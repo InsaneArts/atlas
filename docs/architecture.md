@@ -57,6 +57,8 @@ Only one controller may mutate a helper at a time. A file lock in the person's a
 
 The native input service separates its ownership gate from the serialized event engine. Cancellation can revoke ownership while a gesture is waiting; it does not wait behind that gesture's execution lock. Cleanup still retains exclusion so a new controller cannot act while held keys or buttons are being released.
 
+An agent's request may name its app; the input service then refuses each action, before its first event and under the engine lock, unless that app has keyboard focus (text and keys) or has an uncovered window at the point (pointer actions). An input service that cannot check is refused before anything is sent, and a checked reply must echo what it checked.
+
 Requests are tied to a display epoch: the account, graphical session, display and input/capture processes observed for the action. A fresh screenshot alone cannot authorize input into a different epoch. Frame and epoch checks must remain connected through the full request.
 
 Before a mutation, Atlas records that its outcome is pending. A complete acknowledgement settles that record. A disconnected caller, timeout or dead executor is not an acknowledgement. Unknown outcomes remain pending until supported recovery confirms the required new helper state. Recovery never replays the action.

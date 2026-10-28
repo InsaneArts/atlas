@@ -125,6 +125,7 @@ pub const CODES: &[&str] = &[
     "daemon",
     "elements",
     "environment",
+    "focus-changed",
     "identity",
     "init",
     "input",

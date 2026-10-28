@@ -249,17 +249,21 @@ pub(super) enum Command {
     /// scroll {x, y, dx?, dy?}; type {text}; key {key}; wait {ms}. Up to 32
     /// actions that finish within two seconds; coordinates are display points,
     /// a click is 1 to 5 clicks, a scroll at most 100 lines, text at most 256
-    /// characters, a wait at most 250 ms.
+    /// characters, a wait at most 250 ms. With --app or --pid, each action is
+    /// checked before it starts, as type, key, click, scroll and drag check it.
     /// Example: [{"type":"click","x":200,"y":120},{"type":"type","text":"hi"}]
     Input {
         /// A JSON array of actions, or @path/to/actions.json.
         actions: String,
+        #[command(flatten)]
+        target: AppTarget,
     },
     /// Click a point, or exactly one element of an app.
     ///
     /// Click at display point X Y (origin + screenshot pixels × pointsPerPixel),
     /// or on exactly one accessibility element of an app with --app and
-    /// --name/--role.
+    /// --name/--role. With X Y, --app or --pid sends the click only if that
+    /// app's window is the top one at the point.
     Click {
         /// Display point X (origin + screenshot pixels × pointsPerPixel).
         #[arg(requires = "y")]
@@ -343,7 +347,8 @@ pub(super) enum Command {
     /// up to one point past the end, in the direction of travel, never off the
     /// display. Drag-and-drop onto a target (selected text, files, list items)
     /// does not begin in the helper: macOS starts such a drag only from a real
-    /// mouse.
+    /// mouse. With --app or --pid, nothing is sent unless that app's window is
+    /// the top one at the start point.
     Drag {
         /// Start point X.
         from_x: f64,
@@ -356,11 +361,15 @@ pub(super) enum Command {
         /// Which mouse button.
         #[arg(long, value_enum, default_value_t)]
         button: ButtonArg,
+        #[command(flatten)]
+        target: AppTarget,
     },
     /// Scroll at a point.
     ///
     /// Scroll at X Y by lines, as a mouse wheel's notches (about 10 points
-    /// each, as the app has it); negative values scroll up or left.
+    /// each, as the app has it); negative values scroll up or left. With
+    /// --app or --pid, nothing is sent unless that app's window is the top
+    /// one at the point.
     Scroll {
         /// Display point X.
         x: f64,
@@ -372,6 +381,8 @@ pub(super) enum Command {
         /// Lines to scroll, at most 100; negative scrolls up.
         #[arg(long, default_value_t = 0, allow_hyphen_values = true)]
         dy: i32,
+        #[command(flatten)]
+        target: AppTarget,
     },
     /// Type text.
     ///
@@ -379,7 +390,9 @@ pub(super) enum Command {
     /// $'one\ntwo') or on standard input arrives as a line break or tab,
     /// while the two characters \n are typed as they are. Long text is typed
     /// in parts without breaking characters, and Atlas keeps control until the
-    /// last part, so no other input lands in between.
+    /// last part, so no other input lands in between. With --app or --pid,
+    /// text is typed only while that app has keyboard focus, checked before
+    /// every 16 characters; Atlas stops at the first check that fails.
     Type {
         /// The text to type.
         #[arg(required_unless_present = "stdin", allow_hyphen_values = true)]
@@ -387,6 +400,8 @@ pub(super) enum Command {
         /// Read the text from standard input instead.
         #[arg(long, conflicts_with = "text")]
         stdin: bool,
+        #[command(flatten)]
+        target: AppTarget,
     },
     /// Press keys, for example cmd+s or escape.
     ///
@@ -394,11 +409,14 @@ pub(super) enum Command {
     /// a letter, digit or punctuation mark, or one of return, tab, space,
     /// escape, backspace, forwarddelete, left, right, up, down, home, end,
     /// pageup, pagedown and f1 to f12; the plus key is written + on its own or
-    /// at the end of a chord (cmd++).
+    /// at the end of a chord (cmd++). With --app or --pid, each key is pressed
+    /// only while that app has keyboard focus.
     Key {
         /// Keys or chords such as cmd+s, escape, return, shift+tab.
         #[arg(required = true)]
         keys: Vec<String>,
+        #[command(flatten)]
+        target: AppTarget,
     },
     /// List the helper's windows, front to back.
     ///
@@ -867,7 +885,7 @@ impl From<ButtonArg> for Button {
     }
 }
 
-/// The helper app an element command is about.
+/// The helper app a command is about.
 #[derive(clap::Args)]
 #[group(multiple = false)]
 pub(super) struct AppTarget {
@@ -917,6 +935,44 @@ mod tests {
         assert!(parse(&["click", "10", "20", "--role", "AXButton"]).is_err());
         assert!(parse(&["click", "10"]).is_err(), "Y is required with X");
         assert!(parse(&["click", "--app", "A", "--pid", "1", "--name", "x"]).is_err());
+        assert!(parse(&["click", "10", "20", "--app", "A"]).is_ok());
+        assert!(parse(&["click", "10", "20", "--pid", "1"]).is_ok());
+        assert!(parse(&["click", "10", "20", "--app", "A", "--pid", "1"]).is_err());
+    }
+
+    #[test]
+    fn keyboard_and_pointer_commands_take_an_app() {
+        let app = |args: &[&str]| match parse(args) {
+            Ok(Cli {
+                command:
+                    Some(
+                        Command::Type { target, .. }
+                        | Command::Key { target, .. }
+                        | Command::Scroll { target, .. }
+                        | Command::Drag { target, .. }
+                        | Command::Input { target, .. },
+                    ),
+                ..
+            }) => Some((target.app, target.pid)),
+            _ => None,
+        };
+        let named = Some((Some("A".to_owned()), None));
+
+        assert_eq!(app(&["type", "--app", "A", "hi"]), named);
+        assert_eq!(app(&["type", "hi", "--app", "A"]), named);
+        assert_eq!(app(&["key", "--pid", "3", "escape"]), Some((None, Some(3))));
+        assert_eq!(app(&["scroll", "1", "2", "--dy", "3", "--app", "A"]), named);
+        assert_eq!(app(&["drag", "1", "2", "3", "4", "--app", "A"]), named);
+        assert_eq!(
+            app(&["input", r#"[{"type":"key","key":"a"}]"#, "--app", "A"]),
+            named
+        );
+        assert!(matches!(
+            parse(&["key", "cmd+s", "--app", "A"]),
+            Ok(Cli { command: Some(Command::Key { keys, .. }), .. }) if keys == ["cmd+s"]
+        ));
+        assert!(parse(&["type", "hi", "--app", "A", "--pid", "1"]).is_err());
+        assert!(parse(&["move", "1", "2", "--app", "A"]).is_err());
     }
 
     #[test]
@@ -1054,7 +1110,7 @@ mod tests {
     #[test]
     fn text_may_begin_with_a_hyphen_and_keys_may_be_one() {
         let Ok(Cli {
-            command: Some(Command::Type { text, stdin }),
+            command: Some(Command::Type { text, stdin, .. }),
             ..
         }) = parse(&["type", "-hi there"])
         else {
@@ -1064,7 +1120,7 @@ mod tests {
         assert_eq!((text.as_deref(), stdin), (Some("-hi there"), false));
 
         let Ok(Cli {
-            command: Some(Command::Key { keys }),
+            command: Some(Command::Key { keys, .. }),
             ..
         }) = parse(&["key", "-", "cmd+-"])
         else {
@@ -1088,7 +1144,8 @@ mod tests {
             Ok(Cli {
                 command: Some(Command::Type {
                     text: None,
-                    stdin: true
+                    stdin: true,
+                    ..
                 }),
                 ..
             })

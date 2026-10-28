@@ -1,6 +1,7 @@
-//! The input actions a batch may hold, and the bounds every batch is checked
-//! against before anything is sent: coordinates on the display, known keys
-//! and modifiers, and a total that finishes within two seconds.
+//! The input actions a batch may hold, the app a batch may be for, and the
+//! bounds every batch is checked against before anything is sent:
+//! coordinates on the display, known keys and modifiers, and a total that
+//! finishes within two seconds.
 use crate::{
     error::{Error, Result},
     session::Display,
@@ -87,6 +88,46 @@ pub enum PointerPhase {
 
 fn one() -> u8 {
     1
+}
+
+/// The app an agent's batch is for: its process in the helper. A batch
+/// that names one is sent only while each action would reach that app.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Expect {
+    pid: i32,
+}
+
+impl Expect {
+    /// The expectation for process `pid`, refused unless it can be one.
+    pub fn new(pid: i64) -> Result<Self> {
+        i32::try_from(pid)
+            .ok()
+            .filter(|pid| *pid > 0)
+            .map(|pid| Self { pid })
+            .ok_or_else(not_a_process)
+    }
+
+    /// A request's expectation: none when absent or null. Anything but
+    /// `{"pid": N}` naming a process is refused, so a field this build does
+    /// not know is never ignored.
+    pub fn from_request(value: &Value) -> Result<Option<Self>> {
+        if value.is_null() {
+            return Ok(None);
+        }
+
+        let Self { pid } = Self::deserialize(value).map_err(|_| not_a_process())?;
+        Self::new(pid.into()).map(Some)
+    }
+
+    /// The process the batch is for.
+    pub fn pid(self) -> i64 {
+        self.pid.into()
+    }
+}
+
+fn not_a_process() -> Error {
+    Error::new("input", "\"expect\" must name a process ID")
 }
 
 /// CoreGraphics modifier masks (`CGEventFlags`), the flags a chord sends.
@@ -395,6 +436,34 @@ pub(crate) fn parse(value: &Value, display: &Display) -> Result<Vec<Action>> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn an_expectation_must_be_a_process_id() {
+        use serde_json::json;
+
+        assert_eq!(Expect::from_request(&Value::Null).unwrap(), None);
+        assert_eq!(Expect::from_request(&json!({})["expect"]).unwrap(), None);
+        let five = Expect::from_request(&json!({"pid": 5})).unwrap().unwrap();
+        assert_eq!(five.pid(), 5);
+        assert_eq!(serde_json::to_value(five).unwrap(), json!({"pid": 5}));
+
+        for refused in [
+            json!({"pid": 0}),
+            json!({"pid": -1}),
+            json!({"pid": "5"}),
+            json!({"pid": 2147483648_i64}),
+            json!({}),
+            json!({"pid": 5, "window": 1}),
+            json!(5),
+        ] {
+            let error = Expect::from_request(&refused).unwrap_err();
+            assert_eq!(error.code, "input", "{refused}");
+        }
+
+        assert!(Expect::new(812).is_ok());
+        assert!(Expect::new(0).is_err());
+        assert!(Expect::new(1 << 31).is_err());
+    }
 
     #[test]
     fn keys_are_named_or_refused() {

@@ -76,6 +76,9 @@ pub fn next(code: &str, holder: Option<Holder>) -> &'static str {
         ("not-ready", _) => "Tell the person what the error says. Don't try again in a loop.",
         ("switch", _) => "Ask the person to lock the screen from the Apple menu and switch there.",
         ("update", _) => "Show the error to the person. Never bypass the signature checks.",
+        ("focus-changed", _) => {
+            "Another app was in front, maybe another agent's. Earlier actions were sent: check typed or performed and what landed, click where your app shows, then send only the rest."
+        }
         _ => fix(code).unwrap_or("Take a screenshot, then run atlas doctor to see what is wrong."),
     }
 }
@@ -98,6 +101,7 @@ pub fn fix(code: &str) -> Option<&'static str> {
             "Check the app is running with a window (atlas windows), then narrow it with --name or --role, or click the point from a screenshot instead."
         }
         "environment" => "Check what it names, then try again. Nothing is ever overwritten.",
+        "focus-changed" => "Bring the app to the front, then try again.",
         "identity" | "native" | "restart" => "Run atlas doctor to see what is not ready.",
         "init" => "Run atlas init again. It picks up where it stopped.",
         "input" => "Check the action, take a screenshot, then try again.",
@@ -232,6 +236,21 @@ mod tests {
         assert!(said.contains("ask the person"), "{said}");
         assert_eq!(step("uncertain", None, false), said);
         assert_eq!(step("uncertain", None, true), UNCERTAIN);
+    }
+
+    /// Opening an app again does not bring it forward in the helper, and
+    /// takes focus from whoever moved it; a click where the app shows does.
+    #[test]
+    fn a_focus_refusal_never_sends_an_agent_to_open_the_app() {
+        let said = next("focus-changed", None);
+        assert!(!said.contains("atlas open"), "{said}");
+        assert!(said.contains("click where your app shows"), "{said}");
+        assert!(said.contains("send only the rest"), "{said}");
+        assert!(
+            !said.contains("try again"),
+            "never the whole command: {said}"
+        );
+        assert_eq!(step("focus-changed", None, false), said);
     }
 
     /// Every code an agent can meet has a step for a person too.

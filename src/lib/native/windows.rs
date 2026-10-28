@@ -62,6 +62,22 @@ pub struct Window {
     pub bounds: Bounds,
 }
 
+impl Window {
+    /// Whether this is the menu bar, the Window Server's window that shows
+    /// the frontmost app's titles.
+    pub fn is_menu_bar(&self) -> bool {
+        self.layer == MENU_BAR_LAYER && self.owner.as_deref() == Some("Window Server")
+    }
+
+    /// Whether this is one of the Dock's or Notification Center's windows
+    /// spanning the whole `display`, which pass pointer events through to
+    /// what is under them.
+    pub fn passes_through(&self, display: &Bounds) -> bool {
+        self.bounds.covers(display)
+            && matches!(self.owner.as_deref(), Some("Dock" | "Notification Center"))
+    }
+}
+
 /// One window-list entry, if it carries the fields every window has.
 fn read_window(entry: &cf::Record) -> Option<Window> {
     // The bounds dictionary holds X, Y, Width and Height as numbers.
@@ -117,11 +133,30 @@ pub fn unobstructed(windows: &[Window], target: i64, x: f64, y: f64, display: &B
     let window = &windows[index];
     window.bounds.contains(x, y)
         && !windows[..index].iter().any(|other| {
-            let overlay = other.layer > window.layer
-                && other.bounds.covers(display)
-                && matches!(other.owner.as_deref(), Some("Dock" | "Notification Center"));
+            let overlay = other.layer > window.layer && other.passes_through(display);
             other.alpha > 0.0 && !overlay && other.bounds.contains(x, y)
         })
+}
+
+/// The window shown on top at the point: the frontmost visible one
+/// containing it, passing over the Dock's and Notification Center's
+/// full-display click-through overlays above the ordinary layer, the same
+/// overlays [`unobstructed`] passes over. `windows` is front to back.
+pub fn top_at<'a>(windows: &'a [Window], x: f64, y: f64, display: &Bounds) -> Option<&'a Window> {
+    windows.iter().find(|window| {
+        let overlay = window.layer > 0 && window.passes_through(display);
+        window.alpha > 0.0 && !overlay && window.bounds.contains(x, y)
+    })
+}
+
+/// Whether a pointer event at the point reaches process `pid`: one of its
+/// windows there is [`unobstructed`], the test a named click's element
+/// passes. A window of its that shows nothing (alpha 0) counts as it does
+/// there, though [`top_at`] names what is shown behind it.
+pub fn reaches(windows: &[Window], pid: i64, x: f64, y: f64, display: &Bounds) -> bool {
+    windows
+        .iter()
+        .any(|window| window.pid == pid && unobstructed(windows, window.number, x, y, display))
 }
 
 /// A whole point inside `target` that is [`unobstructed`], preferring points
@@ -318,6 +353,77 @@ mod tests {
         );
         assert_eq!(frontmost_pid(&windows), Some(2));
         assert_eq!(frontmost_pid(&windows[..1]), None);
+    }
+
+    #[test]
+    fn the_top_window_at_a_point_agrees_with_the_unobstructed_check() {
+        let display = Bounds {
+            x: 0.0,
+            y: 0.0,
+            width: 1000.0,
+            height: 800.0,
+        };
+        let layered = |number, layer, owner: &str, bounds: (f64, f64, f64, f64)| {
+            let mut window = window(number, bounds.0, bounds.1, bounds.2, bounds.3);
+            window.layer = layer;
+            window.owner = Some(owner.to_owned());
+            window
+        };
+        let mut hidden = layered(8, 0, "Ghost", (0.0, 0.0, 1000.0, 800.0));
+        hidden.alpha = 0.0;
+        let fixtures = [
+            vec![
+                layered(1, MENU_LAYER, "TextEdit", (100.0, 24.0, 200.0, 300.0)),
+                layered(2, MENU_BAR_LAYER, "Window Server", (0.0, 0.0, 1000.0, 24.0)),
+                layered(3, 20, "Dock", (0.0, 0.0, 1000.0, 800.0)),
+                layered(4, 3, "Notes", (700.0, 100.0, 200.0, 200.0)),
+                layered(5, 0, "Calculator", (250.0, 200.0, 300.0, 300.0)),
+                layered(6, 0, "TextEdit", (50.0, 50.0, 600.0, 500.0)),
+                layered(7, 0, "Finder", (0.0, 0.0, 1000.0, 800.0)),
+            ],
+            vec![
+                hidden,
+                layered(9, 20, "Notification Center", (0.0, 0.0, 1000.0, 800.0)),
+                layered(10, 20, "Other", (0.0, 0.0, 500.0, 800.0)),
+                layered(11, 0, "TextEdit", (100.0, 100.0, 800.0, 600.0)),
+            ],
+        ];
+
+        // Each fixture window is its own process.
+        for windows in &fixtures {
+            for x in (0..1000).step_by(25) {
+                for y in (0..800).step_by(25) {
+                    let (x, y) = (f64::from(x), f64::from(y));
+                    let top = top_at(windows, x, y, &display).map(|window| window.number);
+                    for ordinary in windows.iter().filter(|window| window.layer == 0) {
+                        let clear = unobstructed(windows, ordinary.number, x, y, &display);
+                        let at = format!("window {} at {x},{y}", ordinary.number);
+                        assert_eq!(
+                            reaches(windows, ordinary.pid, x, y, &display),
+                            clear,
+                            "{at}"
+                        );
+                        if ordinary.alpha > 0.0 {
+                            assert_eq!(top == Some(ordinary.number), clear, "{at}");
+                        }
+                    }
+                }
+            }
+        }
+        assert!(
+            reaches(&fixtures[1], 8, 300.0, 300.0, &display),
+            "an ordinary window that shows nothing is reached where it is clear"
+        );
+
+        let first = &fixtures[0];
+        assert_eq!(top_at(first, 150.0, 100.0, &display).unwrap().number, 1);
+        assert!(top_at(first, 10.0, 10.0, &display).unwrap().is_menu_bar());
+        assert_eq!(top_at(first, 750.0, 150.0, &display).unwrap().number, 4);
+        assert_eq!(
+            top_at(&fixtures[1], 300.0, 300.0, &display).unwrap().number,
+            10
+        );
+        assert_eq!(top_at(&[], 1.0, 1.0, &display), None);
     }
 
     /// Window dictionaries are read through the same keys CoreGraphics uses.

@@ -6,16 +6,16 @@ pub use crate::app_selection::Closing;
 pub(crate) use crate::app_selection::same_text;
 
 use crate::{
-    actions::Button,
+    actions::{Button, Expect},
     app_selection::{Process, atlas_bundle, selected},
-    client::Client,
+    client::{Check, Client},
     control::Ownership,
     daemon::protocol::{Crop, Region},
     error::{Error, Holder, Result},
     handoff,
     native::{
         ax::{self, Element, Frame, Stop},
-        windows::{Bounds, MENU_BAR_LAYER, MENU_LAYER, Window, unobstructed},
+        windows::{Bounds, MENU_LAYER, Window, unobstructed},
     },
     transport::{accepted, run_output},
 };
@@ -102,6 +102,11 @@ pub fn skill() -> String {
 /// held across the parts, so nothing lands between them.
 const TYPE_BATCH: usize = 64;
 
+/// How much text one `type` action holds: 16 characters. With a target the
+/// helper checks focus before each action, so at most this much can follow
+/// a focus change before Atlas sees it.
+const TYPE_PART: usize = 16;
+
 /// How long a read-only look at the helper (its window list) may take.
 const PROBE_LIMIT: Duration = Duration::from_secs(5);
 
@@ -127,37 +132,47 @@ pub fn drag(from: (f64, f64), to: (f64, f64), which: Button) -> Value {
     }])
 }
 
-/// Text as `type` batches of at most [`TYPE_BATCH`] characters, never
-/// splitting a grapheme cluster (an emoji sequence or a letter with
-/// combining marks); a longer cluster goes on its own, up to
-/// [`TEXT_MAX`](crate::actions::TEXT_MAX).
-pub(crate) fn type_batches(text: &str) -> Result<Vec<String>> {
-    let mut batches = Vec::new();
-    let mut chunk = String::new();
+/// Text in pieces of at most `limit` characters, never splitting a
+/// grapheme cluster (an emoji sequence or a letter with combining marks); a
+/// longer cluster goes on its own.
+fn split_text(text: &str, limit: usize) -> Vec<String> {
+    let mut pieces = Vec::new();
+    let mut piece = String::new();
     let mut length = 0;
 
     for grapheme in text.graphemes(true) {
         let size = grapheme.chars().count();
-        if size > crate::actions::TEXT_MAX {
-            return Err(Error::new(
-                "input",
-                "A single character cluster is too long to type",
-            ));
-        }
-
-        if length > 0 && length + size > TYPE_BATCH {
-            batches.push(std::mem::take(&mut chunk));
+        if length > 0 && length + size > limit {
+            pieces.push(std::mem::take(&mut piece));
             length = 0;
         }
 
-        chunk.push_str(grapheme);
+        piece.push_str(grapheme);
         length += size;
     }
 
-    if !chunk.is_empty() {
-        batches.push(chunk);
+    if !piece.is_empty() {
+        pieces.push(piece);
     }
 
+    pieces
+}
+
+/// Text as `type` batches of at most [`TYPE_BATCH`] characters, never
+/// splitting a grapheme cluster; a longer cluster goes on its own, up to
+/// [`TEXT_MAX`](crate::actions::TEXT_MAX).
+pub(crate) fn type_batches(text: &str) -> Result<Vec<String>> {
+    if text
+        .graphemes(true)
+        .any(|grapheme| grapheme.chars().count() > crate::actions::TEXT_MAX)
+    {
+        return Err(Error::new(
+            "input",
+            "A single character cluster is too long to type",
+        ));
+    }
+
+    let batches = split_text(text, TYPE_BATCH);
     if batches.is_empty() {
         return Err(Error::new("input", "Provide text to type"));
     }
@@ -165,69 +180,163 @@ pub(crate) fn type_batches(text: &str) -> Result<Vec<String>> {
     Ok(batches)
 }
 
+/// A batch as `type` actions of at most [`TYPE_PART`] characters, never
+/// splitting a grapheme cluster; a longer cluster goes on its own.
+fn type_parts(batch: &str) -> Vec<String> {
+    split_text(batch, TYPE_PART)
+}
+
+/// Send `actions` as one batch. With a target, the app is found once
+/// control is held, and the helper refuses each action before it starts
+/// unless it lands in that app: text and keys while the app has keyboard
+/// focus, pointer actions where its own window is the top one.
+pub async fn act(client: &Client, target: Option<&Target>, actions: &Value) -> Result<Value> {
+    let Some(target) = target else {
+        return client.input(actions, None, None).await;
+    };
+
+    let ownership = client.controller.acquire(false)?;
+    let epoch = client.identity().await?.epoch;
+    let expect = Expect::new(target_pid(client, target).await?)?;
+    client
+        .input_owned(&ownership, actions, &epoch, Some(Check::Required(expect)))
+        .await
+}
+
 /// Type `text` batch by batch, stopping at the first batch that is not
-/// confirmed. The report says exactly how much was confirmed typed and, on
-/// failure, whether the failed batch's delivery is uncertain. The whole
-/// text is typed under one ownership into the helper as it was at the
-/// start: no other input lands between batches, and a helper that restarts
-/// midway is refused rather than typed into.
-pub async fn type_text(client: &Client, text: &str) -> Result<Value> {
+/// confirmed. Each batch goes as `type` actions of [`TYPE_PART`]
+/// characters, and with a target each is sent only while that app has
+/// keyboard focus. The report says exactly how much was confirmed typed
+/// and, on failure, whether the failed batch's delivery is uncertain. The
+/// whole text is typed under one ownership into the helper as it was at
+/// the start: no other input lands between batches, and a helper that
+/// restarts midway is refused rather than typed into.
+pub async fn type_text(client: &Client, text: &str, target: Option<&Target>) -> Result<Value> {
     let batches = type_batches(text)?;
     let (mut typed, mut confirmed) = (0, 0);
 
     let ownership = client.controller.acquire(false)?;
     let epoch = client.identity().await?.epoch;
+    let check = match target {
+        Some(target) => Some(Check::Required(Expect::new(
+            target_pid(client, target).await?,
+        )?)),
+        None => None,
+    };
 
     for batch in &batches {
+        let parts = type_parts(batch);
+        let actions: Vec<Value> = parts
+            .iter()
+            .map(|part| json!({ "type": "type", "text": part }))
+            .collect();
         let outcome = client
-            .input_owned(
-                &ownership,
-                &json!([{ "type": "type", "text": batch }]),
-                &epoch,
-            )
+            .input_owned(&ownership, &Value::Array(actions), &epoch, check)
             .await;
 
-        // Agents act on the code (busy, lease-lost, session-changed), and
-        // on who holds control when busy, so both are kept whichever way
-        // the batch failed.
-        let (code, failure, uncertain, holder) = match outcome {
+        let failure = match outcome {
             Ok(reply) if reply["ok"] == true => {
                 confirmed += 1;
                 typed += batch.chars().count();
                 continue;
             }
-            Ok(reply) => (
-                reply["code"]
-                    .as_str()
-                    .and_then(crate::error::code)
-                    .unwrap_or("input"),
-                reply["error"]
-                    .as_str()
-                    .unwrap_or("The helper did not confirm the text")
-                    .to_owned(),
-                reply["uncertain"] == true,
-                reply["holder"].as_str().and_then(Holder::parse),
-            ),
-            Err(error) => (error.code, error.error, error.uncertain, error.holder),
+            Ok(reply) => Unconfirmed::from_reply(&reply),
+            Err(error) => Unconfirmed::from(error),
         };
 
-        let mut report = json!({
-            "ok": false,
-            "typed": typed,
-            "batches": batches.len(),
-            "confirmedBatches": confirmed,
-            "code": code,
-            "error": failure,
-            "uncertain": uncertain,
-        });
-        if let Some(holder) = holder {
-            report["holder"] = json!(holder);
-        }
-
-        return Ok(report);
+        return Ok(stopped_typing(
+            typed,
+            batches.len(),
+            confirmed,
+            &parts,
+            failure,
+        ));
     }
 
     Ok(json!({ "ok": true, "typed": typed, "batches": batches.len() }))
+}
+
+/// A batch the helper did not confirm: why, how many of its actions were
+/// performed, and whether the failing one had sent some of its events.
+struct Unconfirmed {
+    error: Error,
+    performed: usize,
+    partial: bool,
+}
+
+impl Unconfirmed {
+    /// A failure the helper replied with. Agents act on the code (busy,
+    /// lease-lost, session-changed, focus-changed), on who holds control
+    /// when busy and on what was found instead of the app, so those are
+    /// kept; nothing else of the reply is.
+    fn from_reply(reply: &Value) -> Self {
+        let code = reply["code"]
+            .as_str()
+            .and_then(crate::error::code)
+            .unwrap_or("input");
+        let message = reply["error"]
+            .as_str()
+            .unwrap_or("The helper did not confirm the text");
+        let mut error = Error::new(code, message);
+        if reply["uncertain"] == true {
+            error = error.uncertain();
+        }
+        if let Some(holder) = reply["holder"].as_str().and_then(Holder::parse) {
+            error = error.held_by(holder);
+        }
+        for kept in ["reason", "found"] {
+            if !reply[kept].is_null() {
+                error = error.with(kept, &reply[kept]);
+            }
+        }
+
+        Self {
+            error,
+            performed: reply["performed"]
+                .as_u64()
+                .and_then(|performed| usize::try_from(performed).ok())
+                .unwrap_or(0),
+            partial: reply["partial"] == true,
+        }
+    }
+}
+
+impl From<Error> for Unconfirmed {
+    /// A failure before or around the batch: none of it is known performed.
+    fn from(error: Error) -> Self {
+        Self {
+            error,
+            performed: 0,
+            partial: false,
+        }
+    }
+}
+
+/// The report of a `type` that stopped at a batch: everything confirmed
+/// before it, `typed` characters in `confirmed` of `batches`, plus the
+/// `parts` of that batch the helper says it performed. `partial` says some
+/// of the text was sent.
+fn stopped_typing(
+    typed: usize,
+    batches: usize,
+    confirmed: usize,
+    parts: &[String],
+    failure: Unconfirmed,
+) -> Value {
+    let typed = typed
+        + parts
+            .iter()
+            .take(failure.performed)
+            .map(|part| part.chars().count())
+            .sum::<usize>();
+
+    let mut report = json!(failure.error);
+    report["typed"] = json!(typed);
+    report["batches"] = json!(batches);
+    report["confirmedBatches"] = json!(confirmed);
+    report["partial"] = json!(typed > 0 || failure.partial);
+
+    report
 }
 
 /// Keys pressed in order, as one batch; an unknown key is named.
@@ -1411,12 +1520,7 @@ fn owning_window(windows: &[Window], pid: i64, frame: &Frame) -> Option<i64> {
 fn menu_bar_window(windows: &[Window], x: f64, y: f64) -> Option<i64> {
     windows
         .iter()
-        .find(|window| {
-            window.layer == MENU_BAR_LAYER
-                && window.owner.as_deref() == Some("Window Server")
-                && window.alpha > 0.0
-                && window.bounds.contains(x, y)
-        })
+        .find(|window| window.is_menu_bar() && window.alpha > 0.0 && window.bounds.contains(x, y))
         .map(|window| window.number)
 }
 
@@ -1723,7 +1827,12 @@ pub async fn click_element(
     };
 
     let actions = click(x, y, which, count, modifiers);
-    let mut result = client.input_owned(&ownership, &actions, &epoch).await?;
+    // The helper repeats the visibility check under its own lock where it
+    // can; an older one is not needed for it, since the check above ran.
+    let check = Check::Offered(Expect::new(pid)?);
+    let mut result = client
+        .input_owned(&ownership, &actions, &epoch, Some(check))
+        .await?;
     result["element"] = clicked(element, (x, y));
 
     Ok(result)
@@ -1765,7 +1874,7 @@ fn clicked(element: &Element, (x, y): (f64, f64)) -> Value {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::session::Display;
+    use crate::{native::windows::MENU_BAR_LAYER, session::Display};
 
     /// The process a name resolves to from the window list alone.
     fn app_pid(windows: &[Window], target: &Target) -> Result<i64> {
@@ -2035,9 +2144,7 @@ mod tests {
     fn agents_are_told_to_read_both_output_streams_on_failure() {
         for text in [GUIDE.to_owned(), skill()] {
             let text = text.split_whitespace().collect::<Vec<_>>().join(" ");
-            assert!(text.contains("A failed action's result is on stdout"));
-            assert!(text.contains("command or connection errors are on stderr"));
-            assert!(text.contains("On a non-zero exit, read both."));
+            assert!(text.contains("exit non-zero on failure; then read both stdout and stderr."));
         }
     }
 
@@ -2109,6 +2216,99 @@ mod tests {
             ["xy", long_cluster.as_str(), "z"],
             "a long cluster goes alone"
         );
+    }
+
+    #[test]
+    fn text_is_typed_in_parts_of_at_most_sixteen_characters() {
+        let plain = "x".repeat(64);
+        let parts = type_parts(&plain);
+        assert_eq!(parts.len(), 4);
+        assert!(parts.iter().all(|part| part.chars().count() == TYPE_PART));
+
+        let family = "👨‍👩‍👧‍👦";
+        let text = format!("{}{family}{}", "a".repeat(14), "b".repeat(20));
+        let parts = type_parts(&text);
+        assert_eq!(parts.concat(), text);
+        assert!(parts.iter().any(|part| part.contains(family)), "kept whole");
+        assert!(parts.iter().all(|part| part.chars().count() <= TYPE_PART));
+
+        let decomposed = "e\u{301}".repeat(20);
+        let parts = type_parts(&decomposed);
+        assert!(parts.iter().all(|part| !part.starts_with('\u{301}')));
+        assert_eq!(parts.concat(), decomposed);
+
+        let long_cluster = format!("a{}", "\u{301}".repeat(30));
+        assert_eq!(
+            type_parts(&format!("xy{long_cluster}z")),
+            ["xy", long_cluster.as_str(), "z"],
+            "a cluster longer than a part goes alone"
+        );
+
+        for batch in type_batches(&"y".repeat(200)).unwrap() {
+            let parts: Vec<Value> = type_parts(&batch)
+                .iter()
+                .map(|part| json!({"type": "type", "text": part}))
+                .collect();
+            assert!(parts.len() <= TYPE_BATCH / TYPE_PART);
+            crate::actions::validate(&Value::Array(parts), &display()).unwrap();
+        }
+    }
+
+    #[test]
+    fn a_stopped_type_counts_the_parts_the_helper_performed() {
+        let parts = type_parts(&"z".repeat(64));
+        let refused = json!({"ok": false, "code": "focus-changed", "reason": "app",
+            "found": {"app": "Calculator", "pid": 900}, "error": "Calculator has keyboard focus",
+            "performed": 2, "partial": false, "uncertain": false, "cleanupError": "kept out"});
+        let reply = |value: &Value| Unconfirmed::from_reply(value);
+
+        let report = stopped_typing(64, 3, 1, &parts, reply(&refused));
+        assert_eq!(report["typed"], 64 + 32);
+        assert_eq!(report["batches"], 3);
+        assert_eq!(report["confirmedBatches"], 1);
+        assert_eq!(report["partial"], true);
+        assert_eq!(report["uncertain"], false);
+        assert_eq!(report["code"], "focus-changed");
+        assert_eq!(report["error"], "Calculator has keyboard focus");
+        assert_eq!(report["reason"], "app");
+        assert_eq!(report["found"], refused["found"]);
+        assert!(
+            report.get("cleanupError").is_none(),
+            "only what agents act on"
+        );
+
+        let first = stopped_typing(
+            0,
+            1,
+            0,
+            &parts,
+            reply(&json!({"performed": 0, "code": "focus-changed"})),
+        );
+        assert_eq!(
+            (first["typed"].clone(), first["partial"].clone()),
+            (json!(0), json!(false))
+        );
+        let broke = reply(&json!({"performed": 0, "partial": true, "uncertain": true}));
+        assert_eq!(stopped_typing(0, 1, 0, &parts, broke)["partial"], true);
+
+        let lost = Error::new("transport", "Native reply timed out").uncertain();
+        let report = stopped_typing(64, 2, 1, &parts, lost.into());
+        assert_eq!(report["typed"], 64, "no part of a failed batch counts");
+        assert_eq!(report["code"], "transport");
+        assert_eq!(report["uncertain"], true);
+        assert!(report.get("reason").is_none() && report.get("found").is_none());
+
+        let busy = Error::new("busy", "held").held_by(Holder::Agent);
+        assert_eq!(
+            stopped_typing(0, 1, 0, &parts, busy.into())["holder"],
+            "agent"
+        );
+        let busy = reply(&json!({"code": "busy", "holder": "person"}));
+        assert_eq!(stopped_typing(0, 1, 0, &parts, busy)["holder"], "person");
+
+        let unknown = stopped_typing(0, 1, 0, &parts, reply(&json!({"code": "made-up"})));
+        assert_eq!(unknown["code"], "input");
+        assert_eq!(unknown["error"], "The helper did not confirm the text");
     }
 
     /// A look never asks the helper for longer than it allows a command,

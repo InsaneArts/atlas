@@ -518,7 +518,11 @@ fn typing_that_stops_part_way_says_so() {
         json!({"ok": false, "typed": 10, "batches": 2, "confirmedBatches": 1,
                "error": "No reply", "uncertain": true}),
     );
-    assert!(shown.err.starts_with("✗ Typed 1 of 2 parts: No reply"));
+    assert!(
+        shown
+            .err
+            .starts_with("✗ Typed 10 characters before it stopped: No reply")
+    );
     assert!(shown.err.contains("don't repeat it"));
 
     let busy = show(

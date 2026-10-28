@@ -26,6 +26,7 @@ failure is in `exitCode`.)
 | `daemon` | The helper daemon stopped unexpectedly. | Run `atlas restart`. |
 | `elements` | An accessibility element could not be found uniquely or is hidden. When a name matched nothing or several, `candidates` lists up to five with their role, name and the point a click lands on (`at`; the box of a labelled checkbox or radio button); when the scan was incomplete, `scan` says why. `atlas elements --name` lists `candidates` the same way when nothing matched. | Add `--role`, pick from `candidates`, check `atlas elements`, or click coordinates from a crop. |
 | `environment` | A provisioning plan was refused. | Read `error`; plans never overwrite unknown changes. |
+| `focus-changed` | An action given `--app` or `--pid` was not sent: another app had keyboard focus (`reason: "app"`), another app's window was at its point (`point`), or Atlas could not tell (`unreadable`). `found` names what was there. A point on the desktop, or under an overlay other than the Dock's and Notification Center's click-through ones, refuses with `point` too. Earlier actions were sent: `performed`, and for `type`, `typed`. Nothing is uncertain, but the one action sent just before the change (16 characters, one key, one click) may have reached the other app. | Look with `atlas screenshot --app NAME`; check what the earlier part did; click where your app shows (a click brings it forward), then send the rest. Do not use `atlas open` to bring it forward. |
 | `identity` | The helper session, account or display is not the configured one. | Stop and tell the person; run `atlas doctor`. |
 | `init` | Guided setup could not finish. | Show the person `error`; they can run `atlas init` again. |
 | `input` | Input could not be delivered (bad key, held button, a point off the display), or a batch was refused before anything was sent: at most 32 actions, 100 lines a scroll, 256 characters a `type`, 250 ms a wait, two seconds in all. | Fix the action or split the batch; a refused batch sent nothing, otherwise observe with a screenshot before retrying. |
@@ -52,7 +53,7 @@ failure is in `exitCode`.)
 | `setup` | Setup was refused or is unfinished. | Show `error`; the person resumes with `atlas setup --apply` or `atlas init`. |
 | `spawn-failed` | The command, or what `open` was asked to open, could not be started in the helper. | Check the program or app path and that it exists in the helper. |
 | `stale-frame` | The screenshot is older than the current display. | Take a new screenshot. |
-| `startup` | The input service did not start. | Run `atlas start-input`, then `atlas doctor`. |
+| `startup` | The input service did not start, or is too old to check `--app`. | Run `atlas start-input`, then `atlas doctor`. |
 | `state` | Local control state is corrupt. | Run `atlas restart`; tell the person if it persists. |
 | `stopped` | The person stopped agents in the helper. | Stop at once and ask the person what to do. Never resume agents yourself; only they can. |
 | `switch` | The screen could not be locked for switching accounts. | Tell the person; they lock it from the Apple menu (Lock Screen) and switch there. |

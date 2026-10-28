@@ -989,6 +989,50 @@ fn unreachable(error: Option<AXError>, trusted: bool, exists: bool) -> Error {
     }
 }
 
+/// The process of the application with keyboard focus in this login, as
+/// Accessibility reports it; None when no application has it. Waits at most
+/// `timeout`. This sets the calling process's messaging timeout, which the
+/// input service uses for nothing else.
+pub fn focused_pid(timeout: Duration) -> Result<Option<i64>> {
+    let unreadable = || Error::new("native", "The focused app could not be read");
+
+    // SAFETY: a plain constructor returning an owned element or null.
+    let system =
+        unsafe { AXUIElementCreateSystemWide().map(|system| CFRetained::from_raw(system)) }
+            .ok_or_else(unreadable)?;
+    // SAFETY: the system-wide element sets this process's global messaging
+    // timeout, which covers the read below. A read without it could wait
+    // on an unresponsive app for far longer.
+    if unsafe { system.set_messaging_timeout(timeout.as_secs_f32()) } != AXError::Success {
+        return Err(unreadable());
+    }
+
+    let name = CFString::from_static_str("AXFocusedApplication");
+    let mut value: *const CFType = std::ptr::null();
+    // SAFETY: a valid output slot; on success the Copy hands over one owned
+    // reference, adopted below.
+    let status = unsafe { system.copy_attribute_value(&name, NonNull::from(&mut value)) };
+    match status {
+        AXError::Success => {}
+        AXError::NoValue => return Ok(None),
+        _ => return Err(unreadable()),
+    }
+
+    // SAFETY: a successful Copy wrote an owned reference (or null).
+    let focused = unsafe { adopt(value) }.ok_or_else(unreadable)?;
+    let app = focused
+        .downcast_ref::<AXUIElement>()
+        .ok_or_else(unreadable)?;
+    let mut pid: libc::pid_t = 0;
+    // SAFETY: a valid `pid_t` slot for the element's process.
+    let status = unsafe { app.pid(NonNull::from(&mut pid)) };
+    if status != AXError::Success || pid <= 0 {
+        return Err(unreadable());
+    }
+
+    Ok(Some(pid.into()))
+}
+
 /// Depth-first elements of `pid`'s windows, its menu bar titles when it is
 /// the active app, then the menus it has open (a menu bar, status item or
 /// context menu). Closed menus are left out: nothing in them is on screen.

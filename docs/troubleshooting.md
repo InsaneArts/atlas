@@ -36,6 +36,8 @@ For `transport`, check whether the helper is logged in and read `doctor`. If the
 
 `busy` means another controller holds the helper, and `holder` says who: `person` when the person has control in a viewer, `agent` when another Atlas command, usually another agent's, is running. An agent's command has already waited up to 30 seconds for it (`waited` says how long); try again later, or pass a longer `--wait` (`--wait 0` answers at once). If the person selected **Take Control**, they must use **Give Back** or **Control-Shift-Esc** before agents can take over.
 
+`focus-changed` means an action given `--app` or `--pid` was not sent, because that app did not have keyboard focus (`reason: "app"`), another app's window was at the action's point (`point`), or Atlas could not tell which app was in front (`unreadable`). `found` names the app that was there, often another agent's. Actions before it in the same command were sent, as `performed` and, for `type`, `typed` say, and nothing is left uncertain; the one action sent just before the change may have reached the other app. Take a screenshot of the app, check what the earlier part did, click where the app shows to bring it forward, then send the rest.
+
 `stopped` means the person stopped agents. Ask them what they want next; only they resume agent work. Pausing the picture is different: the helper continues working while its displayed image is paused. See [Using Atlas](using-atlas.md#take-control-or-stop-agents).
 
 ## An action's outcome is unknown

@@ -285,6 +285,13 @@ mod tests {
     /// socket is refused and left alone.
     #[tokio::test]
     async fn a_stale_socket_is_replaced_and_a_non_socket_refused() {
+        // A spawn on another test thread can keep the stale listener open
+        // in its child until exec, so the socket would look served.
+        if !crate::transaction_test::isolated(
+            "native::endpoint::tests::a_stale_socket_is_replaced_and_a_non_socket_refused",
+        ) {
+            return;
+        }
         let dir = tempfile::tempdir().unwrap();
         let socket = dir.path().join("run/s.sock");
         let uid = nix::unistd::getuid().as_raw();

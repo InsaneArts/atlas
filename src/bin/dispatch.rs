@@ -99,10 +99,10 @@ fn doing(command: &Command) -> Option<Doing> {
             .app(target.app.as_deref())
             .label(name.as_deref()),
         Command::Move { .. } => Doing::new("move"),
-        Command::Drag { .. } => Doing::new("drag"),
-        Command::Scroll { .. } => Doing::new("scroll"),
-        Command::Type { .. } => Doing::new("type"),
-        Command::Key { keys } => Doing::keys(keys),
+        Command::Drag { target, .. } => Doing::new("drag").app(target.app.as_deref()),
+        Command::Scroll { target, .. } => Doing::new("scroll").app(target.app.as_deref()),
+        Command::Type { target, .. } => Doing::new("type").app(target.app.as_deref()),
+        Command::Key { keys, target } => Doing::keys(keys).app(target.app.as_deref()),
         Command::Open { app, targets, .. } => Doing::open(app.as_deref(), targets),
         Command::Close { app, .. } => Doing::new("close").app(app.as_deref()),
         Command::Run { .. }
@@ -571,10 +571,11 @@ pub(super) async fn execute(config: PathBuf, command: Command, wait: Duration) -
             let client = client()?;
 
             match (x, y, target.target()) {
-                (Some(x), Some(y), None) => {
-                    act(
+                (Some(x), Some(y), target) => {
+                    agent::act(
                         &client,
-                        agent::click(x, y, button.into(), count, &modifiers),
+                        target.as_ref(),
+                        &agent::click(x, y, button.into(), count, &modifiers),
                     )
                     .await
                 }
@@ -614,7 +615,12 @@ pub(super) async fn execute(config: PathBuf, command: Command, wait: Duration) -
             atlas::readiness::readiness(&client()?, &tools, &apps).await
         }
         Command::Move { x, y } => {
-            act(&client()?, json!([{ "type": "move", "x": x, "y": y }])).await
+            agent::act(
+                &client()?,
+                None,
+                &json!([{ "type": "move", "x": x, "y": y }]),
+            )
+            .await
         }
         Command::Drag {
             from_x,
@@ -622,14 +628,22 @@ pub(super) async fn execute(config: PathBuf, command: Command, wait: Duration) -
             to_x,
             to_y,
             button,
+            target,
         } => {
-            act(
+            agent::act(
                 &client()?,
-                agent::drag((from_x, from_y), (to_x, to_y), button.into()),
+                target.target().as_ref(),
+                &agent::drag((from_x, from_y), (to_x, to_y), button.into()),
             )
             .await
         }
-        Command::Scroll { x, y, dx, dy } => {
+        Command::Scroll {
+            x,
+            y,
+            dx,
+            dy,
+            target,
+        } => {
             if dx == 0 && dy == 0 {
                 return Err(Error::new(
                     "usage",
@@ -637,13 +651,18 @@ pub(super) async fn execute(config: PathBuf, command: Command, wait: Duration) -
                 ));
             }
 
-            act(
+            agent::act(
                 &client()?,
-                json!([{ "type": "scroll", "x": x, "y": y, "dx": dx, "dy": dy }]),
+                target.target().as_ref(),
+                &json!([{ "type": "scroll", "x": x, "y": y, "dx": dx, "dy": dy }]),
             )
             .await
         }
-        Command::Type { text, stdin } => {
+        Command::Type {
+            text,
+            stdin,
+            target,
+        } => {
             let client = client()?;
 
             let text = match text {
@@ -659,9 +678,11 @@ pub(super) async fn execute(config: PathBuf, command: Command, wait: Duration) -
                 }
             };
 
-            agent::type_text(&client, &text).await
+            agent::type_text(&client, &text, target.target().as_ref()).await
         }
-        Command::Key { keys } => act(&client()?, agent::keys(&keys)?).await,
+        Command::Key { keys, target } => {
+            agent::act(&client()?, target.target().as_ref(), &agent::keys(&keys)?).await
+        }
         Command::Windows { app, title, all } => {
             agent::list(&client()?, &agent::WindowFilter { app, title, all }).await
         }
@@ -691,7 +712,7 @@ pub(super) async fn execute(config: PathBuf, command: Command, wait: Duration) -
             };
             agent::wait(&client, &filter, gone, Duration::from_secs(timeout)).await
         }
-        Command::Input { actions } => {
+        Command::Input { actions, target } => {
             let client = client()?;
             // The most an actions batch may take, in bytes.
             const LIMIT: u64 = 32 * 1024;
@@ -714,9 +735,12 @@ pub(super) async fn execute(config: PathBuf, command: Command, wait: Duration) -
                 ));
             }
 
-            client
-                .input(&serde_json::from_slice(&bytes)?, None, None)
-                .await
+            agent::act(
+                &client,
+                target.target().as_ref(),
+                &serde_json::from_slice(&bytes)?,
+            )
+            .await
         }
         Command::Run { argv, timeout } => client()?
             .run_within(argv, Duration::from_secs(timeout))
@@ -844,11 +868,6 @@ fn listed_apps(mut reply: Value, all: bool) -> Value {
     let more = before - apps.len();
     reply["more"] = json!(more);
     reply
-}
-
-/// One guarded batch, reporting what the helper performed.
-async fn act(client: &Client, actions: Value) -> Result<Value> {
-    client.input(&actions, None, None).await
 }
 
 #[cfg(test)]
@@ -1004,6 +1023,31 @@ mod tests {
             said(&["restart"]),
             None,
             "recovery is worded by its operation"
+        );
+    }
+
+    #[test]
+    fn an_actions_app_is_named_in_its_activity() {
+        let app = |args: &[&str]| {
+            let command = parse(args).unwrap().command.unwrap();
+            let mut row = serde_json::Map::new();
+            doing(&command).unwrap().fields(&mut row, true);
+            row.get("app").cloned()
+        };
+
+        for args in [
+            &["type", "--app", "TextEdit", "hi"][..],
+            &["key", "--app", "TextEdit", "cmd+s"],
+            &["scroll", "1", "2", "--dy", "3", "--app", "TextEdit"],
+            &["drag", "1", "2", "3", "4", "--app", "TextEdit"],
+            &["click", "1", "2", "--app", "TextEdit"],
+        ] {
+            assert_eq!(app(args), Some(json!("TextEdit")), "{args:?}");
+        }
+        assert_eq!(
+            app(&["type", "--pid", "42", "hi"]),
+            None,
+            "a pid names no app"
         );
     }
 

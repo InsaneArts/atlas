@@ -2,11 +2,13 @@
 //! the serialized event engine awaits the next step of a gesture.
 use super::{
     events::Engine,
+    focus::{self, Need},
     lease::{Gate, Who},
     session_info,
+    windows::Bounds,
 };
 use crate::{
-    actions,
+    actions::{self, Action, Expect},
     error::{Error, Holder, Result},
     session::{Display, InputEpoch},
 };
@@ -15,7 +17,7 @@ use serde_json::{Value, json};
 use std::{
     path::PathBuf,
     sync::{Arc, RwLock},
-    time::Duration,
+    time::{Duration, Instant},
 };
 use tokio::{
     io::{AsyncRead, AsyncReadExt, AsyncWriteExt},
@@ -28,6 +30,15 @@ use tokio::{
 /// Twice the controller's 32 KiB action limit, leaving room for the owner,
 /// epoch and JSON re-encoding around any batch the controller accepts.
 const MAX_REQUEST: usize = 64 * 1024;
+
+/// What this service can do beyond plain input, as its hello lists it:
+/// authenticated shutdown, the person's Stop, and checking an agent's
+/// target app.
+const CAPABILITIES: [&str; 3] = [
+    crate::session::SHUTDOWN,
+    crate::session::HOLD,
+    crate::session::FOCUS_APP,
+];
 
 struct Service {
     engine: Mutex<Engine>,
@@ -160,7 +171,7 @@ impl Service {
                 "version": env!("CARGO_PKG_VERSION"),
                 "build": self.build,
                 "replaced": self.replaced(),
-                "capabilities": ["shutdown", "hold"],
+                "capabilities": CAPABILITIES,
                 "accessibility": Engine::trusted(),
                 "ready": self.check().is_ok(),
                 "enforcedEpoch": self.epoch()?,
@@ -337,40 +348,17 @@ impl Service {
                 scale: 1.0,
             },
         )?;
+        // Refused before anything is sent: an expectation this build cannot
+        // check is never ignored.
+        let expect = Expect::from_request(&request["expect"])?;
 
         let mut engine = self.engine.lock().await;
 
         drop(grant.authorize()?);
         engine.grant = Some(grant);
 
-        for (performed, action) in actions.into_iter().enumerate() {
-            let before = engine.posted;
-
-            if let Err(error) = engine.perform(action).await {
-                let _ = self.gate.revoke();
-
-                // An action that posted some of its events before failing
-                // (a few typed characters, one click of two) had part of
-                // its effect, and nobody can say which part.
-                let partial = engine.posted > before;
-                let cleanup = engine.release();
-
-                let mut reply = json!(error);
-                reply["performed"] = json!(performed);
-                reply["partial"] = json!(partial);
-
-                // A viewer's cancel is the person's doing, watching what
-                // landed; a stop (the helper hidden) or any other break
-                // mid-action leaves that unknown.
-                let unknown = partial && error.code != "cancelled";
-                reply["uncertain"] = json!(cleanup.is_err() || unknown || error.uncertain);
-
-                if let Err(error) = cleanup {
-                    reply["cleanupError"] = json!(error.error);
-                }
-
-                return Ok(reply);
-            }
+        if let Err(reply) = run(&mut *engine, &self.gate, actions, expect).await {
+            return Ok(reply);
         }
 
         // The app the input landed in, for an agent's activity log (only
@@ -386,12 +374,133 @@ impl Service {
             None
         };
 
-        Ok(json!({
+        let mut reply = json!({
             "ok": true,
             "performed": request["actions"].as_array().map(Vec::len),
             "app": app,
-        }))
+        });
+        // Echoed, so the controller knows each action was checked.
+        if let Some(expect) = expect {
+            reply["expect"] = json!(expect);
+        }
+
+        Ok(reply)
     }
+}
+
+/// What the input loop needs of the event engine; tests stand in for it.
+trait Perform {
+    /// Refuse unless `expect` holds for `need` now, before anything is
+    /// posted, taking at most `budget` to tell.
+    async fn require(&mut self, expect: Expect, need: Need, budget: Duration) -> Result<()>;
+    /// Carry out one action, posting its events.
+    async fn perform(&mut self, action: Action) -> Result<()>;
+    /// Events posted so far.
+    fn posted(&self) -> u64;
+    /// Let go of every key and button still held.
+    fn release(&mut self) -> Result<()>;
+}
+
+impl Perform for Engine {
+    /// The reads block, so they run on a blocking thread; the engine stays
+    /// locked by the caller meanwhile, so nothing posts in between.
+    async fn require(&mut self, expect: Expect, need: Need, budget: Duration) -> Result<()> {
+        let display = Bounds {
+            x: 0.0,
+            y: 0.0,
+            width: self.epoch.width,
+            height: self.epoch.height,
+        };
+        let deadline = Instant::now() + budget;
+        tokio::task::spawn_blocking(move || focus::check(expect, need, &display, deadline))
+            .await
+            .unwrap_or_else(|_| Err(focus::unreadable()))
+    }
+
+    async fn perform(&mut self, action: Action) -> Result<()> {
+        Engine::perform(self, action).await
+    }
+
+    fn posted(&self) -> u64 {
+        self.posted
+    }
+
+    fn release(&mut self) -> Result<()> {
+        Engine::release(self)
+    }
+}
+
+/// Carry out `actions` in order on `engine`, which the caller holds
+/// locked, each checked against `expect` just before it starts. On the
+/// first failure, revoke `gate`, release what is held and return the
+/// failure reply: what was performed, whether the failing action had posted
+/// anything, and whether the outcome is unknown.
+async fn run(
+    engine: &mut impl Perform,
+    gate: &Gate,
+    actions: Vec<Action>,
+    expect: Option<Expect>,
+) -> std::result::Result<(), Value> {
+    let mut budget = focus::CHECK_BUDGET;
+
+    for (performed, action) in actions.into_iter().enumerate() {
+        let before = engine.posted();
+        let checked = match expect {
+            Some(expect) => require_within(engine, expect, Need::of(&action), &mut budget).await,
+            None => Ok(()),
+        };
+        let step = match checked {
+            Ok(()) => engine.perform(action).await,
+            Err(error) => Err(error),
+        };
+
+        if let Err(error) = step {
+            let _ = gate.revoke();
+            return Err(failed(engine, error, performed, before));
+        }
+    }
+
+    Ok(())
+}
+
+/// [`Perform::require`], spending what it takes of `budget`: the time one
+/// request may spend checking in all.
+async fn require_within(
+    engine: &mut impl Perform,
+    expect: Expect,
+    need: Need,
+    budget: &mut Duration,
+) -> Result<()> {
+    let started = Instant::now();
+    let outcome = engine.require(expect, need, *budget).await;
+    *budget = budget.saturating_sub(started.elapsed());
+    outcome
+}
+
+/// The reply for an action that failed with `error` once `performed`
+/// actions had finished and `before` events had been posted, after
+/// releasing what is held.
+fn failed(engine: &mut impl Perform, error: Error, performed: usize, before: u64) -> Value {
+    // An action that posted some of its events before failing (a few typed
+    // characters, one click of two) had part of its effect, and nobody can
+    // say which part. A refused one posted nothing.
+    let partial = engine.posted() > before;
+    let cleanup = engine.release();
+
+    let mut reply = json!(error);
+    reply["performed"] = json!(performed);
+    reply["partial"] = json!(partial);
+
+    // A viewer's cancel is the person's doing, watching what landed; a stop
+    // (the helper hidden) or any other break mid-action leaves that unknown.
+    let unknown = partial && error.code != "cancelled";
+    reply["uncertain"] = json!(cleanup.is_err() || unknown || error.uncertain);
+
+    if let Err(error) = cleanup {
+        reply["cleanupError"] = json!(error.error);
+    }
+
+    reply
 }
 
 /// The name of the app owning the frontmost ordinary window, if any.
@@ -599,8 +708,181 @@ async fn reply(stream: &mut UnixStream, result: Result<Value>) -> Result<()> {
 
 #[cfg(test)]
 mod tests {
-    use super::{MAX_REQUEST, admitted, read_request};
-    use tokio::{io::AsyncWriteExt, net::UnixStream};
+    use super::{
+        Action, CAPABILITIES, Duration, Error, Expect, Gate, MAX_REQUEST, Need, Perform, Result,
+        admitted, read_request, run,
+    };
+    use serde_json::{Value, json};
+    use std::sync::{Arc, Weak};
+    use tokio::{io::AsyncWriteExt, net::UnixStream, sync::Mutex};
+
+    /// What a stand-in engine does at one action.
+    #[derive(Clone, Copy, PartialEq)]
+    enum Step {
+        Post,
+        Refuse,
+        /// Post one event, then fail.
+        Break,
+    }
+
+    /// An engine that logs each check and post, and does at each action
+    /// what its script says. It holds a handle to the lock it lives in, to
+    /// see that the lock is held whenever it is asked anything.
+    struct Stand {
+        script: Vec<Step>,
+        log: Vec<String>,
+        posted: u64,
+        releases: usize,
+        lock: Weak<Mutex<Stand>>,
+    }
+
+    impl Stand {
+        fn locked(script: &[Step]) -> Arc<Mutex<Self>> {
+            Arc::new_cyclic(|lock| {
+                Mutex::new(Self {
+                    script: script.to_vec(),
+                    log: Vec::new(),
+                    posted: 0,
+                    releases: 0,
+                    lock: lock.clone(),
+                })
+            })
+        }
+
+        fn assert_locked(&self) {
+            let lock = self.lock.upgrade().unwrap();
+            assert!(lock.try_lock().is_err(), "asked outside the engine lock");
+        }
+
+        /// How many lines of the log start with `what`.
+        fn logged(&self, what: &str) -> usize {
+            self.log
+                .iter()
+                .filter(|line| line.starts_with(what))
+                .count()
+        }
+    }
+
+    impl Perform for Stand {
+        async fn require(&mut self, _: Expect, _: Need, _: Duration) -> Result<()> {
+            self.assert_locked();
+            let index = self.logged("check");
+            self.log.push(format!("check {index}"));
+            if self.script.get(index) == Some(&Step::Refuse) {
+                return Err(Error::new("focus-changed", "Calculator has keyboard focus")
+                    .with("reason", "app")
+                    .with("found", json!({"app": "Calculator", "pid": 812})));
+            }
+            Ok(())
+        }
+
+        async fn perform(&mut self, _: Action) -> Result<()> {
+            self.assert_locked();
+            let index = self.logged("post");
+            self.log.push(format!("post {index}"));
+            self.posted += 1;
+            match self.script.get(index) {
+                Some(Step::Break) => Err(Error::new("identity", "The session changed")),
+                _ => Ok(()),
+            }
+        }
+
+        fn posted(&self) -> u64 {
+            self.posted
+        }
+
+        fn release(&mut self) -> Result<()> {
+            self.releases += 1;
+            Ok(())
+        }
+    }
+
+    fn keys(count: usize) -> Vec<Action> {
+        (0..count)
+            .map(|_| serde_json::from_value(json!({"type": "key", "key": "a"})).unwrap())
+            .collect()
+    }
+
+    /// Run `count` key actions on a stand-in following `script`, under
+    /// its lock, with or without an expectation.
+    async fn ran(
+        script: &[Step],
+        count: usize,
+        expect: Option<Expect>,
+    ) -> (std::result::Result<(), Value>, Arc<Mutex<Stand>>) {
+        let stand = Stand::locked(script);
+        let gate = Arc::new(Gate::default());
+        let outcome = {
+            let mut engine = stand.lock().await;
+            run(&mut *engine, &gate, keys(count), expect).await
+        };
+        (outcome, stand)
+    }
+
+    fn app() -> Option<Expect> {
+        Some(Expect::new(812).unwrap())
+    }
+
+    #[tokio::test]
+    async fn the_target_is_checked_under_the_engine_lock_just_before_each_action() {
+        let (outcome, stand) = ran(&[Step::Post, Step::Post], 2, app()).await;
+        assert!(outcome.is_ok());
+        assert_eq!(
+            stand.lock().await.log,
+            ["check 0", "post 0", "check 1", "post 1"]
+        );
+    }
+
+    #[tokio::test]
+    async fn a_mismatch_posts_nothing_and_is_not_uncertain() {
+        let (outcome, stand) = ran(&[Step::Refuse], 2, app()).await;
+        let reply = outcome.unwrap_err();
+        assert_eq!(reply["code"], "focus-changed");
+        assert_eq!(reply["reason"], "app");
+        assert_eq!(reply["found"], json!({"app": "Calculator", "pid": 812}));
+        assert_eq!(reply["performed"], 0);
+        assert_eq!(reply["partial"], false);
+        assert_eq!(reply["uncertain"], false);
+
+        let stand = stand.lock().await;
+        assert_eq!(stand.log, ["check 0"], "nothing was performed");
+        assert_eq!(stand.posted, 0);
+        assert_eq!(stand.releases, 1, "what was held is released");
+    }
+
+    #[tokio::test]
+    async fn a_mismatch_after_earlier_actions_says_how_many_were_sent() {
+        let (outcome, stand) = ran(&[Step::Post, Step::Post, Step::Refuse], 4, app()).await;
+        let reply = outcome.unwrap_err();
+        assert_eq!(reply["code"], "focus-changed");
+        assert_eq!(reply["performed"], 2);
+        assert_eq!(reply["partial"], false);
+        assert_eq!(reply["uncertain"], false);
+        assert_eq!(stand.lock().await.posted, 2);
+    }
+
+    #[tokio::test]
+    async fn an_action_that_fails_partway_stays_uncertain() {
+        let (outcome, _) = ran(&[Step::Break], 2, app()).await;
+        let reply = outcome.unwrap_err();
+        assert_eq!(reply["code"], "identity");
+        assert_eq!(reply["performed"], 0);
+        assert_eq!(reply["partial"], true);
+        assert_eq!(reply["uncertain"], true);
+    }
+
+    #[tokio::test]
+    async fn input_without_an_expectation_is_never_checked() {
+        let (outcome, stand) = ran(&[Step::Refuse, Step::Refuse], 2, None).await;
+        assert!(outcome.is_ok());
+        assert_eq!(stand.lock().await.log, ["post 0", "post 1"]);
+    }
+
+    #[test]
+    fn the_input_service_offers_the_target_check() {
+        assert!(CAPABILITIES.contains(&crate::session::FOCUS_APP));
+        assert_eq!(crate::session::FOCUS_APP, "focus-app");
+    }
 
     /// Only the controller is answered: a process in the helper's own
     /// account, where the apps under test run, is turned away.

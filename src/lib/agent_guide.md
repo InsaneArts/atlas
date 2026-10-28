@@ -27,11 +27,10 @@ setup; never test on their desktop instead.
 ## Reading output
 
 Commands print compact JSON when their output is not a terminal (add
-`--json` if you see plain text) and exit non-zero on failure. A failed
-action's result is on stdout; command or connection errors are on stderr. On
-a non-zero exit, read both. A failure has a `code`, an `error` and a short
-`next`; where this guide says more about a code, follow this guide. Read
-fields from the reply itself, not through a script.
+`--json` if you see plain text) and exit non-zero on failure; then read both
+stdout and stderr. A failure has a `code`, an `error` and a short `next`;
+where this guide says more about a code, follow this guide. Read fields from
+the reply itself, not through a script.
 
 Chain steps with `&&`, never `;`, `|| true` or `>/dev/null`: those hide
 failures and `uncertain` replies. Wait with `atlas wait`, not `sleep`. Add
@@ -66,7 +65,8 @@ otherwise the app gets a read-only copy, listed in `copied`. Prefer
 element, or refuses and lists `candidates`. It opens a menu by its title
 (`--role AXMenuBarItem`) and clicks the items of an open menu or sheet.
 Otherwise use `atlas click X Y`, `atlas type "text"`, `atlas key cmd+s` or
-`atlas scroll X Y --dy -3`; pipe several lines to `atlas type --stdin`.
+`atlas scroll X Y --dy -3`, each with `--app NAME`; pipe several lines to
+`atlas type --stdin`.
 `atlas run -- PROGRAM ARGS` runs a command as the helper; its own result is
 `exitCode`. Save and Open panels, Safari, drag-and-drop and the Desktop and
 Documents folders often fail in the helper: read Limits first.

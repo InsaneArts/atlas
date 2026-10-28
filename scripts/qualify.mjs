@@ -408,10 +408,10 @@ async function workCycle(cycle) {
     // The gate is re-checked immediately before every destructive key.
     const edited = await attempt('edit', async () => {
       for (const args of [
-        ['key', 'cmd+a'],
-        ['key', 'backspace'],
-        ['type', line],
-        ['key', 'cmd+s'],
+        ['key', '--app', 'TextEdit', 'cmd+a'],
+        ['key', '--app', 'TextEdit', 'backspace'],
+        ['type', '--app', 'TextEdit', line],
+        ['key', '--app', 'TextEdit', 'cmd+s'],
       ]) {
         await front();
         await cli(args);
@@ -504,7 +504,7 @@ try {
       // Close only the proven-front fixture, confirm it is gone, then delete.
       try {
         await focusNotes();
-        await cli(['key', 'cmd+w']);
+        await cli(['key', '--app', 'TextEdit', 'cmd+w']);
         await pause(800);
         const { windows = [] } = await cli(['windows', '--app', 'TextEdit']);
         cleanup.closed = !windows.some((window) => window.title === title);

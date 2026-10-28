@@ -430,7 +430,7 @@ Global options:
 ```text
 Click a point, or exactly one element of an app.
 
-Click at display point X Y (origin + screenshot pixels × pointsPerPixel), or on exactly one accessibility element of an app with --app and --name/--role.
+Click at display point X Y (origin + screenshot pixels × pointsPerPixel), or on exactly one accessibility element of an app with --app and --name/--role. With X Y, --app or --pid sends the click only if that app's window is the top one at the point.
 
 Usage: atlas click [OPTIONS] [X] [Y]
 
@@ -488,7 +488,7 @@ Examples:
 ```text
 Type text.
 
-The text is typed as given: a real newline or tab in it (in a shell, $'one\ntwo') or on standard input arrives as a line break or tab, while the two characters \n are typed as they are. Long text is typed in parts without breaking characters, and Atlas keeps control until the last part, so no other input lands in between.
+The text is typed as given: a real newline or tab in it (in a shell, $'one\ntwo') or on standard input arrives as a line break or tab, while the two characters \n are typed as they are. Long text is typed in parts without breaking characters, and Atlas keeps control until the last part, so no other input lands in between. With --app or --pid, text is typed only while that app has keyboard focus, checked before every 16 characters; Atlas stops at the first check that fails.
 
 Usage: atlas type [OPTIONS] [TEXT]
 
@@ -499,6 +499,12 @@ Arguments:
 Options:
       --stdin
           Read the text from standard input instead
+
+      --app <APP>
+          Application name: the one process of that name with a window, or the app in front
+
+      --pid <PID>
+          Exact process ID, for apps with several processes
 
   -h, --help
           Print help (see a summary with '-h')
@@ -519,7 +525,7 @@ Examples:
 ```text
 Press keys, for example cmd+s or escape.
 
-Keys are pressed in order: `key cmd+s` or `key escape return`. A key is a letter, digit or punctuation mark, or one of return, tab, space, escape, backspace, forwarddelete, left, right, up, down, home, end, pageup, pagedown and f1 to f12; the plus key is written + on its own or at the end of a chord (cmd++).
+Keys are pressed in order: `key cmd+s` or `key escape return`. A key is a letter, digit or punctuation mark, or one of return, tab, space, escape, backspace, forwarddelete, left, right, up, down, home, end, pageup, pagedown and f1 to f12; the plus key is written + on its own or at the end of a chord (cmd++). With --app or --pid, each key is pressed only while that app has keyboard focus.
 
 Usage: atlas key [OPTIONS] <KEYS>...
 
@@ -528,6 +534,12 @@ Arguments:
           Keys or chords such as cmd+s, escape, return, shift+tab
 
 Options:
+      --app <APP>
+          Application name: the one process of that name with a window, or the app in front
+
+      --pid <PID>
+          Exact process ID, for apps with several processes
+
   -h, --help
           Print help (see a summary with '-h')
 
@@ -577,7 +589,7 @@ Examples:
 ```text
 Drag from one point to another.
 
-What is dragged (a window, a slider's knob, a selection) moves by exactly the distance between the points; the button itself is released up to one point past the end, in the direction of travel, never off the display. Drag-and-drop onto a target (selected text, files, list items) does not begin in the helper: macOS starts such a drag only from a real mouse.
+What is dragged (a window, a slider's knob, a selection) moves by exactly the distance between the points; the button itself is released up to one point past the end, in the direction of travel, never off the display. Drag-and-drop onto a target (selected text, files, list items) does not begin in the helper: macOS starts such a drag only from a real mouse. With --app or --pid, nothing is sent unless that app's window is the top one at the start point.
 
 Usage: atlas drag [OPTIONS] <FROM_X> <FROM_Y> <TO_X> <TO_Y>
 
@@ -601,6 +613,12 @@ Options:
           [default: left]
           [possible values: left, middle, right]
 
+      --app <APP>
+          Application name: the one process of that name with a window, or the app in front
+
+      --pid <PID>
+          Exact process ID, for apps with several processes
+
   -h, --help
           Print help (see a summary with '-h')
 
@@ -620,7 +638,7 @@ Examples:
 ```text
 Scroll at a point.
 
-Scroll at X Y by lines, as a mouse wheel's notches (about 10 points each, as the app has it); negative values scroll up or left.
+Scroll at X Y by lines, as a mouse wheel's notches (about 10 points each, as the app has it); negative values scroll up or left. With --app or --pid, nothing is sent unless that app's window is the top one at the point.
 
 Usage: atlas scroll [OPTIONS] <X> <Y>
 
@@ -642,6 +660,12 @@ Options:
           
           [default: 0]
 
+      --app <APP>
+          Application name: the one process of that name with a window, or the app in front
+
+      --pid <PID>
+          Exact process ID, for apps with several processes
+
   -h, --help
           Print help (see a summary with '-h')
 
@@ -661,7 +685,7 @@ Examples:
 ```text
 Send several actions at once (a JSON array, or @path/to/actions.json).
 
-Each action is an object with a "type": move {x, y}; click {x, y, button?, count?, modifiers?}; drag {fromX, fromY, toX, toY, button?}; scroll {x, y, dx?, dy?}; type {text}; key {key}; wait {ms}. Up to 32 actions that finish within two seconds; coordinates are display points, a click is 1 to 5 clicks, a scroll at most 100 lines, text at most 256 characters, a wait at most 250 ms. Example: [{"type":"click","x":200,"y":120},{"type":"type","text":"hi"}]
+Each action is an object with a "type": move {x, y}; click {x, y, button?, count?, modifiers?}; drag {fromX, fromY, toX, toY, button?}; scroll {x, y, dx?, dy?}; type {text}; key {key}; wait {ms}. Up to 32 actions that finish within two seconds; coordinates are display points, a click is 1 to 5 clicks, a scroll at most 100 lines, text at most 256 characters, a wait at most 250 ms. With --app or --pid, each action is checked before it starts, as type, key, click, scroll and drag check it. Example: [{"type":"click","x":200,"y":120},{"type":"type","text":"hi"}]
 
 Usage: atlas input [OPTIONS] <ACTIONS>
 
@@ -670,6 +694,12 @@ Arguments:
           A JSON array of actions, or @path/to/actions.json
 
 Options:
+      --app <APP>
+          Application name: the one process of that name with a window, or the app in front
+
+      --pid <PID>
+          Exact process ID, for apps with several processes
+
   -h, --help
           Print help (see a summary with '-h')
 

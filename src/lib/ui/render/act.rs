@@ -43,10 +43,9 @@ pub fn typed(value: &Value) -> Rendered {
     let characters = value["typed"].as_u64().unwrap_or(0) as usize;
 
     if value["ok"] == false {
-        let batches = value["batches"].as_u64().unwrap_or(0);
-        let confirmed = value["confirmedBatches"].as_u64().unwrap_or(0);
         let message = format!(
-            "Typed {confirmed} of {batches} parts: {}",
+            "Typed {} before it stopped: {}",
+            text::count(characters, "character"),
             value["error"]
                 .as_str()
                 .unwrap_or("the helper did not confirm the rest")

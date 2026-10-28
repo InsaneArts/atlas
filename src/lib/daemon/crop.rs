@@ -115,13 +115,7 @@ pub fn app(windows: &[Window], pid: i64, display: &Region) -> Option<AppCrop> {
         height: (bottom - top) as i32,
     };
     let area = bounds(&region);
-    let overlay = |window: &Window| {
-        window.bounds.covers(&screen)
-            && matches!(
-                window.owner.as_deref(),
-                Some("Dock" | "Notification Center")
-            )
-    };
+    let overlay = |window: &Window| window.passes_through(&screen);
     let overlapping = windows[..back]
         .iter()
         .filter(|window| {

@@ -456,7 +456,7 @@ impl Canary<'_> {
 
     async fn keys(&self, actions: Value) -> Result<()> {
         self.client
-            .input_owned(self.ownership, &actions, &self.epoch)
+            .input_owned(self.ownership, &actions, &self.epoch, None)
             .await
             .map(|_| ())
     }

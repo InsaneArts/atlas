@@ -4,7 +4,7 @@
 //! action, holds controller exclusion while acting, and keeps the
 //! screenshots and activity log in the private output folder.
 use crate::{
-    actions,
+    actions::{self, Expect},
     config::Config,
     control::{Controller, Ownership, SharedLease},
     daemon::protocol::{Crop, Region},
@@ -12,7 +12,10 @@ use crate::{
     doing::Doing,
     error::{Error, Holder, Result},
     last_capture,
-    session::{Display, Epoch, Session, input_current, input_settled, require_hidden},
+    session::{
+        Display, Epoch, FOCUS_APP, HOLD, SHUTDOWN, Session, has_capability, input_current,
+        input_settled, require_hidden,
+    },
     transport::{Transport, accepted, run_output},
 };
 use base64::{Engine, engine::general_purpose::STANDARD};
@@ -195,6 +198,17 @@ const RUN_MARGIN: Duration = Duration::from_secs(10);
 /// The longest the input service's grant can outlast a command killed
 /// while holding it: the grant's own life, and a second to spare.
 const GRANT_OUTLIVES: Duration = crate::native::GRANT_TTL.saturating_add(Duration::from_secs(1));
+
+/// How an agent's batch is checked against the app it is for.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Check {
+    /// Sent only with the check: an input service that cannot check is
+    /// refused before anything is sent.
+    Required(Expect),
+    /// Checked when the input service can, and otherwise sent as before:
+    /// for input whose own check already ran before it was sent.
+    Offered(Expect),
+}
 
 /// Who recorded mutations are attributed to in the activity log.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -752,10 +766,7 @@ impl Client {
         let Ok(hello) = self.input_transport().call(&json!({"op": "hello"})).await else {
             return unreachable("The helper's input service isn't running.");
         };
-        let capable = hello["capabilities"]
-            .as_array()
-            .is_some_and(|capabilities| capabilities.iter().any(|c| c == "hold"));
-        if !capable {
+        if !has_capability(&hello, HOLD) {
             return unreachable("The helper's input service is from an older build.");
         }
 
@@ -837,6 +848,7 @@ impl Client {
                     Some("identity") => "identity",
                     Some("session-changed") => "session-changed",
                     Some("permission") => "permission",
+                    Some("focus-changed") => "focus-changed",
                     _ => "native",
                 },
                 result["error"]
@@ -873,18 +885,21 @@ impl Client {
             None
         };
 
-        self.input_inner(actions, expected, lease).await
+        self.input_inner(actions, expected, lease, None).await
     }
 
     /// Send one validated batch under controller ownership the caller already
-    /// holds, refusing unless the helper still has exactly `epoch`.
+    /// holds, refusing unless the helper still has exactly `epoch`. With a
+    /// `check`, the helper sends each action only while it would reach that
+    /// app.
     pub async fn input_owned(
         &self,
         _ownership: &Ownership,
         actions: &Value,
         epoch: &Epoch,
+        check: Option<Check>,
     ) -> Result<Value> {
-        self.input_inner(actions, Some((epoch, Instant::now())), None)
+        self.input_inner(actions, Some((epoch, Instant::now())), None, check)
             .await
     }
 
@@ -935,19 +950,44 @@ impl Client {
         actions: &Value,
         expected: Option<(&Epoch, Instant)>,
         lease: Option<(&SharedLease, &str)>,
+        check: Option<Check>,
     ) -> Result<Value> {
         self.controller.require_known()?;
 
         // A viewer's fresh observation is already tied to its acquired lease.
-        // The native process validates that exact epoch again before every event.
-        let session = match (expected, lease) {
-            (Some((epoch, _)), Some(_)) => Session {
+        // The native process validates that exact epoch again before every
+        // event. The person's own input is never checked.
+        if let (Some((epoch, _)), Some(_)) = (expected, lease) {
+            debug_assert!(check.is_none(), "the person's input is never checked");
+            let session = Session {
                 epoch: epoch.clone(),
                 capture: true,
                 input: true,
-            },
-            _ => self.identity().await?,
-        };
+            };
+            actions::validate(actions, &session.epoch.display)?;
+            return self
+                .input_in_session(actions, expected, lease, None, &session)
+                .await;
+        }
+
+        let status = self.status().await;
+        self.input_with_status(&status, actions, expected, lease, check)
+            .await
+    }
+
+    /// [`Client::input_inner`] once `status` is read. The epoch and whether
+    /// the input service checks an agent's app come from this one status,
+    /// so both belong to the very process the input goes to.
+    async fn input_with_status(
+        &self,
+        status: &Value,
+        actions: &Value,
+        expected: Option<(&Epoch, Instant)>,
+        lease: Option<(&SharedLease, &str)>,
+        check: Option<Check>,
+    ) -> Result<Value> {
+        let session = require_hidden(status, self.config.helper_uid)?;
+        let expect = expectation(&status["inputService"], check)?;
 
         if expected.is_some_and(|(epoch, _)| *epoch != session.epoch) {
             return Err(Error::new(
@@ -956,15 +996,24 @@ impl Client {
             ));
         }
 
+        let input_pid = session.epoch.input_pid;
         let session = if session.input || lease.is_some() {
             session
         } else {
             self.repin(session).await?
         };
 
+        // The service whose capability was read is the one that checks.
+        if expect.is_some() && session.epoch.input_pid != input_pid {
+            return Err(Error::new(
+                "session-changed",
+                "The helper's input service changed meanwhile",
+            ));
+        }
+
         actions::validate(actions, &session.epoch.display)?;
 
-        self.input_in_session(actions, expected, lease, &session)
+        self.input_in_session(actions, expected, lease, expect, &session)
             .await
     }
 
@@ -975,6 +1024,7 @@ impl Client {
         actions: &Value,
         expected: Option<(&Epoch, Instant)>,
         lease: Option<(&SharedLease, &str)>,
+        expect: Option<Expect>,
         session: &Session,
     ) -> Result<Value> {
         let standalone = crate::control::token();
@@ -998,19 +1048,19 @@ impl Client {
             .is_none()
             .then(|| self.controller.quarantine())
             .transpose()?;
+        let mut request = json!({
+            "op": "input",
+            "actions": actions,
+            "owner": owner,
+            "epoch": session.epoch.input_epoch(),
+            // An agent's command names the app it acted in.
+            "app": self.doing.is_some(),
+        });
+        if let Some(expect) = expect {
+            request["expect"] = json!(expect);
+        }
         let result = self
-            .mutate(
-                json!({
-                    "op": "input",
-                    "actions": actions,
-                    "owner": owner,
-                    "epoch": session.epoch.input_epoch(),
-                    // An agent's command names the app it acted in.
-                    "app": self.doing.is_some(),
-                }),
-                lease,
-                expected.map(|(_, at)| at),
-            )
+            .mutate(request, lease, expected.map(|(_, at)| at))
             .await;
 
         if lease.is_none() {
@@ -1259,10 +1309,7 @@ impl Client {
             ));
         }
 
-        let stoppable = native["capabilities"]
-            .as_array()
-            .is_some_and(|capabilities| capabilities.iter().any(|c| c == "shutdown"));
-        if !stoppable {
+        if !has_capability(native, SHUTDOWN) {
             return Err(Error::new(
                 "startup",
                 "The running input service predates authenticated shutdown and cannot be \
@@ -1857,6 +1904,25 @@ impl Client {
     }
 }
 
+/// What the helper is asked to expect of an agent's batch, given what its
+/// input service `native` says it can check. An input service that answered
+/// without the check is refused when the check is required: it would post
+/// the input unchecked, and input cannot be taken back once it is sent. One
+/// that did not answer is refused later, as unavailable.
+fn expectation(native: &Value, check: Option<Check>) -> Result<Option<Expect>> {
+    let offered = has_capability(native, FOCUS_APP);
+    let answered = native["ok"] == true;
+    match check {
+        None => Ok(None),
+        Some(Check::Offered(expect)) => Ok(offered.then_some(expect)),
+        Some(Check::Required(expect)) if offered || !answered => Ok(Some(expect)),
+        Some(Check::Required(_)) => Err(Error::new(
+            "startup",
+            "The helper's input service is from an older Atlas that cannot check which app is in front; run atlas start-input, then try again",
+        )),
+    }
+}
+
 /// The code a failure is recorded with: `uncertain` when it may have
 /// finished in the helper all the same, so the activity never says it
 /// didn't happen.
@@ -1902,8 +1968,11 @@ pub fn validate_completion(request: &Value, reply: &Value) -> Result<()> {
     }
 
     let valid = match request["op"].as_str() {
+        // A checked batch is confirmed only with its expectation echoed: a
+        // service that ignored it posted the input unchecked.
         Some("input") => {
             reply["performed"].as_u64() == request["actions"].as_array().map(|v| v.len() as u64)
+                && (request["expect"].is_null() || reply["expect"] == request["expect"])
         }
         Some("run") => {
             reply["timedOut"].is_boolean()
@@ -2088,15 +2157,25 @@ mod tests {
         listener: &UnixListener,
         operation: &str,
     ) -> BufReader<UnixStream> {
+        received(caller, listener, operation).await.0
+    }
+
+    /// [`dispatched`], with the request the stand-in received.
+    async fn received<T: std::fmt::Debug>(
+        caller: &mut (impl Future<Output = Result<T>> + Unpin),
+        listener: &UnixListener,
+        operation: &str,
+    ) -> (BufReader<UnixStream>, Value) {
         tokio::select! {
             outcome = caller => panic!("caller ended before {operation}: {outcome:?}"),
             peer = tokio::time::timeout(Duration::from_secs(2), async {
                 let (peer, _) = listener.accept().await.unwrap();
                 let mut peer = BufReader::new(peer);
-                let mut request = String::new();
-                peer.read_line(&mut request).await.unwrap();
-                assert_eq!(serde_json::from_str::<Value>(&request).unwrap()["op"], operation);
-                peer
+                let mut line = String::new();
+                peer.read_line(&mut line).await.unwrap();
+                let request = serde_json::from_str::<Value>(&line).unwrap();
+                assert_eq!(request["op"], operation);
+                (peer, request)
             }) => peer.unwrap(),
         }
     }
@@ -2117,7 +2196,242 @@ mod tests {
             {"type": "pointer", "phase": "move", "x": 2, "y": 2},
         ]);
         actions::validate(&actions, &session.epoch.display)?;
-        client.input_in_session(&actions, None, None, session).await
+        client
+            .input_in_session(&actions, None, None, None, session)
+            .await
+    }
+
+    /// One key press, checked against `expect` when given, after session
+    /// verification.
+    async fn checked_input(
+        client: &Client,
+        session: &Session,
+        expect: Option<Expect>,
+    ) -> Result<Value> {
+        let _ownership = client.controller.acquire(false)?;
+        let actions = json!([{"type": "key", "key": "a"}]);
+        client
+            .input_in_session(&actions, None, None, expect, session)
+            .await
+    }
+
+    fn textedit() -> Option<Expect> {
+        Some(Expect::new(812).unwrap())
+    }
+
+    #[tokio::test]
+    async fn the_expectation_is_sent_only_when_asked() {
+        for (expect, sent) in [(None, Value::Null), (textedit(), json!({"pid": 812}))] {
+            let (_dir, client, listener, session) = native_client();
+            let mut caller = Box::pin(checked_input(&client, &session, expect));
+            let mut acquire = dispatched(&mut caller, &listener, "acquire").await;
+            answer(&mut acquire, json!({"ok": true})).await;
+            let (mut input, request) = received(&mut caller, &listener, "input").await;
+            assert_eq!(request.get("expect").cloned().unwrap_or(Value::Null), sent);
+            let mut reply = json!({"ok": true, "performed": 1});
+            reply["expect"] = sent;
+            answer(&mut input, reply).await;
+            let mut release = dispatched(&mut caller, &listener, "release").await;
+            answer(&mut release, json!({"ok": true})).await;
+            assert_eq!(caller.await.unwrap()["ok"], true);
+            assert!(client.controller.pending().unwrap().is_empty());
+        }
+    }
+
+    #[tokio::test]
+    async fn a_checked_reply_without_its_echo_is_uncertain() {
+        let (_dir, client, listener, session) = native_client();
+        let mut caller = Box::pin(checked_input(&client, &session, textedit()));
+        let mut acquire = dispatched(&mut caller, &listener, "acquire").await;
+        answer(&mut acquire, json!({"ok": true})).await;
+        let mut input = dispatched(&mut caller, &listener, "input").await;
+        // A service that ignored the expectation posted the key unchecked.
+        answer(&mut input, json!({"ok": true, "performed": 1})).await;
+        let mut release = dispatched(&mut caller, &listener, "release").await;
+        answer(&mut release, json!({"ok": true})).await;
+        let error = caller.await.unwrap_err();
+        assert_eq!(error.code, "protocol");
+        assert!(error.uncertain);
+        recovery_settles_the_abandoned_claim(&client);
+    }
+
+    #[tokio::test]
+    async fn a_focus_refusal_releases_and_leaves_no_marker() {
+        let (_dir, client, listener, session) = native_client();
+        let mut caller = Box::pin(checked_input(&client, &session, textedit()));
+        let mut acquire = dispatched(&mut caller, &listener, "acquire").await;
+        answer(&mut acquire, json!({"ok": true})).await;
+        let mut input = dispatched(&mut caller, &listener, "input").await;
+        let refusal = json!({"ok": false, "code": "focus-changed", "reason": "app",
+            "found": {"app": "Calculator", "pid": 900}, "error": "Calculator has keyboard focus",
+            "performed": 0, "partial": false, "uncertain": false});
+        answer(&mut input, refusal.clone()).await;
+        let mut release = dispatched(&mut caller, &listener, "release").await;
+        answer(&mut release, json!({"ok": true})).await;
+        let reply = caller.await.unwrap();
+        for field in ["ok", "code", "reason", "found", "performed", "uncertain"] {
+            assert_eq!(reply[field], refusal[field], "{field}");
+        }
+        assert!(client.controller.pending().unwrap().is_empty());
+        assert!(client.controller.acquire(false).is_ok());
+    }
+
+    /// A verified status of helper account 7001 whose input service lists
+    /// `capabilities`: enough for input to go ahead without asking again.
+    fn verified_status(capabilities: &[&str]) -> Value {
+        let proof = json!({"ok": true, "uid": 7001, "hasGraphicAccess": true, "parentPID": 123,
+            "onConsole": false, "securitySessionID": 42, "displayID": 7, "width": 100,
+            "height": 100});
+        json!({
+            "ok": true,
+            "user": {"uid": 7001},
+            "daemon": {"pid": 123},
+            "session": {"managerName": "Aqua", "onConsole": false},
+            "display": {"width": 100, "height": 100, "scale": 1},
+            "permissions": {"screenCapture": true, "accessibility": true},
+            "sessionProof": proof,
+            "inputService": {"ok": true, "protocolVersion": 1, "pid": 456, "ready": true,
+                "accessibility": true, "session": proof, "capabilities": capabilities},
+        })
+    }
+
+    /// Send one key under `check` given `status`, and whether the input
+    /// service's socket was connected to at all.
+    ///
+    /// The helper account must differ from the one running the test, so
+    /// the stand-in socket (served by the test's own account) fails the
+    /// peer check of any connection: a connection is the evidence that
+    /// something would have been sent, and none is the evidence that
+    /// nothing was.
+    async fn connected(status: &Value, check: Option<Check>) -> (Result<Value>, bool) {
+        let (_dir, mut client, listener, _) = native_client();
+        client.config.helper_uid = 7001;
+        let actions = json!([{"type": "key", "key": "a"}]);
+        let _ownership = client.controller.acquire(false).unwrap();
+        let (outcome, accepted) = tokio::join!(
+            client.input_with_status(status, &actions, None, None, check),
+            tokio::time::timeout(Duration::from_millis(500), listener.accept()),
+        );
+        assert!(
+            client.controller.pending().unwrap().is_empty(),
+            "no marker is left"
+        );
+        (outcome, accepted.is_ok())
+    }
+
+    #[tokio::test]
+    async fn an_older_input_service_is_refused_before_anything_is_sent() {
+        let older = verified_status(&[SHUTDOWN, HOLD]);
+        let (outcome, sent) = connected(&older, textedit().map(Check::Required)).await;
+        let refused = outcome.unwrap_err();
+        assert_eq!(refused.code, "startup");
+        assert!(!refused.uncertain);
+        assert!(
+            refused.error.contains("atlas start-input"),
+            "{}",
+            refused.error
+        );
+        assert!(!sent, "neither acquire nor input reached the service");
+
+        // The same status goes on to the service when nothing needs the
+        // check, or when the service can make it.
+        let current = verified_status(&[SHUTDOWN, HOLD, FOCUS_APP]);
+        for (status, check) in [
+            (&older, None),
+            (&older, textedit().map(Check::Offered)),
+            (&current, textedit().map(Check::Required)),
+        ] {
+            let (_, sent) = connected(status, check).await;
+            assert!(sent, "{check:?}");
+        }
+    }
+
+    #[test]
+    fn a_named_click_is_checked_only_by_a_service_that_can() {
+        let older = json!({"ok": true, "capabilities": [SHUTDOWN, HOLD]});
+        let current = json!({"ok": true, "capabilities": [SHUTDOWN, HOLD, FOCUS_APP]});
+        let unanswered = json!({"ok": false, "code": "transport"});
+        let pid = textedit().unwrap();
+
+        assert_eq!(
+            expectation(&older, Some(Check::Offered(pid))).unwrap(),
+            None
+        );
+        assert_eq!(
+            expectation(&unanswered, Some(Check::Offered(pid))).unwrap(),
+            None
+        );
+        assert_eq!(
+            expectation(&current, Some(Check::Offered(pid))).unwrap(),
+            Some(pid)
+        );
+
+        assert_eq!(
+            expectation(&older, Some(Check::Required(pid)))
+                .unwrap_err()
+                .code,
+            "startup"
+        );
+        assert_eq!(
+            expectation(&current, Some(Check::Required(pid))).unwrap(),
+            Some(pid)
+        );
+        // A service that did not answer is refused as unavailable later.
+        assert_eq!(
+            expectation(&unanswered, Some(Check::Required(pid))).unwrap(),
+            Some(pid)
+        );
+        assert_eq!(expectation(&older, None).unwrap(), None);
+    }
+
+    #[tokio::test]
+    async fn a_focus_refusal_keeps_its_code_on_every_native_path() {
+        let (_dir, client, listener, _) = native_client();
+        let mut caller = Box::pin(client.native_control("input", "owner"));
+        let mut request = dispatched(&mut caller, &listener, "input").await;
+        answer(
+            &mut request,
+            json!({"ok": false, "code": "focus-changed", "error": "Calculator has keyboard focus"}),
+        )
+        .await;
+        let error = caller.await.unwrap_err();
+        assert_eq!(error.code, "focus-changed");
+        assert!(!error.uncertain);
+    }
+
+    #[test]
+    fn a_checked_input_is_confirmed_only_with_its_expectation_echoed() {
+        let unchecked = json!({"op": "input", "actions": [{}, {}]});
+        let mut checked = unchecked.clone();
+        checked["expect"] = json!({"pid": 812});
+
+        for (request, reply, confirmed) in [
+            (&unchecked, json!({"ok": true, "performed": 2}), true),
+            (&unchecked, json!({"ok": true, "performed": 1}), false),
+            (
+                &checked,
+                json!({"ok": true, "performed": 2, "expect": {"pid": 812}}),
+                true,
+            ),
+            (&checked, json!({"ok": true, "performed": 2}), false),
+            (
+                &checked,
+                json!({"ok": true, "performed": 2, "expect": {"pid": 9}}),
+                false,
+            ),
+            (
+                &checked,
+                json!({"ok": false, "code": "focus-changed"}),
+                true,
+            ),
+        ] {
+            let outcome = validate_completion(request, &reply);
+            assert_eq!(outcome.is_ok(), confirmed, "{request} {reply}");
+            if let Err(error) = outcome {
+                assert_eq!(error.code, "protocol");
+                assert!(error.uncertain);
+            }
+        }
     }
 
     fn recovery_settles_the_abandoned_claim(client: &Client) {
@@ -2172,6 +2486,13 @@ mod tests {
 
     #[tokio::test]
     async fn standalone_input_with_an_uncertain_outcome_stays_pending_until_recovery() {
+        // Recovery takes the controller lock, which a spawn on another test
+        // thread can hold in its child until exec.
+        if !crate::transaction_test::isolated(
+            "client::tests::standalone_input_with_an_uncertain_outcome_stays_pending_until_recovery",
+        ) {
+            return;
+        }
         for (input_reply, release_reply) in [
             (json!({"ok": true, "performed": 2}), None),
             (

@@ -46,7 +46,7 @@ pub(super) fn view(command: &Command) -> View {
             at(*to_x, *to_y)
         )),
         Command::Scroll { x, y, .. } => View::Action(format!("Scrolled at {}", at(*x, *y))),
-        Command::Key { keys } => View::Action(format!("Pressed {}", keys.join(" "))),
+        Command::Key { keys, .. } => View::Action(format!("Pressed {}", keys.join(" "))),
         Command::Input { .. } => View::Action("Performed the actions".into()),
         Command::Type { .. } => View::Type,
         Command::Run { .. }

@@ -471,6 +471,7 @@ fn reason(row: &Value) -> Option<&'static str> {
             _ => "The helper doesn't have permission",
         },
         "session-changed" => "The helper's screen changed meanwhile",
+        "focus-changed" => "Another app was in front",
         "lease-lost" => "Control ended before it finished",
         "cancelled" => "It was cancelled",
         "uncertain" => "It may not have finished",
@@ -569,6 +570,15 @@ mod tests {
             let row = json!({"operation": operation, "ok": false, "code": "permission"});
             assert_eq!(shown(&row, NOW)["reason"], words, "{operation}");
         }
+    }
+
+    #[test]
+    fn a_focus_refusal_has_a_plain_reason() {
+        let row = json!({"operation": "input", "ok": false, "code": "focus-changed",
+            "verb": "type", "app": "TextEdit"});
+        let shown = shown(&row, NOW);
+        assert_eq!(shown["reason"], "Another app was in front");
+        assert_eq!(crate::doing::says(&row), "couldn't type in TextEdit");
     }
 
     #[test]

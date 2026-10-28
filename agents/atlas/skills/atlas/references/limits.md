@@ -92,6 +92,16 @@ than a week are removed the next time one is taken; you need not remove them.
 
 ### Typing, keys and scrolling
 
+- `--app NAME` (or `--pid`) on `type`, `key`, `click X Y`, `scroll`, `drag`
+  and `input` sends each action only while that app has keyboard focus (text
+  and keys) or its window is the top one at the point (clicks, scrolls,
+  drags). Otherwise the reply is `focus-changed` and nothing more is sent.
+  Text is checked every 16 characters. Atlas never brings the app forward
+  itself: click where it shows.
+- In one `input` batch given `--app`, put a short wait
+  (`{"type":"wait","ms":150}`) between a click that brings the app forward
+  and the typing after it: focus moves a moment after the click, and the
+  typing is checked as it starts.
 - `atlas type` types about 150 characters a second, and other input waits
   until it is done. For several lines, pipe them in on one command line:
   `printf 'one\ntwo\n' | atlas type --stdin`, or

@@ -312,6 +312,22 @@ pub fn input_build_current(status: &Value) -> bool {
         && native["replaced"] != true
 }
 
+/// The input-service capability to shut down when its controller asks.
+pub const SHUTDOWN: &str = "shutdown";
+
+/// The input-service capability to keep the person's Stop of agents.
+pub const HOLD: &str = "hold";
+
+/// The input-service capability that checks an agent's target app.
+pub const FOCUS_APP: &str = "focus-app";
+
+/// Whether an input service's hello lists `name` among its capabilities.
+pub fn has_capability(native: &Value, name: &str) -> bool {
+    native["capabilities"]
+        .as_array()
+        .is_some_and(|capabilities| capabilities.iter().any(|capability| capability == name))
+}
+
 /// [`input_settled`], and running the installed build.
 pub fn input_current(status: &Value, uid: u32, pid: u32) -> bool {
     input_settled(status, uid, pid) && input_build_current(status)
@@ -1072,12 +1088,23 @@ fn running_for(elapsed: &str) -> Option<std::time::Duration> {
 #[cfg(test)]
 mod tests {
     use super::{
-        Absence, Blocker, Kind, LOGGED_OUT, Process, Record, Window, blockers, classify,
-        desktop_up_in, diagnose, gone_twice, input_build_current, logged_out_in, parse_processes,
-        record_with, require_hidden, running_for, silent, stale_in, validate_target_uid,
+        Absence, Blocker, FOCUS_APP, Kind, LOGGED_OUT, Process, Record, Window, blockers, classify,
+        desktop_up_in, diagnose, gone_twice, has_capability, input_build_current, logged_out_in,
+        parse_processes, record_with, require_hidden, running_for, silent, stale_in,
+        validate_target_uid,
     };
     use serde_json::json;
     use std::time::Duration;
+
+    #[test]
+    fn a_service_lists_only_the_capabilities_it_names() {
+        let native = json!({"capabilities": ["shutdown", "focus-app"]});
+        assert!(has_capability(&native, "shutdown"));
+        assert!(has_capability(&native, FOCUS_APP));
+        assert!(!has_capability(&native, "hold"));
+        assert!(!has_capability(&json!({}), "hold"));
+        assert!(!has_capability(&json!({"capabilities": "hold"}), "hold"));
+    }
 
     fn listed_processes(listing: &str) -> Vec<Process> {
         parse_processes(listing).expect("valid process list")
