@@ -33,31 +33,60 @@ pub fn worker(path: &Path, apply: bool) -> Result<Value> {
         Request::Apply { plan } => apply_plan(&home, &plan, &guard),
         Request::Rollback { id, apply } => rollback(&home, &id, apply, &guard),
         Request::Run { argv } => runner::execute(&home, &argv, &guard),
-        Request::Transactions {} => transactions(&home, &guard),
+        Request::Transactions { all, ids } => transactions(&home, all, &ids, &guard),
     }
 }
 
-/// The most transactions listed; `more` counts the rest.
+/// The most transactions listed; `more` counts those left unread.
 const LISTED: usize = 200;
 
-/// Every transaction in the helper, newest first, at most [`LISTED`]: its
-/// ID, phase, whether it is the one that must be resumed or rolled back
-/// first, when its record last changed, and each file's target and
-/// operation. File contents, digests, fingerprints, sources and copies are
-/// never included. A record that does not read is counted, not listed. It
-/// opens existing state only, and creates nothing.
-pub(super) fn transactions(home: &Path, guard: &impl Fn() -> Result<()>) -> Result<Value> {
+/// The transactions in the helper, newest first, at most [`LISTED`]: each
+/// one's ID, phase, whether it is the one that must be resumed or rolled
+/// back first, when its record last changed, and each file's target and
+/// operation. Those rolled back completely are counted as `hidden`, not
+/// listed, unless `all`, so they never push older unfinished ones out. Each
+/// of `ids` (the frozen plans the asker holds) is listed whatever its phase
+/// and age, so the asker can tell which the helper started. File contents,
+/// digests, fingerprints, sources and copies are never included, and a
+/// record that does not read is counted, not listed. It opens existing
+/// state only, creates nothing, and holds the store's shared lock only
+/// while it reads one record, so an operation that wants the store waits
+/// no longer than that.
+pub(super) fn transactions(
+    home: &Path,
+    all: bool,
+    ids: &[String],
+    guard: &impl Fn() -> Result<()>,
+) -> Result<Value> {
     guard()?;
-    let store = Store::open(home, false)?;
-    let mut recorded = recorded_transactions(&store.path);
+    if ids.len() > LISTED {
+        return Err(problem("Too many plans were asked about"));
+    }
+    for id in ids {
+        validate_id(id)?;
+    }
+    let (mut recorded, active) = {
+        let store = Store::open(home, false)?;
+        let read = (recorded_transactions(&store.path), store.active()?);
+        store.confirm_read()?;
+        read
+    };
     recorded.sort_by_key(|(_, updated)| std::cmp::Reverse(*updated));
-    let more = recorded.len().saturating_sub(LISTED);
-    let active = store.active()?;
 
-    let mut unreadable = 0;
-    let mut listed = Vec::new();
-    for (id, updated) in recorded.into_iter().take(LISTED) {
-        match store.transaction(&id) {
+    let asked = |id: &String| ids.contains(id);
+    let (mut listed, mut hidden, mut unreadable, mut more) = (Vec::new(), 0, 0, 0);
+    for (id, updated) in &recorded {
+        let full = listed.len() >= LISTED;
+        if full && !asked(id) {
+            more += 1;
+            continue;
+        }
+        match Store::open(home, false)?.transaction(id) {
+            Ok(Some(transaction))
+                if !all && !asked(id) && transaction.phase == Phase::RolledBack =>
+            {
+                hidden += 1;
+            }
             Ok(Some(transaction)) => listed.push(json!({
                 "planId": id,
                 "phase": transaction.phase,
@@ -70,10 +99,10 @@ pub(super) fn transactions(home: &Path, guard: &impl Fn() -> Result<()>) -> Resu
         }
     }
 
-    store.confirm_read()?;
     Ok(json!({
         "ok": true,
         "transactions": listed,
+        "hidden": hidden,
         "more": more,
         "unreadable": unreadable,
     }))

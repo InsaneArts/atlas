@@ -90,7 +90,7 @@ If you lost the plan ID, list every copy into the helper Atlas knows of:
 atlas environment list --json
 ```
 
-Each plan has its `planId`, its `state` (`previewed`, `applying`, `applied`, `rollingBack`, `rolledBack`, `running` while a command uses it, or `unknown` when a request's outcome is not known), when it last changed and the target and operation of each file. File contents, digests and sources are never listed. `session` names the agent session that made it, when its record says so, and `thisTask` says whether the session's current task did. Plans rolled back completely are left out unless you pass `--all`. Listing only reads: it takes no control and records nothing.
+Each plan has its `planId`, its `state` (`previewed`, `applying`, `applied`, `rollingBack`, `rolledBack`, `running` while a command uses it, or `unknown` when a request's outcome is not known), when it last changed and the target and operation of each file. File contents, digests and sources are never listed. `session` names the agent session that made it, when its record says so, and `thisTask` says whether the session's current task did. Plans rolled back completely are left out unless you pass `--all`, and counted in `hidden`. `unreadable` counts records that could not be read and `more` those not looked at or not shown; while either is above 0, an empty list does not prove nothing was copied. Listing only reads: it takes no control and records nothing.
 
 ## Conflicts and interrupted work
 

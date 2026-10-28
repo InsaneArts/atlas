@@ -757,11 +757,24 @@ fn lock_stage(stage: &Path) -> Result<fs::File> {
     let lock = open_regular(&stage.join("controller.lock"), true)?
         .ok_or_else(|| problem("Plan lock is missing"))?;
     validate_private(&lock, false)?;
-    lock.try_lock_exclusive()
-        .map_err(|_| problem("This environment plan is already running"))?;
+
+    // A listing looks at the lock for an instant, and a process being
+    // spawned elsewhere briefly holds every open file of its parent: a lock
+    // held that briefly is waited out; a command using the plan holds it
+    // far longer.
+    let until = std::time::Instant::now() + STAGE_PATIENCE;
+    while lock.try_lock_exclusive().is_err() {
+        if std::time::Instant::now() >= until {
+            return Err(problem("This environment plan is already running"));
+        }
+        std::thread::sleep(Duration::from_millis(5));
+    }
 
     Ok(lock)
 }
+
+/// How long a plan's lock that looks held is tried again.
+const STAGE_PATIENCE: Duration = Duration::from_millis(250);
 
 /// [`dispatch_within`] the usual time a helper command is given.
 async fn dispatch(client: &Client, helper: &str, stage: &Path, request: Request) -> Result<Value> {

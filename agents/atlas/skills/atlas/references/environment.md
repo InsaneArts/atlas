@@ -52,5 +52,7 @@ contents; `thisTask` marks those this task made, and `session` names the
 session that made one. `applying` and `rollingBack` stopped partway: finish
 them with `atlas environment apply PLAN_ID` or
 `atlas environment rollback PLAN_ID --apply`. `--all` also lists those rolled
-back completely. To keep one part of a long session's copies apart, run that
-part's commands with `ATLAS_TASK=NAME`.
+back completely (counted in `hidden` otherwise). `unreadable` and `more`
+count records it could not read or did not look at: when either is above 0,
+an empty list does not mean nothing was copied. To keep one part of a long
+session's copies apart, run that part's commands with `ATLAS_TASK=NAME`.

@@ -24,23 +24,41 @@ pub(super) async fn list_as(client: &Client, helper: &str, all: bool) -> Result<
         .parent()
         .ok_or_else(|| problem("Missing shared directory"))?;
     let here = frozen(shared, client.config.helper_uid);
-    let there = transactions(client, helper).await?;
+    let there = transactions(client, helper, all, &here).await?;
     let work = task::everyone(client.output_dir()?);
     Ok(listing(&here, &there, &Labels::new(&work, client), all))
 }
 
-/// The helper's own list of its transactions, asked through a request
-/// folder of its own that goes once the answer is in.
-async fn transactions(client: &Client, helper: &str) -> Result<Value> {
+/// The most frozen plans the helper is asked about by ID.
+const ASKED: usize = 200;
+
+/// The helper's own list of its transactions, with those rolled back when
+/// `all`, and whatever it has of the newest frozen plans in `here`; asked
+/// through a request folder of its own that goes once the answer is in.
+async fn transactions(client: &Client, helper: &str, all: bool, here: &[Frozen]) -> Result<Value> {
+    let mut newest: Vec<&Frozen> = here.iter().collect();
+    newest.sort_by_key(|plan| std::cmp::Reverse(plan.updated));
+    let ids = newest
+        .into_iter()
+        .take(ASKED)
+        .map(|plan| plan.id.clone())
+        .collect();
+
     let id = crate::control::token();
     let stage = stage_path(client, &id)?.with_file_name(format!("environment-run-{id}"));
     create_stage(&stage, helper)?;
-    let answer = dispatch(client, helper, &stage, Request::Transactions {}).await;
+    let answer = dispatch(client, helper, &stage, Request::Transactions { all, ids }).await;
     discard(&stage);
 
     let answer = answer?;
-    if answer["ok"] != true || !answer["transactions"].is_array() {
+    if answer["ok"] == false {
         return Err(crate::transport::refusal(&answer));
+    }
+    if answer["ok"] != true || !answer["transactions"].is_array() {
+        return Err(Error::new(
+            "protocol",
+            "The helper's list of its copies was malformed",
+        ));
     }
     Ok(answer)
 }
@@ -70,7 +88,7 @@ pub(super) fn frozen(shared: &Path, uid: u32) -> Vec<Frozen> {
                 .ok()
                 .and_then(|bytes| decode::<Plan>(&bytes).ok())
                 .filter(|plan| plan.id == id && plan.uid == uid)
-                .map(|plan| file_report(&plan));
+                .map(|plan| shown_files(&Value::from(file_report(&plan))));
             let request = requests(&stage);
             if files.is_none() && !request {
                 return None;
@@ -87,8 +105,8 @@ pub(super) fn frozen(shared: &Path, uid: u32) -> Vec<Frozen> {
 }
 
 /// Whether a command holds the lock of the plan folder `stage` right now.
-/// It is looked at with a shared lock let go of at once, which a command
-/// that takes the lock in that instant would find held.
+/// It is looked at with a shared lock let go of at once; a command that
+/// takes the lock in that instant waits it out.
 fn held(stage: &Path) -> bool {
     match open_regular(&stage.join("controller.lock"), false) {
         Ok(Some(lock)) => FileExt::try_lock_shared(&lock).is_err(),
@@ -144,39 +162,57 @@ impl<'a> Labels<'a> {
     }
 }
 
+/// The phases a helper transaction may be in, as it names them.
+const PHASES: [&str; 4] = ["applying", "applied", "rollingBack", "rolledBack"];
+
 /// What `list` replies: the helper's transactions, `there`, each in the
 /// state its phase (or a command holding its folder) says, then the frozen
 /// plans `here` the helper never started, newest first and labelled. Plans
-/// rolled back completely are left out unless `all`.
+/// rolled back completely are counted as `hidden`, not listed, unless
+/// `all`; `more` counts those not shown or not looked at, and `unreadable`
+/// those the helper or this side could not read, so an empty list is
+/// never taken for proof that nothing was copied.
 pub(super) fn listing(here: &[Frozen], there: &Value, labels: &Labels, all: bool) -> Value {
     let running = |id: &str| here.iter().any(|plan| plan.id == id && plan.running);
+    let count = |field: &str| there[field].as_u64().unwrap_or(0);
+    let (mut hidden, mut unreadable) = (count("hidden"), count("unreadable"));
     let mut plans: Vec<(u64, Value)> = Vec::new();
+    let mut started = Vec::new();
 
     let transactions = there["transactions"]
         .as_array()
         .map_or(&[][..], Vec::as_slice);
     for transaction in transactions {
-        let Some(id) = transaction["planId"].as_str() else {
+        let (Some(id), Some(phase)) = (
+            transaction["planId"]
+                .as_str()
+                .filter(|id| validate_id(id).is_ok()),
+            transaction["phase"]
+                .as_str()
+                .filter(|phase| PHASES.contains(phase)),
+        ) else {
+            unreadable += 1;
             continue;
         };
-        let state = match transaction["phase"].as_str() {
+        started.push(id);
+        let state = match phase {
             _ if running(id) => "running",
-            Some("rolledBack") if !all => continue,
-            Some(phase) => phase,
-            None => continue,
+            "rolledBack" if !all => {
+                hidden += 1;
+                continue;
+            }
+            phase => phase,
         };
         let updated = transaction["updatedAt"].as_u64().unwrap_or(0);
         let entry = json!({"planId": id, "state": state, "updatedAt": updated,
-            "files": transaction["files"]});
+            "files": shown_files(&transaction["files"])});
         plans.push((updated, labels.label(entry, id)));
     }
 
-    let started = |id: &str| {
-        transactions
-            .iter()
-            .any(|transaction| transaction["planId"] == id)
-    };
-    for plan in here.iter().filter(|plan| !started(&plan.id)) {
+    for plan in here
+        .iter()
+        .filter(|plan| !started.contains(&plan.id.as_str()))
+    {
         let state = if plan.running {
             "running"
         } else if plan.request {
@@ -190,15 +226,23 @@ pub(super) fn listing(here: &[Frozen], there: &Value, labels: &Labels, all: bool
     }
 
     plans.sort_by_key(|(updated, _)| std::cmp::Reverse(*updated));
-    let more = u64::try_from(plans.len().saturating_sub(SHOWN)).unwrap_or(u64::MAX)
-        + there["more"].as_u64().unwrap_or(0);
-    let mut reply = json!({
+    let more = u64::try_from(plans.len().saturating_sub(SHOWN)).unwrap_or(u64::MAX) + count("more");
+    json!({
         "ok": true,
         "plans": plans.into_iter().take(SHOWN).map(|(_, plan)| plan).collect::<Vec<_>>(),
         "more": more,
-    });
-    if let Some(unreadable) = there["unreadable"].as_u64().filter(|count| *count > 0) {
-        reply["unreadable"] = json!(unreadable);
-    }
-    reply
+        "hidden": hidden,
+        "unreadable": unreadable,
+    })
+}
+
+/// Each of `files` (a helper's file report) by its target and operation
+/// only: nothing else the helper sends is passed on.
+fn shown_files(files: &Value) -> Vec<Value> {
+    files
+        .as_array()
+        .into_iter()
+        .flatten()
+        .map(|file| json!({"target": file["target"], "operation": file["operation"]}))
+        .collect()
 }

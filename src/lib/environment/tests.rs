@@ -1149,7 +1149,13 @@ fn only_an_apply_an_undo_with_apply_and_a_run_change_the_helper() {
         .changes_helper()
     );
     assert!(Request::Apply { plan }.changes_helper());
-    assert!(!Request::Transactions {}.changes_helper());
+    assert!(
+        !Request::Transactions {
+            all: true,
+            ids: Vec::new()
+        }
+        .changes_helper()
+    );
     assert!(
         Request::Run {
             argv: vec!["cat".into()]
@@ -1470,7 +1476,7 @@ fn previewing(home: &Path) -> impl FnMut(&Value) -> Option<Value> + '_ {
             Request::Preview { id, files } => {
                 worker::preview(home, nix::unistd::getuid().as_raw(), &id, files, &|| Ok(()))
             }
-            Request::Transactions {} => worker::transactions(home, &|| Ok(())),
+            Request::Transactions { all, ids } => worker::transactions(home, all, &ids, &|| Ok(())),
             Request::Rollback { id, apply: false } => {
                 worker::rollback(home, &id, false, &|| Ok(()))
             }
@@ -2437,8 +2443,15 @@ fn an_unrecorded_restore_copy_with_other_contents_is_kept_for_inspection() {
 }
 
 impl Sandbox {
+    /// The helper's list of its transactions, as `list` asks for it.
     fn transactions(&self) -> Value {
-        worker::transactions(&self.home, &|| Ok(())).unwrap()
+        self.transactions_of(false, &[])
+    }
+
+    /// The helper's list, with those rolled back when `all`, and each of
+    /// `ids` whatever its phase.
+    fn transactions_of(&self, all: bool, ids: &[String]) -> Value {
+        worker::transactions(&self.home, all, ids, &|| Ok(())).unwrap()
     }
 }
 
@@ -2481,8 +2494,7 @@ fn the_transaction_list_carries_no_digest_source_or_contents() {
     assert_eq!(listed["transactions"][0]["phase"], "applied");
     assert_eq!(
         shown["plans"][0]["files"],
-        json!([{"target": ".config/probe/settings.toml", "operation": "create",
-            "legacyPrevious": false}])
+        json!([{"target": ".config/probe/settings.toml", "operation": "create"}])
     );
     for text in [listed.to_string(), shown.to_string()] {
         assert!(!text.contains("SECRET-VALUE"), "{text}");
@@ -2507,7 +2519,7 @@ fn the_list_opens_no_state_that_does_not_exist() {
 
     assert_eq!(
         listed,
-        json!({"ok": true, "transactions": [], "more": 0, "unreadable": 0})
+        json!({"ok": true, "transactions": [], "hidden": 0, "more": 0, "unreadable": 0})
     );
     assert_eq!(tree(&sandbox.root), before);
 }
@@ -2607,10 +2619,10 @@ fn rolled_back_plans_are_listed_only_when_asked() {
     let undone = sandbox.plan(vec![sandbox.payload("undone", b"two")]);
     assert_eq!(sandbox.apply(&undone)["ok"], true);
     assert_eq!(sandbox.rollback(&undone, true)["rolledBack"], true);
-    let listed = sandbox.transactions();
 
+    let shown = |all: bool| listing(&[], &sandbox.transactions_of(all, &[]), &unlabelled(), all);
     let ids = |all: bool| -> Vec<Value> {
-        listing(&[], &listed, &unlabelled(), all)["plans"]
+        shown(all)["plans"]
             .as_array()
             .unwrap()
             .iter()
@@ -2619,9 +2631,84 @@ fn rolled_back_plans_are_listed_only_when_asked() {
     };
 
     assert_eq!(ids(false), [json!([kept.id, "applied"])]);
+    assert_eq!(shown(false)["hidden"], 1);
     let all = ids(true);
     assert_eq!(all.len(), 2);
     assert!(all.contains(&json!([undone.id, "rolledBack"])));
+    assert_eq!(shown(true)["hidden"], 0);
+}
+
+#[test]
+fn rolled_back_plans_never_push_an_older_applied_one_out_of_the_list() {
+    let sandbox = Sandbox::new();
+    let applied = sandbox.plan(vec![sandbox.payload("file", b"copied")]);
+    assert_eq!(sandbox.apply(&applied)["ok"], true);
+    let store = state::Store::open(&sandbox.home, true).unwrap();
+    let older = std::time::SystemTime::now() - Duration::from_secs(10_000);
+    fs::File::open(store.folder(&applied.id).join("transaction.json"))
+        .unwrap()
+        .set_modified(older)
+        .unwrap();
+    let mut undone = store.transaction(&applied.id).unwrap().unwrap();
+    undone.phase = Phase::RolledBack;
+    for _ in 0..210 {
+        undone.plan.id = crate::control::token();
+        fs::create_dir(store.folder(&undone.plan.id)).unwrap();
+        store.save(&undone).unwrap();
+    }
+    drop(store);
+
+    let listed = sandbox.transactions();
+    let shown = listing(&[], &listed, &unlabelled(), false);
+
+    assert_eq!(listed["hidden"], 210);
+    assert_eq!(listed["more"], 0);
+    assert_eq!(shown["plans"].as_array().unwrap().len(), 1);
+    assert_eq!(shown["plans"][0]["planId"], applied.id);
+    assert_eq!(shown["plans"][0]["state"], "applied");
+}
+
+#[test]
+fn a_plan_the_asker_holds_is_listed_whatever_its_phase_or_age() {
+    let sandbox = Sandbox::new();
+    let plan = sandbox.plan(vec![sandbox.payload("file", b"copied")]);
+    assert_eq!(sandbox.apply(&plan)["ok"], true);
+    assert_eq!(sandbox.rollback(&plan, true)["rolledBack"], true);
+    let uid = nix::unistd::getuid().as_raw();
+    write_plan(&stage_in(&sandbox.root, &plan.id), &plan.id, uid);
+
+    let here = frozen(&sandbox.root, uid);
+    let listed = sandbox.transactions_of(false, std::slice::from_ref(&plan.id));
+    let shown = listing(&here, &listed, &unlabelled(), false);
+
+    assert_eq!(listed["transactions"][0]["phase"], "rolledBack");
+    assert!(
+        shown["plans"].as_array().unwrap().is_empty(),
+        "never taken for a plan the helper did not start: {shown}"
+    );
+    assert_eq!(shown["hidden"], 1);
+}
+
+#[test]
+fn a_plans_lock_looked_at_for_an_instant_is_waited_out() {
+    let sandbox = Sandbox::new();
+    let stage = stage_in(&sandbox.root, &crate::control::token());
+    atomic_write(&stage.join("controller.lock"), b"", 0o600).unwrap();
+    let looking = fs::File::open(stage.join("controller.lock")).unwrap();
+    FileExt::try_lock_shared(&looking).unwrap();
+
+    let locked = std::thread::scope(|scope| {
+        let waiting = scope.spawn(|| lock_stage(&stage).map(|_| ()));
+        std::thread::sleep(Duration::from_millis(50));
+        drop(looking);
+        waiting.join().unwrap()
+    });
+    assert!(locked.is_ok(), "{locked:?}");
+
+    let held = lock_stage(&stage).unwrap();
+    let error = lock_stage(&stage).unwrap_err();
+    assert!(error.error.contains("already running"), "{error}");
+    drop(held);
 }
 
 #[test]
