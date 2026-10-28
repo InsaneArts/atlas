@@ -7,8 +7,8 @@ mod list;
 mod model;
 
 pub(crate) use model::Phase;
+mod one_off;
 pub mod profile;
-mod requests;
 mod runner;
 mod state;
 #[cfg(test)]
@@ -28,7 +28,7 @@ use files::*;
 use fs2::FileExt;
 pub use list::list;
 use model::*;
-pub(crate) use requests::{install_app, installs, remove_app};
+pub(crate) use one_off::{install_app, installs, remove_app};
 pub use runner::NO_PROFILE;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
@@ -39,6 +39,8 @@ use std::{
     path::{Path, PathBuf},
     time::Duration,
 };
+#[cfg(test)]
+pub(crate) use undo::PlanPhase;
 pub(crate) use undo::{PlanState, Undone, plan_states, undo_plan};
 pub use worker::worker;
 

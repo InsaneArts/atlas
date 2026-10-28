@@ -78,7 +78,7 @@ impl Hands for Fake {
         Ok(ids
             .iter()
             .map(|_| PlanState {
-                state: "applied",
+                phase: crate::environment::PlanPhase::Applied,
                 targets: vec![".config/probe/settings.toml".into()],
             })
             .collect())

@@ -630,45 +630,6 @@ fn rename_at(parent: &fs::File, from: &CStr, to: &CStr, exclusive: bool) -> Resu
     Ok(())
 }
 
-/// Move `from` in the folder `from_dir` to `to` in the folder `to_dir`, on
-/// the same volume, refusing an existing `to` atomically: an
-/// `AlreadyExists` error says something arrived there first.
-#[allow(unsafe_code, reason = "FFI: libc's renameatx_np has no safe wrapper")]
-pub(super) fn rename_between(
-    from_dir: &fs::File,
-    from: &CStr,
-    to_dir: &fs::File,
-    to: &CStr,
-) -> std::io::Result<()> {
-    // SAFETY: two live directory descriptors and two NUL-terminated single
-    // components, each borrowed for the length of the call; RENAME_EXCL
-    // makes the rename refuse an existing target instead of replacing it.
-    let status = unsafe {
-        libc::renameatx_np(
-            from_dir.as_raw_fd(),
-            from.as_ptr(),
-            to_dir.as_raw_fd(),
-            to.as_ptr(),
-            libc::RENAME_EXCL,
-        )
-    };
-
-    if status != 0 {
-        return Err(std::io::Error::last_os_error());
-    }
-
-    from_dir.sync_all()?;
-    to_dir.sync_all()
-}
-
-/// `name` as one path component for a call that takes one.
-pub(super) fn single_component(name: &str) -> Result<CString> {
-    if name.is_empty() || name.contains('/') || name == "." || name == ".." {
-        return Err(problem("Expected a single file name"));
-    }
-    CString::new(name).map_err(|_| problem("Invalid file name"))
-}
-
 /// Move a recorded prepared inode into place. No-replace is atomic for creates.
 pub(super) fn install_prepared(source: &Path, target: &Path, create_only: bool) -> Result<()> {
     let missing =

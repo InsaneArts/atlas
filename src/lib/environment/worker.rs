@@ -38,10 +38,10 @@ pub fn worker(path: &Path, apply: bool) -> Result<Value> {
             installs::install(&home, &id, &source, &name, &guard)
         }
         Request::RemoveApp { id } => {
-            installs::remove(&home, &id, &guard, &installs::helper_processes)
+            installs::remove(&home, &id, &guard, &installs::Looks::system())
         }
         Request::Installs { ids } => {
-            installs::installs(&home, &ids, &guard, &installs::helper_processes)
+            installs::installs(&home, &ids, &guard, &installs::Looks::system())
         }
     }
 }

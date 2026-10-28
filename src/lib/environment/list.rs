@@ -30,7 +30,7 @@ pub(super) async fn list_as(client: &Client, helper: &str, all: bool) -> Result<
 }
 
 /// The most frozen plans the helper is asked about by ID.
-const ASKED: usize = 200;
+pub(super) const ASKED: usize = 200;
 
 /// The helper's own list of its transactions, with those rolled back when
 /// `all`, and whatever it has of the newest frozen plans in `here`; asked
@@ -57,23 +57,12 @@ pub(super) async fn ask(
     if ids.len() > ASKED {
         return Err(problem("Too many plans were asked about"));
     }
-    let id = crate::control::token();
-    let stage = stage_path(client, &id)?.with_file_name(format!("environment-run-{id}"));
-    create_stage(&stage, helper)?;
-    let answer = dispatch(client, helper, &stage, Request::Transactions { all, ids }).await;
-    discard(&stage);
-
-    let answer = answer?;
-    if answer["ok"] == false {
-        return Err(crate::transport::refusal(&answer));
-    }
-    if answer["ok"] != true || !answer["transactions"].is_array() {
-        return Err(Error::new(
-            "protocol",
-            "The helper's list of its copies was malformed",
-        ));
-    }
-    Ok(answer)
+    let answer = one_off::send(client, helper, None, Request::Transactions { all, ids }).await?;
+    one_off::read(
+        answer,
+        "transactions",
+        "The helper's list of its copies was malformed",
+    )
 }
 
 /// A plan folder beside the shared command, as `list` reports it.

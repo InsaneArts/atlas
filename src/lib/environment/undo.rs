@@ -7,19 +7,36 @@ use super::{list::frozen, model::*, *};
 use crate::control::Token;
 
 /// How far a plan got, as a cleanup reads it before it undoes anything.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) enum PlanPhase {
+    /// Frozen here; the helper never started it.
+    Previewed,
+    Applying,
+    Applied,
+    RollingBack,
+    RolledBack,
+    /// A command holds it now.
+    Running,
+    /// A request of it has an outcome nobody knows, or the helper named a
+    /// phase this build does not know: never taken for finished.
+    Unknown,
+    /// Nothing of it, here or in the helper.
+    Gone,
+}
+
+/// How far a plan got, and what it copies.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct PlanState {
-    /// `previewed`, `applying`, `applied`, `rollingBack`, `rolledBack`,
-    /// `running` (a command holds it now), `unknown` (a request whose
-    /// outcome is not known) or `gone` (nothing of it, here or there).
-    pub state: &'static str,
+    pub phase: PlanPhase,
     /// The targets it copies into the helper, relative to its home.
     pub targets: Vec<String>,
 }
 
 /// How far each of `ids` got: the helper's word for those it started, and
-/// the frozen plans beside the shared command for those it never did.
-/// Reads only: it takes no control and records nothing.
+/// the frozen plans beside the shared command for those it never did,
+/// asked in as many reads as the helper's limit needs. Reads only: it
+/// takes no control and records nothing.
 pub(crate) async fn plan_states(client: &Client, ids: &[Token]) -> Result<Vec<PlanState>> {
     if ids.is_empty() {
         return Ok(Vec::new());
@@ -31,11 +48,17 @@ pub(crate) async fn plan_states(client: &Client, ids: &[Token]) -> Result<Vec<Pl
         .parent()
         .ok_or_else(|| problem("Missing shared directory"))?;
     let here = frozen(shared, client.config.helper_uid);
-    let asked: Vec<String> = ids.iter().map(|id| id.as_str().to_owned()).collect();
-    let there = list::ask(client, &helper, true, asked).await?;
-    let transactions = there["transactions"]
-        .as_array()
-        .map_or(&[][..], Vec::as_slice);
+    let mut transactions: Vec<Value> = Vec::new();
+    for batch in ids.chunks(list::ASKED) {
+        let asked: Vec<String> = batch.iter().map(|id| id.as_str().to_owned()).collect();
+        let there = list::ask(client, &helper, true, asked).await?;
+        transactions.extend(
+            there["transactions"]
+                .as_array()
+                .cloned()
+                .unwrap_or_default(),
+        );
+    }
 
     Ok(ids
         .iter()
@@ -47,25 +70,25 @@ pub(crate) async fn plan_states(client: &Client, ids: &[Token]) -> Result<Vec<Pl
                 .find(|transaction| transaction["planId"] == id.as_str());
             match (started, plan) {
                 (Some(transaction), _) => PlanState {
-                    state: if running {
-                        "running"
+                    phase: if running {
+                        PlanPhase::Running
                     } else {
-                        phase_name(&transaction["phase"])
+                        phase_of(&transaction["phase"])
                     },
                     targets: targets(&transaction["files"]),
                 },
                 (None, Some(plan)) => PlanState {
-                    state: if running {
-                        "running"
+                    phase: if running {
+                        PlanPhase::Running
                     } else if plan.request() {
-                        "unknown"
+                        PlanPhase::Unknown
                     } else {
-                        "previewed"
+                        PlanPhase::Previewed
                     },
                     targets: plan.targets(),
                 },
                 (None, None) => PlanState {
-                    state: "gone",
+                    phase: PlanPhase::Gone,
                     targets: Vec::new(),
                 },
             }
@@ -73,15 +96,15 @@ pub(crate) async fn plan_states(client: &Client, ids: &[Token]) -> Result<Vec<Pl
         .collect())
 }
 
-/// A helper phase by the name a cleanup shows; one it does not know reads
-/// as unknown, never as finished.
-fn phase_name(phase: &Value) -> &'static str {
+/// A helper phase as a cleanup reads it; one it does not know reads as
+/// unknown, never as finished.
+fn phase_of(phase: &Value) -> PlanPhase {
     match phase.as_str() {
-        Some("applying") => "applying",
-        Some("applied") => "applied",
-        Some("rollingBack") => "rollingBack",
-        Some("rolledBack") => "rolledBack",
-        _ => "unknown",
+        Some("applying") => PlanPhase::Applying,
+        Some("applied") => PlanPhase::Applied,
+        Some("rollingBack") => PlanPhase::RollingBack,
+        Some("rolledBack") => PlanPhase::RolledBack,
+        _ => PlanPhase::Unknown,
     }
 }
 
@@ -164,7 +187,9 @@ async fn undo_locked(
             ));
         }
         let frozen = !created && planned(stage);
-        discard(stage);
+        if !discarded(stage) {
+            return Ok(Undone::Unfinished(UNREMOVED.into()));
+        }
         return Ok(if frozen {
             Undone::Discarded
         } else {
@@ -174,38 +199,51 @@ async fn undo_locked(
     if preview["ok"] != true {
         return Ok(Undone::Unfinished(said(&preview)));
     }
-    if preview["phase"] == "rolledBack" {
-        if !requests(stage) {
-            discard(stage);
+    let reply = if preview["phase"] == "rolledBack" {
+        preview
+    } else {
+        let reply = dispatch_owned(client, ownership, helper, stage, ask(true)).await?;
+        if !settled(&Ok(reply.clone()), "rolledBack") {
+            return Ok(Undone::Unfinished(said(&reply)));
         }
-        return Ok(Undone::RolledBack);
+        reply
+    };
+    if !requests(stage) && !discarded(stage) {
+        return Ok(Undone::Unfinished(UNREMOVED.into()));
     }
+    Ok(rolled_back(&reply))
+}
 
-    let reply = dispatch_owned(client, ownership, helper, stage, ask(true)).await?;
-    if !settled(&Ok(reply.clone()), "rolledBack") {
-        return Ok(Undone::Unfinished(said(&reply)));
-    }
-    if !requests(stage) {
-        discard(stage);
-    }
-    let kept = targets(&Value::Array(
-        reply["keptTargets"]
-            .as_array()
-            .cloned()
-            .unwrap_or_default()
-            .into_iter()
-            .map(|target| json!({"target": target}))
-            .collect(),
-    ));
+/// Why undoing a plan is not finished when what Atlas kept for it would
+/// not go.
+const UNREMOVED: &str = "Atlas could not remove what it kept for this copy into the helper";
+
+/// Discard `stage`, and whether it is gone: a folder still there is never
+/// taken for removed.
+fn discarded(stage: &Path) -> bool {
+    discard(stage);
+    fs::symlink_metadata(stage).is_err_and(|error| error.kind() == std::io::ErrorKind::NotFound)
+}
+
+/// What a rollback `reply` that reached rolledBack left: nothing, or the
+/// files the helper changed since and the folders it could not remove. One
+/// rolled back before says the same as one rolled back now.
+fn rolled_back(reply: &Value) -> Undone {
+    let kept: Vec<String> = reply["keptTargets"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter_map(|target| target.as_str().map(str::to_owned))
+        .collect();
     let directories = reply["retainedDirectories"].as_array().map_or(0, Vec::len);
-    Ok(if kept.is_empty() && directories == 0 {
+    if kept.is_empty() && directories == 0 {
         Undone::RolledBack
     } else {
         Undone::Kept {
             targets: kept,
             directories,
         }
-    })
+    }
 }
 
 /// What the helper said of a request it did not finish.

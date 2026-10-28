@@ -16,6 +16,8 @@ pub mod digest;
 pub mod doing;
 pub mod environment;
 pub mod error;
+#[allow(unsafe_code, reason = "FFI: libc's renameatx_np has no safe binding")]
+mod fs_move;
 pub mod handoff;
 pub mod helper_info;
 pub mod host_session;

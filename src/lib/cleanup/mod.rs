@@ -372,7 +372,7 @@ pub(crate) async fn preview(
                         .position(|id| id == plan)
                         .and_then(|place| states.get(place))
                     {
-                        value["planState"] = json!(state.state);
+                        value["planState"] = json!(state.phase);
                         value["targets"] = json!(state.targets);
                     }
                 }
