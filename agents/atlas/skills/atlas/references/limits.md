@@ -142,8 +142,18 @@ output, so its end may be missing. `pid` is the command's process.
 A command is stopped after 20 seconds; `--timeout SECONDS` allows up to 600.
 If the helper stops while it runs, it fails with the code `restart`; if the
 helper comes on screen, the command is stopped with `on-console`. Both are
-uncertain. Atlas stays busy while it runs, so start anything longer in the
-background (`nohup … > "$HOME/run.log" 2>&1 &`) and read its log.
+uncertain. Other agents can act while it runs; recovery, restart and updates
+wait for it. Use `--timeout` up to 600 rather than starting it in the
+background: Atlas ends a command it started when the person stops agents,
+when the helper comes on screen and at its timeout. Keep `--timeout` under
+your own tool timeout, and never leave an Atlas command running when your
+turn ends: `codex exec` kills it then, and its outcome is left unknown for
+every agent until `atlas restart`.
+
+Never send keys or clicks from inside `run` (`osascript` with System Events,
+`cliclick` and the like): use Atlas's own commands, which check where input
+goes. A command that opens windows or activates apps changes what other
+agents see, so pass `--app` to keyboard commands.
 
 A command that changes the helper waits up to 30 seconds for another Atlas
 command to finish before answering `busy` (`--wait SECONDS`, 0 to 600, or the

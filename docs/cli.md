@@ -53,7 +53,7 @@ Use `doctor` to decide whether a task can start. Use the observation commands to
 | `open`   | Open an app, file or URL in the helper. `--app` selects an app; `--env NAME=VALUE` passes a launch variable.                               |
 | `close`  | Quit one app with `--app`. `--all` quits every app left open, another agent's too. In an agent session it leaves another session's copies. |
 | `wait`   | Wait for a matching window to appear or, with `--gone`, disappear.                                                                         |
-| `run`    | Run a command as the helper and return its output and process result.                                                                      |
+| `run`    | Run a command as the helper and return its output and process result. Other agents may act while it runs.                                  |
 
 Check the screen before acting, and verify the effect afterward. The [daily use guide](using-atlas.md) shows a complete open, inspect, act and close sequence. `close --all` is broader than closing the app you are testing: it includes ordinary app bundles and non-Apple menu bar apps, another agent's too, while leaving Atlas and macOS system apps alone.
 
