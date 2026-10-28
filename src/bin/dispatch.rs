@@ -134,7 +134,7 @@ fn attributed(command: &Command) -> bool {
             | Command::EnvironmentWorker { .. }
             | Command::SessionInfo
             | Command::PermissionsInfo
-            | Command::WindowsInfo
+            | Command::WindowsInfo { .. }
             | Command::ElementsInfo { .. }
             | Command::Init
             | Command::Uninstall { .. }
@@ -237,15 +237,19 @@ pub(super) fn controls(command: &Command) -> bool {
     )
 }
 
-/// The helper's on-screen windows and where its Dock takes clicks, as one
-/// reading for the controller to judge points by.
+/// The helper's on-screen windows and, with `dock`, where its Dock takes
+/// clicks, as one reading for the controller to judge points by. Only a
+/// check of a point asks for the Dock, which is read through Accessibility.
 #[cfg(target_os = "macos")]
-fn windows_info() -> Result<Value> {
+fn windows_info(dock: bool) -> Result<Value> {
     use atlas::native::{ax, windows};
 
     let windows = windows::windows()?;
-    let dock = ax::dock(&windows, ax::DOCK_TIMEOUT);
-    Ok(json!({ "ok": true, "windows": windows, "dock": dock }))
+    let mut info = json!({ "ok": true, "windows": windows });
+    if dock {
+        info["dock"] = json!(ax::dock(&windows, ax::DOCK_TIMEOUT));
+    }
+    Ok(info)
 }
 
 #[cfg(target_os = "macos")]
@@ -270,7 +274,7 @@ fn elements_info(_: i32) -> Result<Value> {
 }
 
 #[cfg(not(target_os = "macos"))]
-fn windows_info() -> Result<Value> {
+fn windows_info(_: bool) -> Result<Value> {
     Err(Error::new("platform", "Window listing requires macOS"))
 }
 
@@ -391,7 +395,7 @@ async fn carry_out(
         }
         Command::SessionInfo => atlas::native::session_info(),
         Command::PermissionsInfo => Ok(atlas::daemon::facts::permissions_now()),
-        Command::WindowsInfo => windows_info(),
+        Command::WindowsInfo { dock } => windows_info(dock),
         Command::ElementsInfo { pid } => elements_info(pid),
         Command::HelperServe { .. } => {
             unreachable!("main serves the helper daemon on its own thread")

@@ -1039,18 +1039,19 @@ pub const DOCK_TIMEOUT: Duration = Duration::from_millis(250);
 /// Most children of the Dock's application element read; it has one list.
 const DOCK_CHILDREN: usize = 16;
 
-/// Where the Dock takes clicks: the frames of its lists of tiles, read
+/// Where the Dock takes clicks: the frames of its lists of icons, read
 /// from the process owning the Dock's window in `windows`, waiting at most
-/// `timeout`. With no Dock window there is nothing of the Dock's to click;
-/// a Dock whose lists cannot all be read in time is [`Dock::Unread`], so
-/// every edge it may sit on counts as its.
+/// `timeout`. With no Dock window there is nothing of the Dock's to click.
+/// A Dock that shows anything but lists of icons is [`Dock::Other`], and
+/// one that cannot all be read in time is [`Dock::Unread`]; either covers
+/// all of its window.
 pub fn dock(windows: &[windows::Window], timeout: Duration) -> Dock {
     let Some(pid) = windows
         .iter()
         .find(|window| window.is_dock())
         .map(|window| window.pid)
     else {
-        return Dock::Tiles(Vec::new());
+        return Dock::Icons(Vec::new());
     };
     let Ok(pid) = libc::pid_t::try_from(pid) else {
         return Dock::Unread;
@@ -1070,19 +1071,22 @@ pub fn dock(windows: &[windows::Window], timeout: Duration) -> Dock {
     }
 
     let mut scan = Scan::new(Instant::now() + timeout);
-    let mut tiles = Vec::new();
+    let mut lists = Vec::new();
+    let mut other = false;
     for child in scan.children(&app, "AXChildren", DOCK_CHILDREN) {
         let Some(role) = scan.text(Source::Element(&child), "AXRole") else {
             return Dock::Unread;
         };
         if role != "AXList" {
+            // Mission Control's spaces bar and the like take clicks too.
+            other = true;
             continue;
         }
 
         let Some(frame) = scan.frame(Source::Element(&child)) else {
             return Dock::Unread;
         };
-        tiles.push(windows::Bounds {
+        lists.push(windows::Bounds {
             x: frame.x,
             y: frame.y,
             width: frame.width,
@@ -1090,11 +1094,14 @@ pub fn dock(windows: &[windows::Window], timeout: Duration) -> Dock {
         });
     }
 
-    if scan.incomplete || tiles.is_empty() {
+    if scan.incomplete {
         return Dock::Unread;
     }
+    if other || lists.is_empty() {
+        return Dock::Other;
+    }
 
-    Dock::Tiles(tiles)
+    Dock::Icons(lists)
 }
 
 /// Depth-first elements of `pid`'s windows, its menu bar titles when it is

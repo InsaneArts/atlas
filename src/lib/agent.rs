@@ -17,7 +17,7 @@ use crate::{
     interrupt::Interrupt,
     native::{
         ax::{self, Element, Frame, Stop},
-        windows::{Bounds, MENU_LAYER, Screen, Shown, Window, unobstructed},
+        windows::{Bounds, Dock, MENU_LAYER, Screen, Shown, Window, top_at, unobstructed},
     },
     session::Session,
     transport::{accepted, run_output},
@@ -436,29 +436,47 @@ impl WindowFilter {
 
 /// The helper's on-screen windows, front to back, through a read-only probe.
 pub(crate) async fn windows(client: &Client) -> Result<Vec<Window>> {
-    Ok(windows_within(client, PROBE_LIMIT).await?.windows)
+    window_list(client, PROBE_LIMIT).await
 }
 
-/// The window list and where the Dock takes clicks, with the helper probe
-/// bounded by `limit`.
-async fn windows_within(client: &Client, limit: Duration) -> Result<Shown> {
-    let reply = client.inspect_within(windows_probe(client), limit).await?;
+/// The window list alone, with the helper probe bounded by `limit`.
+async fn window_list(client: &Client, limit: Duration) -> Result<Vec<Window>> {
+    let probe = windows_probe(client, DockRead::Skip);
+    let reply = client.inspect_within(probe, limit).await?;
+    Ok(shown(&reply)?.windows)
+}
+
+/// The window list and where the Dock takes clicks, to judge a point by.
+async fn pointer_view(client: &Client) -> Result<Shown> {
+    let probe = windows_probe(client, DockRead::Read);
+    let reply = client.inspect_within(probe, PROBE_LIMIT).await?;
     shown(&reply)
 }
 
-/// [`windows`] in the helper `verified` describes, which the caller
-/// verified just before.
-async fn windows_in(client: &Client, verified: &Session) -> Result<Shown> {
-    let reply = client
-        .inspect_in(verified, windows_probe(client), PROBE_LIMIT)
-        .await?;
-    shown(&reply)
+/// The window list alone, in the helper `verified` describes, which the
+/// caller verified just before.
+async fn verified_window_list(client: &Client, verified: &Session) -> Result<Vec<Window>> {
+    let probe = windows_probe(client, DockRead::Skip);
+    let reply = client.inspect_in(verified, probe, PROBE_LIMIT).await?;
+    Ok(shown(&reply)?.windows)
+}
+
+/// Whether a window probe also reads where the Dock takes clicks, which
+/// only a check of a point needs.
+#[derive(Clone, Copy)]
+enum DockRead {
+    Skip,
+    Read,
 }
 
 /// The probe that lists the helper's windows.
-fn windows_probe(client: &Client) -> Vec<String> {
+fn windows_probe(client: &Client, dock: DockRead) -> Vec<String> {
     let probe = client.config.identity_probe.to_string_lossy().into_owned();
-    vec![probe, "windows-info".into()]
+    let mut argv = vec![probe, "windows-info".into()];
+    if matches!(dock, DockRead::Read) {
+        argv.push("--dock".into());
+    }
+    argv
 }
 
 /// What the window probe's `reply` shows.
@@ -865,9 +883,8 @@ pub async fn wait(
             probe_budget(remaining)
         };
 
-        let matching: Vec<_> = windows_within(client, budget)
+        let matching: Vec<_> = window_list(client, budget)
             .await?
-            .windows
             .into_iter()
             .filter(|window| filter.matches(window))
             .collect();
@@ -1196,7 +1213,7 @@ async fn target_pid(client: &Client, verified: &Session, target: &Target) -> Res
         Target::Name(name) => name,
     };
 
-    let pids = app_pids(&windows_in(client, verified).await?.windows, name);
+    let pids = app_pids(&verified_window_list(client, verified).await?, name);
     if !pids.is_empty() {
         return one_pid(name, &pids);
     }
@@ -1837,14 +1854,10 @@ pub async fn click_element(
         .unwrap_or_default();
 
     // A fresh list, read after the scan, judged for the element's own window
-    // as the helper judges a point: the Dock's tiles cover what is under them.
-    let Shown { windows, dock } = windows_within(client, PROBE_LIMIT).await?;
-    let display = Bounds {
-        x: 0.0,
-        y: 0.0,
-        width: epoch.display.width,
-        height: epoch.display.height,
-    };
+    // as the helper judges a point: the Dock covers what is under it where
+    // it takes clicks.
+    let Shown { windows, dock } = pointer_view(client).await?;
+    let display = Bounds::display(epoch.display.width, epoch.display.height);
     let screen = Screen::new(display, dock);
     let window = if element.role.as_deref() == Some("AXMenuBarItem") {
         // The menu bar shows the active app's titles, and only those.
@@ -1866,7 +1879,7 @@ pub async fn click_element(
     if !window.is_some_and(|window| unobstructed(&windows, window, x, y, &screen)) {
         return Err(Error::new(
             "elements",
-            "The element is not visible in its window: covered, moved or off screen",
+            hidden_element(&windows, x, y, &screen),
         ));
     }
 
@@ -1890,6 +1903,19 @@ pub async fn click_element(
     result["element"] = clicked(element, (x, y));
 
     Ok(result)
+}
+
+/// Why a named click's element at the point is not visible: the Dock in
+/// front of it, which may be one Atlas could not read, or anything else.
+fn hidden_element(windows: &[Window], x: f64, y: f64, screen: &Screen) -> &'static str {
+    let docked = top_at(windows, x, y, screen).is_some_and(Window::is_dock);
+    match (docked, screen.dock()) {
+        (true, Dock::Unread) => {
+            "Atlas could not read where the Dock takes clicks, so it cannot tell whether the Dock covers the element; try again"
+        }
+        (true, _) => "The Dock covers the element, so a click there would reach the Dock",
+        (false, _) => "The element is not visible in its window: covered, moved or off screen",
+    }
 }
 
 /// Where a click on an element lands: the middle of its frame, or for a
@@ -1947,7 +1973,7 @@ mod tests {
             }
             let output = match request["argv"][1].as_str() {
                 Some("windows-info") => {
-                    json!({"ok": true, "windows": [window.clone()], "dock": []})
+                    json!({"ok": true, "windows": [window.clone()]})
                 }
                 Some("elements-info") => json!({"ok": true, "elements": [], "truncated": false}),
                 other => panic!("nothing else is read: {other:?}"),
@@ -1967,6 +1993,55 @@ mod tests {
             assert_eq!(listed["pid"], 812, "{target:?}");
             assert_eq!(helper.proofs() - before, 1, "{target:?}");
         }
+    }
+
+    /// Only a check of a point pays for reading the Dock: listing windows
+    /// and waiting for them do not ask for it.
+    #[test]
+    fn only_a_point_check_asks_the_window_probe_for_the_dock() {
+        let directory = tempfile::tempdir().unwrap();
+        let client = crate::transaction_test::client(directory.path());
+        let skip = windows_probe(&client, DockRead::Skip);
+        let read = windows_probe(&client, DockRead::Read);
+        assert_eq!(skip[1..], ["windows-info"]);
+        assert_eq!(read[1..], ["windows-info", "--dock"]);
+    }
+
+    /// A named click refused under the Dock says it is the Dock, and when
+    /// the Dock could not be read, that Atlas could not tell.
+    #[test]
+    fn a_named_click_under_the_dock_says_it_is_the_dock() {
+        let dock = Window {
+            number: 1,
+            pid: 2,
+            owner: Some("Dock".into()),
+            title: None,
+            layer: 20,
+            alpha: 1.0,
+            bounds: Bounds::display(1000.0, 800.0),
+        };
+        let app = Window {
+            number: 3,
+            owner: Some("TextEdit".into()),
+            layer: 0,
+            pid: 4,
+            ..dock.clone()
+        };
+        let windows = [dock, app];
+        let display = Bounds::display(1000.0, 800.0);
+        let icons = Dock::Icons(vec![Bounds {
+            x: 200.0,
+            y: 740.0,
+            width: 600.0,
+            height: 60.0,
+        }]);
+        let said =
+            |dock: Dock, y| hidden_element(&windows, 300.0, y, &Screen::new(display.clone(), dock));
+
+        assert!(said(icons.clone(), 770.0).starts_with("The Dock covers"));
+        assert!(said(Dock::Other, 300.0).starts_with("The Dock covers"));
+        assert!(said(Dock::Unread, 300.0).contains("could not read where the Dock takes clicks"));
+        assert!(said(icons, 300.0).starts_with("The element is not visible"));
     }
 
     /// The process a name resolves to from the window list alone.

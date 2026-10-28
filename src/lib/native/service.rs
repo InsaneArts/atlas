@@ -406,12 +406,7 @@ impl Perform for Engine {
     /// The reads block, so they run on a blocking thread; the engine stays
     /// locked by the caller meanwhile, so nothing posts in between.
     async fn require(&mut self, expect: Expect, need: Need, budget: Duration) -> Result<()> {
-        let display = Bounds {
-            x: 0.0,
-            y: 0.0,
-            width: self.epoch.width,
-            height: self.epoch.height,
-        };
+        let display = Bounds::display(self.epoch.width, self.epoch.height);
         let deadline = Instant::now() + budget;
         tokio::task::spawn_blocking(move || focus::check(expect, need, &display, deadline))
             .await

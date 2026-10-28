@@ -625,7 +625,7 @@ Examples:
 ```text
 Drag from one point to another.
 
-What is dragged (a window, a slider's knob, a selection) moves by exactly the distance between the points; the button itself is released up to one point past the end, in the direction of travel, never off the display. Drag-and-drop onto a target (selected text, files, list items) does not begin in the helper: macOS starts such a drag only from a real mouse. With --app or --pid, nothing is sent unless that app's window is the top one at the start point.
+What is dragged (a window, a slider's knob, a selection) moves by exactly the distance between the points; the button itself is released up to one point past the end, in the direction of travel, never off the display. Drag-and-drop onto a target (selected text, files, list items) does not begin in the helper: macOS starts such a drag only from a real mouse. With --app or --pid, nothing is sent unless that app's window is the top one at the start point and at the end point.
 
 Usage: atlas drag [OPTIONS] <FROM_X> <FROM_Y> <TO_X> <TO_Y>
 
@@ -721,7 +721,7 @@ Examples:
 ```text
 Send several actions at once (a JSON array, or @path/to/actions.json).
 
-Each action is an object with a "type": move {x, y}; click {x, y, button?, count?, modifiers?}; drag {fromX, fromY, toX, toY, button?}; scroll {x, y, dx?, dy?}; type {text}; key {key}; wait {ms}. Up to 32 actions that finish within two seconds; coordinates are display points, a click is 1 to 5 clicks, a scroll at most 100 lines, text at most 256 characters, a wait at most 250 ms. With --app or --pid, each action is checked before it starts, as type, key, click, scroll and drag check it. Example: [{"type":"click","x":200,"y":120},{"type":"type","text":"hi"}]
+Each action is an object with a "type": move {x, y}; click {x, y, button?, count?, modifiers?}; drag {fromX, fromY, toX, toY, button?}; scroll {x, y, dx?, dy?}; type {text}; key {key}; wait {ms}. Up to 32 actions that finish within two seconds; coordinates are display points, a click is 1 to 5 clicks, a scroll at most 100 lines, text at most 256 characters, a wait at most 250 ms. With --app or --pid, each action is checked before it starts, as type, key, click, scroll and drag check it, and a move at its point. Example: [{"type":"click","x":200,"y":120},{"type":"type","text":"hi"}]
 
 Usage: atlas input [OPTIONS] <ACTIONS>
 

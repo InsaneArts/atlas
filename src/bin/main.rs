@@ -295,7 +295,7 @@ fn machine_only(command: &Command) -> bool {
         Command::EnvironmentWorker { .. }
             | Command::SessionInfo
             | Command::PermissionsInfo
-            | Command::WindowsInfo
+            | Command::WindowsInfo { .. }
             | Command::ElementsInfo { .. }
             | Command::HelperServe { .. }
             | Command::InputService { .. }

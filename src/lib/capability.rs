@@ -498,7 +498,7 @@ impl Canary<'_> {
             .client
             .inspect_owned(
                 self.ownership,
-                vec![probe.into_owned(), "windows-info".into()],
+                vec![probe.into_owned(), "windows-info".into(), "--dock".into()],
             )
             .await?;
 
@@ -508,12 +508,7 @@ impl Canary<'_> {
 
     /// The helper's display, with its Dock as `shown` says.
     fn screen(&self, shown: &Shown) -> Screen {
-        let display = Bounds {
-            x: 0.0,
-            y: 0.0,
-            width: self.epoch.display.width,
-            height: self.epoch.display.height,
-        };
+        let display = Bounds::display(self.epoch.display.width, self.epoch.display.height);
         Screen::new(display, shown.dock.clone())
     }
 

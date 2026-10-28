@@ -4,7 +4,7 @@
 //! the top one at the point.
 use super::windows::{self, Bounds, Dock, Screen, Window};
 use crate::{
-    actions::{Action, Expect, PointerPhase},
+    actions::{Action, Expect},
     error::{Error, Result},
 };
 use serde::Serialize;
@@ -27,33 +27,53 @@ pub enum Need {
     Keys,
     /// The app's own window on top at this point.
     Point(f64, f64),
-    /// Nothing: the action sends nothing an app acts on, or continues a
-    /// gesture already under way.
+    /// The app's own window on top where a drag starts and where it drops,
+    /// so nothing is dropped on another app or the Dock.
+    Drag { from: (f64, f64), to: (f64, f64) },
+    /// Nothing: the action sends nothing an app acts on.
     Nothing,
 }
 
 impl Need {
-    /// Type and Key need keys; Click, Scroll and a pointer press their
-    /// point; Drag its start; Move, Wait and a pointer's move or release
-    /// nothing.
+    /// Type and Key need keys; Click, Scroll, Move and each pointer phase
+    /// their point, since a move may carry what a press holds and a release
+    /// drops it; Drag its start and its drop; Wait nothing.
     pub fn of(action: &Action) -> Self {
         match action {
             Action::Type { .. } | Action::Key { .. } => Self::Keys,
             Action::Click { x, y, .. }
             | Action::Scroll { x, y, .. }
-            | Action::Pointer {
-                phase: PointerPhase::Down,
-                x,
-                y,
+            | Action::Move { x, y }
+            | Action::Pointer { x, y, .. } => Self::Point(*x, *y),
+            Action::Drag {
+                from_x,
+                from_y,
+                to_x,
+                to_y,
                 ..
-            } => Self::Point(*x, *y),
-            Action::Drag { from_x, from_y, .. } => Self::Point(*from_x, *from_y),
-            Action::Move { .. }
-            | Action::Wait { .. }
-            | Action::Pointer {
-                phase: PointerPhase::Move | PointerPhase::Up,
-                ..
-            } => Self::Nothing,
+            } => Self::Drag {
+                from: (*from_x, *from_y),
+                to: (*to_x, *to_y),
+            },
+            Action::Wait { .. } => Self::Nothing,
+        }
+    }
+}
+
+/// Where on its way a pointer action is checked, as a refusal names it.
+#[derive(Debug, Clone, Copy, PartialEq)]
+enum Spot {
+    /// Where it presses, scrolls or moves.
+    At,
+    /// Where a drag drops what it carries.
+    Drop,
+}
+
+impl Spot {
+    fn words(self) -> &'static str {
+        match self {
+            Self::At => "that point",
+            Self::Drop => "the drop point",
         }
     }
 }
@@ -153,14 +173,17 @@ impl Look for Live {
         Ok(self.windows.as_deref().unwrap_or_default())
     }
 
-    /// The Dock's tiles as Accessibility reports them, from the Dock that
-    /// owns a window in the list.
+    /// The Dock as Accessibility reports it, from the Dock that owns a
+    /// window in the list, in what time is left once the list is read.
     fn dock(&mut self) -> Dock {
         if self.dock.is_none() {
-            let dock = match self.left() {
-                Ok(left) => match self.windows() {
-                    Ok(listed) => super::ax::dock(listed, left.min(super::ax::DOCK_TIMEOUT)),
-                    Err(_) => Dock::Unread,
+            let deadline = self.deadline;
+            let dock = match self.windows() {
+                Ok(listed) => match deadline.checked_duration_since(Instant::now()) {
+                    Some(left) if !left.is_zero() => {
+                        super::ax::dock(listed, left.min(super::ax::DOCK_TIMEOUT))
+                    }
+                    _ => Dock::Unread,
                 },
                 Err(_) => Dock::Unread,
             };
@@ -189,7 +212,9 @@ fn require(
     let outcome = match need {
         Need::Nothing => return Ok(()),
         Need::Keys => keys(expect, look),
-        Need::Point(x, y) => point(expect, x, y, display, look),
+        Need::Point(x, y) => point(expect, (x, y), Spot::At, display, look),
+        Need::Drag { from, to } => point(expect, from, Spot::At, display, look)
+            .and_then(|()| point(expect, to, Spot::Drop, display, look)),
     };
     if outcome.is_ok() && Instant::now() >= deadline {
         return Err(unreadable());
@@ -222,10 +247,17 @@ fn keys(expect: Expect, look: &mut impl Look) -> Result<()> {
 }
 
 /// A pointer action goes ahead only where the app's own window, at any
-/// layer, is uncovered at the point, the Dock's tiles covering what is
-/// under them; on the menu bar, only while the app has keyboard focus,
-/// since the menu bar shows that app's titles.
-fn point(expect: Expect, x: f64, y: f64, display: &Bounds, look: &mut impl Look) -> Result<()> {
+/// layer, is uncovered at the point, the Dock covering what is under it
+/// where it takes clicks; on the menu bar, only while the app has keyboard
+/// focus, since the menu bar shows that app's titles. Where the Dock could
+/// not be read and is on top, what is in front is unreadable.
+fn point(
+    expect: Expect,
+    (x, y): (f64, f64),
+    spot: Spot,
+    display: &Bounds,
+    look: &mut impl Look,
+) -> Result<()> {
     let screen = Screen::new(display.clone(), look.dock());
     let listed = look.windows().map_err(|_| unreadable())?;
     let top = windows::top_at(listed, x, y, &screen);
@@ -236,20 +268,29 @@ fn point(expect: Expect, x: f64, y: f64, display: &Bounds, look: &mut impl Look)
         return Ok(());
     }
 
+    let at = spot.words();
     let Some(top) = top else {
         return Err(refused(
             Reason::Point,
-            format!("No window of the app is at that point, {NOT_SENT}"),
+            format!("No window of the app is at {at}, {NOT_SENT}"),
             None,
         ));
     };
+    if top.is_dock() && *screen.dock() == Dock::Unread {
+        return Err(refused(
+            Reason::Unreadable,
+            format!("Atlas could not read where the Dock takes clicks, {NOT_SENT}"),
+            None,
+        ));
+    }
+
     let found = Found {
         app: top.owner.clone(),
         pid: top.pid,
     };
     let message = match &found.app {
-        Some(name) => format!("{name}'s window is at that point, not the app's, {NOT_SENT}"),
-        None => format!("Another app's window is at that point, {NOT_SENT}"),
+        Some(name) => format!("{name}'s window is at {at}, not the app's, {NOT_SENT}"),
+        None => format!("Another app's window is at {at}, {NOT_SENT}"),
     };
     Err(refused(Reason::Point, message, Some(found)))
 }
@@ -337,7 +378,7 @@ mod tests {
     struct Seen {
         focused: Option<Result<Option<i64>>>,
         windows: Option<Vec<Window>>,
-        /// Where the Dock takes clicks; no tiles unless a test sets them.
+        /// Where the Dock takes clicks; no icons unless a test sets them.
         dock: Option<Dock>,
         focus_reads: usize,
         window_reads: usize,
@@ -379,7 +420,7 @@ mod tests {
         }
 
         fn dock(&mut self) -> Dock {
-            self.dock.clone().unwrap_or(Dock::Tiles(Vec::new()))
+            self.dock.clone().unwrap_or(Dock::Icons(Vec::new()))
         }
     }
 
@@ -529,56 +570,111 @@ mod tests {
         );
     }
 
-    /// The Dock's full-display window lets clicks through except where it
-    /// shows its tiles: there it is on top for every app, even over an
-    /// app's own window under it.
-    #[test]
-    fn the_docks_tiles_refuse_every_app_and_the_points_beside_them_pass() {
-        let dock = window(2, "Dock", 20, (0.0, 0.0, 1000.0, 800.0));
-        let calculator = window(APP, "Calculator", 0, (150.0, 600.0, 300.0, 200.0));
-        let finder = window(OTHER, "Finder", 0, (0.0, 0.0, 1000.0, 800.0));
-        let listed = vec![dock, calculator, finder];
-        let tiles = Dock::Tiles(vec![Bounds {
+    /// The test display's Dock, its icons along the bottom edge.
+    fn icons() -> Dock {
+        Dock::Icons(vec![Bounds {
             x: 200.0,
-            y: 730.0,
+            y: 740.0,
             width: 600.0,
-            height: 70.0,
-        }]);
-        let at = |pid: i64, dock: &Dock, x: f64, y: f64| {
-            let mut look = Seen::focused(Some(pid))
-                .showing(listed.clone())
-                .docked(dock.clone());
-            let expect = Expect::new(pid).unwrap();
-            require(expect, Need::Point(x, y), &display(), &mut look, later())
-        };
+            height: 60.0,
+        }])
+    }
 
-        for (pid, x, y) in [
-            (APP, 300.0, 760.0),
-            (OTHER, 300.0, 760.0),
-            (OTHER, 790.0, 799.0),
+    /// The Dock's window, an app's window partly under its icons, and
+    /// another app's window behind both.
+    fn under_the_dock() -> Vec<Window> {
+        vec![
+            window(2, "Dock", 20, (0.0, 0.0, 1000.0, 800.0)),
+            window(APP, "Calculator", 0, (150.0, 600.0, 300.0, 200.0)),
+            window(OTHER, "Finder", 0, (0.0, 0.0, 1000.0, 800.0)),
+        ]
+    }
+
+    /// A check of `need` for `pid` with the Dock as `dock`.
+    fn docked_need(pid: i64, dock: &Dock, need: Need) -> Result<()> {
+        let mut look = Seen::focused(Some(pid))
+            .showing(under_the_dock())
+            .docked(dock.clone());
+        require(
+            Expect::new(pid).unwrap(),
+            need,
+            &display(),
+            &mut look,
+            later(),
+        )
+    }
+
+    /// The Dock's full-display window lets clicks through except on its
+    /// icons and the shelf around them: there it is on top for every app,
+    /// even over an app's own window under it.
+    #[test]
+    fn the_docks_icons_refuse_every_app_and_the_points_beside_them_pass() {
+        let at = |pid, x, y| docked_need(pid, &icons(), Need::Point(x, y));
+        let dock = json!({"reason": "point", "found": {"app": "Dock", "pid": 2}});
+        for (pid, x, y, what) in [
+            (APP, 300.0, 770.0, "an icon"),
+            (OTHER, 300.0, 770.0, "an icon"),
+            (OTHER, 790.0, 799.0, "an icon at the edge"),
+            (APP, 195.0, 770.0, "the shelf beside the icons"),
+            (APP, 300.0, 732.0, "the shelf above the icons"),
         ] {
-            assert_eq!(
-                refusal(at(pid, &tiles, x, y)),
-                json!({"reason": "point", "found": {"app": "Dock", "pid": 2}}),
-                "{pid} at {x},{y}"
-            );
+            assert_eq!(refusal(at(pid, x, y)), dock, "{pid}: {what}");
         }
 
-        assert!(at(APP, &tiles, 170.0, 760.0).is_ok(), "beside the tiles");
-        assert!(at(APP, &tiles, 300.0, 700.0).is_ok(), "above the tiles");
-        assert!(at(OTHER, &tiles, 900.0, 760.0).is_ok(), "beside the tiles");
+        assert!(at(APP, 170.0, 770.0).is_ok(), "beside the shelf");
+        assert!(at(APP, 300.0, 700.0).is_ok(), "above the shelf");
+        assert!(at(OTHER, 900.0, 770.0).is_ok(), "beside the shelf");
+    }
 
-        // A Dock that could not be read covers each edge it may sit on.
+    /// A Dock that shows more than its icons, or could not be read, covers
+    /// all of its window: what else it shows takes clicks too.
+    #[test]
+    fn a_dock_that_is_not_only_its_icons_covers_the_whole_display() {
+        for (x, y) in [(300.0, 700.0), (500.0, 300.0), (10.0, 10.0)] {
+            assert_eq!(
+                refusal(docked_need(OTHER, &Dock::Other, Need::Point(x, y))),
+                json!({"reason": "point", "found": {"app": "Dock", "pid": 2}}),
+                "{x},{y}"
+            );
+            assert_eq!(
+                refusal(docked_need(OTHER, &Dock::Unread, Need::Point(x, y))),
+                json!({"reason": "unreadable", "found": null}),
+                "{x},{y}"
+            );
+        }
+    }
+
+    /// A drag needs the app's window on top where it drops as well as
+    /// where it starts, so nothing is dropped on a Dock icon or the Trash.
+    #[test]
+    fn a_drag_is_refused_when_it_would_drop_on_the_dock() {
+        let drag = |to| Need::Drag {
+            from: (300.0, 650.0),
+            to,
+        };
+        assert!(docked_need(APP, &icons(), drag((400.0, 700.0))).is_ok());
+
+        let onto_icon = refusal(docked_need(APP, &icons(), drag((400.0, 770.0))));
         assert_eq!(
-            refusal(at(APP, &Dock::Unread, 300.0, 700.0))["found"]["app"],
+            onto_icon,
+            json!({"reason": "point", "found": {"app": "Dock", "pid": 2}})
+        );
+        let error = docked_need(APP, &icons(), drag((400.0, 770.0))).unwrap_err();
+        assert!(error.error.contains("the drop point"), "{}", error.error);
+
+        assert_eq!(
+            refusal(docked_need(APP, &icons(), drag((900.0, 300.0))))["found"]["app"],
+            "Finder",
+            "a drop on another app"
+        );
+        let from_icon = Need::Drag {
+            from: (300.0, 770.0),
+            to: (400.0, 700.0),
+        };
+        assert_eq!(
+            refusal(docked_need(APP, &icons(), from_icon))["found"]["app"],
             "Dock"
         );
-        assert_eq!(
-            refusal(at(OTHER, &Dock::Unread, 10.0, 300.0))["found"]["app"],
-            "Dock"
-        );
-        assert!(at(APP, &Dock::Unread, 300.0, 620.0).is_ok());
-        assert!(at(OTHER, &Dock::Unread, 500.0, 300.0).is_ok());
     }
 
     #[test]
@@ -599,21 +695,25 @@ mod tests {
         );
         assert_eq!(
             need(json!({"type": "drag", "fromX": 5, "fromY": 6, "toX": 7, "toY": 8})),
-            Need::Point(5.0, 6.0),
-            "a drag needs its start, never its end"
+            Need::Drag {
+                from: (5.0, 6.0),
+                to: (7.0, 8.0)
+            },
+            "a drag needs its start and its drop"
         );
-        assert_eq!(
-            need(json!({"type": "pointer", "phase": "down", "x": 9, "y": 10})),
-            Need::Point(9.0, 10.0)
-        );
-        for nothing in [
-            json!({"type": "pointer", "phase": "move", "x": 9, "y": 10}),
-            json!({"type": "pointer", "phase": "up", "x": 9, "y": 10}),
-            json!({"type": "move", "x": 1, "y": 1}),
-            json!({"type": "wait", "ms": 10}),
-        ] {
-            assert_eq!(need(nothing.clone()), Need::Nothing, "{nothing}");
+        for phase in ["down", "move", "up"] {
+            assert_eq!(
+                need(json!({"type": "pointer", "phase": phase, "x": 9, "y": 10})),
+                Need::Point(9.0, 10.0),
+                "a pointer's {phase} may press, carry or drop"
+            );
         }
+        assert_eq!(
+            need(json!({"type": "move", "x": 1, "y": 2})),
+            Need::Point(1.0, 2.0),
+            "a move may carry what a press holds"
+        );
+        assert_eq!(need(json!({"type": "wait", "ms": 10})), Need::Nothing);
     }
 
     #[test]
