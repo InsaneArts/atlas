@@ -1,4 +1,5 @@
 use super::*;
+use crate::helper_test::{Helper, UID};
 use base64::{Engine, engine::general_purpose::STANDARD};
 use std::{
     cell::Cell,
@@ -888,6 +889,7 @@ fn write_plan(stage: &Path, id: &str, uid: u32) {
 /// A worker's reply as the helper's `run` returns it.
 fn worker_reply(exit: u8, output: &Value) -> Value {
     json!({
+        "ok": true,
         "exitCode": exit,
         "timedOut": false,
         "signal": null,
@@ -921,9 +923,124 @@ fn a_stage_keeps_requests_whose_outcome_is_unknown() {
     fs::write(stage.join("controller.lock"), b"").unwrap();
     assert!(!requests(&stage), "a lock is not a request");
 
+    fs::create_dir(stage.join("read-ab12")).unwrap();
+    assert!(
+        !requests(&stage),
+        "a read left behind has nothing to recover"
+    );
+
     fs::create_dir(stage.join("request-ab12")).unwrap();
     assert!(requests(&stage));
     assert!(!requests(&sandbox.root.join("missing")));
+}
+
+/// A week-old preview cut short holds copies but no plan and nothing whose
+/// outcome is unknown, so it goes; one with an unknown request, a plan, or
+/// that is recent, stays.
+#[tokio::test]
+async fn a_week_old_preview_cut_short_is_pruned() {
+    let sandbox = Sandbox::new();
+    let client = crate::transaction_test::client(&sandbox.root);
+    let stage = |inside: &[&str]| {
+        let id = crate::control::token();
+        let stage = stage_in(&sandbox.root, &id);
+        fs::write(stage.join("payload-0"), b"copy").unwrap();
+        for folder in inside {
+            fs::create_dir(stage.join(folder)).unwrap();
+        }
+        (id, stage)
+    };
+    let week_old = |stage: &Path| {
+        let then = std::time::SystemTime::now() - UNUSED - Duration::from_secs(60);
+        fs::File::open(stage).unwrap().set_modified(then).unwrap();
+    };
+
+    let (_, cut_short) = stage(&["read-ab12"]);
+    let (_, unknown) = stage(&["request-ab12"]);
+    let (id, foreign) = stage(&[]);
+    write_plan(&foreign, &id, 501);
+    let (_, recent) = stage(&[]);
+    for old in [&cut_short, &unknown, &foreign] {
+        week_old(old);
+    }
+
+    prune(&client, "nobody").await;
+    assert!(!cut_short.exists());
+    assert!(unknown.exists(), "an unknown outcome stays");
+    assert!(foreign.exists(), "another helper's plan stays");
+    assert!(recent.exists(), "a recent preview stays");
+}
+
+#[test]
+fn only_an_apply_an_undo_with_apply_and_a_run_change_the_helper() {
+    let id = crate::control::token;
+    let plan = Plan {
+        version: 1,
+        id: id(),
+        uid: 501,
+        home: "/Users/helper".into(),
+        files: Vec::new(),
+    };
+
+    let preview = Request::Preview {
+        id: id(),
+        files: Vec::new(),
+    };
+    assert!(!preview.changes_helper());
+    assert!(
+        !Request::Rollback {
+            id: id(),
+            apply: false
+        }
+        .changes_helper()
+    );
+    assert!(
+        Request::Rollback {
+            id: id(),
+            apply: true
+        }
+        .changes_helper()
+    );
+    assert!(Request::Apply { plan }.changes_helper());
+    assert!(
+        Request::Run {
+            argv: vec!["cat".into()]
+        }
+        .changes_helper()
+    );
+}
+
+/// A preview that began before the helper had any environment state reads
+/// without a lock, as there is none to take; an operation that makes the
+/// state meanwhile makes it refuse, as one holding the lock would.
+#[test]
+fn a_preview_refuses_when_the_state_appears_while_it_reads() {
+    let sandbox = Sandbox::new();
+    let payload = sandbox.payload("file", b"new");
+    let guards = Cell::new(0);
+    let other_operation = || {
+        guards.set(guards.get() + 1);
+        if guards.get() == 2 {
+            drop(state::Store::open(&sandbox.home, true).unwrap());
+        }
+        Ok(())
+    };
+
+    let refused = worker::preview(
+        &sandbox.home,
+        nix::unistd::getuid().as_raw(),
+        &crate::control::token(),
+        vec![payload.clone()],
+        &other_operation,
+    )
+    .unwrap_err();
+    assert_eq!(refused.error, "Another environment operation is running");
+
+    let value = sandbox.preview(vec![payload]);
+    assert_eq!(
+        value["ok"], true,
+        "a state that was there all along is read under its lock"
+    );
 }
 
 /// A rollback's own folder goes once nothing in it is unconfirmed, also
@@ -1177,6 +1294,176 @@ async fn an_environment_request_reads_the_helper_only_once_it_has_control() {
             .is_err(),
         "the helper was not asked"
     );
+}
+
+/// The account requests are shared with: the one running the test, which
+/// also runs the stand-in helper.
+fn account() -> String {
+    helper_name(nix::unistd::getuid().as_raw()).unwrap()
+}
+
+/// Answer a worker request as the helper would for a preview or an undo
+/// preview, by running it on `home` in this process.
+fn previewing(home: &Path) -> impl FnMut(&Value) -> Option<Value> + '_ {
+    move |request| {
+        let argv = request["argv"].as_array().unwrap();
+        assert_eq!(argv.len(), 3, "a preview is never sent with --apply");
+        let folder = Path::new(argv[2].as_str().unwrap()).parent().unwrap();
+        assert!(
+            folder
+                .file_name()
+                .unwrap()
+                .to_string_lossy()
+                .starts_with(READ),
+            "a read is never mistaken for a step whose outcome is unknown"
+        );
+        let packet: Packet = decode(&fs::read(argv[2].as_str().unwrap()).unwrap()).unwrap();
+        let value = match packet.request {
+            Request::Preview { id, files } => {
+                worker::preview(home, nix::unistd::getuid().as_raw(), &id, files, &|| Ok(()))
+            }
+            Request::Rollback { id, apply: false } => {
+                worker::rollback(home, &id, false, &|| Ok(()))
+            }
+            _ => panic!("only previews are answered"),
+        };
+
+        Some(worker_reply(0, &value.unwrap()))
+    }
+}
+
+#[tokio::test]
+async fn a_preview_works_while_another_controller_holds_the_lock_and_leaves_no_marker() {
+    let sandbox = Sandbox::new();
+    let (client, helper) = Helper::client(&sandbox.root, UID);
+    let account = account();
+    let _held = client.controller.acquire(false).unwrap();
+    let id = crate::control::token();
+    let stage = stage_in(&sandbox.root, &id);
+    let request = Request::Preview {
+        id: id.clone(),
+        files: vec![sandbox.payload("file", b"new")],
+    };
+
+    let value = helper
+        .serve(
+            dispatch(&client, &account, &stage, request),
+            previewing(&sandbox.home),
+        )
+        .await
+        .unwrap();
+    assert_eq!(value["ok"], true, "{value}");
+    assert_eq!(value["planId"], id);
+    assert!(!sandbox.home.join("file").exists());
+    assert!(client.controller.pending().unwrap().is_empty());
+    assert!(!requests(&stage));
+    assert!(!client.config.output_dir.join("metadata.jsonl").exists());
+}
+
+#[tokio::test]
+async fn a_lost_preview_reply_leaves_no_marker() {
+    let sandbox = Sandbox::new();
+    let (client, helper) = Helper::client(&sandbox.root, UID);
+    let account = account();
+    let id = crate::control::token();
+    let stage = stage_in(&sandbox.root, &id);
+    let request = Request::Preview {
+        id,
+        files: vec![sandbox.payload("file", b"new")],
+    };
+
+    let error = helper
+        .serve(dispatch(&client, &account, &stage, request), |_| None)
+        .await
+        .unwrap_err();
+    assert!(!error.uncertain, "{error:?}");
+    assert!(client.controller.pending().unwrap().is_empty());
+    assert!(!requests(&stage), "the request folder goes");
+}
+
+#[tokio::test]
+async fn an_undo_preview_takes_no_control() {
+    let sandbox = Sandbox::new();
+    let plan = sandbox.plan(vec![sandbox.payload("file", b"copied")]);
+    assert_eq!(sandbox.apply(&plan)["ok"], true);
+    let (client, helper) = Helper::client(&sandbox.root, UID);
+    let account = account();
+    let _held = client.controller.acquire(false).unwrap();
+    let stage = stage_in(&sandbox.root, &crate::control::token());
+    let request = Request::Rollback {
+        id: plan.id.clone(),
+        apply: false,
+    };
+
+    let value = helper
+        .serve(
+            dispatch(&client, &account, &stage, request),
+            previewing(&sandbox.home),
+        )
+        .await
+        .unwrap();
+    assert_eq!(value["pendingTargets"], json!(["file"]), "{value}");
+    assert_eq!(fs::read(sandbox.home.join("file")).unwrap(), b"copied");
+    assert!(client.controller.pending().unwrap().is_empty());
+}
+
+#[tokio::test]
+async fn an_apply_still_takes_control_and_stays_pending_when_its_reply_is_lost() {
+    const TEST: &str =
+        "environment::tests::an_apply_still_takes_control_and_stays_pending_when_its_reply_is_lost";
+    if !crate::transaction_test::isolated(TEST) {
+        return;
+    }
+
+    let sandbox = Sandbox::new();
+    let plan = sandbox.plan(vec![sandbox.payload("file", b"copied")]);
+    let (client, helper) = Helper::client(&sandbox.root, UID);
+    let account = account();
+    let stage = stage_in(&sandbox.root, &plan.id);
+    let apply = || Request::Apply { plan: plan.clone() };
+
+    let held = client.controller.acquire(false).unwrap();
+    let refused = dispatch(&client, &account, &stage, apply())
+        .await
+        .unwrap_err();
+    assert_eq!(refused.code, "busy");
+    drop(held);
+
+    let error = helper
+        .serve(dispatch(&client, &account, &stage, apply()), |_| None)
+        .await
+        .unwrap_err();
+    assert!(error.uncertain, "{error:?}");
+    assert!(requests(&stage), "its request is kept");
+    assert!(!client.controller.pending().unwrap().is_empty());
+    assert_eq!(
+        client.controller.acquire(false).unwrap_err().code,
+        "uncertain"
+    );
+}
+
+/// A preview holds the helper's store shared while it reads; an apply that
+/// comes then is refused before it changes anything, so there is nothing to
+/// resume and it can simply be repeated.
+#[test]
+fn an_apply_refused_by_a_running_preview_is_not_resumable() {
+    let sandbox = Sandbox::new();
+    let first = sandbox.plan(vec![sandbox.payload("file", b"original")]);
+    assert_eq!(sandbox.apply(&first)["ok"], true);
+    let plan = sandbox.plan(vec![sandbox.payload("file", b"replacement")]);
+
+    let preview = state::Store::open(&sandbox.home, false).unwrap();
+    let error = worker::apply_plan(&sandbox.home, &plan, &|| Ok(())).unwrap_err();
+    drop(preview);
+    assert_eq!(error.error, "Another environment operation is running");
+    assert_eq!(fs::read(sandbox.home.join("file")).unwrap(), b"original");
+
+    let mut refusal = json!(error);
+    refusal["refusal"] = json!("request-ab12");
+    let reply = worker_reply(WORKER_REFUSED, &refusal);
+    let value = decode_reply(&reply, true, "request-ab12").unwrap();
+    assert_eq!(value["ok"], false);
+    assert!(value["resumeRequired"].is_null(), "{value}");
 }
 
 /// Plans already on disk store each operation by its lowercase name.

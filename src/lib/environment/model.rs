@@ -58,6 +58,19 @@ pub(super) enum Request {
     Run { argv: Vec<String> },
 }
 
+impl Request {
+    /// Whether the worker may change the helper for this request. Every
+    /// other request only reads, so it takes no control and leaves nothing
+    /// pending; a new request must say which it is.
+    pub fn changes_helper(&self) -> bool {
+        match self {
+            Request::Preview { .. } => false,
+            Request::Rollback { apply, .. } => *apply,
+            Request::Apply { .. } | Request::Run { .. } => true,
+        }
+    }
+}
+
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
 pub(super) struct Payload {

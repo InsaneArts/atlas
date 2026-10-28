@@ -13,6 +13,7 @@ mod worker;
 use crate::{
     client::Client,
     config::parse_toml,
+    control::Ownership,
     error::{Error, Result},
     transport::{OutputError, run_output},
 };
@@ -300,13 +301,20 @@ fn operation(mut result: Result<Value>, name: &str) -> Result<Value> {
     result
 }
 
+/// What a request folder that may change the helper is named with: one
+/// left behind holds a step whose outcome is not known yet.
+const CHANGE: &str = "request-";
+/// What a read-only request folder is named with: one left behind (its
+/// command killed mid-read) holds nothing to recover.
+const READ: &str = "read-";
+
 /// Whether `stage` holds a retained request: a step whose outcome is not
 /// known yet, kept as evidence until it is.
 fn requests(stage: &Path) -> bool {
     fs::read_dir(stage).is_ok_and(|entries| {
         entries
             .flatten()
-            .any(|entry| entry.file_name().to_string_lossy().starts_with("request-"))
+            .any(|entry| entry.file_name().to_string_lossy().starts_with(CHANGE))
     })
 }
 
@@ -355,10 +363,11 @@ fn discard(stage: &Path) {
 const UNUSED: Duration = Duration::from_secs(7 * 24 * 60 * 60);
 
 /// Remove frozen plans older than UNUSED that the helper never started (it
-/// answers that nothing was copied with their ID), and command folders
-/// older than UNUSED. Plans applied or undone completely were removed when
-/// that finished; one with a retained request (a step whose outcome is
-/// unknown), one the helper started, or one it cannot answer for, stays.
+/// answers that nothing was copied with their ID), previews cut short and
+/// command folders older than UNUSED. Plans applied or undone completely
+/// were removed when that finished; one with a retained request (a step
+/// whose outcome is unknown), one the helper started, or one it cannot
+/// answer for, stays.
 async fn prune(client: &Client, helper: &str) {
     let Some(shared) = client.config.identity_probe.parent() else {
         return;
@@ -372,6 +381,11 @@ async fn prune(client: &Client, helper: &str) {
         let Ok(lock) = lock_stage(&stage) else {
             continue;
         };
+
+        if abandoned(&stage) {
+            discard(&stage);
+            continue;
+        }
 
         if !prunable(&stage, &id, client.config.helper_uid) {
             continue;
@@ -439,6 +453,13 @@ fn older(shared: &Path, prefix: &str, age: Duration) -> Vec<(String, PathBuf)> {
             (elapsed > age).then_some((id, stage))
         })
         .collect()
+}
+
+/// Whether `stage` is a preview cut short: copies of the selected files but
+/// no plan, so nothing can apply it, and no request whose outcome is
+/// unknown, so the helper has nothing to recover from it.
+fn abandoned(stage: &Path) -> bool {
+    !planned(stage) && !requests(stage)
 }
 
 /// Whether the helper may be asked about the plan in `stage`: a readable
@@ -611,8 +632,9 @@ async fn dispatch(client: &Client, helper: &str, stage: &Path, request: Request)
 
 /// Each invocation gets immutable arguments and a fresh session pin. Mutating
 /// requests and their binary remain available whenever the reply is uncertain;
-/// a request that was never sent leaves nothing behind. The worker is
-/// stopped after `timeout`.
+/// a request that was never sent leaves nothing behind. A request that only
+/// reads takes no control and leaves nothing pending. The worker is stopped
+/// after `timeout`.
 async fn dispatch_within(
     client: &Client,
     helper: &str,
@@ -620,21 +642,24 @@ async fn dispatch_within(
     request: Request,
     timeout: Duration,
 ) -> Result<Value> {
-    let mutating = matches!(
-        &request,
-        Request::Apply { .. } | Request::Rollback { apply: true, .. } | Request::Run { .. }
-    );
+    let mutating = request.changes_helper();
     let raw_output = matches!(&request, Request::Run { .. });
-    // The helper is read under control, so a wait for it never leaves the
-    // packet expecting a helper that has since restarted.
-    let ownership = client.controller.acquire(false)?;
+    // A preview only reads in the helper: like any other inspection it
+    // takes no control and records nothing pending, so a lost reply leaves
+    // no recovery behind. A change reads the helper under control, so a
+    // wait for it never leaves the packet expecting a helper that has since
+    // restarted.
+    let ownership = mutating
+        .then(|| client.controller.acquire(false))
+        .transpose()?;
     let packet = Packet {
         version: 1,
         expected: Identity::from_epoch(&client.identity().await?.epoch),
         request,
     };
 
-    let name = format!("request-{}", crate::control::token());
+    let kind = if mutating { CHANGE } else { READ };
+    let name = format!("{kind}{}", crate::control::token());
     let invocation = stage.join(&name);
     create_stage(&invocation, helper)?;
 
@@ -646,27 +671,44 @@ async fn dispatch_within(
         }
     };
 
-    let result = async {
-        // A process exit does not acknowledge the environment mutation.
-        let generation = client.controller.quarantine()?;
-        let result = match client.run_owned_within(&ownership, argv, timeout).await {
-            Ok(reply) if reply["ok"] == false => Err(crate::transport::refusal(&reply)),
-            Ok(reply) if raw_output => refused(reply, &name),
-            Ok(reply) => decode_reply(&reply, mutating, &name),
-            Err(error) => Err(error),
-        };
-
-        if !delivery_uncertain(&result) {
-            client.controller.clear_if(&generation)?;
-        }
-
-        result
-    }
-    .await;
+    let result = match &ownership {
+        None => client
+            .inspect_within(argv, timeout)
+            .await
+            .and_then(|reply| decode_reply(&reply, false, &name)),
+        Some(ownership) => change(client, ownership, argv, timeout, raw_output, &name).await,
+    };
 
     if !delivery_uncertain(&result) {
         // A complete child reply means its immutable request is no longer in use.
         let _ = fs::remove_dir_all(&invocation);
+    }
+
+    result
+}
+
+/// Run the worker request `name` that changes the helper, under control the
+/// caller holds. It stays pending until a reply shows what it did; `raw_output`
+/// passes a command's own output through.
+async fn change(
+    client: &Client,
+    ownership: &Ownership,
+    argv: Vec<String>,
+    timeout: Duration,
+    raw_output: bool,
+    name: &str,
+) -> Result<Value> {
+    // A process exit does not acknowledge the environment mutation.
+    let generation = client.controller.quarantine()?;
+    let result = match client.run_owned_within(ownership, argv, timeout).await {
+        Ok(reply) if reply["ok"] == false => Err(crate::transport::refusal(&reply)),
+        Ok(reply) if raw_output => refused(reply, name),
+        Ok(reply) => decode_reply(&reply, true, name),
+        Err(error) => Err(error),
+    };
+
+    if !delivery_uncertain(&result) {
+        client.controller.clear_if(&generation)?;
     }
 
     result

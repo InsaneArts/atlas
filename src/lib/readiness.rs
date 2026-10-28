@@ -267,6 +267,7 @@ pub async fn readiness(client: &Client, tools: &[String], apps: &[String]) -> Re
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::helper_test::{Helper, completed, exited};
 
     fn reply(exit: i64) -> Value {
         json!({"exitCode": exit, "timedOut": false, "signal": null})
@@ -339,6 +340,105 @@ mod tests {
         ]});
         assert_eq!(usable_bundle(&item), Some("/Users/h/Applications/A.app"));
         assert_eq!(usable_bundle(&json!({"helperCandidates": []})), None);
+    }
+
+    /// A client of a stand-in helper, both kept in `directory`. The helper
+    /// is the system's own `nobody`, an account that exists everywhere, so
+    /// requests can be staged for it.
+    fn helped(directory: &std::path::Path) -> (Client, Helper) {
+        let nobody = nix::unistd::User::from_name("nobody").unwrap().unwrap();
+        Helper::staging(directory, nobody.uid.as_raw())
+    }
+
+    /// Answer as a helper where every path discovery looks at is a runnable
+    /// file and a readable folder, and every app is Finder.
+    fn found(request: &Value) -> Option<Value> {
+        let argv = request["argv"].as_array().unwrap();
+        let output = if argv[2].as_str().unwrap().contains("plutil") {
+            "id=com.apple.finder\n".to_owned()
+        } else {
+            "-fdrx\n".repeat(argv.len() - 4)
+        };
+
+        Some(completed(&output))
+    }
+
+    #[tokio::test]
+    async fn a_tool_version_probe_still_needs_control() {
+        let directory = tempfile::tempdir().unwrap();
+        let (client, helper) = helped(directory.path());
+        let _held = client.controller.acquire(false).unwrap();
+        let mut heard = Vec::new();
+
+        let error = helper
+            .serve(readiness(&client, &["cat".into()], &[]), |request| {
+                heard.push(request["argv"].clone());
+                found(request)
+            })
+            .await
+            .unwrap_err();
+        assert_eq!(error.code, "busy");
+        assert_eq!(heard.len(), 1, "only discovery reached the helper");
+        assert_eq!(heard[0][0], "/bin/sh");
+        assert!(client.controller.pending().unwrap().is_empty());
+    }
+
+    /// Without an environment profile a tool's `--version` runs on the
+    /// helper's PATH, and that run still holds control and stays pending
+    /// until its reply settles it.
+    #[tokio::test]
+    async fn the_path_version_probe_runs_under_control() {
+        let directory = tempfile::tempdir().unwrap();
+        let (client, helper) = helped(directory.path());
+        let mut fallbacks = 0;
+
+        let report = helper
+            .serve(readiness(&client, &["cat".into()], &[]), |request| {
+                let argv = request["argv"].as_array().unwrap();
+                if argv[1] == "environment-worker" {
+                    let packet = std::path::Path::new(argv[2].as_str().unwrap());
+                    let name = packet.parent().unwrap().file_name().unwrap();
+                    let refusal = json!({"ok": false, "code": crate::environment::NO_PROFILE,
+                        "error": "No helper environment profile is installed",
+                        "refusal": name.to_string_lossy()});
+                    return Some(exited(
+                        crate::environment::WORKER_REFUSED,
+                        &refusal.to_string(),
+                    ));
+                }
+
+                if argv[0] == "/usr/bin/env" {
+                    fallbacks += 1;
+                    assert_eq!(argv[2..], [json!("cat"), json!("--version")]);
+                    assert!(!client.controller.pending().unwrap().is_empty());
+                    assert_eq!(client.controller.acquire(false).unwrap_err().code, "busy");
+                    return Some(completed("cat 1.0\n"));
+                }
+
+                found(request)
+            })
+            .await
+            .unwrap();
+        assert_eq!(fallbacks, 1);
+        assert_eq!(report["items"][0]["status"], "ready", "{report}");
+        assert_eq!(report["items"][0]["context"], "path");
+        assert!(client.controller.pending().unwrap().is_empty());
+    }
+
+    #[tokio::test]
+    async fn readiness_for_apps_alone_needs_no_control() {
+        let directory = tempfile::tempdir().unwrap();
+        let (client, helper) = helped(directory.path());
+        let _held = client.controller.acquire(false).unwrap();
+
+        let report = helper
+            .serve(readiness(&client, &[], &["Finder".into()]), found)
+            .await
+            .unwrap();
+        assert_eq!(report["ok"], true);
+        assert_eq!(report["items"][0]["status"], "installed", "{report}");
+        assert_eq!(report["items"][0]["bundleIdentifier"], "com.apple.finder");
+        assert!(client.controller.pending().unwrap().is_empty());
     }
 
     #[test]

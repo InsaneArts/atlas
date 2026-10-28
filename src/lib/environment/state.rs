@@ -8,6 +8,9 @@ use fs2::FileExt;
 /// milliseconds; a real concurrent operation holds it far longer.
 const LOCK_PATIENCE: std::time::Duration = std::time::Duration::from_millis(250);
 
+/// Why the store could not be used: another operation has it.
+const RUNNING: &str = "Another environment operation is running";
+
 /// Take the store lock without blocking on a real holder.
 fn take(
     lock: &fs::File,
@@ -28,7 +31,7 @@ fn take(
         }
 
         if !retry(deadline) {
-            return Err(problem("Another environment operation is running"));
+            return Err(problem(RUNNING));
         }
 
         std::thread::sleep(std::time::Duration::from_millis(5));
@@ -38,6 +41,8 @@ fn take(
 pub(super) struct Store {
     pub path: PathBuf,
     lock: Option<fs::File>,
+    /// Whether the store's folder was there when it was opened.
+    existed: bool,
 }
 
 impl Store {
@@ -59,7 +64,11 @@ impl Store {
         };
 
         let Some(directory) = directory else {
-            return Ok(Self { path, lock: None });
+            return Ok(Self {
+                path,
+                lock: None,
+                existed: false,
+            });
         };
 
         validate_private(&directory, true)?;
@@ -69,7 +78,26 @@ impl Store {
             take(lock, write, retry)?;
         }
 
-        Ok(Self { path, lock })
+        Ok(Self {
+            path,
+            lock,
+            existed: true,
+        })
+    }
+
+    /// Refuse what was read through a store opened without its lock, which
+    /// happens only while there is nothing to lock yet, if another
+    /// operation has since made the store or its lock: what was read may be
+    /// part of that operation's change.
+    pub fn confirm_read(&self) -> Result<()> {
+        let appeared = |path: &Path| fs::symlink_metadata(path).is_ok();
+        if self.lock.is_none()
+            && ((!self.existed && appeared(&self.path)) || appeared(&self.path.join("lock")))
+        {
+            return Err(problem(RUNNING));
+        }
+
+        Ok(())
     }
 
     pub fn ledger(&self) -> Result<Ledger> {

@@ -37,6 +37,8 @@ pub mod viewer;
 pub mod watch;
 
 #[cfg(test)]
+mod helper_test;
+#[cfg(test)]
 mod transaction_test;
 
 /// This build's version, as released.

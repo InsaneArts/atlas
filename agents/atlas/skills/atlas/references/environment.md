@@ -12,11 +12,12 @@ never ask the person to do it:
    the app needs, never credentials, keychains or tokens.
 2. Quit the app in the helper first (`atlas close --app NAME`), so it does not
    overwrite the files while they arrive.
-3. `atlas environment MANIFEST` previews without changing anything. Read each
-   file's `operation`: `conflict` means the helper already has a file Atlas
-   did not put there, so stop and tell the person rather than working around
-   it. A target inside, around or differing only in case from a file copied
-   earlier is refused: roll that copy back first. Keep the `planId`.
+3. `atlas environment MANIFEST` previews without changing anything, even while
+   someone else is acting in the helper. Read each file's `operation`:
+   `conflict` means the helper already has a file Atlas did not put there, so
+   stop and tell the person rather than working around it. A target inside,
+   around or differing only in case from a file copied earlier is refused:
+   roll that copy back first. Keep the `planId`.
 4. `atlas environment apply PLAN_ID` copies exactly what was previewed, as a
    one-time snapshot. Keep every `planId` you apply. If it stops partway
    (`resumeRequired`, with `pendingTargets`), run the same apply again to
@@ -25,7 +26,8 @@ never ask the person to do it:
 
 `atlas environment discover`, `profile` and `environment run` inspect or
 freeze a selected set of tools and variables (see `atlas environment --help`);
-a test seldom needs them.
+a test seldom needs them. Discovery only reads, so it works while someone else
+is acting in the helper.
 
 Nothing is ever copied back to the person's account.
 

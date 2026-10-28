@@ -20,7 +20,7 @@ For discovery without launching the selected tools or apps, use:
 atlas environment discover --tool git --app Preview
 ```
 
-Discovery can also check a selected variable name with `--env NAME`, or the helper's existing access to a path with `--reference PATH`. It does not change permissions or print selected variable values.
+Discovery can also check a selected variable name with `--env NAME`, or the helper's existing access to a path with `--reference PATH`. It does not change permissions or print selected variable values. Discovery and previews only read, so they work while another agent or the person is acting in the helper.
 
 ## Copy a harmless fixture
 

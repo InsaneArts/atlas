@@ -24,11 +24,7 @@ pub fn worker(path: &Path, apply: bool) -> Result<Value> {
 
     guard()?;
     let home = account_home(packet.expected.uid)?;
-    let mutating = matches!(
-        &packet.request,
-        Request::Apply { .. } | Request::Rollback { apply: true, .. } | Request::Run { .. }
-    );
-    if apply != mutating {
+    if apply != packet.request.changes_helper() {
         return Err(problem("Worker apply flag does not match its request"));
     }
 
@@ -100,6 +96,7 @@ pub(super) fn preview(
     }
 
     guard()?;
+    store.confirm_read()?;
     let plan = Plan {
         version: 1,
         id: id.into(),
@@ -751,6 +748,10 @@ pub(super) fn rollback(
 
         Ok(())
     })();
+
+    if !apply {
+        store.confirm_read()?;
+    }
 
     let mut value = report(&transaction, result, true);
     value["preview"] = json!(!apply);
