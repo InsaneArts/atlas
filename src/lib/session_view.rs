@@ -13,6 +13,10 @@ use crate::{
         record::Record,
         store::IDLE_FOR,
     },
+    task::{
+        Owned, State as Claimed,
+        record::{CleanupState, Record as TaskRecord},
+    },
 };
 use serde::Serialize;
 use serde_json::{Value, json};
@@ -334,6 +338,12 @@ pub(crate) struct Past {
     pub apps: Vec<PastApp>,
     pub copies: Vec<PastCopy>,
     pub plans: Vec<PastPlan>,
+    /// The apps its tasks installed into the helper that may still be
+    /// there, by name.
+    pub installs: Vec<String>,
+    /// How far its newest unfinished cleanup got; none when every cleanup
+    /// of its work finished, or none ran.
+    pub cleanup: Option<CleanupState>,
     /// Its newest screenshots still kept, by file name.
     pub screenshots: Vec<Capture>,
 }
@@ -371,6 +381,9 @@ pub(crate) struct Records<'a> {
     /// Each session's copies still there, by the app each is for when
     /// that can be told.
     pub copies: &'a BTreeMap<Key, Vec<Option<String>>>,
+    /// Every task record kept, for what each session's tasks installed and
+    /// whether their cleanup finished.
+    pub tasks: &'a [TaskRecord],
     /// Now, in milliseconds since 1970.
     pub now: u64,
 }
@@ -423,6 +436,8 @@ impl Records<'_> {
                             can_roll_back: matches!(plan.phase, Phase::Applied | Phase::Applying),
                         })
                         .collect(),
+                    installs: self.installs(&record.key),
+                    cleanup: self.cleanup(&record.key),
                     screenshots: record
                         .screenshots
                         .iter()
@@ -433,6 +448,31 @@ impl Records<'_> {
                 }
             })
             .collect()
+    }
+
+    /// The apps `key`'s tasks installed that may still be there, by name.
+    fn installs(&self, key: &Key) -> Vec<String> {
+        self.tasks
+            .iter()
+            .filter(|task| task.session == *key)
+            .flat_map(TaskRecord::claims)
+            .filter_map(|(owned, state)| match owned {
+                Owned::Install { app, .. } if matches!(state, Claimed::Intent | Claimed::Made) => {
+                    Some(app)
+                }
+                _ => None,
+            })
+            .collect()
+    }
+
+    /// How far the newest unfinished cleanup of `key`'s work got.
+    fn cleanup(&self, key: &Key) -> Option<CleanupState> {
+        self.tasks
+            .iter()
+            .filter(|task| task.session == *key)
+            .filter_map(TaskRecord::unfinished_cleanup)
+            .max_by_key(|note| note.updated)
+            .map(|note| note.state)
     }
 
     /// The apps `record`'s session opened, as its rows still say, newest

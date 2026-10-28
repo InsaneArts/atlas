@@ -637,6 +637,7 @@ impl Viewer {
                 rows: &rows,
                 captures: &captures,
                 copies: &copies,
+                tasks: &crate::task::store::Store::at(output).all(),
                 now: u64::try_from(now / 1_000_000).unwrap_or(u64::MAX),
             }
             .history()
@@ -3211,6 +3212,7 @@ mod tests {
             rows: &[],
             captures: &Default::default(),
             copies: &Default::default(),
+            tasks: &[],
             now,
         }
         .history();
