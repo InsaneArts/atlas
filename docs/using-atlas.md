@@ -79,7 +79,7 @@ Open **Settings** to change picture behavior in **General**, check the account a
 
 Keep these limits in mind when choosing a task:
 
-- Open apps with `atlas open`. Atlas cannot click the Dock. Dragging works for window movement, sliders and text selection, but does not provide native file or item drag and drop.
+- Open apps with `atlas open`. A click on a Dock icon launches that app, so `--app` and `--pid` refuse a click, scroll or drag on the Dock. Dragging works for window movement, sliders and text selection, but does not provide native file or item drag and drop.
 - Native Save and Open panels need an authenticated Screen Sharing connection to the helper. Check `capabilities.nativeDialogs` in `doctor --verbose`; a delivered click alone does not prove a dialog accepted it.
 - Use Google Chrome or Firefox for hidden browser work, for example `atlas open --app "Google Chrome" http://localhost:3000` with your local server running. Safari and other WebKit views can remain blank without Screen Sharing. `capabilities.webContent` in `doctor --verbose` reports this constraint. Opening a URL without `--app` uses the default browser.
 - The helper has its own files and sign-ins. Atlas does not copy your credentials. Save working files in the helper's home rather than an app copy staged under `/Users/Shared/Atlas/Open`, which the helper can only read.

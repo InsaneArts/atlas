@@ -1,6 +1,7 @@
 ## Limits
 
-- The Dock does not take Atlas's clicks; start apps with `atlas open`.
+- A click on a Dock icon launches that app, and `--app` or `--pid` refuses
+  any click, scroll or drag on the Dock; start apps with `atlas open`.
 - Drag-and-drop onto a target (selected text, files, list items) does not
   begin in the helper: macOS starts such a drag only from a real mouse.
   `atlas drag` still moves windows and sliders and selects text (a slider
