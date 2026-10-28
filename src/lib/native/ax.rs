@@ -9,7 +9,7 @@
 #![allow(unsafe_code)]
 use crate::{
     error::{Error, Result},
-    native::windows::{self, MENU_LAYER},
+    native::windows::{self, Dock, MENU_LAYER},
 };
 use objc2_application_services::{
     AXCopyMultipleAttributeOptions, AXError, AXUIElement, AXValue, AXValueType,
@@ -1031,6 +1031,70 @@ pub fn focused_pid(timeout: Duration) -> Result<Option<i64>> {
     }
 
     Ok(Some(pid.into()))
+}
+
+/// The longest a read of where the Dock takes clicks may take.
+pub const DOCK_TIMEOUT: Duration = Duration::from_millis(250);
+
+/// Most children of the Dock's application element read; it has one list.
+const DOCK_CHILDREN: usize = 16;
+
+/// Where the Dock takes clicks: the frames of its lists of tiles, read
+/// from the process owning the Dock's window in `windows`, waiting at most
+/// `timeout`. With no Dock window there is nothing of the Dock's to click;
+/// a Dock whose lists cannot all be read in time is [`Dock::Unread`], so
+/// every edge it may sit on counts as its.
+pub fn dock(windows: &[windows::Window], timeout: Duration) -> Dock {
+    let Some(pid) = windows
+        .iter()
+        .find(|window| window.is_dock())
+        .map(|window| window.pid)
+    else {
+        return Dock::Tiles(Vec::new());
+    };
+    let Ok(pid) = libc::pid_t::try_from(pid) else {
+        return Dock::Unread;
+    };
+
+    // SAFETY: a plain constructor returning an owned element or null.
+    let Some(app) = (unsafe { AXUIElementCreateApplication(pid) })
+        // SAFETY: the constructor handed over one owned reference.
+        .map(|app| unsafe { CFRetained::from_raw(app) })
+    else {
+        return Dock::Unread;
+    };
+    // SAFETY: sets this one element's messaging timeout, which bounds each
+    // read below; nothing else in the process is affected.
+    if unsafe { app.set_messaging_timeout(timeout.as_secs_f32()) } != AXError::Success {
+        return Dock::Unread;
+    }
+
+    let mut scan = Scan::new(Instant::now() + timeout);
+    let mut tiles = Vec::new();
+    for child in scan.children(&app, "AXChildren", DOCK_CHILDREN) {
+        let Some(role) = scan.text(Source::Element(&child), "AXRole") else {
+            return Dock::Unread;
+        };
+        if role != "AXList" {
+            continue;
+        }
+
+        let Some(frame) = scan.frame(Source::Element(&child)) else {
+            return Dock::Unread;
+        };
+        tiles.push(windows::Bounds {
+            x: frame.x,
+            y: frame.y,
+            width: frame.width,
+            height: frame.height,
+        });
+    }
+
+    if scan.incomplete || tiles.is_empty() {
+        return Dock::Unread;
+    }
+
+    Dock::Tiles(tiles)
 }
 
 /// Depth-first elements of `pid`'s windows, its menu bar titles when it is

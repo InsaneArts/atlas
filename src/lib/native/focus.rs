@@ -2,7 +2,7 @@
 //! the helper just before the action is sent: text and keys need the app
 //! to have keyboard focus, pointer actions need the app's own window to be
 //! the top one at the point.
-use super::windows::{self, Bounds, Window};
+use super::windows::{self, Bounds, Dock, Screen, Window};
 use crate::{
     actions::{Action, Expect, PointerPhase},
     error::{Error, Result},
@@ -99,12 +99,17 @@ trait Look {
     fn focused(&mut self) -> Result<Option<i64>>;
     /// On-screen windows, front to back.
     fn windows(&mut self) -> Result<&[Window]>;
+    /// Where the Dock takes clicks; [`Dock::Unread`] when that cannot be
+    /// read in time.
+    fn dock(&mut self) -> Dock;
 }
 
-/// The live helper, read until `deadline`, its window list at most once.
+/// The live helper, read until `deadline`, its window list and its Dock at
+/// most once.
 struct Live {
     deadline: Instant,
     windows: Option<Vec<Window>>,
+    dock: Option<Dock>,
 }
 
 impl Live {
@@ -113,6 +118,7 @@ impl Live {
         Self {
             deadline,
             windows: None,
+            dock: None,
         }
     }
 
@@ -145,6 +151,23 @@ impl Look for Live {
         }
 
         Ok(self.windows.as_deref().unwrap_or_default())
+    }
+
+    /// The Dock's tiles as Accessibility reports them, from the Dock that
+    /// owns a window in the list.
+    fn dock(&mut self) -> Dock {
+        if self.dock.is_none() {
+            let dock = match self.left() {
+                Ok(left) => match self.windows() {
+                    Ok(listed) => super::ax::dock(listed, left.min(super::ax::DOCK_TIMEOUT)),
+                    Err(_) => Dock::Unread,
+                },
+                Err(_) => Dock::Unread,
+            };
+            self.dock = Some(dock);
+        }
+
+        self.dock.clone().unwrap_or_default()
     }
 }
 
@@ -199,15 +222,17 @@ fn keys(expect: Expect, look: &mut impl Look) -> Result<()> {
 }
 
 /// A pointer action goes ahead only where the app's own window, at any
-/// layer, is uncovered at the point; on the menu bar, only while the app
-/// has keyboard focus, since the menu bar shows that app's titles.
+/// layer, is uncovered at the point, the Dock's tiles covering what is
+/// under them; on the menu bar, only while the app has keyboard focus,
+/// since the menu bar shows that app's titles.
 fn point(expect: Expect, x: f64, y: f64, display: &Bounds, look: &mut impl Look) -> Result<()> {
+    let screen = Screen::new(display.clone(), look.dock());
     let listed = look.windows().map_err(|_| unreadable())?;
-    let top = windows::top_at(listed, x, y, display);
+    let top = windows::top_at(listed, x, y, &screen);
     if top.is_some_and(Window::is_menu_bar) {
         return menu_bar(expect, look);
     }
-    if windows::reaches(listed, expect.pid(), x, y, display) {
+    if windows::reaches(listed, expect.pid(), x, y, &screen) {
         return Ok(());
     }
 
@@ -312,6 +337,8 @@ mod tests {
     struct Seen {
         focused: Option<Result<Option<i64>>>,
         windows: Option<Vec<Window>>,
+        /// Where the Dock takes clicks; no tiles unless a test sets them.
+        dock: Option<Dock>,
         focus_reads: usize,
         window_reads: usize,
     }
@@ -326,6 +353,11 @@ mod tests {
 
         fn showing(mut self, windows: Vec<Window>) -> Self {
             self.windows = Some(windows);
+            self
+        }
+
+        fn docked(mut self, dock: Dock) -> Self {
+            self.dock = Some(dock);
             self
         }
     }
@@ -344,6 +376,10 @@ mod tests {
             self.windows
                 .as_deref()
                 .ok_or_else(|| Error::new("windows", "unreadable"))
+        }
+
+        fn dock(&mut self) -> Dock {
+            self.dock.clone().unwrap_or(Dock::Tiles(Vec::new()))
         }
     }
 
@@ -491,6 +527,58 @@ mod tests {
             refusal(point_with(&mut look, 200.0, 200.0))["found"]["app"],
             "Shade"
         );
+    }
+
+    /// The Dock's full-display window lets clicks through except where it
+    /// shows its tiles: there it is on top for every app, even over an
+    /// app's own window under it.
+    #[test]
+    fn the_docks_tiles_refuse_every_app_and_the_points_beside_them_pass() {
+        let dock = window(2, "Dock", 20, (0.0, 0.0, 1000.0, 800.0));
+        let calculator = window(APP, "Calculator", 0, (150.0, 600.0, 300.0, 200.0));
+        let finder = window(OTHER, "Finder", 0, (0.0, 0.0, 1000.0, 800.0));
+        let listed = vec![dock, calculator, finder];
+        let tiles = Dock::Tiles(vec![Bounds {
+            x: 200.0,
+            y: 730.0,
+            width: 600.0,
+            height: 70.0,
+        }]);
+        let at = |pid: i64, dock: &Dock, x: f64, y: f64| {
+            let mut look = Seen::focused(Some(pid))
+                .showing(listed.clone())
+                .docked(dock.clone());
+            let expect = Expect::new(pid).unwrap();
+            require(expect, Need::Point(x, y), &display(), &mut look, later())
+        };
+
+        for (pid, x, y) in [
+            (APP, 300.0, 760.0),
+            (OTHER, 300.0, 760.0),
+            (OTHER, 790.0, 799.0),
+        ] {
+            assert_eq!(
+                refusal(at(pid, &tiles, x, y)),
+                json!({"reason": "point", "found": {"app": "Dock", "pid": 2}}),
+                "{pid} at {x},{y}"
+            );
+        }
+
+        assert!(at(APP, &tiles, 170.0, 760.0).is_ok(), "beside the tiles");
+        assert!(at(APP, &tiles, 300.0, 700.0).is_ok(), "above the tiles");
+        assert!(at(OTHER, &tiles, 900.0, 760.0).is_ok(), "beside the tiles");
+
+        // A Dock that could not be read covers each edge it may sit on.
+        assert_eq!(
+            refusal(at(APP, &Dock::Unread, 300.0, 700.0))["found"]["app"],
+            "Dock"
+        );
+        assert_eq!(
+            refusal(at(OTHER, &Dock::Unread, 10.0, 300.0))["found"]["app"],
+            "Dock"
+        );
+        assert!(at(APP, &Dock::Unread, 300.0, 620.0).is_ok());
+        assert!(at(OTHER, &Dock::Unread, 500.0, 300.0).is_ok());
     }
 
     #[test]

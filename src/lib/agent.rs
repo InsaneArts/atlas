@@ -17,7 +17,7 @@ use crate::{
     interrupt::Interrupt,
     native::{
         ax::{self, Element, Frame, Stop},
-        windows::{Bounds, MENU_LAYER, Window, unobstructed},
+        windows::{Bounds, MENU_LAYER, Screen, Shown, Window, unobstructed},
     },
     transport::{accepted, run_output},
 };
@@ -429,11 +429,12 @@ impl WindowFilter {
 
 /// The helper's on-screen windows, front to back, through a read-only probe.
 pub(crate) async fn windows(client: &Client) -> Result<Vec<Window>> {
-    windows_within(client, PROBE_LIMIT).await
+    Ok(windows_within(client, PROBE_LIMIT).await?.windows)
 }
 
-/// The window list, with the helper probe bounded by `limit`.
-async fn windows_within(client: &Client, limit: Duration) -> Result<Vec<Window>> {
+/// The window list and where the Dock takes clicks, with the helper probe
+/// bounded by `limit`.
+async fn windows_within(client: &Client, limit: Duration) -> Result<Shown> {
     let probe = client.config.identity_probe.to_string_lossy().into_owned();
     let reply = client
         .inspect_within(vec![probe, "windows-info".into()], limit)
@@ -843,6 +844,7 @@ pub async fn wait(
 
         let matching: Vec<_> = windows_within(client, budget)
             .await?
+            .windows
             .into_iter()
             .filter(|window| filter.matches(window))
             .collect();
@@ -1804,15 +1806,16 @@ pub async fn click_element(
         .map(|frame| click_point(element.role.as_deref(), frame))
         .unwrap_or_default();
 
+    // A fresh list, read after the scan, judged for the element's own window
+    // as the helper judges a point: the Dock's tiles cover what is under them.
+    let Shown { windows, dock } = windows_within(client, PROBE_LIMIT).await?;
     let display = Bounds {
         x: 0.0,
         y: 0.0,
         width: epoch.display.width,
         height: epoch.display.height,
     };
-
-    // A fresh list, read after the scan, judged for the element's own window.
-    let windows = windows(client).await?;
+    let screen = Screen::new(display, dock);
     let window = if element.role.as_deref() == Some("AXMenuBarItem") {
         // The menu bar shows the active app's titles, and only those.
         if active_pid(client).await? != Some(pid) {
@@ -1830,7 +1833,7 @@ pub async fn click_element(
             .and_then(|frame| owning_window(&windows, pid, frame))
     };
 
-    if !window.is_some_and(|window| unobstructed(&windows, window, x, y, &display)) {
+    if !window.is_some_and(|window| unobstructed(&windows, window, x, y, &screen)) {
         return Err(Error::new(
             "elements",
             "The element is not visible in its window: covered, moved or off screen",

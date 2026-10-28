@@ -71,11 +71,96 @@ impl Window {
 
     /// Whether this is one of the Dock's or Notification Center's windows
     /// spanning the whole `display`, which pass pointer events through to
-    /// what is under them.
+    /// what is under them, except where the Dock shows its tiles (see
+    /// [`Screen`]).
     pub fn passes_through(&self, display: &Bounds) -> bool {
         self.bounds.covers(display)
             && matches!(self.owner.as_deref(), Some("Dock" | "Notification Center"))
     }
+
+    /// Whether this is a window of the Dock's.
+    pub fn is_dock(&self) -> bool {
+        self.owner.as_deref() == Some("Dock")
+    }
+}
+
+/// How far from a display's edge the Dock may take clicks when where it
+/// sits is not known: a little more than its largest tiles.
+const DOCK_EDGE: f64 = 160.0;
+
+/// Where the Dock takes clicks inside its full-display window.
+#[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
+#[serde(from = "Option<Vec<Bounds>>", into = "Option<Vec<Bounds>>")]
+pub enum Dock {
+    /// The frames of its tiles, as Accessibility reports them; none when
+    /// no Dock is on screen.
+    Tiles(Vec<Bounds>),
+    /// Its frames could not be read, so a strip along each edge it may sit
+    /// on (bottom, left and right) counts as its.
+    #[default]
+    Unread,
+}
+
+impl Dock {
+    /// Whether the Dock takes a pointer event at the point of `display`.
+    fn takes(&self, x: f64, y: f64, display: &Bounds) -> bool {
+        match self {
+            Self::Tiles(tiles) => tiles.iter().any(|tile| tile.contains(x, y)),
+            Self::Unread => {
+                display.contains(x, y)
+                    && (x < display.x + DOCK_EDGE
+                        || x >= display.x + display.width - DOCK_EDGE
+                        || y >= display.y + display.height - DOCK_EDGE)
+            }
+        }
+    }
+}
+
+impl From<Option<Vec<Bounds>>> for Dock {
+    fn from(tiles: Option<Vec<Bounds>>) -> Self {
+        tiles.map_or(Self::Unread, Self::Tiles)
+    }
+}
+
+impl From<Dock> for Option<Vec<Bounds>> {
+    fn from(dock: Dock) -> Self {
+        match dock {
+            Dock::Tiles(tiles) => Some(tiles),
+            Dock::Unread => None,
+        }
+    }
+}
+
+/// What pointer events are judged against: the display, and where its
+/// Dock takes clicks.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Screen {
+    pub display: Bounds,
+    pub dock: Dock,
+}
+
+impl Screen {
+    pub fn new(display: Bounds, dock: Dock) -> Self {
+        Self { display, dock }
+    }
+
+    /// Whether `window` lets a pointer event at the point through to what
+    /// is under it: a full-display click-through overlay, but not where the
+    /// Dock shows its tiles.
+    fn passes(&self, window: &Window, x: f64, y: f64) -> bool {
+        window.passes_through(&self.display)
+            && !(window.is_dock() && self.dock.takes(x, y, &self.display))
+    }
+}
+
+/// What a `windows-info` probe run in the helper reports: the on-screen
+/// windows, front to back, and where the Dock takes clicks.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct Shown {
+    pub windows: Vec<Window>,
+    /// Unread when the probe does not say, as an older one does not.
+    #[serde(default)]
+    pub dock: Dock,
 }
 
 /// One window-list entry, if it carries the fields every window has.
@@ -100,13 +185,13 @@ fn read_window(entry: &cf::Record) -> Option<Window> {
     })
 }
 
-/// The windows a `windows-info` probe run in the helper reported, from the
-/// helper daemon's reply for that run; None when it did not answer whole.
-pub fn from_probe(reply: &serde_json::Value) -> Option<Vec<Window>> {
+/// What a `windows-info` probe run in the helper reported, from the helper
+/// daemon's reply for that run; None when it did not answer whole.
+pub fn from_probe(reply: &serde_json::Value) -> Option<Shown> {
     let output = crate::transport::run_output(reply, 1 << 20).ok()?;
     let value: serde_json::Value = serde_json::from_slice(&output).ok()?;
     (value["ok"] == true)
-        .then(|| Vec::<Window>::deserialize(&value["windows"]).ok())
+        .then(|| Shown::deserialize(&value).ok())
         .flatten()
 }
 
@@ -122,10 +207,11 @@ pub fn windows() -> Result<Vec<Window>> {
 
 /// Whether the point lies inside window `target` with nothing in front of it
 /// covering that point. `windows` is front to back. Only the Dock's and
-/// Notification Center's higher-layer windows spanning the whole `display`
-/// are click-through overlays; every other window in front, the menu bar and
-/// any unidentified overlay included, occludes.
-pub fn unobstructed(windows: &[Window], target: i64, x: f64, y: f64, display: &Bounds) -> bool {
+/// Notification Center's higher-layer windows spanning the whole display
+/// are click-through overlays, the Dock's only away from where it takes
+/// clicks; every other window in front, the menu bar and any unidentified
+/// overlay included, occludes.
+pub fn unobstructed(windows: &[Window], target: i64, x: f64, y: f64, screen: &Screen) -> bool {
     let Some(index) = windows.iter().position(|window| window.number == target) else {
         return false;
     };
@@ -133,7 +219,7 @@ pub fn unobstructed(windows: &[Window], target: i64, x: f64, y: f64, display: &B
     let window = &windows[index];
     window.bounds.contains(x, y)
         && !windows[..index].iter().any(|other| {
-            let overlay = other.layer > window.layer && other.passes_through(display);
+            let overlay = other.layer > window.layer && screen.passes(other, x, y);
             other.alpha > 0.0 && !overlay && other.bounds.contains(x, y)
         })
 }
@@ -141,10 +227,11 @@ pub fn unobstructed(windows: &[Window], target: i64, x: f64, y: f64, display: &B
 /// The window shown on top at the point: the frontmost visible one
 /// containing it, passing over the Dock's and Notification Center's
 /// full-display click-through overlays above the ordinary layer, the same
-/// overlays [`unobstructed`] passes over. `windows` is front to back.
-pub fn top_at<'a>(windows: &'a [Window], x: f64, y: f64, display: &Bounds) -> Option<&'a Window> {
+/// overlays [`unobstructed`] passes over. Where the Dock takes clicks that
+/// is the Dock's window. `windows` is front to back.
+pub fn top_at<'a>(windows: &'a [Window], x: f64, y: f64, screen: &Screen) -> Option<&'a Window> {
     windows.iter().find(|window| {
-        let overlay = window.layer > 0 && window.passes_through(display);
+        let overlay = window.layer > 0 && screen.passes(window, x, y);
         window.alpha > 0.0 && !overlay && window.bounds.contains(x, y)
     })
 }
@@ -153,15 +240,15 @@ pub fn top_at<'a>(windows: &'a [Window], x: f64, y: f64, display: &Bounds) -> Op
 /// windows there is [`unobstructed`], the test a named click's element
 /// passes. A window of its that shows nothing (alpha 0) counts as it does
 /// there, though [`top_at`] names what is shown behind it.
-pub fn reaches(windows: &[Window], pid: i64, x: f64, y: f64, display: &Bounds) -> bool {
+pub fn reaches(windows: &[Window], pid: i64, x: f64, y: f64, screen: &Screen) -> bool {
     windows
         .iter()
-        .any(|window| window.pid == pid && unobstructed(windows, window.number, x, y, display))
+        .any(|window| window.pid == pid && unobstructed(windows, window.number, x, y, screen))
 }
 
 /// A whole point inside `target` that is [`unobstructed`], preferring points
 /// near its centre. The point that is tested is the point that is clicked.
-pub fn visible_point(windows: &[Window], target: i64, display: &Bounds) -> Option<(f64, f64)> {
+pub fn visible_point(windows: &[Window], target: i64, screen: &Screen) -> Option<(f64, f64)> {
     let bounds = &windows
         .iter()
         .find(|window| window.number == target)?
@@ -182,7 +269,7 @@ pub fn visible_point(windows: &[Window], target: i64, display: &Bounds) -> Optio
     candidates.sort_by(|a, b| a.0.total_cmp(&b.0));
     candidates
         .into_iter()
-        .find(|(_, x, y)| unobstructed(windows, target, *x, *y, display))
+        .find(|(_, x, y)| unobstructed(windows, target, *x, *y, screen))
         .map(|(_, x, y)| (x, y))
 }
 
@@ -270,14 +357,37 @@ mod tests {
         assert!(!square.intersects(&line), "no area of its own");
     }
 
-    #[test]
-    fn visible_points_avoid_windows_in_front() {
-        let display = Bounds {
+    fn display() -> Bounds {
+        Bounds {
             x: 0.0,
             y: 0.0,
             width: 1000.0,
             height: 800.0,
-        };
+        }
+    }
+
+    /// The test display with the Dock's tiles along its bottom edge.
+    fn docked() -> Screen {
+        Screen::new(display(), Dock::Tiles(vec![dock_tiles()]))
+    }
+
+    fn dock_tiles() -> Bounds {
+        Bounds {
+            x: 200.0,
+            y: 730.0,
+            width: 600.0,
+            height: 70.0,
+        }
+    }
+
+    /// The test display with no Dock tiles on it.
+    fn undocked() -> Screen {
+        Screen::new(display(), Dock::Tiles(Vec::new()))
+    }
+
+    #[test]
+    fn visible_points_avoid_windows_in_front() {
+        let display = undocked();
         let target = window(2, 0.0, 0.0, 100.0, 100.0);
         let point = |windows: &[Window]| visible_point(windows, 2, &display);
         assert_eq!(point(std::slice::from_ref(&target)), Some((50.0, 50.0)));
@@ -355,14 +465,71 @@ mod tests {
         assert_eq!(frontmost_pid(&windows[..1]), None);
     }
 
+    /// A named click's element under the Dock's tiles is covered for every
+    /// app, so no visible point is found there; beside the tiles the Dock
+    /// lets clicks through.
+    #[test]
+    fn the_docks_tiles_cover_every_window_under_them() {
+        let mut dock = window(1, 0.0, 0.0, 1000.0, 800.0);
+        dock.layer = 20;
+        dock.owner = Some("Dock".into());
+        let under = window(2, 300.0, 740.0, 100.0, 60.0);
+        let beside = window(3, 0.0, 700.0, 150.0, 100.0);
+        let behind = window(4, 0.0, 0.0, 1000.0, 800.0);
+        let windows = [dock, under, beside, behind];
+
+        for (target, x) in [(2, 350.0), (4, 600.0)] {
+            assert!(
+                !unobstructed(&windows, target, x, 770.0, &docked()),
+                "window {target} on the tiles"
+            );
+            assert!(
+                unobstructed(&windows, target, x, 770.0, &undocked()),
+                "window {target} without tiles"
+            );
+        }
+        assert_eq!(top_at(&windows, 350.0, 770.0, &docked()).unwrap().number, 1);
+        assert_eq!(visible_point(&windows, 2, &docked()), None);
+
+        assert!(unobstructed(&windows, 3, 75.0, 750.0, &docked()));
+        assert_eq!(visible_point(&windows, 3, &docked()), Some((75.0, 750.0)));
+        assert!(unobstructed(&windows, 4, 500.0, 700.0, &docked()));
+
+        let unread = Screen::new(display(), Dock::Unread);
+        assert!(!unobstructed(&windows, 3, 75.0, 750.0, &unread));
+        assert!(!unobstructed(&windows, 4, 900.0, 300.0, &unread));
+        assert!(unobstructed(&windows, 4, 500.0, 300.0, &unread));
+    }
+
+    #[test]
+    fn a_probe_says_where_the_dock_takes_clicks_or_leaves_it_unread() {
+        let reply = |output: serde_json::Value| crate::helper_test::completed(&output.to_string());
+        let windows = serde_json::json!([]);
+        let tiles = serde_json::json!([{"x": 200.0, "y": 730.0, "width": 600.0, "height": 70.0}]);
+
+        let shown = from_probe(&reply(
+            serde_json::json!({"ok": true, "windows": windows, "dock": tiles}),
+        ))
+        .unwrap();
+        assert_eq!(shown.dock, Dock::Tiles(vec![dock_tiles()]));
+        for older in [
+            serde_json::json!({"ok": true, "windows": windows, "dock": null}),
+            serde_json::json!({"ok": true, "windows": windows}),
+        ] {
+            assert_eq!(from_probe(&reply(older)).unwrap().dock, Dock::Unread);
+        }
+        assert_eq!(
+            serde_json::to_value(Dock::Unread).unwrap(),
+            serde_json::Value::Null
+        );
+        assert_eq!(
+            serde_json::to_value(Dock::Tiles(vec![dock_tiles()])).unwrap(),
+            tiles
+        );
+    }
+
     #[test]
     fn the_top_window_at_a_point_agrees_with_the_unobstructed_check() {
-        let display = Bounds {
-            x: 0.0,
-            y: 0.0,
-            width: 1000.0,
-            height: 800.0,
-        };
         let layered = |number, layer, owner: &str, bounds: (f64, f64, f64, f64)| {
             let mut window = window(number, bounds.0, bounds.1, bounds.2, bounds.3);
             window.layer = layer;
@@ -389,41 +556,59 @@ mod tests {
             ],
         ];
 
+        let screens = [undocked(), docked(), Screen::new(display(), Dock::Unread)];
+
         // Each fixture window is its own process.
         for windows in &fixtures {
-            for x in (0..1000).step_by(25) {
-                for y in (0..800).step_by(25) {
-                    let (x, y) = (f64::from(x), f64::from(y));
-                    let top = top_at(windows, x, y, &display).map(|window| window.number);
-                    for ordinary in windows.iter().filter(|window| window.layer == 0) {
-                        let clear = unobstructed(windows, ordinary.number, x, y, &display);
-                        let at = format!("window {} at {x},{y}", ordinary.number);
-                        assert_eq!(
-                            reaches(windows, ordinary.pid, x, y, &display),
-                            clear,
-                            "{at}"
-                        );
-                        if ordinary.alpha > 0.0 {
-                            assert_eq!(top == Some(ordinary.number), clear, "{at}");
+            for screen in &screens {
+                for x in (0..1000).step_by(25) {
+                    for y in (0..800).step_by(25) {
+                        let (x, y) = (f64::from(x), f64::from(y));
+                        let top = top_at(windows, x, y, screen).map(|window| window.number);
+                        for ordinary in windows.iter().filter(|window| window.layer == 0) {
+                            let clear = unobstructed(windows, ordinary.number, x, y, screen);
+                            let at = format!(
+                                "window {} at {x},{y} with {:?}",
+                                ordinary.number, screen.dock
+                            );
+                            assert_eq!(reaches(windows, ordinary.pid, x, y, screen), clear, "{at}");
+                            if ordinary.alpha > 0.0 {
+                                assert_eq!(top == Some(ordinary.number), clear, "{at}");
+                            }
                         }
                     }
                 }
             }
         }
         assert!(
-            reaches(&fixtures[1], 8, 300.0, 300.0, &display),
+            reaches(&fixtures[1], 8, 300.0, 300.0, &undocked()),
             "an ordinary window that shows nothing is reached where it is clear"
         );
 
         let first = &fixtures[0];
-        assert_eq!(top_at(first, 150.0, 100.0, &display).unwrap().number, 1);
-        assert!(top_at(first, 10.0, 10.0, &display).unwrap().is_menu_bar());
-        assert_eq!(top_at(first, 750.0, 150.0, &display).unwrap().number, 4);
+        assert_eq!(top_at(first, 150.0, 100.0, &undocked()).unwrap().number, 1);
+        assert!(
+            top_at(first, 10.0, 10.0, &undocked())
+                .unwrap()
+                .is_menu_bar()
+        );
+        assert_eq!(top_at(first, 750.0, 150.0, &undocked()).unwrap().number, 4);
         assert_eq!(
-            top_at(&fixtures[1], 300.0, 300.0, &display).unwrap().number,
+            top_at(&fixtures[1], 300.0, 300.0, &undocked())
+                .unwrap()
+                .number,
             10
         );
-        assert_eq!(top_at(&[], 1.0, 1.0, &display), None);
+        assert_eq!(top_at(&[], 1.0, 1.0, &undocked()), None);
+
+        // On the Dock's tiles the Dock is on top and no app is reached;
+        // beside them the app under the Dock is.
+        assert_eq!(top_at(first, 300.0, 775.0, &docked()).unwrap().number, 3);
+        assert_eq!(top_at(first, 300.0, 775.0, &undocked()).unwrap().number, 7);
+        for pid in [5, 6, 7] {
+            assert!(!reaches(first, pid, 300.0, 775.0, &docked()), "{pid}");
+        }
+        assert!(reaches(first, 7, 100.0, 775.0, &docked()));
     }
 
     /// Window dictionaries are read through the same keys CoreGraphics uses.

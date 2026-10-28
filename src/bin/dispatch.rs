@@ -237,9 +237,15 @@ pub(super) fn controls(command: &Command) -> bool {
     )
 }
 
+/// The helper's on-screen windows and where its Dock takes clicks, as one
+/// reading for the controller to judge points by.
 #[cfg(target_os = "macos")]
 fn windows_info() -> Result<Value> {
-    Ok(json!({ "ok": true, "windows": atlas::native::windows::windows()? }))
+    use atlas::native::{ax, windows};
+
+    let windows = windows::windows()?;
+    let dock = ax::dock(&windows, ax::DOCK_TIMEOUT);
+    Ok(json!({ "ok": true, "windows": windows, "dock": dock }))
 }
 
 #[cfg(target_os = "macos")]

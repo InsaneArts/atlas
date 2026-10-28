@@ -13,7 +13,7 @@ use crate::{
     config::home,
     control::{Ownership, write_private},
     error::{Error, Result},
-    native::windows::{Bounds, Window, frontmost_pid, unobstructed, visible_point},
+    native::windows::{Bounds, Screen, Shown, Window, frontmost_pid, unobstructed, visible_point},
     session::{Display, Epoch, require_hidden},
     transport::run_output,
 };
@@ -489,8 +489,9 @@ impl Canary<'_> {
         .await
     }
 
-    /// The helper's on-screen windows, front to back.
-    async fn windows(&self) -> Result<Vec<Window>> {
+    /// The helper's on-screen windows, front to back, and where its Dock
+    /// takes clicks.
+    async fn windows(&self) -> Result<Shown> {
         // Only reads: a failed listing leaves nothing pending.
         let probe = self.client.config.identity_probe.to_string_lossy();
         let reply = self
@@ -505,13 +506,15 @@ impl Canary<'_> {
             .ok_or_else(|| problem("The helper window list is unavailable"))
     }
 
-    fn display(&self) -> Bounds {
-        Bounds {
+    /// The helper's display, with its Dock as `shown` says.
+    fn screen(&self, shown: &Shown) -> Screen {
+        let display = Bounds {
             x: 0.0,
             y: 0.0,
             width: self.epoch.display.width,
             height: self.epoch.display.height,
-        }
+        };
+        Screen::new(display, shown.dock.clone())
     }
 
     /// The fixture's ordinary window in a fresh window list.
@@ -532,14 +535,14 @@ impl Canary<'_> {
         let deadline = Instant::now() + Duration::from_secs(6);
 
         loop {
-            let windows = self.windows().await?;
-            if frontmost_pid(&windows) == Some(pid) {
+            let shown = self.windows().await?;
+            if frontmost_pid(&shown.windows) == Some(pid) {
                 return Ok(());
             }
 
             let point = self
-                .fixture_window(&windows)
-                .and_then(|window| visible_point(&windows, window, &self.display()));
+                .fixture_window(&shown.windows)
+                .and_then(|window| visible_point(&shown.windows, window, &self.screen(&shown)));
             if let Some((x, y)) = point {
                 self.keys(json!([{ "type": "click", "x": x, "y": y }]))
                     .await?;
@@ -676,9 +679,10 @@ impl Canary<'_> {
         let y = self.epoch.display.height - state["windowY"].as_f64().unwrap_or_default() - 520.0;
 
         // Never click or type unless the text field's point is the fixture's.
-        let windows = self.windows().await?;
-        let target = self.fixture_window(&windows);
-        if !target.is_some_and(|window| unobstructed(&windows, window, x, y, &self.display())) {
+        let shown = self.windows().await?;
+        let screen = self.screen(&shown);
+        let target = self.fixture_window(&shown.windows);
+        if !target.is_some_and(|window| unobstructed(&shown.windows, window, x, y, &screen)) {
             return Err(problem("The fixture text field is not uncovered"));
         }
 
@@ -688,7 +692,7 @@ impl Canary<'_> {
                 .await?;
         }
 
-        if frontmost_pid(&self.windows().await?) != Some(i64::from(self.fixture.pid)) {
+        if frontmost_pid(&self.windows().await?.windows) != Some(i64::from(self.fixture.pid)) {
             return Err(problem("The fixture lost focus before typing"));
         }
 
