@@ -1663,7 +1663,12 @@ mod tests {
         if std::env::var("ATLAS_MUTATION_TEST_MODE").unwrap() == "interactive" {
             let controller = Controller::at(7001, &directory.join("state"));
             let _ = init::setup_transaction(&controller, || {
-                let script = r#"print -r -- $$ > "$4"; /usr/bin/touch "$3" "$2"; while [[ ! -e $1 ]]; do /bin/sleep 0.01; done"#;
+                // The stand-in outlives its caller, as the test needs: once
+                // the caller dies, `script` dies writing to it and hangs up
+                // the worker's terminal, which would otherwise end the
+                // stand-in at whatever moment that comes. It ends once told
+                // to, or once the test's folder is gone.
+                let script = r#"trap '' HUP; print -r -- $$ > "$4"; /usr/bin/touch "$3" "$2"; while [[ ! -e $1 && -d ${1:h} ]]; do /bin/sleep 0.01; done"#;
                 let paths = [
                     directory.join("continue"),
                     directory.join("paused"),

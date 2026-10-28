@@ -53,7 +53,8 @@ pub(crate) fn client(directory: &Path) -> Client {
 }
 
 /// Dispatch through the production executor handshake, then pause after a
-/// temporary filesystem mutation. No privileged or desktop tools are used.
+/// temporary filesystem mutation, until told to go on or the test's folder
+/// is gone. No privileged or desktop tools are used.
 pub(crate) fn pause_executor(directory: &Path) {
     let script = [
         crate::onboarding::as_root::EXECUTOR,
@@ -61,7 +62,7 @@ pub(crate) fn pause_executor(directory: &Path) {
 print -r -- $$ > "$4"
 /bin/rm -f "$5"
 /usr/bin/touch "$3" "$2"
-while [[ ! -e $1 ]]; do /bin/sleep 0.01; done
+while [[ ! -e $1 && -d ${1:h} ]]; do /bin/sleep 0.01; done
 "#,
     ]
     .concat();
