@@ -196,10 +196,40 @@ pub fn install(value: &Value) -> String {
 /// state and the files it copies.
 pub fn plans(value: &Value) -> String {
     let plans = value["plans"].as_array().map_or(&[][..], Vec::as_slice);
-    if plans.is_empty() {
-        return format!("{} Nothing has been copied into the helper", style::ok());
-    }
+    let count = |field: &str| value[field].as_u64().unwrap_or(0);
+    let (hidden, more, unreadable) = (count("hidden"), count("more"), count("unreadable"));
 
+    let mut lines = Vec::new();
+    if plans.is_empty() {
+        // Nothing listed is proof of nothing only when nothing was left out.
+        lines.push(if hidden + more + unreadable == 0 {
+            format!("{} Nothing has been copied into the helper", style::ok())
+        } else {
+            "No copy into the helper is listed".to_owned()
+        });
+    } else {
+        lines.push(plan_table(plans));
+    }
+    if unreadable > 0 {
+        lines.push(format!(
+            "{} {} could not be read, so this list may be missing some",
+            style::warn(),
+            text::count(usize::try_from(unreadable).unwrap_or(usize::MAX), "record")
+        ));
+    }
+    if more > 0 {
+        lines.push(style::dim(format!("{more} older not shown")));
+    }
+    if hidden > 0 {
+        lines.push(style::dim(format!(
+            "{hidden} undone completely not shown (--all lists them)"
+        )));
+    }
+    lines.join("\n")
+}
+
+/// The plans `environment list` found, one row each.
+fn plan_table(plans: &[Value]) -> String {
     let rows: Vec<Vec<String>> = plans
         .iter()
         .map(|plan| {
@@ -217,11 +247,7 @@ pub fn plans(value: &Value) -> String {
             ]
         })
         .collect();
-    let mut lines = vec![crate::ui::table::render(&["PLAN", "STATE", "FILES"], &rows)];
-    if let Some(more) = value["more"].as_u64().filter(|more| *more > 0) {
-        lines.push(style::dim(format!("{more} older not shown")));
-    }
-    lines.join("\n")
+    crate::ui::table::render(&["PLAN", "STATE", "FILES"], &rows)
 }
 
 /// A listed plan's state, in words.

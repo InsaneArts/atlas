@@ -771,13 +771,28 @@ pub(crate) async fn quit(
 /// what it leaves: they may or may not have exited, and their copies stay.
 /// The signal's own reply was received, so it is not uncertain.
 fn unconfirmed(mut error: Error, names: &[String]) -> Error {
+    let named: Vec<&str> = names
+        .iter()
+        .map(String::as_str)
+        .filter(|name| !name.is_empty())
+        .collect();
+    let asked = match (names.is_empty(), named.is_empty()) {
+        (true, _) => "Atlas could not read the helper's apps to confirm the apps it was closing \
+                      exited"
+            .to_owned(),
+        (false, true) => "Atlas asked the apps it was closing to quit but could not read the \
+                          helper's apps to confirm they exited"
+            .to_owned(),
+        (false, false) => format!(
+            "Atlas asked {} to quit but could not read the helper's apps to confirm they exited",
+            named.join(", ")
+        ),
+    };
     error.error = format!(
-        "Atlas asked {} to quit but could not read the helper's apps to confirm they exited \
-         ({}). Their copies were kept; run atlas close --app NAME again.",
-        names.join(", "),
+        "{asked} ({}). Their copies were kept; run atlas close --app NAME again.",
         error.error
     );
-    error.with("signalled", names)
+    error.with("signalled", named)
 }
 
 /// Quit apps in the helper: one by name (every process of it), or with
@@ -3830,6 +3845,29 @@ mod tests {
             error.error
         );
         assert!(copies.iter().all(|copy| copy.exists()));
+    }
+
+    #[test]
+    fn an_unconfirmed_quit_always_says_what_it_asked_in_plain_words() {
+        let said = |names: &[&str]| {
+            let names: Vec<String> = names.iter().map(|name| (*name).to_owned()).collect();
+            unconfirmed(Error::new("apps", "Refused"), &names)
+        };
+
+        let named = said(&["TextEdit"]);
+        assert!(
+            named.error.starts_with("Atlas asked TextEdit to quit"),
+            "{named}"
+        );
+        for nameless in [said(&[]), said(&[""]), said(&["", ""])] {
+            assert!(!nameless.error.contains("  "), "{nameless}");
+            assert!(
+                nameless.error.contains("the apps it was closing"),
+                "{nameless}"
+            );
+            assert_eq!(nameless.code, "apps");
+        }
+        assert_eq!(said(&["", "Notes"]).details["signalled"], json!(["Notes"]));
     }
 
     #[tokio::test]

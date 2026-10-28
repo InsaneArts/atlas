@@ -809,8 +809,67 @@ fn listed_copies_into_the_helper_read_as_a_table_of_ids_states_and_targets() {
     );
     assert!(listed.out.ends_with("2 older not shown"), "{}", listed.out);
 
-    let none = show(View::Plans, json!({"ok": true, "plans": [], "more": 0}));
+    let none = show(
+        View::Plans,
+        json!({"ok": true, "plans": [], "more": 0, "hidden": 0, "unreadable": 0}),
+    );
     assert_eq!(none.out, "✓ Nothing has been copied into the helper");
+}
+
+#[test]
+fn a_listing_that_could_not_read_everything_never_reads_as_nothing_copied() {
+    let unread = show(
+        View::Plans,
+        json!({"ok": true, "plans": [], "more": 0, "hidden": 0, "unreadable": 1}),
+    );
+    assert_eq!(
+        unread.out,
+        "No copy into the helper is listed\n! 1 record could not be read, so this list may be missing some"
+    );
+
+    let hidden = show(
+        View::Plans,
+        json!({"ok": true, "plans": [], "more": 0, "hidden": 3, "unreadable": 0}),
+    );
+    assert_eq!(
+        hidden.out,
+        "No copy into the helper is listed\n3 undone completely not shown (--all lists them)"
+    );
+
+    let listed = show(
+        View::Plans,
+        json!({"ok": true, "more": 0, "hidden": 0, "unreadable": 2, "plans": [{"planId": "3c1f",
+            "state": "applied", "files": [{"target": "a", "operation": "create"}]}]}),
+    );
+    assert!(
+        listed
+            .out
+            .ends_with("! 2 records could not be read, so this list may be missing some"),
+        "{}",
+        listed.out
+    );
+}
+
+#[test]
+fn activity_names_each_task_and_what_it_left() {
+    let one = show(
+        View::Activity,
+        json!({"ok": true,
+            "session": {"key": "3f9a1c07b2e4", "name": "Claude Code · left", "this": true},
+            "counts": {"open": 2}, "recent": [], "screenshots": [], "copies": [], "plans": [],
+            "uncertain": 0,
+            "tasks": [
+                {"key": "5be0d1a2c3f4", "name": "settings-sheet",
+                    "leftovers": {"copies": 1, "plans": 2}},
+                {"key": "6cf1e2b3d4a5", "name": "review", "leftovers": {"copies": 0, "plans": 0}}]}),
+    );
+    assert_eq!(
+        one.out,
+        "Claude Code · left — this session\n  2 opens\n  \
+         Task settings-sheet: left 1 open copy and 2 environment plans\n  \
+         Task review: nothing left"
+    );
+    assert!(!one.out.contains("5be0d1a2c3f4"), "no keys in words");
 }
 
 #[test]

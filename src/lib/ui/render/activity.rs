@@ -4,6 +4,41 @@ use super::{style, text};
 use crate::host_session::names::minute;
 use serde_json::Value;
 
+/// One line for each task the session named, with what it left.
+fn tasks(tasks: &Value) -> Vec<String> {
+    tasks
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter_map(|task| {
+            let name = text::printable(task["name"].as_str()?).into_owned();
+            let left = &task["leftovers"];
+            let count = |field: &str, one: &str, many: &str| {
+                left[field]
+                    .as_u64()
+                    .filter(|count| *count > 0)
+                    .map(|count| match count {
+                        1 => format!("1 {one}"),
+                        count => format!("{count} {many}"),
+                    })
+            };
+            let parts: Vec<String> = [
+                count("copies", "open copy", "open copies"),
+                count("plans", "environment plan", "environment plans"),
+            ]
+            .into_iter()
+            .flatten()
+            .collect();
+            let left = if parts.is_empty() {
+                "nothing left".to_owned()
+            } else {
+                format!("left {}", parts.join(" and "))
+            };
+            Some(format!("  Task {name}: {left}"))
+        })
+        .collect()
+}
+
 /// What a host session did, or one line for each session.
 pub fn activity(value: &Value) -> String {
     match value["sessions"].as_array() {
@@ -63,6 +98,8 @@ fn one(value: &Value) -> String {
     if !plans.is_empty() {
         lines.push(format!("  Environment plans: {}", plans.join(", ")));
     }
+
+    lines.extend(tasks(&value["tasks"]));
 
     if let Some(unknown) = value["uncertain"].as_u64().filter(|count| *count > 0) {
         let count = text::count(
