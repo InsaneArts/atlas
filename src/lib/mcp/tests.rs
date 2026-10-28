@@ -668,6 +668,36 @@ fn a_status_reads_in_a_line_for_the_model_and_whole_for_the_view() {
     assert_eq!(result.get("_meta"), None, "no screen for the model");
 }
 
+#[test]
+fn a_line_that_ends_with_an_ellipsis_gets_no_full_stop_after_it() {
+    let status = json!({
+        "state": "working",
+        "label": "Working",
+        "headline": "Running a command…",
+        "activity": [
+            {"actor": "agent", "says": "running a command…"},
+            {"actor": "agent", "says": "opened TextEdit"},
+        ],
+    });
+    assert_eq!(
+        said(&status)["content"][0]["text"],
+        "Atlas: Working. Running a command… Recent: running a command…; opened TextEdit."
+    );
+
+    let last = json!({
+        "label": "Working",
+        "headline": "Clicked Save",
+        "activity": [{"actor": "agent", "says": "running a command…"}],
+    });
+    assert_eq!(
+        said(&last)["content"][0]["text"],
+        "Atlas: Working. Clicked Save. Recent: running a command…"
+    );
+
+    let quiet = json!({"label": "Idle", "headline": "", "activity": []});
+    assert_eq!(said(&quiet)["content"][0]["text"], "Atlas: Idle.");
+}
+
 #[tokio::test]
 async fn control_and_the_persons_actions_are_offered_only_to_a_client_that_draws_views() {
     let dir = tempfile::tempdir().unwrap();

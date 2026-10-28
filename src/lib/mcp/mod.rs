@@ -1338,7 +1338,10 @@ fn summary(status: &Value, named: &BTreeMap<Key, String>, own: Option<&Key>) -> 
 fn said(status: &Value) -> Value {
     let label = status["label"].as_str().unwrap_or("Not ready");
     let headline = status["headline"].as_str().unwrap_or_default();
-    let mut text = format!("Atlas: {label}. {headline}.");
+    let mut text = format!("Atlas: {}", sentence(label));
+    if !headline.is_empty() {
+        text.push_str(&format!(" {}", sentence(headline)));
+    }
     let earlier = status["activity"]
         .as_array()
         .into_iter()
@@ -1348,13 +1351,24 @@ fn said(status: &Value) -> Value {
         .take(3)
         .collect::<Vec<_>>();
     if !earlier.is_empty() {
-        text.push_str(&format!(" Recent: {}.", earlier.join("; ")));
+        text.push_str(&format!(" Recent: {}", sentence(&earlier.join("; "))));
     }
 
     json!({
         "content": [{"type": "text", "text": text}],
         "structuredContent": {"status": status},
     })
+}
+
+/// `text` ended as a sentence: with a full stop, unless it already ends
+/// with one, an ellipsis ("Running a command…") or another mark that ends
+/// a sentence.
+fn sentence(text: &str) -> String {
+    if text.ends_with(['.', '…', '!', '?']) {
+        text.to_owned()
+    } else {
+        format!("{text}.")
+    }
 }
 
 /// The view's input after checking it is only what the person may send:
