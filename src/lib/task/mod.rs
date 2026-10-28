@@ -179,21 +179,40 @@ impl Claims {
     /// made it (`made`), written through to the disk before the caller goes
     /// on.
     pub fn claim(&self, owned: &Owned, state: State) -> Result<()> {
-        let Some((store, task)) = &self.task else {
+        self.claim_all(std::slice::from_ref(owned), state)
+    }
+
+    /// [`Claims::claim`] for each of `owned`, in one write. When the record
+    /// is full, the claims that fit are kept and the rest are refused.
+    pub fn claim_all(&self, owned: &[Owned], state: State) -> Result<()> {
+        let Some((store, task)) = self.task.as_ref().filter(|_| !owned.is_empty()) else {
             return Ok(());
         };
         let now = now_ms();
-        store.update(task, now, |record| record.claim(owned, state, now))
+        let mut refused = None;
+        store.update(task, now, |record| {
+            for owned in owned {
+                if let Err(error) = record.claim(owned, state, now) {
+                    refused = Some(error);
+                    break;
+                }
+            }
+            Ok(())
+        })?;
+        refused.map_or(Ok(()), Err)
     }
 
-    /// Record what became of `owned`, which this task claimed.
-    pub fn settle(&self, owned: &Owned, state: State) -> Result<()> {
-        let Some((store, task)) = &self.task else {
+    /// Record what became of each of `settled`, which this task claimed, in
+    /// one write.
+    pub fn settle_all(&self, settled: &[(Owned, State)]) -> Result<()> {
+        let Some((store, task)) = self.task.as_ref().filter(|_| !settled.is_empty()) else {
             return Ok(());
         };
         let now = now_ms();
         store.update(task, now, |record| {
-            record.settle(owned, state, now);
+            for (owned, state) in settled {
+                record.settle(owned, *state, now);
+            }
             Ok(())
         })
     }

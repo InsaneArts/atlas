@@ -245,6 +245,7 @@ const OPENED_WITH: &str = ".opened-with";
 const SESSION: &str = ".session";
 
 /// What [`hand_over`] gives the helper to open.
+#[derive(Debug)]
 pub(crate) struct Handed {
     /// The targets as the helper can open them, in order.
     pub paths: Vec<String>,
@@ -253,8 +254,9 @@ pub(crate) struct Handed {
 }
 
 /// The paths among `targets` as the helper can open them: unchanged when it
-/// can read them (or they are copies already), otherwise copied first. When
-/// one cannot be handed over, the copies already made for the others go.
+/// can read them (or they are copies already), otherwise copied first. Every
+/// target is checked before anything is copied; when a copy fails, the
+/// copies already made for the others go.
 pub(crate) async fn hand_over(
     client: &Client,
     ownership: &Ownership,
@@ -282,84 +284,53 @@ pub(crate) async fn hand_over(
         })
         .collect();
     let answers = readable(client, ownership, &checks).await?;
+    let placed = placement(targets, answers, running)?;
 
-    let mut made = Vec::new();
-    let session = client.host_session.as_ref().map(HostSession::key);
+    let root = if placed
+        .iter()
+        .any(|placed| matches!(placed, Placed::Copy { .. }))
+    {
+        self::root(client.config.helper_uid)?
+    } else {
+        root_path
+    };
     let claims = Claims::of(client);
     let owner = Owner {
-        session,
+        session: client.host_session.as_ref().map(HostSession::key),
         claims: &claims,
+        opened_with: &opened_with,
     };
-    let placed = place(
-        targets,
-        answers,
-        running,
-        &opened_with,
-        client.config.helper_uid,
-        &owner,
-        &mut made,
-    );
-
-    match placed {
-        Ok(paths) => Ok(Handed {
-            paths,
-            copied: made
-                .into_iter()
-                .map(|(from, to)| json!({"from": from, "to": to}))
-                .collect(),
-        }),
-        Err(error) => {
-            // Nothing has opened these copies yet: they go with the failure.
-            for folder in made.iter().filter_map(|(_, copy)| copy.parent()) {
-                if fs::remove_dir_all(folder).is_ok()
-                    && let Some(id) = folder_token(folder)
-                {
-                    let _ = claims.settle(&Owned::Copy { id }, State::Gone);
-                }
-            }
-            Err(error)
-        }
-    }
+    handed_in(&root, placed, &owner, copy)
 }
 
-/// Who a copy is made for: the host session its label names, if any, and
-/// the task whose record claims it.
-struct Owner<'a> {
-    session: Option<&'a Key>,
-    claims: &'a Claims,
+/// What one target becomes for the helper.
+enum Placed {
+    /// Opened as it is: a name, a URL, a path the helper can read or one of
+    /// Atlas's copies.
+    Given(String),
+    /// Copied under the copy root first.
+    Copy { path: PathBuf, token: Token },
 }
 
 /// [`hand_over`]'s targets in order, given `answers` (whether the helper
-/// can read each path outside ROOT), for `helper` and the command copying;
-/// each copy made is added to `made` as (original, copy) as soon as it
-/// exists.
-fn place(
-    targets: Vec<Target>,
-    answers: Vec<bool>,
-    running: &[Running],
-    opened_with: &[String],
-    helper: u32,
-    owner: &Owner,
-    made: &mut Vec<(PathBuf, PathBuf)>,
-) -> Result<Vec<String>> {
+/// can read each path outside ROOT): each one as it is given, or the copy
+/// it needs. A folder the helper cannot read, or a file whose earlier copy
+/// still runs in the helper, refuses them all before anything is copied.
+fn placement(targets: Vec<Target>, answers: Vec<bool>, running: &[Running]) -> Result<Vec<Placed>> {
     let root_path = PathBuf::from(ROOT);
     let mut answers = answers.into_iter();
-    let mut root = None;
-    let mut out = Vec::new();
+    let mut placed = Vec::new();
 
     for target in targets {
         let path = match target {
             Target::Name(name) => {
-                out.push(name);
+                placed.push(Placed::Given(name));
                 continue;
             }
             Target::Path(path) if path.starts_with(&root_path) => path,
+            Target::Path(path) if answers.next().unwrap_or(false) => path,
             Target::Path(path) => {
-                if answers.next().unwrap_or(false) {
-                    path
-                } else if path.is_dir()
-                    && path.extension().is_none_or(|extension| extension != "app")
-                {
+                if path.is_dir() && path.extension().is_none_or(|extension| extension != "app") {
                     // A whole folder could be any size; only apps and files are copied.
                     return Err(Error::new(
                         "input",
@@ -368,73 +339,149 @@ fn place(
                             path.display()
                         ),
                     ));
-                } else {
-                    // A new copy is a new app to macOS: a second one would run
-                    // beside the first instead of bringing it forward.
-                    if let Some(earlier) = running.iter().find(|app| {
-                        app.executable.starts_with(ROOT) && names(&path).contains(&app.name)
-                    }) {
-                        return Err(Error::new(
-                            "input",
-                            format!(
-                                "An earlier copy of {0} is still running in the helper. Close it first: atlas close --app '{0}'",
-                                earlier.name
-                            ),
-                        ));
-                    }
-
-                    let root = match &root {
-                        Some(root) => root,
-                        None => root.insert(self::root(helper)?),
-                    };
-
-                    let copy = claimed_copy(&path, root, owner.claims, copy)?;
-                    made.push((path.clone(), copy.clone()));
-                    if let (Some(session), Some(folder)) = (owner.session, copy.parent()) {
-                        // A label for close and the session's record; a
-                        // lost one leaves the copy everyone's, as before.
-                        let _ = label(folder, session);
-                    }
-
-                    if path.extension().is_none_or(|extension| extension != "app")
-                        && !opened_with.is_empty()
-                        && let Some(folder) = copy.parent()
-                    {
-                        fs::write(folder.join(OPENED_WITH), opened_with.join("\n"))?;
-                    }
-
-                    copy
                 }
+
+                // A new copy is a new app to macOS: a second one would run
+                // beside the first instead of bringing it forward.
+                if let Some(earlier) = running.iter().find(|app| {
+                    app.executable.starts_with(ROOT) && names(&path).contains(&app.name)
+                }) {
+                    return Err(Error::new(
+                        "input",
+                        format!(
+                            "An earlier copy of {0} is still running in the helper. Close it first: atlas close --app '{0}'",
+                            earlier.name
+                        ),
+                    ));
+                }
+
+                placed.push(Placed::Copy {
+                    path,
+                    token: Token::new(),
+                });
+                continue;
             }
         };
-
-        out.push(path.to_string_lossy().into_owned());
+        placed.push(Placed::Given(path.to_string_lossy().into_owned()));
     }
 
-    Ok(out)
+    Ok(placed)
 }
 
-/// Copy `path` under `root` with `copy`, into a folder whose token the
-/// command's task claims before the folder is made, so a crash on the way
-/// leaves it findable, and settles once it is known whether it was.
-fn claimed_copy(
-    path: &Path,
-    root: &Path,
-    claims: &Claims,
-    copy: impl FnOnce(&Path, &Path, &Token) -> Result<PathBuf>,
-) -> Result<PathBuf> {
-    let token = Token::new();
-    let owned = Owned::Copy { id: token.clone() };
-    let _ = claims.claim(&owned, State::Intent);
+/// Who a copy is made for: the host session its label names, if any, the
+/// task whose record claims it, and the app its files are opened with.
+struct Owner<'a> {
+    session: Option<&'a Key>,
+    claims: &'a Claims,
+    opened_with: &'a [String],
+}
 
-    let copied = copy(path, root, &token);
-    let state = if copied.is_ok() {
-        State::Made
-    } else {
-        State::Gone
-    };
-    let _ = claims.settle(&owned, state);
-    copied
+/// What `placed` gives the helper to open, its copies made under `root`
+/// with `copy`. Every copy's token is claimed for the command's task in one
+/// write before any folder is made, so a crash on the way leaves each one
+/// findable, and all are settled in one more once it is known how each
+/// went: `made` when it is there, `gone` only once its folder is seen to be
+/// absent. When a copy fails, those already made go; one whose folder
+/// stays anyway is left claimed and named in the error as `leftover`.
+fn handed_in(
+    root: &Path,
+    placed: Vec<Placed>,
+    owner: &Owner,
+    mut copy: impl FnMut(&Path, &Path, &Token) -> Result<PathBuf>,
+) -> Result<Handed> {
+    let tokens: Vec<Token> = placed
+        .iter()
+        .filter_map(|placed| match placed {
+            Placed::Copy { token, .. } => Some(token.clone()),
+            Placed::Given(_) => None,
+        })
+        .collect();
+    let owned: Vec<Owned> = tokens
+        .iter()
+        .map(|id| Owned::Copy { id: id.clone() })
+        .collect();
+    let _ = owner.claims.claim_all(&owned, State::Intent);
+
+    let mut made = Vec::new();
+    let mut paths = Vec::new();
+    let mut failure = None;
+    for placed in placed {
+        match placed {
+            Placed::Given(given) => paths.push(given),
+            Placed::Copy { path, token } => {
+                let copied = match copy(&path, root, &token) {
+                    Ok(copied) => copied,
+                    Err(error) => {
+                        failure = Some(error);
+                        break;
+                    }
+                };
+                made.push((path.clone(), copied.clone()));
+                if let Err(error) = owner.mark(&path, &copied) {
+                    failure = Some(error);
+                    break;
+                }
+                paths.push(copied.to_string_lossy().into_owned());
+            }
+        }
+    }
+
+    if failure.is_some() {
+        // Nothing has opened these copies yet: they go with the failure.
+        for folder in made.iter().filter_map(|(_, copy)| copy.parent()) {
+            let _ = fs::remove_dir_all(folder);
+        }
+    }
+
+    let mut settled = Vec::new();
+    let mut leftover = Vec::new();
+    for (token, owned) in tokens.iter().zip(owned) {
+        let folder = root.join(token.as_str());
+        match (fs::symlink_metadata(&folder).is_ok(), failure.is_some()) {
+            (false, _) => settled.push((owned, State::Gone)),
+            (true, false) => settled.push((owned, State::Made)),
+            (true, true) => leftover.push(folder.to_string_lossy().into_owned()),
+        }
+    }
+    let _ = owner.claims.settle_all(&settled);
+
+    match failure {
+        None => Ok(Handed {
+            paths,
+            copied: made
+                .into_iter()
+                .map(|(from, to)| json!({"from": from, "to": to}))
+                .collect(),
+        }),
+        Some(error) if leftover.is_empty() => Err(error),
+        Some(mut error) => {
+            error.error.push_str(&format!(
+                " Atlas could not remove what it began copying at {}; it stays claimed for this task.",
+                leftover.join(", ")
+            ));
+            Err(error.with("leftover", leftover))
+        }
+    }
+}
+
+impl Owner<'_> {
+    /// Label `copied`, a copy of `path` just made, with the host session it
+    /// was made for and the app its files are opened with. A lost session
+    /// label leaves the copy everyone's, as before.
+    fn mark(&self, path: &Path, copied: &Path) -> Result<()> {
+        let Some(folder) = copied.parent() else {
+            return Ok(());
+        };
+        if let Some(session) = self.session {
+            let _ = label(folder, session);
+        }
+        if path.extension().is_none_or(|extension| extension != "app")
+            && !self.opened_with.is_empty()
+        {
+            fs::write(folder.join(OPENED_WITH), self.opened_with.join("\n"))?;
+        }
+        Ok(())
+    }
 }
 
 /// Copy `path` into a new folder of its own under `root`, named `token`,
@@ -1140,70 +1187,144 @@ mod tests {
         assert_eq!(token_of(&format!("{ROOT}/../{}", Token::new())), None);
     }
 
-    /// Claims for a task of a fresh session, kept under `output`, and that
-    /// task.
-    fn claims_in(output: &Path) -> (Claims, crate::task::Task) {
+    /// A private copy root and an output folder under `dir`, and the claims
+    /// of a task of a fresh session kept there, with that task.
+    fn claiming(dir: &Path) -> (PathBuf, PathBuf, Claims, crate::task::Task) {
+        let root = dir.join("root");
+        fs::DirBuilder::new().mode(0o700).create(&root).unwrap();
+        let output = dir.join("output");
+        fs::create_dir(&output).unwrap();
         let task = crate::task::Task::of(&key("claiming"), Some("probe")).unwrap();
-        let store = crate::task::store::Store::at(output);
-        (Claims::in_store(store, task.clone()), task)
+        let store = crate::task::store::Store::at(&output);
+        (root, output, Claims::in_store(store, task.clone()), task)
     }
 
-    #[test]
-    fn a_claim_is_on_disk_before_the_thing_is_made() {
-        let dir = tempfile::tempdir().unwrap();
-        let (claims, task) = claims_in(dir.path());
-        let store = crate::task::store::Store::at(dir.path());
-        let source = dir.path().join("note.txt");
-        fs::write(&source, "hello").unwrap();
-
-        let claimed = |token: &Token| {
-            let record = store.load(task.key()).unwrap();
-            record.claims().any(|(owned, state)| {
-                owned == Owned::Copy { id: token.clone() } && state == State::Intent
+    /// The copies of `sources`, as `hand_over` places them once checked.
+    fn to_copy(sources: &[&Path]) -> Vec<Placed> {
+        sources
+            .iter()
+            .map(|path| Placed::Copy {
+                path: path.to_path_buf(),
+                token: Token::new(),
             })
-        };
-        let mut seen = None;
-        let made = claimed_copy(&source, dir.path(), &claims, |_, _, token| {
-            seen = Some(claimed(token));
-            Ok(PathBuf::from("made"))
-        });
-        assert_eq!(made.unwrap(), Path::new("made"));
-        assert_eq!(seen, Some(true), "claimed before the copy began");
+            .collect()
+    }
 
-        let failed = claimed_copy(&source, dir.path(), &claims, |_, _, _| {
-            Err(problem("Could not copy"))
-        });
-        assert!(failed.is_err());
-        let states: Vec<State> = store
+    /// The states `output`'s record of `task` holds, in claim order.
+    fn states(output: &Path, task: &crate::task::Task) -> Vec<State> {
+        crate::task::store::Store::at(output)
             .load(task.key())
             .unwrap()
             .claims()
             .map(|(_, state)| state)
-            .collect();
-        assert_eq!(states, [State::Made, State::Gone]);
+            .collect()
+    }
+
+    #[test]
+    fn every_copy_is_claimed_in_one_write_before_any_is_made() {
+        let dir = tempfile::tempdir().unwrap();
+        let (root, output, claims, task) = claiming(dir.path());
+        let owner = Owner {
+            session: None,
+            claims: &claims,
+            opened_with: &[],
+        };
+        let sources = [dir.path().join("a.txt"), dir.path().join("b.txt")];
+        for source in &sources {
+            fs::write(source, "hello").unwrap();
+        }
+        let placed = to_copy(&[&sources[0], &sources[1]]);
+
+        let mut seen = Vec::new();
+        let handed = handed_in(&root, placed, &owner, |path, root, token| {
+            seen.push(states(&output, &task));
+            copy(path, root, token)
+        })
+        .unwrap();
+
+        assert_eq!(seen, [[State::Intent, State::Intent]; 2]);
+        assert_eq!(handed.paths.len(), 2);
+        assert_eq!(states(&output, &task), [State::Made, State::Made]);
+    }
+
+    #[test]
+    fn a_failed_copy_takes_the_ones_before_it_and_each_is_settled_once_gone() {
+        let dir = tempfile::tempdir().unwrap();
+        let (root, output, claims, task) = claiming(dir.path());
+        let owner = Owner {
+            session: Some(&key("claiming")),
+            claims: &claims,
+            opened_with: &["TextEdit".to_owned()],
+        };
+        let made = dir.path().join("made.txt");
+        fs::write(&made, "hello").unwrap();
+        let missing = dir.path().join("missing.txt");
+        let placed = to_copy(&[&made, &missing, &made]);
+
+        let error = handed_in(&root, placed, &owner, copy).unwrap_err();
+
+        assert!(error.error.contains("Could not copy"), "{error}");
+        assert!(error.details.get("leftover").is_none());
+        assert_eq!(
+            fs::read_dir(&root).unwrap().count(),
+            0,
+            "the first copy went"
+        );
+        assert_eq!(states(&output, &task), [State::Gone; 3]);
+    }
+
+    #[test]
+    fn a_failed_copy_whose_folder_stays_is_left_claimed_and_reported() {
+        let dir = tempfile::tempdir().unwrap();
+        let (root, output, claims, task) = claiming(dir.path());
+        let owner = Owner {
+            session: None,
+            claims: &claims,
+            opened_with: &[],
+        };
+        let source = dir.path().join("note.txt");
+        fs::write(&source, "hello").unwrap();
+
+        // The copy fails after making its folder, and cannot remove it.
+        let error = handed_in(&root, to_copy(&[&source]), &owner, |_, root, token| {
+            fs::create_dir(root.join(token.as_str())).unwrap();
+            Err(problem("Could not copy"))
+        })
+        .unwrap_err();
+
+        let leftover = error.details["leftover"].as_array().unwrap();
+        assert_eq!(leftover.len(), 1);
+        assert!(Path::new(leftover[0].as_str().unwrap()).exists());
+        assert_eq!(states(&output, &task), [State::Intent]);
     }
 
     #[test]
     fn the_record_keeps_no_file_names_or_paths() {
         let dir = tempfile::tempdir().unwrap();
-        let root = dir.path().join("root");
-        fs::DirBuilder::new().mode(0o700).create(&root).unwrap();
-        let output = dir.path().join("output");
-        fs::create_dir(&output).unwrap();
-        let (claims, task) = claims_in(&output);
+        let (root, output, claims, task) = claiming(dir.path());
+        let owner = Owner {
+            session: None,
+            claims: &claims,
+            opened_with: &[],
+        };
         let source = dir.path().join("Secret plan.rtf");
         fs::write(&source, "hello").unwrap();
 
-        let made = claimed_copy(&source, &root, &claims, copy).unwrap();
+        let handed = handed_in(&root, to_copy(&[&source]), &owner, copy).unwrap();
 
-        assert!(made.ends_with("Secret plan.rtf"));
+        assert!(handed.paths[0].ends_with("Secret plan.rtf"));
         let record = fs::read_to_string(output.join(format!("tasks/{}.json", task.key()))).unwrap();
         assert!(!record.contains("Secret"), "{record}");
         assert!(
             !record.contains(&dir.path().to_string_lossy().into_owned()),
             "{record}"
         );
-        assert!(record.contains(folder_token(made.parent().unwrap()).unwrap().as_str()));
+        assert!(record.contains(token_of_copy(&handed.paths[0]).as_str()));
+    }
+
+    /// The token of the copy folder `copied` lies in, wherever the root is.
+    fn token_of_copy(copied: &str) -> Token {
+        folder_token(Path::new(copied).parent().unwrap()).unwrap()
     }
 
     #[test]

@@ -91,8 +91,8 @@ fn a_claim_is_written_whole_and_settled_in_place() {
 
     claims.claim(&first, State::Intent).unwrap();
     claims.claim(&second, State::Made).unwrap();
-    claims.settle(&first, State::Made).unwrap();
-    claims.settle(&first, State::Gone).unwrap();
+    claims.settle_all(&[(first.clone(), State::Made)]).unwrap();
+    claims.settle_all(&[(first.clone(), State::Gone)]).unwrap();
 
     assert_eq!(
         claimed(&store, &task),
@@ -224,7 +224,7 @@ fn a_record_a_later_build_wrote_keeps_what_this_one_does_not_know() {
     .unwrap();
 
     let claims = Claims::in_store(Store::at(directory.path()), task.clone());
-    claims.settle(&known, State::Gone).unwrap();
+    claims.settle_all(&[(known.clone(), State::Gone)]).unwrap();
     claims.claim(&plan(), State::Made).unwrap();
 
     let rewritten: serde_json::Value =
@@ -314,7 +314,9 @@ fn a_finished_task_goes_once_its_session_record_has_gone() {
     let claims = |task: &Task| Claims::in_store(Store::at(directory.path()), task.clone());
     let made = copy();
     claims(&finished).claim(&made, State::Made).unwrap();
-    claims(&finished).settle(&made, State::Gone).unwrap();
+    claims(&finished)
+        .settle_all(&[(made.clone(), State::Gone)])
+        .unwrap();
     claims(&unfinished).claim(&copy(), State::Made).unwrap();
 
     // A new record is made, and the others are looked over.
