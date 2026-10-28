@@ -47,6 +47,9 @@ pub(crate) struct Helper {
     moves_after: Option<usize>,
     /// How many identity proofs it gave.
     proofs: AtomicUsize,
+    /// Whether it refuses a read meant for another session, as a current
+    /// daemon does; an older one cannot be told the session.
+    pins: bool,
 }
 
 impl Helper {
@@ -63,6 +66,7 @@ impl Helper {
             uid,
             moves_after: None,
             proofs: AtomicUsize::new(0),
+            pins: true,
         };
 
         (client, helper)
@@ -87,6 +91,33 @@ impl Helper {
         self
     }
 
+    /// This helper as an older daemon serves it: one that cannot be told
+    /// which session a read is for.
+    pub(crate) fn older(mut self) -> Self {
+        self.pins = false;
+        self
+    }
+
+    /// The session this helper is in now: the one its proofs name next.
+    fn session(&self) -> u64 {
+        let given = self.proofs.load(Ordering::Relaxed);
+        if self.moves_after.is_some_and(|proofs| given >= proofs) {
+            SESSION + 1
+        } else {
+            SESSION
+        }
+    }
+
+    /// The refusal of a read pinned to a session other than this helper's.
+    fn elsewhere(&self, request: &Value) -> Option<Value> {
+        let pin = request.get("session").filter(|_| self.pins)?;
+        let here = json!({"securitySessionId": self.session(), "displayId": 7});
+        (*pin != here).then(|| {
+            json!({"ok": false, "code": "session-changed", "uncertain": false,
+                "error": "The helper changed since Atlas checked it; look again"})
+        })
+    }
+
     /// Run `operation` while serving it. `answer` is given each run other
     /// than the identity probe and returns the reply, or `None` to close the
     /// connection without one.
@@ -108,6 +139,8 @@ impl Helper {
                 } else if request["argv"][1] == "session-info" {
                     let proofs = self.proofs.fetch_add(1, Ordering::Relaxed) + 1;
                     Some(self.proof(proofs))
+                } else if let Some(refusal) = self.elsewhere(&request) {
+                    Some(refusal)
                 } else {
                     answer(&request)
                 };
@@ -134,7 +167,13 @@ impl Helper {
     }
 
     fn hello(&self) -> Value {
-        json!({"ok": true, "user": {"uid": self.uid, "home": HOME}, "daemon": {"pid": 123},
+        let capabilities: &[&str] = if self.pins {
+            &[crate::daemon::protocol::SESSION_PIN]
+        } else {
+            &[]
+        };
+        json!({"ok": true, "user": {"uid": self.uid, "home": HOME},
+            "daemon": {"pid": 123, "capabilities": capabilities},
             "session": {"managerName": "Aqua", "onConsole": false},
             "display": {"width": 100, "height": 100, "scale": 1}})
     }

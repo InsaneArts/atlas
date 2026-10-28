@@ -7,7 +7,7 @@ use crate::{
     actions::{self, Expect},
     config::Config,
     control::{Controller, Ownership, SharedLease},
-    daemon::protocol::{Crop, Region},
+    daemon::protocol::{Crop, Region, SESSION_PIN, SessionPin},
     digest::file_sha256,
     doing::Doing,
     error::{Error, Holder, Result},
@@ -201,6 +201,31 @@ const RUN_MARGIN: Duration = Duration::from_secs(10);
 /// The longest the input service's grant can outlast a command killed
 /// while holding it: the grant's own life, and a second to spare.
 const GRANT_OUTLIVES: Duration = crate::native::GRANT_TTL.saturating_add(Duration::from_secs(1));
+
+/// A helper session a command has just verified, and whether its daemon
+/// refuses a read meant for another session. Only [`Client::verify`] makes
+/// one, so a read given it was checked in that session.
+#[derive(Debug, Clone)]
+pub struct Verified {
+    session: Session,
+    pinned: bool,
+}
+
+impl Verified {
+    /// The session as it was verified.
+    pub fn session(&self) -> &Session {
+        &self.session
+    }
+
+    /// What a read carries to be served only in this session; none when the
+    /// daemon cannot be told, and the session is verified again instead.
+    fn pin(&self) -> Option<SessionPin> {
+        self.pinned.then_some(SessionPin {
+            security_session_id: self.session.epoch.security_session_id,
+            display_id: self.session.epoch.display_id,
+        })
+    }
+}
 
 /// How an agent's batch is checked against the app it is for.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -518,18 +543,31 @@ impl Client {
     pub async fn frame(&self, maximum: Option<u32>) -> Result<Frame> {
         let size = maximum.map_or(Size::Full, Size::Longest);
 
-        self.framed(size, None).await.map(|(frame, _)| frame)
+        self.framed(size, None, None).await.map(|(frame, _)| frame)
     }
 
     /// A frame of the whole display, or of the crop asked for, with what the
-    /// helper says the crop shows.
-    async fn framed(&self, size: Size, crop: Option<&Crop>) -> Result<(Frame, Option<Cropped>)> {
+    /// helper says the crop shows. With `expected`, the helper must still be
+    /// in that epoch when the capture starts, as when the crop names a
+    /// process found in it.
+    async fn framed(
+        &self,
+        size: Size,
+        crop: Option<&Crop>,
+        expected: Option<&Epoch>,
+    ) -> Result<(Frame, Option<Cropped>)> {
         let maximum = size.longest();
         if maximum.is_some_and(|m| m == 0 || m > 8192) {
             return Err(Error::new("input", "Maximum dimension must be 1–8192"));
         }
 
         let before = self.identity().await?;
+        if expected.is_some_and(|epoch| *epoch != before.epoch) {
+            return Err(Error::new(
+                "session-changed",
+                "The helper changed since the app was found; look again",
+            ));
+        }
         let mut request = screenshot_request(size);
 
         match crop {
@@ -606,8 +644,34 @@ impl Client {
     /// last one of that target and size names the earlier file and says it
     /// is `unchanged`, unless `new_file` asks for a file anyway.
     pub async fn capture(&self, size: Size, crop: Option<&Crop>, new_file: bool) -> Result<Value> {
+        self.capture_expecting(None, size, crop, new_file).await
+    }
+
+    /// [`Client::capture`] only while the helper is still the one `verified`
+    /// names, as for a crop of a process found in it.
+    pub async fn capture_in(
+        &self,
+        verified: &Verified,
+        size: Size,
+        crop: Option<&Crop>,
+        new_file: bool,
+    ) -> Result<Value> {
+        self.capture_expecting(Some(&verified.session().epoch), size, crop, new_file)
+            .await
+    }
+
+    /// [`Client::capture`], refused unless the helper is in `expected`.
+    async fn capture_expecting(
+        &self,
+        expected: Option<&Epoch>,
+        size: Size,
+        crop: Option<&Crop>,
+        new_file: bool,
+    ) -> Result<Value> {
         let started = Instant::now();
-        let captured = self.capture_unrecorded(size, crop, new_file).await;
+        let captured = self
+            .capture_unrecorded(size, crop, new_file, expected)
+            .await;
 
         // An agent's look at the screen is activity too, naming the file it
         // gave; a recording that fails never fails the capture.
@@ -627,8 +691,9 @@ impl Client {
         size: Size,
         crop: Option<&Crop>,
         new_file: bool,
+        expected: Option<&Epoch>,
     ) -> Result<Value> {
-        let (frame, shows) = self.framed(size, crop).await?;
+        let (frame, shows) = self.framed(size, crop, expected).await?;
         let output = self.output_dir()?;
         let kept = last_capture::keep(
             output,
@@ -1190,21 +1255,27 @@ impl Client {
         })
     }
 
-    /// [`Client::inspect_within`] in the helper `_verified` describes, which
-    /// the caller verified moments before, so it is not verified again. The
-    /// socket's peer is still checked and the daemon refuses a run while
-    /// the helper is on screen; a command that then acts compares the
-    /// helper's epoch with the one verified before it acts.
+    /// [`Client::inspect_within`] in the helper session `verified` names,
+    /// which the caller verified moments before. A daemon that can be told
+    /// the session refuses the run in any other, so it is not verified
+    /// again; an older one is verified again first, as for any inspection.
     pub(crate) async fn inspect_in(
         &self,
-        _verified: &Session,
+        verified: &Verified,
         argv: Vec<String>,
         limit: Duration,
     ) -> Result<Value> {
-        self.run_verified(argv, limit).await.map_err(|error| Error {
-            uncertain: false,
-            ..error
-        })
+        let pin = verified.pin();
+        if pin.is_none() {
+            self.identity().await?;
+        }
+
+        self.run_verified(argv, limit, pin)
+            .await
+            .map_err(|error| Error {
+                uncertain: false,
+                ..error
+            })
     }
 
     /// [`Client::inspect_within`] with a run's usual limit, under controller
@@ -1225,13 +1296,22 @@ impl Client {
     /// command may have started.
     pub async fn run_pending(&self, argv: Vec<String>, timeout: Duration) -> Result<Value> {
         self.identity().await?;
-        self.run_verified(argv, timeout).await
+        self.run_verified(argv, timeout, None).await
     }
 
-    /// [`Client::run_pending`] once the helper is verified.
-    async fn run_verified(&self, argv: Vec<String>, timeout: Duration) -> Result<Value> {
+    /// [`Client::run_pending`] once the helper is verified, served only in
+    /// the session `pin` names when there is one.
+    async fn run_verified(
+        &self,
+        argv: Vec<String>,
+        timeout: Duration,
+        pin: Option<SessionPin>,
+    ) -> Result<Value> {
         let timeout_ms = u64::try_from(timeout.as_millis()).unwrap_or(u64::MAX);
-        let request = json!({"op": "run", "argv": argv, "timeoutMs": timeout_ms});
+        let mut request = json!({"op": "run", "argv": argv, "timeoutMs": timeout_ms});
+        if let Some(pin) = pin {
+            request["session"] = json!(pin);
+        }
 
         // The reply comes after the command ends, as for any other run.
         let mut transport = self.transport.clone();
@@ -1244,14 +1324,34 @@ impl Client {
     }
 
     pub async fn apps(&self) -> Result<Value> {
-        let verified = self.identity().await?;
-        self.apps_in(&verified).await
+        self.identity().await?;
+        self.transport.call(&json!({"op": "apps"})).await
     }
 
-    /// [`Client::apps`] in the helper `_verified` describes, which the caller
-    /// verified moments before, as [`Client::inspect_in`] runs.
-    pub(crate) async fn apps_in(&self, _verified: &Session) -> Result<Value> {
-        self.transport.call(&json!({"op": "apps"})).await
+    /// [`Client::apps`] in the helper session `verified` names, as
+    /// [`Client::inspect_in`] runs: a daemon that can be told the session
+    /// refuses the listing in any other, and an older one is verified again.
+    pub(crate) async fn apps_in(&self, verified: &Verified) -> Result<Value> {
+        let Some(pin) = verified.pin() else {
+            return self.apps().await;
+        };
+
+        accepted(
+            self.transport
+                .call(&json!({"op": "apps", "session": pin}))
+                .await?,
+        )
+    }
+
+    /// The helper session as the daemon reports it now, and whether that
+    /// daemon refuses a read meant for another session: what reads in this
+    /// session are checked by. It verifies the helper as
+    /// [`Client::identity`] does.
+    pub async fn verify(&self) -> Result<Verified> {
+        let status = self.status().await;
+        let session = require_hidden(&status, self.config.helper_uid)?;
+        let pinned = has_capability(&status["daemon"], SESSION_PIN);
+        Ok(Verified { session, pinned })
     }
 
     pub async fn start_input(&self) -> Result<Value> {

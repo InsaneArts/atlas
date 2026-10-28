@@ -8,7 +8,7 @@ pub(crate) use crate::app_selection::same_text;
 use crate::{
     actions::{Button, Expect},
     app_selection::{Process, atlas_bundle, selected},
-    client::{Check, Client},
+    client::{Check, Client, Verified},
     control::Ownership,
     daemon::protocol::{Crop, Region},
     error::{Error, Holder, Result},
@@ -19,7 +19,6 @@ use crate::{
         ax::{self, Element, Frame, Stop},
         windows::{Bounds, Dock, MENU_LAYER, Screen, Shown, Window, top_at, unobstructed},
     },
-    session::Session,
     transport::{accepted, run_output},
 };
 use serde_json::{Value, json};
@@ -199,13 +198,13 @@ pub async fn act(client: &Client, target: Option<&Target>, actions: &Value) -> R
     };
 
     let ownership = client.controller.acquire(false)?;
-    let verified = client.identity().await?;
+    let verified = client.verify().await?;
     let expect = Expect::new(target_pid(client, &verified, target).await?)?;
     client
         .input_owned(
             &ownership,
             actions,
-            &verified.epoch,
+            &verified.session().epoch,
             Some(Check::Required(expect)),
         )
         .await
@@ -227,14 +226,14 @@ pub async fn type_text(client: &Client, text: &str, target: Option<&Target>) -> 
     // A signal's stop waits for the report of how much was typed.
     let interrupt = client.controller.interrupt();
     let _typing = interrupt.step();
-    let verified = client.identity().await?;
+    let verified = client.verify().await?;
     let check = match target {
         Some(target) => Some(Check::Required(Expect::new(
             target_pid(client, &verified, target).await?,
         )?)),
         None => None,
     };
-    let epoch = verified.epoch;
+    let epoch = verified.session().epoch.clone();
 
     let send = async |actions: &Value| client.input_owned(&ownership, actions, &epoch, check).await;
     Ok(type_each(&batches, interrupt, send).await)
@@ -455,7 +454,7 @@ async fn pointer_view(client: &Client) -> Result<Shown> {
 
 /// The window list alone, in the helper `verified` describes, which the
 /// caller verified just before.
-async fn verified_window_list(client: &Client, verified: &Session) -> Result<Vec<Window>> {
+async fn verified_window_list(client: &Client, verified: &Verified) -> Result<Vec<Window>> {
     let probe = windows_probe(client, DockRead::Skip);
     let reply = client.inspect_in(verified, probe, PROBE_LIMIT).await?;
     Ok(shown(&reply)?.windows)
@@ -1190,7 +1189,7 @@ fn one_pid(name: &str, pids: &[i64]) -> Result<i64> {
 /// stay ambiguous. It is found in the helper `verified` describes, which
 /// the caller verified just before, so it is not verified again for each
 /// list it reads.
-async fn target_pid(client: &Client, verified: &Session, target: &Target) -> Result<i64> {
+async fn target_pid(client: &Client, verified: &Verified, target: &Target) -> Result<i64> {
     let name = match target {
         Target::Pid(pid) => {
             let apps = client.apps_in(verified).await?;
@@ -1366,7 +1365,7 @@ impl Scanned {
 
 /// The accessibility elements of process `pid`, scanned in the helper
 /// `verified` describes, which the caller verified just before.
-async fn app_elements(client: &Client, verified: &Session, pid: i64) -> Result<Scanned> {
+async fn app_elements(client: &Client, verified: &Verified, pid: i64) -> Result<Scanned> {
     let probe = client.config.identity_probe.to_string_lossy().into_owned();
     let argv = vec![probe, "elements-info".into(), pid.to_string()];
     let reply = client
@@ -1389,7 +1388,7 @@ pub async fn elements(
     max: usize,
     full: bool,
 ) -> Result<Value> {
-    let verified = client.identity().await?;
+    let verified = client.verify().await?;
     let pid = target_pid(client, &verified, target).await?;
     let scanned = app_elements(client, &verified, pid).await?;
 
@@ -1406,32 +1405,41 @@ pub async fn screenshot(
     size: crate::client::Size,
     new_file: bool,
 ) -> Result<Value> {
-    let crop = match (target, region) {
+    // An app is found in the helper verified first, and captured only if
+    // the helper is still that one: its pid means nothing in another.
+    let (crop, verified) = match (target, region) {
         (Some(_), Some(_)) => {
             return Err(Error::new(
                 "usage",
                 "Give an app or a region to capture, not both",
             ));
         }
-        (Some(target), None) => Some(Crop::App {
-            pid: target_pid(client, &client.identity().await?, target).await?,
-        }),
-        (None, region) => region.map(Crop::Region),
+        (Some(target), None) => {
+            let verified = client.verify().await?;
+            let pid = target_pid(client, &verified, target).await?;
+            (Some(Crop::App { pid }), Some(verified))
+        }
+        (None, region) => (region.map(Crop::Region), None),
     };
 
-    client
-        .capture(size, crop.as_ref(), new_file)
-        .await
-        .map_err(|error| match target {
-            Some(Target::Name(name)) if error.code == "no-window" => Error::new(
-                "no-window",
-                format!(
-                    "{name} has no window on screen: open one, or take a full screenshot to see \
+    let captured = match &verified {
+        Some(verified) => {
+            client
+                .capture_in(verified, size, crop.as_ref(), new_file)
+                .await
+        }
+        None => client.capture(size, crop.as_ref(), new_file).await,
+    };
+    captured.map_err(|error| match target {
+        Some(Target::Name(name)) if error.code == "no-window" => Error::new(
+            "no-window",
+            format!(
+                "{name} has no window on screen: open one, or take a full screenshot to see \
                      its menu bar"
-                ),
             ),
-            _ => error,
-        })
+        ),
+        _ => error,
+    })
 }
 
 /// The elements of one scan that match `filter`, as `elements` lists them:
@@ -1838,10 +1846,10 @@ pub async fn click_element(
     }
 
     let ownership = client.controller.acquire(false)?;
-    let verified = client.identity().await?;
+    let verified = client.verify().await?;
     let pid = target_pid(client, &verified, target).await?;
     let scanned = app_elements(client, &verified, pid).await?;
-    let epoch = verified.epoch;
+    let epoch = verified.session().epoch.clone();
     if scanned.incomplete {
         return Err(scanned.refusal());
     }
@@ -1956,42 +1964,149 @@ mod tests {
     use super::*;
     use crate::{native::windows::MENU_BAR_LAYER, session::Display};
 
+    /// The stand-in helper's answer to a read: TextEdit (812) with one
+    /// window and no elements.
+    fn textedit_reads(request: &Value) -> Option<Value> {
+        use crate::helper_test::completed;
+
+        if request["op"] == "apps" {
+            return Some(json!({"ok": true, "apps": [{"pid": 812, "name": "TextEdit"}]}));
+        }
+        let output = match request["argv"][1].as_str() {
+            Some("windows-info") => json!({"ok": true, "windows": [{"number": 5, "pid": 812,
+                "owner": "TextEdit", "title": null, "layer": 0, "alpha": 1.0,
+                "bounds": {"x": 0, "y": 0, "width": 100, "height": 100}}]}),
+            Some("elements-info") => json!({"ok": true, "elements": [], "truncated": false}),
+            other => panic!("nothing else is read: {other:?}"),
+        };
+        Some(completed(&output.to_string()))
+    }
+
     /// An app found by name or process ID is looked for in the helper the
     /// command verified moments before: the lookup and the scan after it
     /// verify the helper once between them, not once for each list read.
     #[tokio::test]
     async fn finding_an_app_verifies_the_helper_once() {
-        use crate::helper_test::{Helper, UID, completed};
+        use crate::helper_test::{Helper, UID};
 
         let directory = tempfile::tempdir().unwrap();
         let (client, helper) = Helper::client(directory.path(), UID);
-        let window = json!({"number": 5, "pid": 812, "owner": "TextEdit", "title": null,
-            "layer": 0, "alpha": 1.0, "bounds": {"x": 0, "y": 0, "width": 100, "height": 100}});
-        let answer = |request: &Value| {
-            if request["op"] == "apps" {
-                return Some(json!({"ok": true, "apps": [{"pid": 812, "name": "TextEdit"}]}));
-            }
-            let output = match request["argv"][1].as_str() {
-                Some("windows-info") => {
-                    json!({"ok": true, "windows": [window.clone()]})
-                }
-                Some("elements-info") => json!({"ok": true, "elements": [], "truncated": false}),
-                other => panic!("nothing else is read: {other:?}"),
-            };
-            Some(completed(&output.to_string()))
-        };
-
         for target in [Target::Name("TextEdit".into()), Target::Pid(812)] {
             let before = helper.proofs();
             let listed = helper
                 .serve(
                     elements(&client, &target, &ElementFilter::default(), 10, false),
-                    answer,
+                    textedit_reads,
                 )
                 .await
                 .unwrap();
             assert_eq!(listed["pid"], 812, "{target:?}");
             assert_eq!(helper.proofs() - before, 1, "{target:?}");
+        }
+    }
+
+    /// A daemon that cannot be told which session a read is for is not
+    /// trusted to be the one verified: each read verifies it again.
+    #[tokio::test]
+    async fn an_older_daemon_is_verified_again_for_each_read() {
+        use crate::helper_test::{Helper, UID};
+
+        let directory = tempfile::tempdir().unwrap();
+        let (client, helper) = Helper::client(directory.path(), UID);
+        let helper = helper.older();
+        let target = Target::Name("TextEdit".into());
+        let listed = helper
+            .serve(
+                elements(&client, &target, &ElementFilter::default(), 10, false),
+                textedit_reads,
+            )
+            .await
+            .unwrap();
+        assert_eq!(listed["pid"], 812);
+        assert_eq!(
+            helper.proofs(),
+            3,
+            "once, then before the lookup and the scan"
+        );
+    }
+
+    /// An app found in one helper session is never captured in another:
+    /// its process ID means nothing there. Even an older daemon, which
+    /// cannot refuse the lookup itself, gets no capture asked of it.
+    #[tokio::test]
+    async fn an_app_is_captured_only_in_the_session_it_was_found_in() {
+        use crate::helper_test::{Helper, UID};
+
+        let directory = tempfile::tempdir().unwrap();
+        let (client, helper) = Helper::client(directory.path(), UID);
+        let helper = helper.older().moving_after(1);
+        let mut captures = 0;
+        let error = helper
+            .serve(
+                screenshot(
+                    &client,
+                    Some(&Target::Name("TextEdit".into())),
+                    None,
+                    crate::client::Size::Standard,
+                    false,
+                ),
+                |request| {
+                    captures += usize::from(request["op"] == "screenshot");
+                    textedit_reads(request)
+                },
+            )
+            .await
+            .unwrap_err();
+        assert_eq!(error.code, "session-changed", "{error}");
+        assert_eq!(captures, 0, "no capture was asked for");
+    }
+
+    /// A helper that logged in again after the one verification is never
+    /// read as the one verified: looking for the app there is refused, so
+    /// nothing is listed, clicked or sent.
+    #[tokio::test]
+    async fn a_helper_that_changes_after_it_is_verified_is_refused() {
+        use crate::helper_test::{Helper, UID};
+
+        let filter = ElementFilter {
+            role: Some("AXButton".into()),
+            name: None,
+        };
+        let key = json!([{"type": "key", "key": "a"}]);
+        // Each command meets its own helper, which moves once it has been
+        // verified the one time.
+        let helpers = || {
+            let directory = tempfile::tempdir().unwrap();
+            let (client, helper) = Helper::client(directory.path(), UID);
+            (directory, client, helper.moving_after(1))
+        };
+        for target in [Target::Name("TextEdit".into()), Target::Pid(812)] {
+            let (_listing, client, helper) = helpers();
+            let listed = helper
+                .serve(
+                    elements(&client, &target, &filter, 10, false),
+                    textedit_reads,
+                )
+                .await;
+            let (_clicking, clicker, helper) = helpers();
+            let clicked = helper
+                .serve(
+                    click_element(&clicker, &target, &filter, Button::Left, 1, &[]),
+                    textedit_reads,
+                )
+                .await;
+            let (_sending, sender, helper) = helpers();
+            let sent = helper
+                .serve(act(&sender, Some(&target), &key), textedit_reads)
+                .await;
+            for outcome in [listed, clicked, sent] {
+                let error = outcome.unwrap_err();
+                assert_eq!(error.code, "session-changed", "{target:?}: {error}");
+                assert!(!error.uncertain);
+            }
+            for client in [client, clicker, sender] {
+                assert!(client.controller.pending().unwrap().is_empty());
+            }
         }
     }
 

@@ -880,7 +880,7 @@ fn blockers(classified: &[(Window, Kind)], listed: &[Process]) -> Vec<Blocker> {
 }
 
 /// The loginwindow processes in a process list.
-fn windows_in(listed: &[Process]) -> Vec<Window> {
+fn loginwindows_in(listed: &[Process]) -> Vec<Window> {
     listed
         .iter()
         .filter(|process| process.command.ends_with("/loginwindow"))
@@ -961,7 +961,13 @@ pub fn sessions(helper: Option<u32>) -> Option<Sessions> {
     let listed = processes()?;
     let me = nix::unistd::getuid().as_raw();
     let accounts = |uid| record(uid, Some(uid) == helper);
-    let logins = classify(&windows_in(&listed), accounts, me, helper, console_owner());
+    let logins = classify(
+        &loginwindows_in(&listed),
+        accounts,
+        me,
+        helper,
+        console_owner(),
+    );
     let blockers = blockers(&logins, &listed);
 
     Some(Sessions { logins, blockers })
@@ -1016,7 +1022,7 @@ pub fn stale(uid: u32) -> Option<bool> {
 }
 
 fn stale_in(listed: &[Process], uid: u32) -> bool {
-    windows_in(listed)
+    loginwindows_in(listed)
         .iter()
         .any(|window| window.uid == uid && window.age > STALE_AFTER)
         && runs_as(listed, uid, "/Dock")

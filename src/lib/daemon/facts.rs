@@ -623,7 +623,8 @@ pub fn hello(manager: &str) -> Value {
         },
         "session": session(manager),
         "display": display(),
-        "daemon": {"protocol": 1, "pid": std::process::id(), "version": env!("CARGO_PKG_VERSION")},
+        "daemon": {"protocol": 1, "pid": std::process::id(), "version": env!("CARGO_PKG_VERSION"),
+            "capabilities": [crate::daemon::protocol::SESSION_PIN]},
     })
 }
 
@@ -780,6 +781,10 @@ mod tests {
         );
         assert_eq!(reply["daemon"]["pid"], std::process::id());
         assert_eq!(reply["daemon"]["protocol"], 1);
+        assert!(crate::session::has_capability(
+            &reply["daemon"],
+            crate::daemon::protocol::SESSION_PIN
+        ));
         assert!(reply["permissions"]["screenCapture"].is_boolean());
         assert!(
             reply["display"]["scale"]

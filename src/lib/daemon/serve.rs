@@ -314,6 +314,30 @@ fn allowed(request: &Request, on_console: bool) -> Option<Value> {
     })
 }
 
+/// The refusal of a request pinned to a helper session other than this
+/// one, as `session` reads it now; none for a request with no pin.
+fn pinned_elsewhere(request: &Request, session: fn() -> Result<Value>) -> Option<Value> {
+    let pin = match request {
+        Request::Apps { pin } | Request::Run { pin, .. } => (*pin)?,
+        _ => return None,
+    };
+    let here = session()
+        .and_then(|proof| InputEpoch::from_proof(&proof, std::process::id()))
+        .map(|epoch| protocol::SessionPin {
+            security_session_id: epoch.security_session_id,
+            display_id: epoch.display_id,
+        });
+
+    match here {
+        Ok(here) if here == pin => None,
+        Ok(_) => Some(failure(
+            "session-changed",
+            "The helper changed since Atlas checked it; look again",
+        )),
+        Err(error) => Some(refused(error)),
+    }
+}
+
 /// Ask macOS to log this login out, as its Apple menu's Log Out does but
 /// without the confirmation: apps quit as at any log-out, and one may hold
 /// it up (asking to save). loginwindow answers at once; only its error is a
@@ -563,6 +587,10 @@ async fn handle(stream: UnixStream, daemon: Arc<Daemon>, controller: bool) -> Re
         Some(refusal) => Err(refusal),
         None => Ok(request),
     });
+    let request = request.and_then(|request| match pinned_elsewhere(&request, daemon.session) {
+        Some(refusal) => Err(refusal),
+        None => Ok(request),
+    });
     let reply = match request {
         Err(reply) => reply,
         Ok(Request::Hello) => {
@@ -574,7 +602,7 @@ async fn handle(stream: UnixStream, daemon: Arc<Daemon>, controller: bool) -> Re
             }
             facts::hello(&daemon.manager)
         }
-        Ok(Request::Apps) => match tokio::task::spawn_blocking(apps::running).await {
+        Ok(Request::Apps { .. }) => match tokio::task::spawn_blocking(apps::running).await {
             Ok(apps) => json!({"ok": true, "apps": apps}),
             Err(_) => failure("apps", "Running applications could not be listed"),
         },
@@ -583,7 +611,7 @@ async fn handle(stream: UnixStream, daemon: Arc<Daemon>, controller: bool) -> Re
             per_point,
             crop,
         }) => screenshot(&daemon, max_dimension, per_point, crop).await,
-        Ok(Request::Run { argv, timeout }) => {
+        Ok(Request::Run { argv, timeout, .. }) => {
             // Events reach the client through their own writer, so a slow
             // client never stalls supervision of the command.
             let (events, mut queue) = mpsc::channel(run::EVENTS);
@@ -756,6 +784,40 @@ mod tests {
             let reply = &exchange_as(daemon(false), request, false).await[0];
             assert_eq!(reply["code"], "permission", "{request}");
             assert_eq!(reply["uncertain"], false, "{request}");
+        }
+    }
+
+    /// A read pinned to the session Atlas verified is served only in that
+    /// session: one that logged in again, or moved to another display, is
+    /// refused before anything runs.
+    #[tokio::test]
+    async fn a_read_pinned_to_another_session_is_refused_before_it_runs() {
+        let pinned = |session: &str| {
+            [
+                format!(r#"{{"op":"apps","session":{session}}}"#),
+                format!(r#"{{"op":"run","argv":["/bin/echo","hi"],"session":{session}}}"#),
+            ]
+        };
+
+        for request in pinned(r#"{"securitySessionId":42,"displayId":7}"#) {
+            let reply = exchange(daemon(false), &request).await;
+            assert_ne!(reply[0]["code"], "session-changed", "{request}");
+            assert!(
+                reply.iter().any(|line| line["ok"] == true),
+                "{request}: {reply:?}"
+            );
+        }
+
+        for session in [
+            r#"{"securitySessionId":43,"displayId":7}"#,
+            r#"{"securitySessionId":42,"displayId":8}"#,
+        ] {
+            for request in pinned(session) {
+                let reply = exchange(daemon(false), &request).await;
+                assert_eq!(reply.len(), 1, "nothing ran: {reply:?}");
+                assert_eq!(reply[0]["code"], "session-changed", "{request}");
+                assert_eq!(reply[0]["uncertain"], false);
+            }
         }
     }
 
@@ -971,7 +1033,10 @@ mod tests {
                 "user"
             ]
         );
-        assert_eq!(keys(&hello["daemon"]), ["pid", "protocol", "version"]);
+        assert_eq!(
+            keys(&hello["daemon"]),
+            ["capabilities", "pid", "protocol", "version"]
+        );
         assert_eq!(keys(&hello["display"]), ["height", "scale", "width"]);
         assert_eq!(keys(&hello["user"]), ["home", "name", "uid"]);
 

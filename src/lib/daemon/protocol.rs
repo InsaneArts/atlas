@@ -68,6 +68,20 @@ pub enum Crop {
     Region(Region),
 }
 
+/// The daemon capability to refuse a request meant for another session of
+/// the helper, as its hello lists it.
+pub const SESSION_PIN: &str = "session-pin";
+
+/// The helper session a request was verified in: the daemon refuses it in
+/// any other, so a helper that logged in again is never read as the one
+/// that was checked.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct SessionPin {
+    pub security_session_id: u64,
+    pub display_id: u64,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Request {
     Hello,
@@ -77,10 +91,13 @@ pub enum Request {
         per_point: bool,
         crop: Option<Crop>,
     },
-    Apps,
+    Apps {
+        pin: Option<SessionPin>,
+    },
     Run {
         argv: Vec<String>,
         timeout: Duration,
+        pin: Option<SessionPin>,
     },
     Restart,
     /// Log this helper out; `force` ends its session without asking its apps.
@@ -116,7 +133,9 @@ pub fn parse(line: &[u8]) -> Result<Request, Value> {
         .ok_or_else(|| bad("request is missing an \"op\" string"))?;
     match op {
         "hello" => Ok(Request::Hello),
-        "apps" => Ok(Request::Apps),
+        "apps" => Ok(Request::Apps {
+            pin: pin(&request)?,
+        }),
         "restart" => Ok(Request::Restart),
         "logout" => Ok(Request::Logout {
             force: match &request["force"] {
@@ -185,9 +204,20 @@ pub fn parse(line: &[u8]) -> Result<Request, Value> {
             Ok(Request::Run {
                 argv,
                 timeout: Duration::from_millis(timeout),
+                pin: pin(&request)?,
             })
         }
         other => Err(bad(format!("unknown op '{other}'"))),
+    }
+}
+
+/// A request's `session`, the helper session it must be served in.
+fn pin(request: &Value) -> Result<Option<SessionPin>, Value> {
+    match &request["session"] {
+        Value::Null => Ok(None),
+        value => SessionPin::deserialize(value)
+            .map(Some)
+            .map_err(|_| bad("\"session\" must name a securitySessionId and a displayId")),
     }
 }
 
@@ -226,7 +256,7 @@ mod tests {
     #[test]
     fn requests_parse_into_operations() {
         assert_eq!(parse(br#"{"op":"hello"}"#), Ok(Request::Hello));
-        assert_eq!(parse(br#"{"op":"apps"}"#), Ok(Request::Apps));
+        assert_eq!(parse(br#"{"op":"apps"}"#), Ok(Request::Apps { pin: None }));
         assert_eq!(parse(br#"{"op":"restart"}"#), Ok(Request::Restart));
         assert_eq!(
             parse(br#"{"op":"logout"}"#),
@@ -260,7 +290,8 @@ mod tests {
             parse(br#"{"op":"run","argv":["/bin/echo","hi"],"timeoutMs":3000}"#),
             Ok(Request::Run {
                 argv: vec!["/bin/echo".into(), "hi".into()],
-                timeout: Duration::from_millis(3000)
+                timeout: Duration::from_millis(3000),
+                pin: None
             })
         );
 
@@ -269,6 +300,36 @@ mod tests {
         };
 
         assert_eq!(timeout, Duration::from_secs(30));
+    }
+
+    /// A run or an app listing may name the helper session it was verified
+    /// in; anything but its two numbers is refused.
+    #[test]
+    fn a_read_may_name_the_session_it_is_for() {
+        let pin = Some(SessionPin {
+            security_session_id: 42,
+            display_id: 7,
+        });
+        assert_eq!(
+            parse(br#"{"op":"apps","session":{"securitySessionId":42,"displayId":7}}"#),
+            Ok(Request::Apps { pin })
+        );
+        let Ok(Request::Run { pin: run, .. }) = parse(
+            br#"{"op":"run","argv":["true"],"session":{"securitySessionId":42,"displayId":7}}"#,
+        ) else {
+            panic!("a pinned run");
+        };
+        assert_eq!(run, pin);
+
+        for session in [
+            r#"{"securitySessionId":42}"#,
+            r#"{"securitySessionId":"42","displayId":7}"#,
+            r#"{"securitySessionId":42,"displayId":7,"uid":501}"#,
+            r#"42"#,
+        ] {
+            let line = format!(r#"{{"op":"apps","session":{session}}}"#);
+            assert_eq!(refused(&line)["code"], "bad-request", "{session}");
+        }
     }
 
     /// The wording clients match on.
