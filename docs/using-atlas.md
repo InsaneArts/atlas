@@ -27,7 +27,7 @@ atlas windows --app Example
 atlas elements --app Example --role AXButton
 ```
 
-Choose a visible control from that result. If your app has a button named **Settings**, for example:
+Each element has its role, name, click point (`at`) and size. The click point is where a named click lands: the middle of the element, or the box of a checkbox or radio button. Choose a visible control from that result. If your app has a button named **Settings**, for example:
 
 ```sh
 atlas click --app Example --name Settings --role AXButton
@@ -36,7 +36,7 @@ atlas screenshot
 
 The named click refuses missing or ambiguous targets. Inspect the second screenshot to check the result. A successful input response confirms delivery, not that the app did what you intended. Check the resulting screen, accessibility elements or saved file after each meaningful step.
 
-If a control has no usable accessibility element, take a fresh screenshot and use `atlas click X Y` with the observed position. Coordinates are display points measured from the top-left corner. Multiply screenshot pixel coordinates by the result's `pointsPerPixel` value before clicking. Do not reuse coordinates after the window or display changes.
+If a control has no usable accessibility element, take a fresh screenshot and use `atlas click X Y` with the observed position. Coordinates are display points measured from the top-left corner. Convert screenshot pixel coordinates with the result's `origin` and `pointsPerPixel`: point = origin + pixel × pointsPerPixel. `atlas screenshot --app NAME` or `--region X,Y,W,H` takes a smaller picture of one app's windows or one part of the display. Do not reuse coordinates after the window or display changes.
 
 When you finish, close this app:
 
@@ -80,8 +80,8 @@ Open **Settings** to change picture behavior in **General**, check the account a
 Keep these limits in mind when choosing a task:
 
 - Open apps with `atlas open`. Atlas cannot click the Dock. Dragging works for window movement, sliders and text selection, but does not provide native file or item drag and drop.
-- Native Save and Open panels need an authenticated Screen Sharing connection to the helper. Check `doctor`'s `capabilities.nativeDialogs`; a delivered click alone does not prove a dialog accepted it.
-- Use Google Chrome or Firefox for hidden browser work, for example `atlas open --app "Google Chrome" http://localhost:3000` with your local server running. Safari and other WebKit views can remain blank without Screen Sharing. `capabilities.webContent` reports this constraint. Opening a URL without `--app` uses the default browser.
+- Native Save and Open panels need an authenticated Screen Sharing connection to the helper. Check `capabilities.nativeDialogs` in `doctor --verbose`; a delivered click alone does not prove a dialog accepted it.
+- Use Google Chrome or Firefox for hidden browser work, for example `atlas open --app "Google Chrome" http://localhost:3000` with your local server running. Safari and other WebKit views can remain blank without Screen Sharing. `capabilities.webContent` in `doctor --verbose` reports this constraint. Opening a URL without `--app` uses the default browser.
 - The helper has its own files and sign-ins. Atlas does not copy your credentials. Save working files in the helper's home rather than an app copy staged under `/Users/Shared/Atlas/Open`, which the helper can only read.
 - The helper shares your Mac's network, speakers and process list. Audio can play through your speakers. Use `atlas close --app NAME` instead of a broad process-killing command.
 

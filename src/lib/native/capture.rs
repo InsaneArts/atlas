@@ -63,6 +63,14 @@ pub fn fit(width: usize, height: usize, limit: Option<u32>) -> (usize, usize) {
     (side(width), side(height))
 }
 
+/// `limit`, lowered to `points`, the captured area's longer side in display
+/// points (rounded up), so the picture holds at most one pixel per point.
+pub fn per_point(limit: Option<u32>, points: f64) -> Option<u32> {
+    let side = (points.ceil() as u32).max(1);
+
+    Some(limit.map_or(side, |limit| limit.min(side)))
+}
+
 /// The sRGB color space, by its documented name.
 fn srgb() -> Option<CFRetained<CGColorSpace>> {
     CGColorSpace::with_name(Some(&CFString::from_static_str("kCGColorSpaceSRGB")))
@@ -203,8 +211,30 @@ pub(crate) fn sample_png(width: usize, height: usize) -> Vec<u8> {
     png(&image).expect("a PNG")
 }
 
-/// The checked main display, at most `limit` pixels on its longest side.
-pub fn main_display(display: u32, limit: Option<u32>) -> Result<Shot> {
+/// A `width`×`height` PNG, blank but for its top `rows` rows, which are
+/// filled: two of these differ only where a menu bar would be.
+#[cfg(test)]
+pub(crate) fn banded_png(width: usize, height: usize, rows: usize) -> Vec<u8> {
+    png(&banded(width, height, rows)).expect("a PNG")
+}
+
+#[cfg(test)]
+fn banded(width: usize, height: usize, rows: usize) -> CFRetained<CGImage> {
+    let context = bitmap(width, height).expect("a bitmap context");
+    CGContext::set_rgb_fill_color(Some(&context), 0.2, 0.4, 0.8, 1.0);
+    // A bitmap context's origin is its bottom left.
+    let band = CGRect::new(
+        CGPoint::new(0.0, (height - rows) as f64),
+        CGSize::new(width as f64, rows as f64),
+    );
+    CGContext::fill_rect(Some(&context), band);
+
+    CGBitmapContextCreateImage(Some(&context)).expect("an image")
+}
+
+/// The checked main display, or only `area` of it (in global display
+/// points), at most `limit` pixels on its longest side.
+pub fn main_display(display: u32, area: Option<CGRect>, limit: Option<u32>) -> Result<Shot> {
     if !permitted() {
         return Err(Error::new(
             "permission",
@@ -212,16 +242,36 @@ pub fn main_display(display: u32, limit: Option<u32>) -> Result<Shot> {
         ));
     }
 
-    let points = CGDisplayBounds(display).size;
+    let failed = || Error::new("capture", "The display could not be captured");
+    let bounds = CGDisplayBounds(display);
     // Deprecated for ScreenCaptureKit, but still a synchronous, consent-gated
     // capture of exactly this display on current macOS (qualified live).
-    #[allow(deprecated)]
-    let image = objc2_core_graphics::CGDisplayCreateImage(display)
-        .ok_or_else(|| Error::new("capture", "The display could not be captured"))?;
+    let (image, points) = match area {
+        None => {
+            #[allow(deprecated)]
+            let image = objc2_core_graphics::CGDisplayCreateImage(display).ok_or_else(failed)?;
+            (image, bounds.size.width)
+        }
+        Some(area) => {
+            // The rectangle is in the display's own space: points from its
+            // top-left corner. The image holds its pixels.
+            let local = CGRect::new(
+                CGPoint::new(
+                    area.origin.x - bounds.origin.x,
+                    area.origin.y - bounds.origin.y,
+                ),
+                area.size,
+            );
+            #[allow(deprecated)]
+            let image = objc2_core_graphics::CGDisplayCreateImageForRect(display, local)
+                .ok_or_else(failed)?;
+            (image, area.size.width)
+        }
+    };
 
     let (width, height) = (CGImage::width(Some(&image)), CGImage::height(Some(&image)));
-    let scale = if points.width > 0.0 {
-        width as f64 / points.width
+    let scale = if points > 0.0 {
+        width as f64 / points
     } else {
         1.0
     };
@@ -258,6 +308,35 @@ mod tests {
     }
 
     #[test]
+    fn a_picture_per_point_holds_one_pixel_per_point_up_to_the_limit() {
+        let sized = |pixels: (usize, usize), points: (f64, f64)| {
+            fit(
+                pixels.0,
+                pixels.1,
+                per_point(Some(1456), points.0.max(points.1)),
+            )
+        };
+
+        assert_eq!(sized((2560, 1440), (2560.0, 1440.0)), (1456, 819));
+        assert_eq!(sized((3024, 1964), (1512.0, 982.0)), (1456, 946));
+        assert_eq!(sized((1280, 800), (1280.0, 800.0)), (1280, 800));
+        assert_eq!(sized((2560, 1600), (1280.0, 800.0)), (1280, 800));
+        assert_eq!(sized((602, 504), (602.0, 504.0)), (602, 504));
+        assert_eq!(sized((1204, 1008), (602.0, 504.0)), (602, 504));
+        assert_eq!(sized((400, 1200), (200.0, 600.0)), (200, 600));
+        assert_eq!(sized((4000, 2000), (2000.0, 1000.0)), (1456, 728));
+    }
+
+    #[test]
+    fn the_per_point_limit_keeps_the_lower_bound_and_rounds_points_up() {
+        assert_eq!(per_point(Some(1456), 602.0), Some(602));
+        assert_eq!(per_point(Some(400), 602.0), Some(400));
+        assert_eq!(per_point(None, 1512.0), Some(1512));
+        assert_eq!(per_point(Some(1456), 600.5), Some(601));
+        assert_eq!(per_point(Some(1456), 0.0), Some(1));
+    }
+
+    #[test]
     fn the_bitmap_layout_keeps_its_raw_value() {
         assert_eq!(BGRA, 2 | (2 << 12));
     }
@@ -274,6 +353,16 @@ mod tests {
         let (width, height) = crate::client::png_dimensions(&encoded).unwrap();
 
         assert_eq!((width, height), (32, 18));
+    }
+
+    #[test]
+    fn the_same_pixels_encode_to_the_same_png() {
+        let plain = || png(&banded(640, 360, 24)).unwrap();
+        assert_eq!(plain(), plain());
+        assert_ne!(plain(), sample_png(640, 360), "different pixels differ");
+
+        let shrunk = || png(&scaled(&banded(640, 360, 24), 320, 180).unwrap()).unwrap();
+        assert_eq!(shrunk(), shrunk());
     }
 
     #[test]

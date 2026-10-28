@@ -1,6 +1,7 @@
 //! Protocol v1 requests the helper daemon accepts, validated before anything
 //! runs. Refusals keep their exact wording: clients and the live checks
 //! match on it.
+use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use std::time::Duration;
 
@@ -12,11 +13,69 @@ const MAX_TIMEOUT_MS: u64 = 10 * 60 * 1000;
 const DEFAULT_TIMEOUT_MS: u64 = 30_000;
 const MAX_DIMENSION: u64 = 8192;
 
+/// Farthest a region's top-left corner may lie from the display's, and its
+/// longest side, in display points.
+const MAX_POINTS: i32 = 16384;
+
+/// A rectangle of the display in whole points: its top-left corner and size.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Region {
+    pub x: i32,
+    pub y: i32,
+    pub width: i32,
+    pub height: i32,
+}
+
+impl Region {
+    /// The region, if it lies within the protocol's bounds.
+    fn new(x: i64, y: i64, width: i64, height: i64) -> Option<Self> {
+        let corner = -i64::from(MAX_POINTS)..=i64::from(MAX_POINTS);
+        let side = 1..=i64::from(MAX_POINTS);
+        (corner.contains(&x)
+            && corner.contains(&y)
+            && side.contains(&width)
+            && side.contains(&height))
+        .then_some(Self {
+            x: x as i32,
+            y: y as i32,
+            width: width as i32,
+            height: height as i32,
+        })
+    }
+
+    /// The smallest whole-point region holding x, y, width, height (floor
+    /// the corner, ceil the far edges); None outside the protocol's bounds.
+    pub fn from_points(x: f64, y: f64, width: f64, height: f64) -> Option<Self> {
+        if ![x, y, width, height].iter().all(|n| n.is_finite()) {
+            return None;
+        }
+
+        let whole = |n: f64| (n.abs() <= f64::from(MAX_POINTS) * 4.0).then_some(n as i64);
+        let (left, top) = (whole(x.floor())?, whole(y.floor())?);
+        let (right, bottom) = (whole((x + width).ceil())?, whole((y + height).ceil())?);
+
+        Self::new(left, top, right - left, bottom - top)
+    }
+}
+
+/// What a screenshot shows instead of the whole display.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Crop {
+    /// Every on-screen window of this process.
+    App {
+        pid: i64,
+    },
+    Region(Region),
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Request {
     Hello,
     Screenshot {
         max_dimension: Option<u32>,
+        /// At most one pixel per display point of the area captured, too.
+        per_point: bool,
+        crop: Option<Crop>,
     },
     Apps,
     Run {
@@ -79,7 +138,18 @@ pub fn parse(line: &[u8]) -> Result<Request, Value> {
                 ),
             };
 
-            Ok(Request::Screenshot { max_dimension })
+            let per_point = match &request["perPoint"] {
+                Value::Null => false,
+                value => value
+                    .as_bool()
+                    .ok_or_else(|| bad("\"perPoint\" must be true or false"))?,
+            };
+
+            Ok(Request::Screenshot {
+                max_dimension,
+                per_point,
+                crop: crop(&request)?,
+            })
         }
         "run" => {
             let argv = request["argv"]
@@ -121,6 +191,30 @@ pub fn parse(line: &[u8]) -> Result<Request, Value> {
     }
 }
 
+/// A screenshot request's `pid` or `region`, at most one of them.
+fn crop(request: &Value) -> Result<Option<Crop>, Value> {
+    match (&request["pid"], &request["region"]) {
+        (Value::Null, Value::Null) => Ok(None),
+        (pid, Value::Null) => pid
+            .as_i64()
+            .filter(|pid| (1..=i64::from(i32::MAX)).contains(pid))
+            .map(|pid| Some(Crop::App { pid }))
+            .ok_or_else(|| bad("\"pid\" must be a process ID")),
+        (Value::Null, region) => {
+            let side = |key: &str| region.get(key).and_then(Value::as_i64);
+            side("x")
+                .zip(side("y"))
+                .zip(side("width").zip(side("height")))
+                .and_then(|((x, y), (width, height))| Region::new(x, y, width, height))
+                .map(|region| Some(Crop::Region(region)))
+                .ok_or_else(|| {
+                    bad("\"region\" must be whole points: x and y -16384–16384, width and height 1–16384")
+                })
+        }
+        _ => Err(bad("give \"pid\" or \"region\", not both")),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -149,13 +243,17 @@ mod tests {
         assert_eq!(
             parse(br#"{"op":"screenshot","maxDimension":320}"#),
             Ok(Request::Screenshot {
-                max_dimension: Some(320)
+                max_dimension: Some(320),
+                per_point: false,
+                crop: None
             })
         );
         assert_eq!(
             parse(br#"{"op":"screenshot"}"#),
             Ok(Request::Screenshot {
-                max_dimension: None
+                max_dimension: None,
+                per_point: false,
+                crop: None
             })
         );
         assert_eq!(
@@ -191,6 +289,120 @@ mod tests {
     }
 
     #[test]
+    fn screenshots_parse_an_app_or_a_region() {
+        let shot = |crop| {
+            Ok(Request::Screenshot {
+                max_dimension: None,
+                per_point: false,
+                crop,
+            })
+        };
+
+        assert_eq!(
+            parse(br#"{"op":"screenshot","pid":4242}"#),
+            shot(Some(Crop::App { pid: 4242 }))
+        );
+        assert_eq!(
+            parse(br#"{"op":"screenshot","region":{"x":-100,"y":80,"width":800,"height":600}}"#),
+            shot(Some(Crop::Region(Region {
+                x: -100,
+                y: 80,
+                width: 800,
+                height: 600
+            })))
+        );
+        assert_eq!(
+            parse(br#"{"op":"screenshot","pid":null,"region":null}"#),
+            shot(None)
+        );
+        assert_eq!(
+            parse(br#"{"op":"screenshot","pid":7,"maxDimension":400}"#),
+            Ok(Request::Screenshot {
+                max_dimension: Some(400),
+                per_point: false,
+                crop: Some(Crop::App { pid: 7 })
+            })
+        );
+        assert_eq!(
+            refused(r#"{"op":"screenshot","pid":1,"region":{"x":0,"y":0,"width":1,"height":1}}"#)["error"],
+            "give \"pid\" or \"region\", not both"
+        );
+        assert_eq!(
+            refused(r#"{"op":"screenshot","pid":0}"#)["error"],
+            "\"pid\" must be a process ID"
+        );
+        assert_eq!(
+            refused(r#"{"op":"screenshot","region":{"x":0,"y":0,"width":0,"height":1}}"#)["error"],
+            "\"region\" must be whole points: x and y -16384–16384, width and height 1–16384"
+        );
+    }
+
+    #[test]
+    fn a_screenshot_may_ask_for_at_most_one_pixel_per_point() {
+        assert_eq!(
+            parse(br#"{"op":"screenshot","maxDimension":1456,"perPoint":true}"#),
+            Ok(Request::Screenshot {
+                max_dimension: Some(1456),
+                per_point: true,
+                crop: None
+            })
+        );
+        assert_eq!(
+            parse(br#"{"op":"screenshot","pid":7,"perPoint":false}"#),
+            Ok(Request::Screenshot {
+                max_dimension: None,
+                per_point: false,
+                crop: Some(Crop::App { pid: 7 })
+            })
+        );
+        assert_eq!(
+            parse(br#"{"op":"screenshot","perPoint":null}"#),
+            Ok(Request::Screenshot {
+                max_dimension: None,
+                per_point: false,
+                crop: None
+            })
+        );
+        for line in [
+            r#"{"op":"screenshot","perPoint":"yes"}"#,
+            r#"{"op":"screenshot","perPoint":1}"#,
+        ] {
+            assert_eq!(
+                refused(line)["error"],
+                "\"perPoint\" must be true or false",
+                "{line}"
+            );
+        }
+    }
+
+    #[test]
+    fn regions_widen_to_whole_points() {
+        assert_eq!(
+            Region::from_points(1.5, 2.25, 3.0, 4.0),
+            Some(Region {
+                x: 1,
+                y: 2,
+                width: 4,
+                height: 5
+            })
+        );
+        assert_eq!(
+            Region::from_points(-50.0, -50.0, 200.0, 200.0),
+            Some(Region {
+                x: -50,
+                y: -50,
+                width: 200,
+                height: 200
+            })
+        );
+        assert_eq!(Region::from_points(0.0, 0.0, 16385.0, 10.0), None);
+        assert_eq!(Region::from_points(16385.0, 0.0, 10.0, 10.0), None);
+        assert_eq!(Region::from_points(-16384.5, 0.0, 10.0, 10.0), None);
+        assert_eq!(Region::from_points(0.0, 0.0, f64::NAN, 10.0), None);
+        assert_eq!(Region::from_points(0.0, 0.0, 1e300, 10.0), None);
+    }
+
+    #[test]
     fn every_bound_is_enforced() {
         for line in [
             "not json",
@@ -206,6 +418,19 @@ mod tests {
             r#"{"op":"screenshot","maxDimension":0}"#,
             r#"{"op":"screenshot","maxDimension":8193}"#,
             r#"{"op":"screenshot","maxDimension":1.5}"#,
+            r#"{"op":"screenshot","pid":0}"#,
+            r#"{"op":"screenshot","pid":-1}"#,
+            r#"{"op":"screenshot","pid":"5"}"#,
+            r#"{"op":"screenshot","pid":2147483648}"#,
+            r#"{"op":"screenshot","pid":5.5}"#,
+            r#"{"op":"screenshot","region":{"x":0,"y":0,"width":10}}"#,
+            r#"{"op":"screenshot","region":{"x":0,"y":0,"width":0,"height":10}}"#,
+            r#"{"op":"screenshot","region":{"x":0,"y":0,"width":16385,"height":10}}"#,
+            r#"{"op":"screenshot","region":{"x":-16385,"y":0,"width":10,"height":10}}"#,
+            r#"{"op":"screenshot","region":{"x":0.5,"y":0,"width":10,"height":10}}"#,
+            r#"{"op":"screenshot","region":"0,0,10,10"}"#,
+            r#"{"op":"screenshot","region":[0,0,10,10]}"#,
+            r#"{"op":"screenshot","pid":5,"region":{"x":0,"y":0,"width":10,"height":10}}"#,
         ] {
             assert_eq!(refused(line)["code"], "bad-request", "{line}");
         }

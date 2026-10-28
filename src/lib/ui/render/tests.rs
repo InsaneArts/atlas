@@ -136,6 +136,52 @@ fn a_screenshot_names_its_file_and_size() {
 }
 
 #[test]
+fn an_unchanged_screenshot_names_the_earlier_file() {
+    let shown = show(
+        View::Capture,
+        json!({
+            "ok": true, "unchanged": true, "path": "/tmp/1-capture.png", "width": 1456,
+            "height": 819, "origin": {"x": 0.0, "y": 0.0}, "pointsPerPixel": 1.758,
+        }),
+    );
+    assert_eq!(
+        shown.out,
+        "✓ Screenshot unchanged  /tmp/1-capture.png\n  1456 × 819 pixels · 1.8 points per pixel"
+    );
+}
+
+#[test]
+fn a_cropped_screenshot_names_its_origin_and_what_is_in_front() {
+    let shown = show(
+        View::Capture,
+        json!({
+            "ok": true, "path": "/tmp/x.png", "width": 800, "height": 600,
+            "origin": {"x": 100.0, "y": 80.0}, "pointsPerPixel": 0.5,
+            "region": {"x": 100, "y": 80, "width": 400, "height": 300},
+            "app": {"pid": 42, "name": "TextEdit"},
+            "overlapping": [
+                {"owner": "System Events", "pid": 7, "title": null, "bounds": {}},
+                {"owner": "System Events", "pid": 7, "title": "Two", "bounds": {}},
+                {"owner": "Bad\u{1b}[2J", "pid": 8, "title": null, "bounds": {}},
+            ],
+        }),
+    );
+    assert_eq!(
+        shown.out,
+        "✓ Screenshot saved  /tmp/x.png\n  800 × 600 pixels · 0.5 points per pixel · origin 100, 80\n  In front of it: System Events, Bad\\u{1b}[2J"
+    );
+
+    let corner = show(
+        View::Capture,
+        json!({"ok": true, "path": "/tmp/x.png", "width": 2560, "height": 1440, "origin": {"x": 0.0, "y": 0.0}, "pointsPerPixel": 1.0, "overlapping": []}),
+    );
+    assert_eq!(
+        corner.out,
+        "✓ Screenshot saved  /tmp/x.png\n  2560 × 1440 pixels · 1 point per pixel"
+    );
+}
+
+#[test]
 fn run_prints_the_output_and_notes_a_failure_apart() {
     let ok = show(
         View::Run,
@@ -165,17 +211,29 @@ fn windows_are_a_table_with_names_made_safe() {
 }
 
 #[test]
-fn apps_hide_background_processes() {
+fn apps_say_how_many_background_processes_were_left_out() {
     let shown = show(
         View::Apps,
-        json!({"ok": true, "apps": [
+        json!({"ok": true, "more": 1, "apps": [
+            {"name": "TextEdit", "pid": 1, "policy": "regular", "active": true, "hidden": false},
+        ]}),
+    );
+    assert!(shown.out.contains("TextEdit  1    frontmost"));
+    assert!(
+        shown
+            .out
+            .ends_with("1 background process not shown; --all lists them.")
+    );
+
+    let every = show(
+        View::Apps,
+        json!({"ok": true, "more": 0, "apps": [
             {"name": "TextEdit", "pid": 1, "policy": "regular", "active": true, "hidden": false},
             {"name": "loginwindow", "pid": 2, "policy": "accessory", "active": false, "hidden": false},
         ]}),
     );
-    assert!(shown.out.contains("TextEdit  1    frontmost"));
-    assert!(!shown.out.contains("loginwindow"));
-    assert!(shown.out.contains("1 background process not shown"));
+    assert!(every.out.contains("loginwindow"));
+    assert!(!every.out.contains("not shown"));
 }
 
 #[test]
@@ -192,6 +250,12 @@ fn a_failed_action_says_how_far_it_got() {
         json!({"ok": true, "performed": 1, "element": {"role": "AXButton", "title": "Save"}}),
     );
     assert_eq!(clicked.out, "✓ Clicked \"Save\" (button)");
+
+    let named = show(
+        View::Action("Clicked".into()),
+        json!({"ok": true, "performed": 1, "element": {"at": [25, 25], "name": "Save", "role": "AXButton"}}),
+    );
+    assert_eq!(named.out, "✓ Clicked \"Save\" (button)");
 }
 
 #[test]
@@ -330,20 +394,96 @@ fn config_names_the_settings_file() {
 fn elements_say_how_many_match_and_what_is_missing() {
     let all = show(
         View::Elements,
-        json!({"ok": true, "pid": 9, "scanned": 2, "matching": 2, "scanIncomplete": true,
-               "elements": [{"index": 0, "role": "AXButton", "title": "",
-                             "identifier": "save", "frame": {"x": 1.0, "y": 2.0}}]}),
+        json!({"ok": true, "pid": 9, "scanned": 2, "matching": 2, "more": 1,
+               "scanIncomplete": true, "windows": [],
+               "elements": [{"index": 0, "role": "AXButton", "name": "save",
+                             "at": [11, 12], "size": [20, 20]}]}),
     );
     assert!(all.out.starts_with("Process 9 · 2 elements"));
-    assert!(all.out.contains("save"), "a name from the identifier");
+    assert!(all.out.contains("save"));
     assert!(all.out.contains("Showing 1 of 2"));
-    assert!(all.out.contains("stopped early"));
+    assert!(all.out.contains("The scan stopped early, so some"));
 
     let some = show(
         View::Elements,
-        json!({"ok": true, "pid": 9, "scanned": 5, "matching": 0, "elements": []}),
+        json!({"ok": true, "pid": 9, "scanned": 5, "matching": 0, "more": 0,
+               "scanIncomplete": false, "elements": []}),
     );
     assert_eq!(some.out, "Process 9 · 0 of 5 elements match");
+}
+
+#[test]
+fn the_elements_table_shows_each_click_point() {
+    let compact = show(
+        View::Elements,
+        json!({"ok": true, "pid": 9, "scanned": 1, "matching": 1, "more": 0,
+               "scanIncomplete": false, "windows": [],
+               "elements": [{"index": 3, "role": "AXCheckBox", "name": "Bold",
+                             "at": [400, 62], "size": [24, 22]}]}),
+    );
+    assert!(compact.out.contains("400, 62"), "{}", compact.out);
+
+    let full = show(
+        View::Elements,
+        json!({"ok": true, "pid": 9, "scanned": 1, "matching": 1, "more": 0,
+               "scanIncomplete": false,
+               "elements": [{"index": 3, "depth": 2, "role": "AXCheckBox", "title": "Bold",
+                             "frame": {"x": 388.0, "y": 51.0, "width": 24.0, "height": 22.0}}]}),
+    );
+    assert!(
+        full.out.contains("400, 62"),
+        "the middle of the frame: {}",
+        full.out
+    );
+    assert!(!full.out.contains("388, 51"));
+}
+
+#[test]
+fn a_scan_that_stopped_early_says_why() {
+    let shown = show(
+        View::Elements,
+        json!({"ok": true, "pid": 9, "scanned": 0, "matching": 0, "more": 0,
+               "scanIncomplete": true, "scan": {"reasons": ["count", "time"]},
+               "elements": []}),
+    );
+    assert!(
+        shown.out.contains(
+            "The scan stopped early (the app has more elements than Atlas reads and it ran out \
+             of time), so some elements may be missing."
+        ),
+        "{}",
+        shown.out
+    );
+}
+
+#[test]
+fn a_refused_name_lists_what_it_may_have_meant() {
+    let refused = Error::new("elements", "No visible element matches.").with(
+        "candidates",
+        json!([{"role": "AXMenuBarItem", "name": "Format", "at": [356, 11]},
+               {"role": "AXButton", "name": "Form\u{1b}[31m", "at": [10, 20]}]),
+    );
+    console::set_colors_enabled_stderr(false);
+    let shown = error(&refused);
+    assert!(
+        shown.contains("\n  · \"Format\" (menu bar item) at 356, 11"),
+        "{shown}"
+    );
+    assert!(!shown.contains('\u{1b}'), "names are made safe: {shown}");
+
+    let listed = show(
+        View::Elements,
+        json!({"ok": true, "pid": 9, "scanned": 4, "matching": 0, "more": 0,
+               "scanIncomplete": false, "elements": [],
+               "candidates": [{"role": "AXMenuBarItem", "name": "Format", "at": [356, 11]}]}),
+    );
+    assert!(
+        listed
+            .out
+            .contains("· \"Format\" (menu bar item) at 356, 11"),
+        "{}",
+        listed.out
+    );
 }
 
 #[test]

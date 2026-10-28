@@ -3,6 +3,8 @@
 //! session facts, screenshots, running apps and commands — on a private
 //! socket, and starts the input service as its child.
 #[cfg(target_os = "macos")]
+pub mod crop;
+#[cfg(target_os = "macos")]
 pub mod facts;
 pub mod protocol;
 pub mod run;

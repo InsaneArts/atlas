@@ -1,7 +1,10 @@
 //! Views of what the helper is and shows: doctor, status, configuration,
 //! screenshots, apps, windows, elements and readiness.
 use super::{Rendered, failed, style, text};
-use crate::ui::table;
+use crate::{
+    native::ax::{self, Stop},
+    ui::table,
+};
 use serde_json::Value;
 
 fn helper_name(value: &Value) -> Option<&str> {
@@ -159,8 +162,9 @@ pub fn doctor(value: &Value, verbose: bool) -> String {
     let native = &value["capabilities"]["nativeDialogs"];
     if native["state"] == "failed" {
         lines.push(format!(
-            "{} Native Save and Open dialogs failed their last check. atlas verify-native checks again.",
-            style::warn()
+            "{} {}",
+            style::warn(),
+            crate::capability::NATIVE_DIALOGS_FAILED
         ));
     }
 
@@ -326,11 +330,12 @@ fn path(value: &Value) -> String {
 }
 
 pub fn capture(value: &Value) -> String {
-    let mut lines = vec![format!(
-        "{} Screenshot saved  {}",
-        style::ok(),
-        path(&value["path"])
-    )];
+    let said = if value["unchanged"] == true {
+        "Screenshot unchanged"
+    } else {
+        "Screenshot saved"
+    };
+    let mut lines = vec![format!("{} {said}  {}", style::ok(), path(&value["path"]))];
     let mut facts = Vec::new();
 
     if let (Some(width), Some(height)) = (value["width"].as_f64(), value["height"].as_f64()) {
@@ -345,20 +350,40 @@ pub fn capture(value: &Value) -> String {
         });
     }
 
+    let origin = (value["origin"]["x"].as_f64(), value["origin"]["y"].as_f64());
+    if let (Some(x), Some(y)) = origin
+        && (x, y) != (0.0, 0.0)
+    {
+        facts.push(format!("origin {}, {}", text::number(x), text::number(y)));
+    }
+
     if !facts.is_empty() {
         lines.push(format!("  {}", style::dim(facts.join(" · "))));
+    }
+
+    let in_front: Vec<String> = value["overlapping"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter_map(|window| window["owner"].as_str())
+        .map(|owner| text::printable(owner).into_owned())
+        .fold(Vec::new(), |mut owners, owner| {
+            if !owners.contains(&owner) {
+                owners.push(owner);
+            }
+            owners
+        });
+    if !in_front.is_empty() {
+        lines.push(format!("  In front of it: {}", in_front.join(", ")));
     }
 
     lines.join("\n")
 }
 
-/// The helper's apps a person would see in the Dock.
+/// The helper's apps as `atlas apps` chose them, and how many background
+/// processes it left out.
 pub fn apps(value: &Value) -> String {
-    let apps: Vec<&Value> = value["apps"].as_array().into_iter().flatten().collect();
-    let shown: Vec<&&Value> = apps
-        .iter()
-        .filter(|app| app["policy"] == "regular")
-        .collect();
+    let shown: Vec<&Value> = value["apps"].as_array().into_iter().flatten().collect();
     let mut lines = Vec::new();
 
     if shown.is_empty() {
@@ -385,14 +410,14 @@ pub fn apps(value: &Value) -> String {
         lines.push(table::render(&["APP", "PID", "STATE"], &rows));
     }
 
-    let background = apps.len() - shown.len();
+    let background = value["more"].as_u64().unwrap_or(0);
     if background > 0 {
         let what = if background == 1 {
             "1 background process".to_owned()
         } else {
             format!("{background} background processes")
         };
-        lines.push(style::dim(format!("{what} not shown; --json lists them.")));
+        lines.push(style::dim(format!("{what} not shown; --all lists them.")));
     }
 
     lines.join("\n")
@@ -454,10 +479,9 @@ pub fn elements(value: &Value) -> String {
             .iter()
             .map(|element| {
                 let name = super::element_name(element).unwrap_or("");
-                let frame = &element["frame"];
-                let at = match (frame["x"].as_f64(), frame["y"].as_f64()) {
-                    (Some(x), Some(y)) => format!("{}, {}", text::number(x), text::number(y)),
-                    _ => String::new(),
+                let at = match listed_point(element) {
+                    Some((x, y)) => format!("{}, {}", text::number(x), text::number(y)),
+                    None => String::new(),
                 };
 
                 vec![
@@ -477,21 +501,50 @@ pub fn elements(value: &Value) -> String {
         lines.push(table::render(&["#", "ROLE", "NAME", "VALUE", "AT"], &rows));
     }
 
-    if (elements.len() as u64) < matching {
+    let more = value["more"]
+        .as_u64()
+        .unwrap_or(matching.saturating_sub(elements.len() as u64));
+    if more > 0 {
         lines.push(style::dim(format!(
             "Showing {} of {matching}; --max shows more.",
             elements.len()
         )));
     }
 
+    let candidates = super::candidate_lines(&value["candidates"]);
+    if !candidates.is_empty() {
+        lines.push("The closest names:".to_owned());
+        lines.extend(candidates);
+    }
+
     if value["scanIncomplete"] == true {
+        let reasons = value["scan"]["reasons"].as_array().into_iter().flatten();
+        let why = ax::why(reasons.filter_map(Value::as_str).filter_map(Stop::parse))
+            .map(|why| format!(" ({why})"))
+            .unwrap_or_default();
         lines.push(format!(
-            "{} The scan stopped early, so some elements may be missing.",
+            "{} The scan stopped early{why}, so some elements may be missing.",
             style::warn()
         ));
     }
 
     lines.join("\n")
+}
+
+/// Where a listed element is: its click point (`at`), or the middle of its
+/// frame when listed in full.
+fn listed_point(element: &Value) -> Option<(f64, f64)> {
+    if let Some(at) = super::point(&element["at"]) {
+        return Some(at);
+    }
+
+    let frame = &element["frame"];
+    let (x, y) = (frame["x"].as_f64()?, frame["y"].as_f64()?);
+    let (width, height) = (
+        frame["width"].as_f64().unwrap_or(0.0),
+        frame["height"].as_f64().unwrap_or(0.0),
+    );
+    Some(((x + width / 2.0).round(), (y + height / 2.0).round()))
 }
 
 pub fn readiness(value: &Value) -> String {

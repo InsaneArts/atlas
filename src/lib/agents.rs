@@ -794,6 +794,11 @@ pub fn refresh() -> Value {
     json!({"agents": refreshed})
 }
 
+/// The session brief while an earlier action's outcome is unknown: it may
+/// be another agent's, so the person hears of it before any restart.
+const UNKNOWN_OUTCOME: &str = "an earlier action's outcome is unknown. Take a screenshot and tell \
+the person before running atlas restart.";
+
 /// One line for an agent's session start: local, bounded, never failing.
 pub async fn brief(config_path: &Path) -> String {
     let version = crate::VERSION;
@@ -813,9 +818,7 @@ pub async fn brief(config_path: &Path) -> String {
         .pending()
         .is_ok_and(|pending| !pending.is_empty())
     {
-        return format!(
-            "Atlas {version}: an action's outcome is unknown; run atlas restart first."
-        );
+        return format!("Atlas {version}: {UNKNOWN_OUTCOME}");
     }
 
     let Ok(status) = tokio::time::timeout(Duration::from_millis(1500), client.status()).await
@@ -1187,6 +1190,13 @@ mod tests {
             crate::agent::skill(),
             "regenerate with: atlas agent-guide --skill"
         );
+    }
+
+    #[test]
+    fn a_session_with_an_unknown_outcome_is_told_to_ask_before_recovering() {
+        assert!(UNKNOWN_OUTCOME.contains("Take a screenshot"));
+        assert!(UNKNOWN_OUTCOME.contains("tell the person before running atlas restart"));
+        assert!(!UNKNOWN_OUTCOME.contains("restart first"));
     }
 
     /// Every error code the CLI can report is explained to the agent.

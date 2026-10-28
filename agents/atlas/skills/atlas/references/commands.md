@@ -32,7 +32,7 @@ Usage: atlas doctor [OPTIONS]
 
 Options:
       --verbose
-          Include the helper's full status (in --json too)
+          Include every check and the helper's full status (in --json too)
 
       --login-timing
           Show how long the last login of the past two hours took, step by step
@@ -272,15 +272,27 @@ Global options:
 ## atlas screenshot
 
 ```text
-Save a screenshot of the helper's screen.
+Save a screenshot of the helper's screen, an app's windows or a region.
 
-Reports pointsPerPixel: multiply screenshot pixels by it for input coordinates.
+Reports origin and pointsPerPixel: the image's pixel (px, py) is the display point (origin.x + px × pointsPerPixel, origin.y + py × pointsPerPixel). With --app the picture holds the app's windows, its sheets, panels and open menus with a small margin; overlapping lists other apps' windows in front of them (take a full screenshot to see those).
 
 Usage: atlas screenshot [OPTIONS]
 
 Options:
+      --app <APP>
+          Application name: the one process of that name with a window, or the app in front
+
+      --pid <PID>
+          Exact process ID, for apps with several processes
+
+      --region <X,Y,W,H>
+          Only this part of the display: X,Y,W,H in display points, widened to whole points
+
       --max-dimension <MAX_DIMENSION>
-          Scale the image down so its longer side is at most this many pixels
+          Shrink the longer side to at most this many pixels; 0 keeps the full size. Without it: at most 1456 and one pixel per display point
+
+      --new-file
+          Save a new file even when nothing changed since the last screenshot
 
   -h, --help
           Print help (see a summary with '-h')
@@ -331,7 +343,7 @@ Examples:
 ```text
 List an app's buttons, fields and other elements.
 
-Lists accessibility elements of the app's windows: role, name, value and frame; also the items of a menu the app has open (menu: true, with a check mark as mark) and, while the app is in front, its menu bar titles.
+Lists accessibility elements of the app's windows: role, name, value, click point (at) and size, with each window listed once; also the items of a menu the app has open (menu: true, with a check mark as mark) and, while the app is in front, its menu bar titles. more says how many matching elements were left out.
 
 Usage: atlas elements [OPTIONS]
 
@@ -351,7 +363,10 @@ Options:
       --max <MAX>
           Show at most this many elements
           
-          [default: 200]
+          [default: 50]
+
+      --full
+          Show every attribute the scan read, as it read it
 
   -h, --help
           Print help (see a summary with '-h')
@@ -370,13 +385,18 @@ Examples:
 ## atlas apps
 
 ```text
-List the apps open in the helper
+List the apps open in the helper.
+
+Lists apps with a Dock icon and menu bar apps that are not part of macOS; `more` says how many other processes were left out.
 
 Usage: atlas apps [OPTIONS]
 
 Options:
+      --all
+          List every process, macOS's own background ones too
+
   -h, --help
-          Print help
+          Print help (see a summary with '-h')
 
 Global options:
       --json
@@ -410,13 +430,13 @@ Global options:
 ```text
 Click a point, or exactly one element of an app.
 
-Click at display point X Y (screenshot pixels × pointsPerPixel), or on exactly one accessibility element of an app with --app and --name/--role.
+Click at display point X Y (origin + screenshot pixels × pointsPerPixel), or on exactly one accessibility element of an app with --app and --name/--role.
 
 Usage: atlas click [OPTIONS] [X] [Y]
 
 Arguments:
   [X]
-          Display point X (screenshot pixels × pointsPerPixel)
+          Display point X (origin + screenshot pixels × pointsPerPixel)
 
   [Y]
           Display point Y
@@ -703,7 +723,7 @@ Examples:
 ```text
 Quit an app in the helper and remove the copies `open` made for it.
 
-The app quits at once, without asking to save: save first (key cmd+s). --all quits what an earlier session may have left open: every app bundle with a Dock icon and every menu bar app not made by Apple. Atlas and macOS's own in /System/Library (Finder among them) stay.
+The app quits at once, without asking to save: save first (key cmd+s). --all quits every app left open, another agent's too: use it only when the person asks. Atlas and macOS's own in /System/Library (Finder among them) stay.
 
 Usage: atlas close [OPTIONS] <--app <APP>|--all>
 
@@ -712,7 +732,7 @@ Options:
           The app's name, as `atlas apps` lists it
 
       --all
-          Quit every app left open (not Atlas or macOS's own)
+          Quit every app left open, another agent's too (not Atlas or macOS's own)
 
   -h, --help
           Print help (see a summary with '-h')
@@ -726,7 +746,6 @@ Global options:
 
 Examples:
   atlas close --app TextEdit
-  atlas close --all
 ```
 
 ## atlas wait
@@ -1301,11 +1320,20 @@ Global options:
 ## atlas agent-guide
 
 ```text
-Print the guide agents read to use Atlas
+Print the guide agents read to use Atlas (all of it by default)
 
 Usage: atlas agent-guide [OPTIONS]
 
 Options:
+      --skill
+          Print the short version the agent plugins load (SKILL.md), which lists the rest
+
+      --commands
+          Print every command and its options (Markdown)
+
+      --errors
+          Print what each error code means and what to do (Markdown)
+
   -h, --help
           Print help
 
@@ -1315,4 +1343,9 @@ Global options:
 
       --config <FILE>
           Use another settings file
+
+Examples:
+  atlas agent-guide
+  atlas agent-guide --skill
+  atlas agent-guide --errors
 ```

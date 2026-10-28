@@ -2,8 +2,8 @@
 //! protocol v1 replies.
 use crate::{
     daemon::{
-        facts,
-        protocol::{self, MAX_REQUEST, Request, failure},
+        crop, facts,
+        protocol::{self, Crop, MAX_REQUEST, Region, Request, failure},
         run,
     },
     error::{Error, Result},
@@ -11,6 +11,7 @@ use crate::{
     session::{InputEpoch, validate_target_uid},
 };
 use base64::{Engine, engine::general_purpose::STANDARD};
+use objc2_core_foundation::{CGPoint, CGRect, CGSize};
 use serde_json::{Value, json};
 use std::{path::PathBuf, sync::Arc, time::Duration};
 use tokio::{
@@ -37,14 +38,17 @@ const SHUTDOWN: Duration = Duration::from_secs(2);
 /// How often a running command checks that the helper is still off screen.
 const CONSOLE_CHECK: Duration = Duration::from_secs(1);
 
-/// Takes a screenshot: the real display in the daemon, a synthetic image in
-/// tests, so ordinary tests never capture the desktop they run on.
-type Capture = fn(u32, Option<u32>) -> Result<capture::Shot>;
+/// Takes a screenshot of a display, or of an area of it in display points:
+/// the real display in the daemon, a synthetic image in tests, so ordinary
+/// tests never capture the desktop they run on.
+type Capture = fn(u32, Option<CGRect>, Option<u32>) -> Result<capture::Shot>;
 
 struct Daemon {
     /// launchd's session type, read once at start.
     manager: String,
     capture: Capture,
+    /// The session's on-screen windows, front to back.
+    windows: fn() -> Result<Vec<windows::Window>>,
     /// Whether the helper's session is on the console right now.
     on_console: fn() -> bool,
     session: fn() -> Result<Value>,
@@ -63,6 +67,7 @@ impl Daemon {
         Self {
             manager,
             capture,
+            windows: windows::windows,
             on_console,
             session,
             restarting: Notify::new(),
@@ -366,11 +371,10 @@ fn force_log_out() {
 }
 
 /// Windows that lie entirely outside the main display.
-fn off_display_windows() -> Vec<Value> {
+fn off_display_windows(windows: &[windows::Window]) -> Vec<Value> {
     let (x, y, width, height) = facts::display_bounds();
-    windows::windows()
-        .unwrap_or_default()
-        .into_iter()
+    windows
+        .iter()
         .filter(|window| window.layer == 0)
         .filter(|window| {
             let b = &window.bounds;
@@ -382,8 +386,48 @@ fn off_display_windows() -> Vec<Value> {
         .collect()
 }
 
-async fn screenshot(daemon: &Daemon, max_dimension: Option<u32>) -> Value {
+/// A region as the rectangle a capture takes.
+fn rect(region: Region) -> CGRect {
+    CGRect::new(
+        CGPoint::new(f64::from(region.x), f64::from(region.y)),
+        CGSize::new(f64::from(region.width), f64::from(region.height)),
+    )
+}
+
+/// What a cropped screenshot's reply adds: the area captured and, for an
+/// app, which app and what lies in front of it.
+fn crop_keys(area: Region, app: Option<(i64, crop::AppCrop)>) -> serde_json::Map<String, Value> {
+    let mut keys = serde_json::Map::new();
+    keys.insert("region".into(), json!(area));
+
+    if let Some((pid, found)) = app {
+        let overlapping: Vec<Value> = found
+            .overlapping
+            .iter()
+            .map(|window| {
+                json!({
+                    "owner": window.owner,
+                    "pid": window.pid,
+                    "title": window.title,
+                    "bounds": window.bounds,
+                })
+            })
+            .collect();
+        keys.insert("app".into(), json!({"pid": pid, "name": found.name}));
+        keys.insert("overlapping".into(), json!(overlapping));
+    }
+
+    keys
+}
+
+async fn screenshot(
+    daemon: &Daemon,
+    max_dimension: Option<u32>,
+    per_point: bool,
+    crop: Option<Crop>,
+) -> Value {
     let capture = daemon.capture;
+    let list = daemon.windows;
     let on_console = daemon.on_console;
     let session = daemon.session;
     let epoch = match session().and_then(|proof| InputEpoch::from_proof(&proof, std::process::id()))
@@ -392,7 +436,11 @@ async fn screenshot(daemon: &Daemon, max_dimension: Option<u32>) -> Value {
         Err(error) => return refused(error),
     };
     let taken = tokio::task::spawn_blocking(move || {
-        let request = Request::Screenshot { max_dimension };
+        let request = Request::Screenshot {
+            max_dimension,
+            per_point,
+            crop,
+        };
         let validate = || {
             if let Some(refusal) = allowed(&request, on_console()) {
                 return Err(refusal);
@@ -409,23 +457,72 @@ async fn screenshot(daemon: &Daemon, max_dimension: Option<u32>) -> Value {
         };
         validate()?;
 
-        let shot = capture(epoch.display_id as u32, max_dimension).map_err(refused)?;
-        let off_display = off_display_windows();
+        // One read of the window list serves the crop and the report of
+        // windows off the display.
+        let windows = list();
+        // The main display's corner is the origin of global points, so a
+        // window's bounds are points of this display.
+        let display = Region {
+            x: 0,
+            y: 0,
+            width: epoch.width.round() as i32,
+            height: epoch.height.round() as i32,
+        };
+        let (area, app) = match crop {
+            None => (None, None),
+            Some(Crop::Region(asked)) => {
+                let area = crop::clamp(asked, &display).ok_or_else(|| {
+                    failure("bad-request", "\"region\" lies outside the display")
+                })?;
+                (Some(area), None)
+            }
+            Some(Crop::App { pid }) => {
+                let on_screen = windows
+                    .as_ref()
+                    .map_err(|_| failure("windows", "The window list is unavailable"))?;
+                let found = crop::app(on_screen, pid, &display).ok_or_else(|| {
+                    failure(
+                        "no-window",
+                        format!(
+                            "Process {pid} has no window on screen; open one, or take a full screenshot"
+                        ),
+                    )
+                })?;
+                (Some(found.region), Some((pid, found)))
+            }
+        };
+
+        let limit = if per_point {
+            let (width, height) = area.map_or((epoch.width, epoch.height), |area| {
+                (f64::from(area.width), f64::from(area.height))
+            });
+            capture::per_point(max_dimension, width.max(height))
+        } else {
+            max_dimension
+        };
+        let shot = capture(epoch.display_id as u32, area.map(rect), limit).map_err(refused)?;
+        let off_display = off_display_windows(windows.as_deref().unwrap_or_default());
 
         validate()?;
 
-        Ok((shot, off_display))
+        Ok((shot, off_display, area.map(|area| crop_keys(area, app))))
     })
     .await;
     match taken {
-        Ok(Ok((shot, off_display))) => json!({
-            "ok": true,
-            "png": STANDARD.encode(&shot.png),
-            "width": shot.width,
-            "height": shot.height,
-            "scale": shot.scale,
-            "offDisplayWindows": off_display,
-        }),
+        Ok(Ok((shot, off_display, cropped))) => {
+            let mut reply = json!({
+                "ok": true,
+                "png": STANDARD.encode(&shot.png),
+                "width": shot.width,
+                "height": shot.height,
+                "scale": shot.scale,
+                "offDisplayWindows": off_display,
+            });
+            if let (Some(reply), Some(cropped)) = (reply.as_object_mut(), cropped) {
+                reply.extend(cropped);
+            }
+            reply
+        }
         Ok(Err(refusal)) => refusal,
         Err(_) => failure("capture", "The capture failed"),
     }
@@ -472,7 +569,11 @@ async fn handle(stream: UnixStream, daemon: Arc<Daemon>, controller: bool) -> Re
             Ok(apps) => json!({"ok": true, "apps": apps}),
             Err(_) => failure("apps", "Running applications could not be listed"),
         },
-        Ok(Request::Screenshot { max_dimension }) => screenshot(&daemon, max_dimension).await,
+        Ok(Request::Screenshot {
+            max_dimension,
+            per_point,
+            crop,
+        }) => screenshot(&daemon, max_dimension, per_point, crop).await,
         Ok(Request::Run { argv, timeout }) => {
             // Events reach the client through their own writer, so a slow
             // client never stalls supervision of the command.
@@ -536,7 +637,7 @@ mod tests {
         assert_eq!(mode.to_string(), "kCFRunLoopDefaultMode");
     }
 
-    fn synthetic(display: u32, _: Option<u32>) -> Result<capture::Shot> {
+    fn synthetic(display: u32, _: Option<CGRect>, _: Option<u32>) -> Result<capture::Shot> {
         assert_eq!(display, 7);
         Ok(capture::Shot {
             png: b"\x89PNG synthetic".to_vec(),
@@ -544,6 +645,33 @@ mod tests {
             height: 36,
             scale: 1.0,
         })
+    }
+
+    fn window(pid: i64, owner: &str, layer: i64, bounds: [f64; 4]) -> windows::Window {
+        windows::Window {
+            number: pid * 10 + layer,
+            pid,
+            owner: Some(owner.into()),
+            title: Some(format!("{owner} window")),
+            layer,
+            alpha: 1.0,
+            bounds: windows::Bounds {
+                x: bounds[0],
+                y: bounds[1],
+                width: bounds[2],
+                height: bounds[3],
+            },
+        }
+    }
+
+    /// A 64 × 36 point display: an alert of System Events in front of a
+    /// TextEdit window, and a Finder window behind both.
+    fn fake_windows() -> Result<Vec<windows::Window>> {
+        Ok(vec![
+            window(300, "System Events", 8, [20.0, 10.0, 10.0, 8.0]),
+            window(200, "TextEdit", 0, [10.0, 5.0, 30.0, 20.0]),
+            window(100, "Finder", 0, [0.0, 0.0, 64.0, 36.0]),
+        ])
     }
 
     fn session() -> Result<Value> {
@@ -560,12 +688,14 @@ mod tests {
     }
 
     fn daemon(on_console: bool) -> Arc<Daemon> {
-        Arc::new(Daemon::new(
+        let mut daemon = Daemon::new(
             "Aqua".into(),
             synthetic,
             if on_console { || true } else { || false },
             session,
-        ))
+        );
+        daemon.windows = fake_windows;
+        Arc::new(daemon)
     }
 
     /// Send one request line over a socket pair and collect every reply line.
@@ -657,6 +787,8 @@ mod tests {
         for request in [
             r#"{"op":"run","argv":["/bin/echo","hi"]}"#,
             r#"{"op":"screenshot"}"#,
+            r#"{"op":"screenshot","pid":200}"#,
+            r#"{"op":"screenshot","region":{"x":0,"y":0,"width":10,"height":10}}"#,
         ] {
             let reply = exchange(daemon(true), request).await;
             assert_eq!(reply.len(), 1, "{request}");
@@ -686,9 +818,9 @@ mod tests {
         });
         let daemon = Arc::new(Daemon::new(
             "Aqua".into(),
-            |display, limit| {
+            |display, area, limit| {
                 CAPTURES.fetch_add(1, Ordering::SeqCst);
-                synthetic(display, limit)
+                synthetic(display, area, limit)
             },
             || {
                 let shown = SHOWN.load(Ordering::SeqCst);
@@ -714,7 +846,9 @@ mod tests {
                 vec![
                     allowed(
                         &Request::Screenshot {
-                            max_dimension: None
+                            max_dimension: None,
+                            per_point: false,
+                            crop: None
                         },
                         true
                     )
@@ -732,15 +866,22 @@ mod tests {
         static CHANGE_AT: AtomicUsize = AtomicUsize::new(1);
         static CAPTURES: AtomicUsize = AtomicUsize::new(0);
 
-        for change_at in [1, 2] {
+        for (change_at, request) in [1, 2].into_iter().flat_map(|change_at| {
+            [
+                r#"{"op":"screenshot"}"#,
+                r#"{"op":"screenshot","pid":200}"#,
+                r#"{"op":"screenshot","region":{"x":0,"y":0,"width":10,"height":10}}"#,
+            ]
+            .map(|request| (change_at, request))
+        }) {
             READS.store(0, Ordering::SeqCst);
             CHANGE_AT.store(change_at, Ordering::SeqCst);
             CAPTURES.store(0, Ordering::SeqCst);
-            let daemon = Arc::new(Daemon::new(
+            let mut daemon = Daemon::new(
                 "Aqua".into(),
-                |display, limit| {
+                |display, area, limit| {
                     CAPTURES.fetch_add(1, Ordering::SeqCst);
-                    synthetic(display, limit)
+                    synthetic(display, area, limit)
                 },
                 || false,
                 || {
@@ -750,10 +891,11 @@ mod tests {
                     }
                     Ok(proof)
                 },
-            ));
+            );
+            daemon.windows = fake_windows;
 
-            let reply = exchange(daemon, r#"{"op":"screenshot"}"#).await;
-            assert_eq!(CAPTURES.load(Ordering::SeqCst), change_at - 1);
+            let reply = exchange(Arc::new(daemon), request).await;
+            assert_eq!(CAPTURES.load(Ordering::SeqCst), change_at - 1, "{request}");
             assert_eq!(
                 reply,
                 vec![failure(
@@ -771,9 +913,9 @@ mod tests {
         static SHOWN: AtomicBool = AtomicBool::new(false);
         let daemon = Arc::new(Daemon::new(
             "Aqua".into(),
-            |display, limit| {
+            |display, area, limit| {
                 SHOWN.store(true, Ordering::SeqCst);
-                synthetic(display, limit)
+                synthetic(display, area, limit)
             },
             || SHOWN.load(Ordering::SeqCst),
             session,
@@ -785,7 +927,9 @@ mod tests {
             vec![
                 allowed(
                     &Request::Screenshot {
-                        max_dimension: None
+                        max_dimension: None,
+                        per_point: false,
+                        crop: None
                     },
                     true
                 )
@@ -826,6 +970,46 @@ mod tests {
             ["height", "offDisplayWindows", "ok", "png", "scale", "width"]
         );
 
+        let region = &exchange(
+            daemon(false),
+            r#"{"op":"screenshot","region":{"x":0,"y":0,"width":10,"height":10}}"#,
+        )
+        .await[0];
+        assert_eq!(
+            keys(region),
+            [
+                "height",
+                "offDisplayWindows",
+                "ok",
+                "png",
+                "region",
+                "scale",
+                "width"
+            ]
+        );
+        assert_eq!(keys(&region["region"]), ["height", "width", "x", "y"]);
+
+        let app = &exchange(daemon(false), r#"{"op":"screenshot","pid":200}"#).await[0];
+        assert_eq!(
+            keys(app),
+            [
+                "app",
+                "height",
+                "offDisplayWindows",
+                "ok",
+                "overlapping",
+                "png",
+                "region",
+                "scale",
+                "width"
+            ]
+        );
+        assert_eq!(keys(&app["app"]), ["name", "pid"]);
+        assert_eq!(
+            keys(&app["overlapping"][0]),
+            ["bounds", "owner", "pid", "title"]
+        );
+
         let ran = exchange(daemon(false), r#"{"op":"run","argv":["/bin/echo"]}"#).await;
         assert_eq!(keys(&ran[0]), ["event", "pid"]);
         assert_eq!(
@@ -847,6 +1031,168 @@ mod tests {
                 "name",
                 "pid",
                 "policy"
+            ]
+        );
+    }
+
+    /// The area each capture was asked for, kept in `areas`.
+    type Areas = std::sync::Mutex<Vec<Option<CGRect>>>;
+
+    fn recorded(areas: &Areas, area: Option<CGRect>) -> Result<capture::Shot> {
+        areas.lock().unwrap().push(area);
+        synthetic(7, area, None)
+    }
+
+    fn with_windows(
+        capture: Capture,
+        windows: fn() -> Result<Vec<windows::Window>>,
+    ) -> Arc<Daemon> {
+        let mut daemon = Daemon::new("Aqua".into(), capture, || false, session);
+        daemon.windows = windows;
+        Arc::new(daemon)
+    }
+
+    fn sides(area: CGRect) -> (f64, f64, f64, f64) {
+        (
+            area.origin.x,
+            area.origin.y,
+            area.size.width,
+            area.size.height,
+        )
+    }
+
+    #[tokio::test]
+    async fn an_app_screenshot_covers_its_windows_and_names_what_is_in_front() {
+        static AREAS: Areas = std::sync::Mutex::new(Vec::new());
+        let daemon = with_windows(|_, area, _| recorded(&AREAS, area), fake_windows);
+
+        let reply = &exchange(daemon, r#"{"op":"screenshot","pid":200}"#).await[0];
+
+        let areas = AREAS.lock().unwrap().clone();
+        assert_eq!(areas.len(), 1);
+        assert_eq!(sides(areas[0].unwrap()), (2.0, 0.0, 46.0, 33.0));
+        assert_eq!(
+            reply["region"],
+            json!({"x": 2, "y": 0, "width": 46, "height": 33})
+        );
+        assert_eq!(reply["app"], json!({"pid": 200, "name": "TextEdit"}));
+        assert_eq!(
+            reply["overlapping"],
+            json!([{
+                "owner": "System Events",
+                "pid": 300,
+                "title": "System Events window",
+                "bounds": {"x": 20.0, "y": 10.0, "width": 10.0, "height": 8.0},
+            }])
+        );
+    }
+
+    #[tokio::test]
+    async fn an_app_without_a_window_on_screen_is_refused_without_capturing() {
+        static AREAS: Areas = std::sync::Mutex::new(Vec::new());
+        let capture: Capture = |_, area, _| recorded(&AREAS, area);
+        let unavailable = || Err(Error::new("windows", "The window list is unavailable"));
+
+        let reply = exchange(
+            with_windows(capture, fake_windows),
+            r#"{"op":"screenshot","pid":4242}"#,
+        )
+        .await;
+        assert_eq!(
+            reply,
+            vec![failure(
+                "no-window",
+                "Process 4242 has no window on screen; open one, or take a full screenshot"
+            )]
+        );
+
+        let reply = exchange(
+            with_windows(capture, unavailable),
+            r#"{"op":"screenshot","pid":200}"#,
+        )
+        .await;
+        assert_eq!(reply[0]["code"], "windows");
+        assert!(AREAS.lock().unwrap().is_empty(), "nothing was captured");
+
+        // A full screenshot does without the window list.
+        let reply =
+            &exchange(with_windows(capture, unavailable), r#"{"op":"screenshot"}"#).await[0];
+        assert_eq!(
+            (&reply["ok"], &reply["offDisplayWindows"]),
+            (&json!(true), &json!([]))
+        );
+        assert_eq!(*AREAS.lock().unwrap(), [None]);
+    }
+
+    #[tokio::test]
+    async fn a_region_screenshot_is_cut_to_the_display() {
+        static AREAS: Areas = std::sync::Mutex::new(Vec::new());
+        let capture: Capture = |_, area, _| recorded(&AREAS, area);
+
+        let reply = &exchange(
+            with_windows(capture, fake_windows),
+            r#"{"op":"screenshot","region":{"x":-10,"y":30,"width":100,"height":100}}"#,
+        )
+        .await[0];
+        assert_eq!(
+            reply["region"],
+            json!({"x": 0, "y": 30, "width": 64, "height": 6})
+        );
+        assert!(reply.get("app").is_none() && reply.get("overlapping").is_none());
+
+        let reply = exchange(
+            with_windows(capture, fake_windows),
+            r#"{"op":"screenshot","region":{"x":64,"y":0,"width":10,"height":10}}"#,
+        )
+        .await;
+        assert_eq!(
+            reply,
+            vec![failure(
+                "bad-request",
+                "\"region\" lies outside the display"
+            )]
+        );
+
+        let areas = AREAS.lock().unwrap().clone();
+        assert_eq!(areas.len(), 1, "the region outside was not captured");
+        assert_eq!(sides(areas[0].unwrap()), (0.0, 30.0, 64.0, 6.0));
+    }
+
+    #[tokio::test]
+    async fn a_picture_per_point_is_limited_to_the_points_it_shows() {
+        static LIMITS: std::sync::Mutex<Vec<Option<u32>>> = std::sync::Mutex::new(Vec::new());
+        let capture: Capture = |display, area, limit| {
+            LIMITS.lock().unwrap().push(limit);
+            synthetic(display, area, limit)
+        };
+
+        for request in [
+            r#"{"op":"screenshot","maxDimension":1456,"perPoint":true}"#,
+            r#"{"op":"screenshot","maxDimension":40,"perPoint":true}"#,
+            r#"{"op":"screenshot","perPoint":true}"#,
+            r#"{"op":"screenshot","maxDimension":1456,"perPoint":true,"region":{"x":0,"y":0,"width":12,"height":20}}"#,
+            r#"{"op":"screenshot","maxDimension":1456,"perPoint":true,"region":{"x":-10,"y":30,"width":100,"height":100}}"#,
+            r#"{"op":"screenshot","maxDimension":1456,"perPoint":true,"pid":200}"#,
+            r#"{"op":"screenshot","maxDimension":1456,"region":{"x":0,"y":0,"width":12,"height":20}}"#,
+            r#"{"op":"screenshot","maxDimension":1456}"#,
+            r#"{"op":"screenshot"}"#,
+        ] {
+            let reply = &exchange(with_windows(capture, fake_windows), request).await[0];
+            assert_eq!(reply["ok"], true, "{request}");
+        }
+
+        assert_eq!(
+            *LIMITS.lock().unwrap(),
+            [
+                Some(64),
+                Some(40),
+                Some(64),
+                Some(20),
+                Some(64),
+                Some(46),
+                Some(1456),
+                Some(1456),
+                None
             ]
         );
     }

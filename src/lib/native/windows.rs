@@ -36,6 +36,18 @@ impl Bounds {
             && self.x + self.width >= other.x + other.width
             && self.y + self.height >= other.y + other.height
     }
+
+    /// Whether the two share an area, not just an edge or a corner.
+    pub fn intersects(&self, other: &Bounds) -> bool {
+        self.width > 0.0
+            && self.height > 0.0
+            && other.width > 0.0
+            && other.height > 0.0
+            && self.x < other.x + other.width
+            && other.x < self.x + self.width
+            && self.y < other.y + other.height
+            && other.y < self.y + self.height
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -203,6 +215,24 @@ mod tests {
                 height,
             },
         }
+    }
+
+    #[test]
+    fn bounds_intersect_only_with_area_in_common() {
+        let square = window(1, 0.0, 0.0, 100.0, 100.0).bounds;
+        let inside = window(2, 10.0, 10.0, 5.0, 5.0).bounds;
+        let overlapping = window(3, 90.0, 90.0, 50.0, 50.0).bounds;
+        let touching = window(4, 100.0, 0.0, 50.0, 100.0).bounds;
+        let corner = window(5, 100.0, 100.0, 10.0, 10.0).bounds;
+        let apart = window(6, 300.0, 300.0, 10.0, 10.0).bounds;
+        let line = window(7, 50.0, 0.0, 0.0, 100.0).bounds;
+
+        assert!(square.intersects(&inside) && inside.intersects(&square));
+        assert!(square.intersects(&overlapping) && overlapping.intersects(&square));
+        assert!(!square.intersects(&touching), "an edge in common");
+        assert!(!square.intersects(&corner), "a corner in common");
+        assert!(!square.intersects(&apart));
+        assert!(!square.intersects(&line), "no area of its own");
     }
 
     #[test]

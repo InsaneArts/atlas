@@ -45,8 +45,10 @@ fn main() -> ExitCode {
         return ExitCode::SUCCESS;
     };
 
-    // Commands run by Atlas itself always answer in JSON.
-    let format = if machine_only(&command) {
+    // Commands run by Atlas itself always answer in JSON, and their
+    // failures carry no step for an agent: another Atlas process reads them.
+    let machine = machine_only(&command);
+    let format = if machine {
         Format::Json
     } else {
         ui::detect(
@@ -133,7 +135,7 @@ fn main() -> ExitCode {
         .map_err(|error| or_logged_out(error, &config));
     match result {
         Ok(result) => {
-            output::emit(format, &view, &result);
+            output::emit(format, &view, &result, !machine);
 
             if output::failed(&result) {
                 ExitCode::FAILURE
@@ -150,7 +152,7 @@ fn main() -> ExitCode {
             }
 
             match format {
-                Format::Json => eprintln!("{}", json!(error)),
+                Format::Json => eprintln!("{}", output::failure(&error, !machine)),
                 Format::Human => eprintln!("{}", render::error(&error)),
             }
 

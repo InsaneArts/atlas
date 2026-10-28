@@ -573,10 +573,11 @@ struct Process {
 
 /// Every process on this Mac, or `None` when they could not be listed.
 fn processes() -> Option<Vec<Process>> {
-    let output = std::process::Command::new("/bin/ps")
-        .args(["-axo", "uid=,pid=,etime=,comm="])
-        .output()
-        .ok()?;
+    let output = crate::bounded::output(
+        std::process::Command::new("/bin/ps").args(["-axo", "uid=,pid=,etime=,comm="]),
+        crate::bounded::LOOKUP,
+    )
+    .ok()?;
 
     if !output.status.success() {
         return None;
@@ -706,7 +707,7 @@ pub struct Record {
     /// Found by `getpwuid`, which asks every directory macOS uses.
     pub passwd: bool,
     /// Found by a search of every directory (`dscl /Search`), network and
-    /// mobile accounts included.
+    /// mobile accounts included. Searched only when `getpwuid` found none.
     pub directory: bool,
     /// How long ago the account was made, when that is known.
     pub age: Option<Duration>,
@@ -885,15 +886,37 @@ pub fn console_owner() -> Option<u32> {
 /// fails counts as an account found: an unknown is never taken for a
 /// deleted account.
 pub fn record(uid: u32, aged: bool) -> Record {
-    let account = crate::setup::account_with_uid(uid);
+    record_with(uid, aged, crate::setup::account_with_uid(uid), searched)
+}
+
+/// Whether a search of every directory finds an account with `uid`. A
+/// search that fails or takes too long counts as one found.
+fn searched(uid: u32) -> bool {
+    crate::bounded::output(
+        std::process::Command::new("/usr/bin/dscl").args([
+            "/Search",
+            "-search",
+            "/Users",
+            "UniqueID",
+            &uid.to_string(),
+        ]),
+        crate::bounded::LOOKUP,
+    )
+    .map_or(true, |output| {
+        !output.status.success() || !String::from_utf8_lossy(&output.stdout).trim().is_empty()
+    })
+}
+
+/// [`record`] from `account`, what `getpwuid` gave. Every directory is
+/// searched only when it found none: the answer cannot matter otherwise.
+fn record_with(
+    uid: u32,
+    aged: bool,
+    account: crate::error::Result<Option<crate::setup::Account>>,
+    search: impl FnOnce(u32) -> bool,
+) -> Record {
     let passwd = !matches!(account, Ok(None));
-    let directory = std::process::Command::new("/usr/bin/dscl")
-        .args(["/Search", "-search", "/Users", "UniqueID", &uid.to_string()])
-        .stdin(std::process::Stdio::null())
-        .output()
-        .map_or(true, |output| {
-            !output.status.success() || !String::from_utf8_lossy(&output.stdout).trim().is_empty()
-        });
+    let directory = !passwd && search(uid);
     let age = account.ok().flatten().filter(|_| aged).and_then(|account| {
         account_age(&account.name).or_else(|| {
             std::fs::metadata(&account.home)
@@ -1006,10 +1029,16 @@ fn account_age(name: &str) -> Option<std::time::Duration> {
 
 /// The directory record's creation time; home-folder timestamps are not provenance.
 pub(crate) fn account_created(name: &str) -> Option<std::time::SystemTime> {
-    let output = std::process::Command::new("/usr/bin/dscl")
-        .args([".", "-read", &format!("/Users/{name}"), "accountPolicyData"])
-        .output()
-        .ok()?;
+    let output = crate::bounded::output(
+        std::process::Command::new("/usr/bin/dscl").args([
+            ".",
+            "-read",
+            &format!("/Users/{name}"),
+            "accountPolicyData",
+        ]),
+        crate::bounded::LOOKUP,
+    )
+    .ok()?;
     if !output.status.success() {
         return None;
     }
@@ -1045,7 +1074,7 @@ mod tests {
     use super::{
         Absence, Blocker, Kind, LOGGED_OUT, Process, Record, Window, blockers, classify,
         desktop_up_in, diagnose, gone_twice, input_build_current, logged_out_in, parse_processes,
-        require_hidden, running_for, silent, stale_in, validate_target_uid,
+        record_with, require_hidden, running_for, silent, stale_in, validate_target_uid,
     };
     use serde_json::json;
     use std::time::Duration;
@@ -1385,6 +1414,38 @@ mod tests {
             [(503, Kind::Helper)],
             "the helper on screen"
         );
+    }
+
+    #[test]
+    fn an_account_getpwuid_found_is_never_searched_for_again() {
+        let found = Ok(Some(crate::setup::Account {
+            name: "helper".to_owned(),
+            uid: 503,
+            home: "/Users/helper".into(),
+        }));
+        let record = record_with(503, false, found, |_| panic!("searched every directory"));
+        assert!(record.exists());
+
+        let failed = Err(crate::error::Error::new("setup", "The lookup failed"));
+        let record = record_with(503, false, failed, |_| panic!("searched every directory"));
+        assert!(
+            record.exists(),
+            "a failed lookup counts as an account found"
+        );
+    }
+
+    #[test]
+    fn an_account_getpwuid_did_not_find_is_searched_for_in_every_directory() {
+        let mut asked = None;
+        let record = record_with(1201, false, Ok(None), |uid| {
+            asked = Some(uid);
+            true
+        });
+        assert_eq!(asked, Some(1201));
+        assert!(record.exists(), "a network account");
+
+        let record = record_with(1202, false, Ok(None), |_| false);
+        assert!(!record.exists(), "a deleted account");
     }
 
     #[test]

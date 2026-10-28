@@ -1,5 +1,5 @@
 //! Command-line grammar, value parsing and argument adapters.
-use atlas::{actions::Button, agent};
+use atlas::{actions::Button, agent, daemon::protocol::Region};
 use clap::{Parser, Subcommand, ValueEnum};
 use std::path::PathBuf;
 
@@ -109,7 +109,7 @@ pub(super) enum Command {
     Status,
     /// Check that everything is ready, and say what to fix if not.
     Doctor {
-        /// Include the helper's full status (in --json too).
+        /// Include every check and the helper's full status (in --json too).
         #[arg(long)]
         verbose: bool,
         /// Show how long the last login of the past two hours took, step by step.
@@ -188,17 +188,44 @@ pub(super) enum Command {
         #[arg(long, value_name = "on|off|status", conflicts_with = "render")]
         login: Option<LoginArg>,
     },
-    /// Save a screenshot of the helper's screen.
+    /// Save a screenshot of the helper's screen, an app's windows or a region.
     ///
-    /// Reports pointsPerPixel: multiply screenshot pixels by it for input coordinates.
+    /// Reports origin and pointsPerPixel: the image's pixel (px, py) is the
+    /// display point (origin.x + px × pointsPerPixel, origin.y + py ×
+    /// pointsPerPixel). With --app the picture holds the app's windows, its
+    /// sheets, panels and open menus with a small margin; overlapping lists other
+    /// apps' windows in front of them (take a full screenshot to see those).
     #[command(visible_alias = "capture")]
     Screenshot {
-        /// Scale the image down so its longer side is at most this many pixels.
-        #[arg(long)]
+        #[command(flatten)]
+        target: AppTarget,
+        /// Only this part of the display: X,Y,W,H in display points, widened to
+        /// whole points.
+        #[arg(
+            long,
+            value_name = "X,Y,W,H",
+            allow_hyphen_values = true,
+            value_parser = region,
+            conflicts_with_all = ["app", "pid"]
+        )]
+        region: Option<Region>,
+        /// Shrink the longer side to at most this many pixels; 0 keeps the
+        /// full size. Without it: at most 1456 and one pixel per display point.
+        #[arg(long, value_parser = clap::value_parser!(u32).range(0..=8192))]
         max_dimension: Option<u32>,
+        /// Save a new file even when nothing changed since the last screenshot.
+        #[arg(long)]
+        new_file: bool,
     },
     /// List the apps open in the helper.
-    Apps,
+    ///
+    /// Lists apps with a Dock icon and menu bar apps that are not part of
+    /// macOS; `more` says how many other processes were left out.
+    Apps {
+        /// List every process, macOS's own background ones too.
+        #[arg(long)]
+        all: bool,
+    },
     /// Send several actions at once (a JSON array, or @path/to/actions.json).
     ///
     /// Each action is an object with a "type": move {x, y}; click {x, y,
@@ -214,10 +241,11 @@ pub(super) enum Command {
     },
     /// Click a point, or exactly one element of an app.
     ///
-    /// Click at display point X Y (screenshot pixels × pointsPerPixel), or on
-    /// exactly one accessibility element of an app with --app and --name/--role.
+    /// Click at display point X Y (origin + screenshot pixels × pointsPerPixel),
+    /// or on exactly one accessibility element of an app with --app and
+    /// --name/--role.
     Click {
-        /// Display point X (screenshot pixels × pointsPerPixel).
+        /// Display point X (origin + screenshot pixels × pointsPerPixel).
         #[arg(requires = "y")]
         x: Option<f64>,
         /// Display point Y.
@@ -242,10 +270,11 @@ pub(super) enum Command {
     },
     /// List an app's buttons, fields and other elements.
     ///
-    /// Lists accessibility elements of the app's windows: role, name, value
-    /// and frame; also the items of a menu the app has open (menu: true, with
-    /// a check mark as mark) and, while the app is in front, its menu bar
-    /// titles.
+    /// Lists accessibility elements of the app's windows: role, name, value,
+    /// click point (at) and size, with each window listed once; also the
+    /// items of a menu the app has open (menu: true, with a check mark as
+    /// mark) and, while the app is in front, its menu bar titles. more says
+    /// how many matching elements were left out.
     Elements {
         #[command(flatten)]
         target: AppTarget,
@@ -256,17 +285,24 @@ pub(super) enum Command {
         #[arg(long)]
         name: Option<String>,
         /// Show at most this many elements.
-        #[arg(long, default_value_t = 200)]
+        #[arg(long, default_value_t = 50)]
         max: usize,
+        /// Show every attribute the scan read, as it read it.
+        #[arg(long)]
+        full: bool,
     },
-    /// Print the guide agents read to use Atlas.
+    /// Print the guide agents read to use Atlas (all of it by default).
+    #[command(group(clap::ArgGroup::new("part").args(["skill", "commands", "errors"])))]
     AgentGuide {
-        /// Print the agent plugin's skill (SKILL.md) instead.
-        #[arg(long, hide = true, conflicts_with = "commands")]
+        /// Print the short version the agent plugins load (SKILL.md), which lists the rest.
+        #[arg(long)]
         skill: bool,
-        /// Print the command reference (Markdown) instead.
-        #[arg(long, hide = true)]
+        /// Print every command and its options (Markdown).
+        #[arg(long)]
         commands: bool,
+        /// Print what each error code means and what to do (Markdown).
+        #[arg(long)]
+        errors: bool,
     },
     /// Check that tools and apps are ready in the helper.
     Readiness {
@@ -378,15 +414,15 @@ pub(super) enum Command {
     /// Quit an app in the helper and remove the copies `open` made for it.
     ///
     /// The app quits at once, without asking to save: save first (key cmd+s).
-    /// --all quits what an earlier session may have left open: every app
-    /// bundle with a Dock icon and every menu bar app not made by Apple.
-    /// Atlas and macOS's own in /System/Library (Finder among them) stay.
+    /// --all quits every app left open, another agent's too: use it only when
+    /// the person asks. Atlas and macOS's own in /System/Library (Finder among
+    /// them) stay.
     #[command(group(clap::ArgGroup::new("which").required(true).args(["app", "all"])))]
     Close {
         /// The app's name, as `atlas apps` lists it.
         #[arg(long)]
         app: Option<String>,
-        /// Quit every app left open (not Atlas or macOS's own).
+        /// Quit every app left open, another agent's too (not Atlas or macOS's own).
         #[arg(long, conflicts_with = "app")]
         all: bool,
     },
@@ -719,6 +755,27 @@ fn run_seconds(value: &str) -> std::result::Result<u64, String> {
         })
 }
 
+/// `screenshot --region`: X,Y,W,H in display points.
+fn region(value: &str) -> std::result::Result<Region, String> {
+    let [x, y, width, height] = value
+        .split(',')
+        .map(|part| part.trim().parse::<f64>())
+        .collect::<std::result::Result<Vec<f64>, _>>()
+        .ok()
+        .and_then(|numbers| <[f64; 4]>::try_from(numbers).ok())
+        .filter(|numbers| numbers.iter().all(|number| number.is_finite()))
+        .ok_or("Give the region as X,Y,W,H in display points, for example 100,80,800,600.")?;
+
+    if width <= 0.0 || height <= 0.0 {
+        return Err("The region's width and height must be more than 0.".into());
+    }
+
+    Region::from_points(x, y, width, height).ok_or_else(|| {
+        "Give a region within 16384 points of the display's corner, at most 16384 points across."
+            .into()
+    })
+}
+
 /// The longest `wait --timeout`: a day.
 const WAIT_MAX_SECONDS: u64 = 24 * 60 * 60;
 
@@ -816,6 +873,108 @@ mod tests {
         assert!(parse(&["click", "10", "20", "--role", "AXButton"]).is_err());
         assert!(parse(&["click", "10"]).is_err(), "Y is required with X");
         assert!(parse(&["click", "--app", "A", "--pid", "1", "--name", "x"]).is_err());
+    }
+
+    #[test]
+    fn screenshots_take_an_app_or_a_region_never_both() {
+        let given = |args: &[&str]| match parse(args) {
+            Ok(Cli {
+                command:
+                    Some(Command::Screenshot {
+                        target,
+                        region,
+                        max_dimension,
+                        ..
+                    }),
+                ..
+            }) => Ok((target.app, target.pid, region, max_dimension)),
+            Err(error) => Err(error.to_string()),
+            _ => Err("not a screenshot".into()),
+        };
+        let region = |x, y, width, height| Region {
+            x,
+            y,
+            width,
+            height,
+        };
+
+        assert_eq!(given(&["screenshot"]), Ok((None, None, None, None)));
+        assert_eq!(
+            given(&["screenshot", "--app", "TextEdit", "--max-dimension", "400"]),
+            Ok((Some("TextEdit".into()), None, None, Some(400)))
+        );
+        assert_eq!(
+            given(&["capture", "--pid", "42"]),
+            Ok((None, Some(42), None, None))
+        );
+        assert_eq!(
+            given(&["screenshot", "--region", "-50,-50,200,200"]),
+            Ok((None, None, Some(region(-50, -50, 200, 200)), None))
+        );
+        assert_eq!(
+            given(&["screenshot", "--region", "1.5, 2.25, 3, 4"]),
+            Ok((None, None, Some(region(1, 2, 4, 5)), None))
+        );
+
+        for (args, says) in [
+            (
+                &["screenshot", "--app", "A", "--region", "0,0,10,10"][..],
+                "cannot be used with",
+            ),
+            (
+                &["screenshot", "--pid", "1", "--region", "0,0,10,10"],
+                "cannot be used with",
+            ),
+            (
+                &["screenshot", "--app", "A", "--pid", "1"],
+                "cannot be used with",
+            ),
+            (&["screenshot", "--region", "0,0,10"], "X,Y,W,H"),
+            (&["screenshot", "--region", "a,b,c,d"], "X,Y,W,H"),
+            (&["screenshot", "--region", "0,0,inf,10"], "X,Y,W,H"),
+            (&["screenshot", "--region", "0,0,0,10"], "more than 0"),
+            (&["screenshot", "--region", "0,0,10,-5"], "more than 0"),
+            (&["screenshot", "--region", "0,0,16385,10"], "16384"),
+            (&["screenshot", "--region", "-16385,0,10,10"], "16384"),
+        ] {
+            let refused = given(args).unwrap_err();
+            assert!(refused.contains(says), "{args:?}: {refused}");
+        }
+    }
+
+    #[test]
+    fn a_screenshot_is_smaller_by_default_and_full_size_on_request() {
+        use crate::dispatch::screenshot_size;
+        use atlas::client::Size;
+
+        assert_eq!(screenshot_size(None), Size::Standard);
+        assert_eq!(screenshot_size(Some(0)), Size::Full);
+        assert_eq!(screenshot_size(Some(800)), Size::Longest(800));
+        assert_eq!(screenshot_size(Some(1456)), Size::Longest(1456));
+
+        let given = |args: &[&str]| match parse(args) {
+            Ok(Cli {
+                command:
+                    Some(Command::Screenshot {
+                        max_dimension,
+                        new_file,
+                        ..
+                    }),
+                ..
+            }) => Some((max_dimension, new_file)),
+            _ => None,
+        };
+        assert_eq!(given(&["screenshot"]), Some((None, false)));
+        assert_eq!(
+            given(&["screenshot", "--max-dimension", "0"]),
+            Some((Some(0), false))
+        );
+        assert_eq!(
+            given(&["screenshot", "--max-dimension", "8192", "--new-file"]),
+            Some((Some(8192), true))
+        );
+        assert_eq!(given(&["screenshot", "--max-dimension", "8193"]), None);
+        assert_eq!(given(&["screenshot", "--max-dimension", "-1"]), None);
     }
 
     #[test]

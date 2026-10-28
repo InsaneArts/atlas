@@ -15,12 +15,12 @@ atlas environment rollback --help
 
 ### Get started
 
-| Command   | Use it to                                                                                                                              |
-| --------- | -------------------------------------------------------------------------------------------------------------------------------------- |
-| `init`    | Set up the helper interactively. See [Getting started](getting-started.md).                                                            |
-| `doctor`  | Check readiness and read the next steps. `--verbose` includes full status; `--login-timing` reports the recent login's timing instead. |
-| `agents`  | Show or change [agent connections](agents.md).                                                                                         |
-| `menubar` | Start the menu bar panel. `--login on`, `--login off` and `--login status` manage Open at Login.                                       |
+| Command   | Use it to                                                                                                                                                                                                                      |
+| --------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `init`    | Set up the helper interactively. See [Getting started](getting-started.md).                                                                                                                                                    |
+| `doctor`  | Check readiness and read the next steps. In JSON mode, a ready helper answers only `ready` and any warnings. `--verbose` includes every check and the full status; `--login-timing` reports the recent login's timing instead. |
+| `agents`  | Show or change [agent connections](agents.md).                                                                                                                                                                                 |
+| `menubar` | Start the menu bar panel. `--login on`, `--login off` and `--login status` manage Open at Login.                                                                                                                               |
 
 `atlas agents status` reports connections, and `atlas agents status --brief` gives a short session summary. `install` and `remove` accept host selectors. `project DIR` adds project instructions; `forget DIR` removes Atlas's sections. See the [connection guide](agents.md) for the selectors and refresh steps.
 
@@ -28,15 +28,15 @@ atlas environment rollback --help
 
 ### Look at the helper
 
-| Command      | Use it to                                                                                                                   |
-| ------------ | --------------------------------------------------------------------------------------------------------------------------- |
-| `screenshot` | Save a PNG and report its path and coordinate scale. `capture` is an alias; `--max-dimension` limits the longer image edge. |
-| `windows`    | List windows, optionally filtered by `--app`.                                                                               |
-| `elements`   | Inspect accessibility elements by app, role or name.                                                                        |
-| `apps`       | List running helper apps and their names.                                                                                   |
-| `status`     | Inspect the helper's identity, session and permissions.                                                                     |
+| Command      | Use it to                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                     |
+| ------------ | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `screenshot` | Save a PNG and report its path, origin and coordinate scale. `capture` is an alias; `--app` or `--pid` shows one app's windows, `--region X,Y,W,H` one part of the display, and `--max-dimension` limits the longer image edge (0 for the full size). Unless it is given, a picture has at most one pixel per display point and at most 1456 px on its longer side, so a Retina display costs no more than a standard one. When nothing changed since the last screenshot of the same view, the reply says `unchanged: true` and names the earlier file; `--new-file` saves a new one anyway. |
+| `windows`    | List windows, optionally filtered by `--app`.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                 |
+| `elements`   | Inspect accessibility elements by app, role or name: 50 at most (`--max` changes it), `--full` for every attribute. A `--name` that matches nothing lists the closest names in `candidates`.                                                                                                                                                                                                                                                                                                                                                                                                  |
+| `apps`       | List running helper apps and their names: apps with a Dock icon and menu bar apps that are not part of macOS. `--all` adds macOS's own background processes.                                                                                                                                                                                                                                                                                                                                                                                                                                  |
+| `status`     | Inspect the helper's identity, session and permissions.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                       |
 
-Use `doctor` to decide whether a task can start. Use the observation commands to decide what to do inside an app. A screenshot's pixels are not necessarily display points; use its `pointsPerPixel` when calculating input coordinates.
+Use `doctor` to decide whether a task can start. Use the observation commands to decide what to do inside an app. A screenshot's pixels are not necessarily display points: the display point for pixel (px, py) is `origin` + pixel × `pointsPerPixel`, and `origin` is 0,0 for a full screenshot.
 
 ### Act in the helper
 
@@ -50,11 +50,11 @@ Use `doctor` to decide whether a task can start. Use the observation commands to
 | `scroll` | Scroll at a point with `--dx` or `--dy`.                                                                     |
 | `input`  | Send a bounded JSON array of actions, directly or from `@actions.json`.                                      |
 | `open`   | Open an app, file or URL in the helper. `--app` selects an app; `--env NAME=VALUE` passes a launch variable. |
-| `close`  | Quit one app with `--app`, or the supported set of apps with `--all`.                                        |
+| `close`  | Quit one app with `--app`. `--all` quits every app left open, another agent's too.                           |
 | `wait`   | Wait for a matching window to appear or, with `--gone`, disappear.                                           |
 | `run`    | Run a command as the helper and return its output and process result.                                        |
 
-Check the screen before acting, and verify the effect afterward. The [daily use guide](using-atlas.md) shows a complete open, inspect, act and close sequence. `close --all` is broader than closing the app you are testing: it includes ordinary app bundles and non-Apple menu bar apps, while leaving Atlas and macOS system apps alone.
+Check the screen before acting, and verify the effect afterward. The [daily use guide](using-atlas.md) shows a complete open, inspect, act and close sequence. `close --all` is broader than closing the app you are testing: it includes ordinary app bundles and non-Apple menu bar apps, another agent's too, while leaving Atlas and macOS system apps alone.
 
 `run` takes the program after `--`. The command starts in the helper's home. Quote a shell expression so that the helper's shell, rather than your own shell, expands its variables:
 
@@ -88,14 +88,14 @@ Coordinate switching, locking and logging out with the person at the Mac. `logou
 
 ### Look after Atlas
 
-| Command       | Use it to                                                                                                       |
-| ------------- | --------------------------------------------------------------------------------------------------------------- |
-| `update`      | Check or install a verified release.                                                                            |
-| `uninstall`   | Remove Atlas, with separate choices for keeping configuration or deleting the helper account.                   |
-| `install`     | Put the current executable where the helper can run it. This is not the public download installer.              |
-| `setup`       | Inspect setup, apply or resume a managed-layout migration, or roll it back. This is an advanced repair command. |
-| `config`      | Show the selected settings and resolved paths.                                                                  |
-| `agent-guide` | Print the Markdown guide supplied to agents.                                                                    |
+| Command       | Use it to                                                                                                                                                                                  |
+| ------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `update`      | Check or install a verified release.                                                                                                                                                       |
+| `uninstall`   | Remove Atlas, with separate choices for keeping configuration or deleting the helper account.                                                                                              |
+| `install`     | Put the current executable where the helper can run it. This is not the public download installer.                                                                                         |
+| `setup`       | Inspect setup, apply or resume a managed-layout migration, or roll it back. This is an advanced repair command.                                                                            |
+| `config`      | Show the selected settings and resolved paths.                                                                                                                                             |
+| `agent-guide` | Print the Markdown guide supplied to agents. `--skill` prints the short version the agent plugins load, `--commands` every command and its options, `--errors` what each error code means. |
 
 See [Maintenance](maintenance.md) before updating, removing or repairing Atlas. See [Configuration](configuration.md) for settings selection and storage paths.
 
@@ -105,7 +105,7 @@ See [Maintenance](maintenance.md) before updating, removing or repairing Atlas. 
 
 Ordinary command results are readable text in a terminal and JSON when redirected or piped. `ATLAS_JSON` can override that default; explicit `--json` wins. Help, version and `atlas agents status --brief` output are text, and `atlas agent-guide` prints Markdown. Interactive setup and commands that open a UI are not a stream of JSON results.
 
-In JSON mode, a returned action result goes to stdout, including a result with `ok: false`. Command, configuration and connection errors go to stderr. On failure, read both streams. Do not assume an empty stdout means nothing happened.
+In JSON mode, each result is one line of JSON. A returned action result goes to stdout, including a result with `ok: false`. Command, configuration and connection errors go to stderr. On failure, read both streams. Do not assume an empty stdout means nothing happened. Every failure carries `next`, one sentence on what to do about it, and `busy` carries `holder`: `person` or `agent`.
 
 The process exits with status 0 for success, 1 for a failed result or execution error, and 2 for invalid command syntax. Two useful exceptions to treating `ok` as success are:
 

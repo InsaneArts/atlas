@@ -327,10 +327,16 @@ async function focusNotes() {
 }
 /** Whether accessibility reports the fixture's text area as focused. */
 async function accessibleFocus(window) {
-  const { elements = [] } = await cli(['elements', '--app', 'TextEdit', '--role', 'AXTextArea']);
+  const { elements = [], windows = [] } = await cli([
+    'elements',
+    '--app',
+    'TextEdit',
+    '--role',
+    'AXTextArea',
+  ]);
   const same = (a, b) =>
     ['x', 'y', 'width', 'height'].every((k) => Math.round(a?.[k]) === Math.round(b?.[k]));
-  return elements.some((e) => e.focused === true && same(e.window, window.bounds));
+  return elements.some((e) => e.focused === true && same(windows[e.window], window.bounds));
 }
 
 /**

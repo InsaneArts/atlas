@@ -100,6 +100,14 @@ fn cursor_installs_only_its_curated_payload_and_repeats_without_changes() {
     assert!(!fixture.store().target.join("cursor/personal.txt").exists());
     assert!(!fixture.store().target.join(".claude-plugin").exists());
     assert!(!fixture.store().target.join("hooks/register.js").exists());
+    for (file, _) in crate::agent::REFERENCES {
+        let installed = fixture
+            .store()
+            .target
+            .join("skills/atlas/references")
+            .join(file);
+        assert!(installed.is_file(), "{file}");
+    }
     assert_eq!(fixture.install().unwrap(), Removal::Nothing);
     fixture.clean(true);
     assert_eq!(fixture.remove().unwrap(), Removal::Changed);
@@ -126,6 +134,42 @@ fn cursor_refreshes_an_owned_old_copy_and_removes_without_the_source() {
     fs::rename(&fixture.source, fixture.source.with_extension("moved")).unwrap();
     assert_eq!(fixture.remove().unwrap(), Removal::Changed);
     fixture.clean(false);
+}
+
+#[test]
+fn cursors_payload_carries_every_reference_the_skill_lists() {
+    let source = Path::new(env!("CARGO_MANIFEST_DIR")).join("agents");
+    let record = payload(&source).unwrap();
+    for (file, _) in crate::agent::REFERENCES {
+        let path = format!("skills/atlas/references/{file}");
+        let entry = record.entries.get(&path);
+        assert!(entry.is_some_and(|entry| entry.digest.is_some()), "{path}");
+    }
+}
+
+#[test]
+fn cursor_refreshes_an_owned_copy_that_had_fewer_references() {
+    let fixture = Fixture::new();
+    fixture.install().unwrap();
+    let store = fixture.store();
+    let mut record = store.record().unwrap().unwrap();
+    for file in ["testing.md", "environment.md", "limits.md"] {
+        let path = format!("skills/atlas/references/{file}");
+        fs::remove_file(store.target.join(&path)).unwrap();
+        record.entries.remove(&path).unwrap();
+    }
+    store.write_record(Some(&record)).unwrap();
+
+    assert_eq!(fixture.install().unwrap(), Removal::Changed);
+    let expected = payload(&fixture.source).unwrap();
+    assert_eq!(snapshot(&store.target).unwrap(), expected.entries);
+    assert!(
+        store
+            .target
+            .join("skills/atlas/references/limits.md")
+            .is_file()
+    );
+    assert_eq!(fixture.install().unwrap(), Removal::Nothing);
 }
 
 #[test]

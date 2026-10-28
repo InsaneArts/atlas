@@ -1,6 +1,6 @@
 //! Ownership is independent of the event engine, so cancellation never queues
 //! behind a drag, text insertion or wait. Posting holds this gate briefly.
-use crate::error::{Error, Result};
+use crate::error::{Error, Holder, Result};
 use std::sync::{Arc, Mutex, MutexGuard};
 use std::time::{Duration, Instant};
 
@@ -88,11 +88,16 @@ impl Gate {
         Ok(state.owner.is_some())
     }
 
-    /// Whether the person holds control now, through a viewer.
-    pub fn person_in_control(&self) -> Result<bool> {
+    /// Who holds control now, if anyone: the person through a viewer, or
+    /// an agent. Read under one lock, so the two never disagree.
+    pub fn holder(&self) -> Result<Option<Holder>> {
         let mut state = self.lock()?;
         state.expire();
-        Ok(state.owner.is_some() && state.person)
+        Ok(match (state.owner.is_some(), state.person) {
+            (false, _) => None,
+            (true, true) => Some(Holder::Person),
+            (true, false) => Some(Holder::Agent),
+        })
     }
 
     pub fn acquire(self: &Arc<Self>, owner: &str, who: Who) -> Result<Grant> {
@@ -105,14 +110,21 @@ impl Gate {
 
         // An agent finding the person in control is told to wait for them.
         if !state.closed && state.owner.is_some() && state.person && who == Who::Agent {
-            return Err(Error::new("busy", crate::error::PERSON_HAS_CONTROL));
+            return Err(
+                Error::new("busy", crate::error::PERSON_HAS_CONTROL).held_by(Holder::Person)
+            );
         }
 
         if state.closed || state.owner.is_some() {
-            return Err(Error::new(
+            let error = Error::new(
                 "busy",
                 "The native input service is unavailable or already controlled",
-            ));
+            );
+            return Err(match (state.closed, state.person) {
+                (true, _) => error,
+                (false, true) => error.held_by(Holder::Person),
+                (false, false) => error.held_by(Holder::Agent),
+            });
         }
 
         // Owners are `control::token()`s: two hexadecimal digits a byte.
@@ -243,9 +255,11 @@ mod tests {
     #[test]
     fn a_second_controller_is_busy() {
         let gate = gate();
+        assert_eq!(gate.holder().unwrap(), None);
         let _grant = gate.acquire(&owner('a'), Who::Agent).unwrap();
 
         assert!(gate.active().unwrap());
+        assert_eq!(gate.holder().unwrap(), Some(Holder::Agent));
         assert_eq!(code(gate.acquire(&owner('b'), Who::Agent)), "busy");
         assert_eq!(
             code(gate.acquire(&owner('a'), Who::Agent)),
@@ -259,7 +273,7 @@ mod tests {
         let gate = gate();
         let _person = gate.acquire(&owner('a'), Who::Person).unwrap();
 
-        assert!(gate.person_in_control().unwrap());
+        assert_eq!(gate.holder().unwrap(), Some(Holder::Person));
         let said = |who| {
             gate.acquire(&owner('b'), who)
                 .err()
@@ -268,6 +282,23 @@ mod tests {
         assert_eq!(
             said(Who::Agent),
             Some(("busy", crate::error::PERSON_HAS_CONTROL.to_owned()))
+        );
+        let holder = |gate: &Arc<Gate>, who| gate.acquire(&owner('b'), who).err()?.holder;
+        assert_eq!(holder(&gate, Who::Agent), Some(Holder::Person));
+        assert_eq!(holder(&gate, Who::Person), Some(Holder::Person));
+
+        let other = self::gate();
+        let _agent = other.acquire(&owner('c'), Who::Agent).unwrap();
+        assert_eq!(
+            holder(&other, Who::Agent),
+            Some(Holder::Agent),
+            "another agent holds it"
+        );
+        other.close().unwrap();
+        assert_eq!(
+            holder(&other, Who::Agent),
+            None,
+            "a closed service names no one"
         );
         assert_ne!(
             said(Who::Person).map(|(_, error)| error),

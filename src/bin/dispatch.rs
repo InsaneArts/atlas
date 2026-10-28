@@ -10,7 +10,7 @@ use super::{
 };
 use atlas::{
     agent,
-    client::Client,
+    client::{Client, Size},
     config::Config,
     doing::Doing,
     environment,
@@ -22,6 +22,17 @@ use atlas::{
 };
 use serde_json::{Value, json};
 use std::{io::Read, path::PathBuf, time::Duration};
+
+/// How large a screenshot is saved: at most one pixel per display point and
+/// [`atlas::client::SCREENSHOT_SIDE`] pixels on its longer side unless a
+/// longest side is given; 0 asks for the full size.
+pub(super) fn screenshot_size(given: Option<u32>) -> Size {
+    match given {
+        None => Size::Standard,
+        Some(0) => Size::Full,
+        Some(side) => Size::Longest(side),
+    }
+}
 
 /// Connect or disconnect the named agents and Claude app; none
 /// named means every installed one, the Claude app included.
@@ -142,6 +153,7 @@ fn elements_info(pid: i32) -> Result<Value> {
         "ok": true,
         "elements": snapshot.elements,
         "truncated": snapshot.incomplete,
+        "reasons": snapshot.stops,
         "errors": snapshot.errors,
     }))
 }
@@ -199,11 +211,17 @@ pub(super) async fn execute(config: PathBuf, command: Command) -> Result<Value> 
 
     match command {
         Command::EnvironmentWorker { packet, apply } => environment::worker(&packet, apply),
-        Command::AgentGuide { skill, commands } => {
+        Command::AgentGuide {
+            skill,
+            commands,
+            errors,
+        } => {
             if skill {
                 print(&agent::skill());
             } else if commands {
                 print(&help::command_reference());
+            } else if errors {
+                print(agent::ERRORS);
             } else {
                 print(agent::GUIDE);
             }
@@ -479,8 +497,17 @@ pub(super) async fn execute(config: PathBuf, command: Command) -> Result<Value> 
                 }
             }
         }
-        Command::Screenshot { max_dimension } => client()?.capture(max_dimension).await,
-        Command::Apps => client()?.apps().await,
+        Command::Screenshot {
+            target,
+            region,
+            max_dimension,
+            new_file,
+        } => {
+            let target = target.target();
+            let size = screenshot_size(max_dimension);
+            agent::screenshot(&client()?, target.as_ref(), region, size, new_file).await
+        }
+        Command::Apps { all } => client()?.apps().await.map(|reply| listed_apps(reply, all)),
         Command::Click {
             x,
             y,
@@ -524,12 +551,14 @@ pub(super) async fn execute(config: PathBuf, command: Command) -> Result<Value> 
             role,
             name,
             max,
+            full,
         } => {
             let client = client()?;
             let target = target
                 .target()
                 .ok_or_else(|| Error::new("usage", "Select the app with --app or --pid"))?;
-            agent::elements(&client, &target, &agent::ElementFilter { role, name }, max).await
+            let filter = agent::ElementFilter { role, name };
+            agent::elements(&client, &target, &filter, max, full).await
         }
         Command::Readiness { tools, apps } => {
             atlas::readiness::readiness(&client()?, &tools, &apps).await
@@ -738,6 +767,35 @@ fn refuse_root(command: &str, root: bool) -> Result<()> {
     Ok(())
 }
 
+/// The helper's `apps` reply as `atlas apps` shows it: apps with a Dock
+/// icon and menu bar apps that are not part of macOS, unless `all`, with
+/// `more` saying how many processes were left out.
+fn listed_apps(mut reply: Value, all: bool) -> Value {
+    let Some(apps) = reply.get_mut("apps").and_then(Value::as_array_mut) else {
+        return reply;
+    };
+    let before = apps.len();
+
+    if !all {
+        apps.retain(|app| {
+            let executable = app["executable"].as_str().unwrap_or("");
+            match app["policy"].as_str() {
+                Some("regular") => true,
+                Some("accessory") => {
+                    !executable.is_empty()
+                        && !executable.starts_with("/System/")
+                        && !executable.starts_with("/usr/")
+                }
+                _ => false,
+            }
+        });
+    }
+
+    let more = before - apps.len();
+    reply["more"] = json!(more);
+    reply
+}
+
 /// One guarded batch, reporting what the helper performed.
 async fn act(client: &Client, actions: Value) -> Result<Value> {
     client.input(&actions, None, None).await
@@ -783,6 +841,74 @@ mod tests {
             .render_long_help()
             .to_string();
         assert!(!help.contains("cursor-hook"));
+    }
+
+    #[test]
+    fn apps_lists_apps_and_third_party_menu_bar_apps_unless_all() {
+        let reply = json!({"ok": true, "apps": [
+            {"name": "TextEdit", "pid": 1, "policy": "regular",
+             "executable": "/System/Applications/TextEdit.app/Contents/MacOS/TextEdit"},
+            {"name": "Opie", "pid": 2, "policy": "accessory",
+             "executable": "/Applications/Opie.app/Contents/MacOS/Opie"},
+            {"name": "Siri", "pid": 3, "policy": "accessory",
+             "executable": "/System/Library/CoreServices/Siri.app/Contents/MacOS/Siri"},
+            {"name": "loginwindow", "pid": 4, "policy": "accessory",
+             "executable": "/usr/libexec/loginwindow"},
+            {"name": "cfprefsd", "pid": 5, "policy": "prohibited",
+             "executable": "/usr/sbin/cfprefsd"},
+        ]});
+
+        let listed = listed_apps(reply.clone(), false);
+        let names: Vec<&str> = listed["apps"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|app| app["name"].as_str().unwrap())
+            .collect();
+        assert_eq!(names, ["TextEdit", "Opie"]);
+        assert_eq!(listed["more"], 3);
+        assert_eq!(listed["ok"], true);
+
+        let every = listed_apps(reply, true);
+        assert_eq!(every["apps"].as_array().unwrap().len(), 5);
+        assert_eq!(every["more"], 0);
+    }
+
+    #[test]
+    fn a_process_that_cannot_be_placed_is_left_out_unless_all() {
+        let reply = json!({"ok": true, "apps": [
+            {"name": "Unnamed agent", "pid": 6, "policy": "accessory"},
+            {"name": "No policy", "pid": 7,
+             "executable": "/Applications/Tool.app/Contents/MacOS/Tool"},
+            {"name": "Odd policy", "pid": 8, "policy": "unknown",
+             "executable": "/Applications/Odd.app/Contents/MacOS/Odd"},
+        ]});
+
+        let listed = listed_apps(reply.clone(), false);
+        assert_eq!(listed["apps"], json!([]));
+        assert_eq!(listed["more"], 3);
+
+        assert_eq!(
+            listed_apps(reply, true)["apps"].as_array().unwrap().len(),
+            3
+        );
+        assert_eq!(
+            listed_apps(json!({"ok": false, "code": "apps"}), false),
+            json!({"ok": false, "code": "apps"}),
+            "a failed reply is passed on as it is"
+        );
+    }
+
+    #[test]
+    fn apps_takes_all_to_list_every_process() {
+        assert!(matches!(
+            parse(&["apps", "--all"]).unwrap().command,
+            Some(Command::Apps { all: true })
+        ));
+        assert!(matches!(
+            parse(&["apps"]).unwrap().command,
+            Some(Command::Apps { all: false })
+        ));
     }
 
     #[test]

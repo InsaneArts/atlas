@@ -45,12 +45,17 @@ extension AppContainer {
     NSApp.terminate(sender)
   }
 
-  /// Puts what `atlas doctor` says on the general pasteboard, as text.
+  /// Puts what `atlas doctor` says on the general pasteboard, as indented
+  /// text, so a bug report stays readable.
   ///
   /// - Returns: Whether it said anything to copy.
   func copyDiagnostics() async -> Bool {
     let outcome = await commands.run(.doctor)
-    let text = String(decoding: outcome.reply, as: UTF8.self)
+    let report = try? JSONSerialization.jsonObject(with: outcome.reply)
+    let indented = report.flatMap { report in
+      try? JSONSerialization.data(withJSONObject: report, options: [.prettyPrinted, .sortedKeys])
+    }
+    let text = String(decoding: indented ?? outcome.reply, as: UTF8.self)
     guard !text.isEmpty else { return false }
     let pasteboard = NSPasteboard.general
     pasteboard.clearContents()
