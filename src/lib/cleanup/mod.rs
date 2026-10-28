@@ -322,6 +322,15 @@ pub(crate) async fn preview(
         })
         .collect();
     let states = hands.plan_states(&plans).await?;
+    let bundles: Vec<plan::Bundle> = to_run
+        .iter()
+        .flat_map(|entry| match &entry.step {
+            Step::Quit { bundles } => bundles.clone(),
+            Step::RemoveInstall { install, .. } => vec![plan::Bundle::Install(install.clone())],
+            _ => Vec::new(),
+        })
+        .collect();
+    let installs = run::installs_answer(hands, &bundles).await?;
 
     let shown: Vec<Value> = steps
         .iter()
@@ -335,14 +344,27 @@ pub(crate) async fn preview(
             }
             match &entry.step {
                 Step::Quit { bundles } => {
-                    let running = apps
+                    let mut running = apps
                         .as_ref()
-                        .map(|apps| running_from(apps, &folders(hands, bundles)))
+                        .map(|apps| running_from(apps, &folders(hands, bundles, &installs)))
                         .unwrap_or_default();
+                    for process in run::running_from_installs(&installs) {
+                        if !running.iter().any(|known| known.pid == process.pid) {
+                            running.push(process);
+                        }
+                    }
                     value["apps"] = running
                         .iter()
                         .map(|process| json!({"app": process.name, "pid": process.pid}))
                         .collect();
+                }
+                Step::RemoveInstall { install, .. } => {
+                    if let Some(found) = run::install_in(&installs, install) {
+                        value["path"] = found["path"].clone();
+                        value["present"] = found["present"].clone();
+                        value["unchanged"] = found["unchanged"].clone();
+                        value["installPhase"] = found["phase"].clone();
+                    }
                 }
                 Step::UndoPlan { plan } => {
                     if let Some(state) = plans
@@ -586,6 +608,11 @@ fn described(hands: &impl Hands, entry: &Entry) -> Value {
         Step::UndoPlan { plan } => {
             value["do"] = json!("undo-plan");
             value["planId"] = json!(plan);
+        }
+        Step::RemoveInstall { install, app } => {
+            value["do"] = json!("remove-install");
+            value["installId"] = json!(install);
+            value["app"] = json!(app);
         }
         Step::RemoveCopy { copy } => {
             value["do"] = json!("remove-copy");

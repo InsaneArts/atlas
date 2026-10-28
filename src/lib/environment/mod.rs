@@ -2,11 +2,13 @@
 //! This is a resumable transaction, not a watcher or an account clone.
 pub mod discovery;
 mod files;
+mod installs;
 mod list;
 mod model;
 
 pub(crate) use model::Phase;
 pub mod profile;
+mod requests;
 mod runner;
 mod state;
 #[cfg(test)]
@@ -26,6 +28,7 @@ use files::*;
 use fs2::FileExt;
 pub use list::list;
 use model::*;
+pub(crate) use requests::{install_app, installs, remove_app};
 pub use runner::NO_PROFILE;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};

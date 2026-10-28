@@ -113,6 +113,7 @@ fn doing(command: &Command) -> Option<Doing> {
         Command::Open { app, targets, .. } => Doing::open(app.as_deref(), targets),
         Command::Close { app, .. } => Doing::new("close").app(app.as_deref()),
         Command::Cleanup { apply: true, .. } => Doing::new("cleanup"),
+        Command::InstallApp { path } => Doing::new("install").app(path.to_str()),
         Command::Run { .. }
         | Command::Environment {
             command: Some(EnvironmentCommand::Run { .. }),
@@ -193,7 +194,10 @@ fn kind(command: &Command) -> Kind {
 /// on it.
 fn makes(command: &Command) -> bool {
     match command {
-        Command::Open { .. } | Command::Run { .. } | Command::Cleanup { .. } => true,
+        Command::Open { .. }
+        | Command::Run { .. }
+        | Command::InstallApp { .. }
+        | Command::Cleanup { .. } => true,
         Command::Environment { command, .. } => matches!(
             command,
             None | Some(
@@ -270,6 +274,7 @@ pub(super) fn controls(command: &Command) -> bool {
             | Command::Open { .. }
             | Command::Close { .. }
             | Command::Cleanup { apply: true, .. }
+            | Command::InstallApp { .. }
             | Command::Run { .. }
             | Command::Restart
             | Command::StartInput
@@ -881,6 +886,7 @@ async fn carry_out(
             targets,
             environment,
         } => agent::open(&client()?, app.as_deref(), &targets, &environment).await,
+        Command::InstallApp { path } => atlas::installs::install(&client()?, &path).await,
         Command::Cleanup {
             apply,
             session,

@@ -52,11 +52,35 @@ pub(super) struct Packet {
 #[derive(Serialize, Deserialize)]
 #[serde(tag = "operation", rename_all = "camelCase", deny_unknown_fields)]
 pub(super) enum Request {
-    Preview { id: String, files: Vec<Payload> },
-    Apply { plan: Plan },
-    Rollback { id: String, apply: bool },
-    Run { argv: Vec<String> },
-    Transactions { all: bool, ids: Vec<String> },
+    Preview {
+        id: String,
+        files: Vec<Payload>,
+    },
+    Apply {
+        plan: Plan,
+    },
+    Rollback {
+        id: String,
+        apply: bool,
+    },
+    Run {
+        argv: Vec<String>,
+    },
+    Transactions {
+        all: bool,
+        ids: Vec<String>,
+    },
+    InstallApp {
+        id: String,
+        source: PathBuf,
+        name: String,
+    },
+    RemoveApp {
+        id: String,
+    },
+    Installs {
+        ids: Vec<String>,
+    },
 }
 
 impl Request {
@@ -65,9 +89,14 @@ impl Request {
     /// pending; a new request must say which it is.
     pub fn changes_helper(&self) -> bool {
         match self {
-            Request::Preview { .. } | Request::Transactions { .. } => false,
+            Request::Preview { .. } | Request::Transactions { .. } | Request::Installs { .. } => {
+                false
+            }
             Request::Rollback { apply, .. } => *apply,
-            Request::Apply { .. } | Request::Run { .. } => true,
+            Request::Apply { .. }
+            | Request::Run { .. }
+            | Request::InstallApp { .. }
+            | Request::RemoveApp { .. } => true,
         }
     }
 }

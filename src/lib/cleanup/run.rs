@@ -26,11 +26,23 @@ pub(crate) trait Hands {
     async fn apps(&self) -> Result<Value>;
     /// How far each of `ids` got, read without control.
     async fn plan_states(&self, ids: &[Token]) -> Result<Vec<PlanState>>;
+    /// How each of `ids` stands in the helper, read without control: where
+    /// it is, whether it is unchanged, and what runs from it.
+    async fn installs(&self, ids: &[Token]) -> Result<Value>;
     /// Signal `processes`, which run from `folders`, and wait until no app
-    /// in a fresh list runs from any of them.
-    async fn quit(&self, processes: &[Process], folders: &[String]) -> Result<()>;
+    /// in a fresh list runs from any of them, nor any process from
+    /// `installs`.
+    async fn quit(
+        &self,
+        processes: &[Process],
+        folders: &[String],
+        installs: &[Token],
+    ) -> Result<()>;
     /// Undo one copy into the helper, under the control the cleanup holds.
     async fn undo_plan(&self, plan: &Token) -> Result<Undone>;
+    /// Remove one install, when it is unchanged and nothing runs from it,
+    /// under the control the cleanup holds.
+    async fn remove_install(&self, install: &Token) -> Result<Value>;
     /// Whether the person has stopped agents.
     fn stopped(&self) -> bool;
     /// Whether a signal asked this command to stop.
@@ -184,20 +196,80 @@ async fn act(hands: &impl Hands, step: &Step, session: &Key) -> Outcome {
             },
             Err(error) => Outcome::erred(&error, Reason::Helper),
         },
+        Step::RemoveInstall { install, .. } => remove_install(hands, install).await,
         Step::RemoveCopy { copy } => remove_copy(hands, copy, session).await,
     }
 }
 
-/// The folders `bundles` name, as paths processes run from.
-pub(crate) fn folders(hands: &impl Hands, bundles: &[Bundle]) -> Vec<String> {
+/// The installs among `bundles`, by their IDs.
+pub(crate) fn installs_of(bundles: &[Bundle]) -> Vec<Token> {
     bundles
         .iter()
-        .map(|bundle| match bundle {
-            Bundle::Copy(token) => handoff::copy_folder(hands.copies(), token)
-                .to_string_lossy()
-                .into_owned(),
+        .filter_map(|bundle| match bundle {
+            Bundle::Install(id) => Some(id.clone()),
+            Bundle::Copy(_) => None,
         })
         .collect()
+}
+
+/// What the helper said of install `id` in `installs`, its answer.
+pub(crate) fn install_in<'a>(installs: &'a Value, id: &Token) -> Option<&'a Value> {
+    installs["installs"]
+        .as_array()?
+        .iter()
+        .find(|install| install["installId"] == id.as_str())
+}
+
+/// The folders `bundles` name, as paths processes run from: each copy
+/// folder, and each install where `installs` (the helper's word on them)
+/// says it is.
+pub(crate) fn folders(hands: &impl Hands, bundles: &[Bundle], installs: &Value) -> Vec<String> {
+    bundles
+        .iter()
+        .filter_map(|bundle| match bundle {
+            Bundle::Copy(token) => Some(
+                handoff::copy_folder(hands.copies(), token)
+                    .to_string_lossy()
+                    .into_owned(),
+            ),
+            Bundle::Install(id) => install_in(installs, id)
+                .and_then(|install| install["path"].as_str())
+                .map(str::to_owned),
+        })
+        .collect()
+}
+
+/// The helper's processes that `installs` (its word on them) says run from
+/// them, apps or not, by process ID and executable.
+pub(crate) fn running_from_installs(installs: &Value) -> Vec<Process> {
+    installs["installs"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .flat_map(|install| install["processes"].as_array().into_iter().flatten())
+        .filter_map(|process| {
+            let executable = process["executable"].as_str()?;
+            Some(Process {
+                pid: process["pid"].as_u64().filter(|pid| *pid > 0)?,
+                executable: executable.to_owned(),
+                name: Path::new(executable)
+                    .file_name()
+                    .map(|name| name.to_string_lossy().into_owned())
+                    .unwrap_or_default(),
+                protected: false,
+            })
+        })
+        .collect()
+}
+
+/// What the helper says of the installs among `bundles`; nothing to ask
+/// when there are none.
+pub(crate) async fn installs_answer(hands: &impl Hands, bundles: &[Bundle]) -> Result<Value> {
+    let ids = installs_of(bundles);
+    if ids.is_empty() {
+        return Ok(json!({"ok": true, "installs": []}));
+    }
+    hands.installs(&ids).await
 }
 
 /// Whether `executable` lies inside one of `folders`.
@@ -229,22 +301,60 @@ pub(crate) fn running_from(apps: &Value, folders: &[String]) -> Vec<Process> {
 }
 
 async fn quit(hands: &impl Hands, bundles: &[Bundle]) -> Outcome {
-    let folders = folders(hands, bundles);
+    let installs = match installs_answer(hands, bundles).await {
+        Ok(installs) => installs,
+        Err(error) => return Outcome::erred(&error, Reason::Helper),
+    };
+    let folders = folders(hands, bundles, &installs);
     let apps = match hands.apps().await {
         Ok(apps) => apps,
         Err(error) => return Outcome::erred(&error, Reason::Helper),
     };
-    let processes = running_from(&apps, &folders);
+    let mut processes = running_from(&apps, &folders);
+    for process in running_from_installs(&installs) {
+        if !processes.iter().any(|known| known.pid == process.pid) {
+            processes.push(process);
+        }
+    }
     if processes.is_empty() {
         return Outcome::done();
     }
-    match hands.quit(&processes, &folders).await {
+    match hands
+        .quit(&processes, &folders, &installs_of(bundles))
+        .await
+    {
         Ok(()) => Outcome::done(),
         Err(error) if error.code == "wait-failed" && !error.uncertain => Outcome {
             shown: Some(json!({"error": error.error})),
             ..Outcome::failed(Reason::Timeout)
         },
         Err(error) => Outcome::erred(&error, Reason::Helper),
+    }
+}
+
+async fn remove_install(hands: &impl Hands, install: &Token) -> Outcome {
+    let reply = match hands.remove_install(install).await {
+        Ok(reply) => reply,
+        Err(error) => return Outcome::erred(&error, Reason::Helper),
+    };
+    let shown = reply
+        .get("sideEffects")
+        .map(|effects| json!({"sideEffects": effects}));
+    let outcome = match (reply["outcome"].as_str(), reply["reason"].as_str()) {
+        _ if reply["ok"] != true => Outcome {
+            shown: Some(json!({"error": reply["error"]})),
+            ..Outcome::failed(Reason::Helper)
+        },
+        (Some("removed"), _) => Outcome::done(),
+        (Some("alreadyGone"), _) => Outcome::gone(),
+        (Some("kept"), Some("replaced")) => Outcome::kept(Reason::Replaced),
+        (Some("kept"), _) => Outcome::kept(Reason::Changed),
+        (Some("inUse"), _) => Outcome::failed(Reason::InUse),
+        _ => Outcome::failed(Reason::Helper),
+    };
+    Outcome {
+        shown: outcome.shown.or(shown),
+        ..outcome
     }
 }
 

@@ -31,7 +31,7 @@ pub const GROUPS: &[(&str, &[&str])] = &[
     ),
     (
         "Prepare the helper",
-        &["readiness", "environment", "verify-native"],
+        &["readiness", "environment", "install-app", "verify-native"],
     ),
     (
         "Take over or recover",
@@ -89,6 +89,13 @@ const EXAMPLES: &[(&str, &[&str])] = &[
         ],
     ),
     ("close", &["atlas close --app TextEdit"]),
+    (
+        "install-app",
+        &[
+            "atlas install-app ./build/Release/Probe.app",
+            "atlas open --app Probe",
+        ],
+    ),
     (
         "cleanup",
         &[

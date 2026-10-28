@@ -491,13 +491,25 @@ pub(super) enum Command {
         #[arg(long, conflicts_with = "app")]
         all: bool,
     },
+    /// Install an app into the helper's Applications folder for this task.
+    ///
+    /// Copies an .app from this Mac into ~/Applications in the helper, never
+    /// over anything already there, and records it, so that atlas cleanup
+    /// --apply removes it once the task is done, unless it changed
+    /// meanwhile. Settings and data the app writes in the helper stay.
+    InstallApp {
+        /// The .app to install.
+        #[arg(value_name = "PATH")]
+        path: PathBuf,
+    },
     /// See what this task left in the helper, and clean it up with --apply.
     ///
-    /// Lists the copies into the helper this task applied, the copies it
-    /// opened and the apps running from them. With --apply it quits those
-    /// apps, rolls the copies into the helper back newest first, removes
-    /// the copies, and reports what it kept and why. Run it again to finish
-    /// what is left. Apps opened by name are listed, not quit.
+    /// Lists the copies into the helper this task applied, the apps it
+    /// installed, the copies it opened and the apps running from them. With
+    /// --apply it quits those apps, rolls the copies into the helper back
+    /// newest first, removes the installs and copies, and reports what it
+    /// kept and why. Run it again to finish what is left. Apps opened by
+    /// name are listed, not quit.
     Cleanup {
         /// Do it; otherwise only show what would be done.
         #[arg(long)]
@@ -1030,7 +1042,7 @@ mod tests {
     }
 
     #[test]
-    fn cleanup_takes_apply_session_and_task() {
+    fn cleanup_takes_apply_session_and_task_and_install_app_a_path() {
         let cleanup = |args: &[&str]| match parse(args) {
             Ok(Cli {
                 command:
@@ -1061,6 +1073,15 @@ mod tests {
                 Some("5be0d1a2c3f4".into())
             ))
         );
+        assert!(matches!(
+            parse(&["install-app", "./build/Probe.app"]),
+            Ok(Cli {
+                command: Some(Command::InstallApp { path }),
+                ..
+            }) if path == std::path::Path::new("./build/Probe.app")
+        ));
+        assert!(parse(&["install-app"]).is_err(), "a path is needed");
+
         for refused in [
             &["cleanup", "--session", "3F9A1C07B2E4"][..],
             &["cleanup", "--task", "../tasks"],

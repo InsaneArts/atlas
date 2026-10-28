@@ -181,8 +181,8 @@ impl Claims {
         }
     }
 
-    /// The claims of `task`, kept in `store`.
-    #[cfg(test)]
+    /// The claims of `task`, kept in `store`: written there or refused,
+    /// never dropped for want of a task.
     pub(crate) fn in_store(store: Store, task: Task) -> Self {
         Self {
             task: Some((store, task)),

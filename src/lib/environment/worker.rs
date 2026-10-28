@@ -34,6 +34,15 @@ pub fn worker(path: &Path, apply: bool) -> Result<Value> {
         Request::Rollback { id, apply } => rollback(&home, &id, apply, &guard),
         Request::Run { argv } => runner::execute(&home, &argv, &guard),
         Request::Transactions { all, ids } => transactions(&home, all, &ids, &guard),
+        Request::InstallApp { id, source, name } => {
+            installs::install(&home, &id, &source, &name, &guard)
+        }
+        Request::RemoveApp { id } => {
+            installs::remove(&home, &id, &guard, &installs::helper_processes)
+        }
+        Request::Installs { ids } => {
+            installs::installs(&home, &ids, &guard, &installs::helper_processes)
+        }
     }
 }
 

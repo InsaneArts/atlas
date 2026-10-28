@@ -23,6 +23,10 @@ struct Fake {
     apps: RefCell<Vec<(u64, String, String)>>,
     /// What undoing each plan answers; a plan not here is rolled back.
     undo: RefCell<BTreeMap<Token, Result<Undone>>>,
+    /// What the helper says of each install; one not here is missing.
+    installed: RefCell<BTreeMap<Token, Value>>,
+    /// What removing each install answers; one not here is removed.
+    removals: RefCell<BTreeMap<Token, Value>>,
     /// A plan whose undo never answers, as a run killed while it waits.
     hangs: Option<Token>,
     /// Whether quitting runs out of time.
@@ -80,7 +84,30 @@ impl Hands for Fake {
             .collect())
     }
 
-    async fn quit(&self, processes: &[Process], _: &[String]) -> Result<()> {
+    async fn installs(&self, ids: &[Token]) -> Result<Value> {
+        let installs: Vec<Value> = ids
+            .iter()
+            .map(|id| {
+                self.installed
+                    .borrow()
+                    .get(id)
+                    .cloned()
+                    .unwrap_or_else(|| json!({"installId": id, "phase": "missing"}))
+            })
+            .collect();
+        Ok(json!({"ok": true, "installs": installs}))
+    }
+
+    async fn remove_install(&self, install: &Token) -> Result<Value> {
+        self.log.borrow_mut().push(format!("remove {install}"));
+        Ok(self
+            .removals
+            .borrow_mut()
+            .remove(install)
+            .unwrap_or_else(|| json!({"ok": true, "outcome": "removed"})))
+    }
+
+    async fn quit(&self, processes: &[Process], _: &[String], _: &[Token]) -> Result<()> {
         let pids: Vec<String> = processes
             .iter()
             .map(|process| process.pid.to_string())
@@ -245,12 +272,20 @@ fn states(reply: &Value) -> Vec<String> {
 }
 
 #[tokio::test]
-async fn steps_run_quit_then_plans_newest_first_then_copies() {
+async fn steps_run_quit_then_plans_newest_first_then_installs_then_copies() {
     let place = Place::new();
     let key = session("order");
     let task = default_task(&key);
     let copy = place.copy(Some(&key));
     place.claim(&task, Owned::Copy { id: copy.clone() });
+    let install = Token::new();
+    place.claim(
+        &task,
+        Owned::Install {
+            id: install.clone(),
+            app: "Probe".into(),
+        },
+    );
     let older = plan_claimed(&place, &task);
     let newer = plan_claimed(&place, &task);
     let fake = Fake::at(&place.root);
@@ -258,21 +293,51 @@ async fn steps_run_quit_then_plans_newest_first_then_copies() {
         .folder(&copy)
         .join("TextEdit.app/Contents/MacOS/TextEdit");
     fake.running(812, "TextEdit", &executable.to_string_lossy());
+    fake.installed.borrow_mut().insert(
+        install.clone(),
+        installed(
+            &install,
+            &[(
+                813,
+                "/Users/helper/Applications/Probe.app/Contents/MacOS/Probe",
+            )],
+        ),
+    );
+    fake.running(
+        813,
+        "Probe",
+        "/Users/helper/Applications/Probe.app/Contents/MacOS/Probe",
+    );
 
     let reply = place.apply(&fake, &own(&key)).await;
 
     assert_eq!(
         kinds(&reply),
-        ["quit", "undo-plan", "undo-plan", "remove-copy"]
+        [
+            "quit",
+            "undo-plan",
+            "undo-plan",
+            "remove-install",
+            "remove-copy"
+        ]
     );
     assert_eq!(reply["steps"][1]["planId"], newer.as_str());
     assert_eq!(reply["steps"][2]["planId"], older.as_str());
+    assert_eq!(reply["steps"][3]["installId"], install.as_str());
+    assert_eq!(reply["steps"][3]["app"], "Probe");
+    let receipt = place.receipt(&reply);
+    assert_eq!(
+        receipt.steps[3].after,
+        [1, 2, 3],
+        "after the quit and both plans"
+    );
     assert_eq!(
         fake.logged(),
         [
-            "quit 812".to_owned(),
+            "quit 812 813".to_owned(),
             format!("undo {newer}"),
-            format!("undo {older}")
+            format!("undo {older}"),
+            format!("remove {install}"),
         ]
     );
     assert_eq!(reply["state"], "complete");
@@ -281,6 +346,74 @@ async fn steps_run_quit_then_plans_newest_first_then_copies() {
     let record = Tasks::at(&place.output).load(task.key()).unwrap();
     assert!(record.claims().all(|(_, state)| state == State::Gone));
     assert!(!record.holds_anything());
+}
+
+/// The helper's word on install `id` of Probe, with `processes` running
+/// from it.
+fn installed(id: &Token, processes: &[(u64, &str)]) -> Value {
+    let processes: Vec<Value> = processes
+        .iter()
+        .map(|(pid, executable)| json!({"pid": pid, "executable": executable}))
+        .collect();
+    json!({"installId": id, "phase": "installed", "app": "Probe",
+        "path": "/Users/helper/Applications/Probe.app", "present": true, "unchanged": true,
+        "processes": processes})
+}
+
+#[tokio::test]
+async fn an_install_that_changed_is_kept_and_one_in_use_is_tried_again() {
+    let place = Place::new();
+    let key = session("installs");
+    let task = default_task(&key);
+    let (changed, busy) = (Token::new(), Token::new());
+    for id in [&changed, &busy] {
+        place.claim(
+            &task,
+            Owned::Install {
+                id: id.clone(),
+                app: "Probe".into(),
+            },
+        );
+    }
+    let fake = Fake::at(&place.root);
+    fake.removals.borrow_mut().insert(
+        changed.clone(),
+        json!({"ok": true, "outcome": "kept", "reason": "changed",
+            "sideEffects": {"kept": [{"path": "Library/Preferences/test.atlas.install-probe.plist",
+                "existedBefore": false}]}}),
+    );
+    fake.removals
+        .borrow_mut()
+        .insert(busy.clone(), json!({"ok": true, "outcome": "inUse"}));
+
+    let reply = place.apply(&fake, &own(&key)).await;
+    assert_eq!(states(&reply), ["done", "kept", "failed"]);
+    assert_eq!(reply["steps"][1]["reason"], "changed");
+    assert_eq!(
+        reply["steps"][1]["sideEffects"]["kept"][0]["existedBefore"],
+        false
+    );
+    assert_eq!(
+        (&reply["steps"][2]["reason"], &reply["steps"][2]["retry"]),
+        (&json!("in-use"), &json!(true))
+    );
+    assert_eq!(reply["state"], "incomplete");
+    let record = Tasks::at(&place.output).load(task.key()).unwrap();
+    let state = |id: &Token| {
+        record
+            .claims()
+            .find(|(owned, _)| {
+                owned.same(&Owned::Install {
+                    id: id.clone(),
+                    app: String::new(),
+                })
+            })
+            .map(|(_, state)| state)
+    };
+    assert_eq!(
+        (state(&changed), state(&busy)),
+        (Some(State::Kept), Some(State::Made))
+    );
 }
 
 #[tokio::test]

@@ -38,6 +38,8 @@ pub enum View {
     Close,
     /// A task's cleanup: its preview or a run.
     Cleanup,
+    /// An app installed into the helper for a task.
+    InstallApp,
     /// What was opened.
     Open(String),
     Wait {
@@ -135,6 +137,9 @@ pub fn render(view: &View, value: &Value) -> Rendered {
         }
         View::Close => failed(value).unwrap_or_else(|| Rendered::out(act::close(value))),
         View::Cleanup => cleanup::cleanup(value),
+        View::InstallApp => {
+            failed(value).unwrap_or_else(|| Rendered::out(cleanup::install_app(value)))
+        }
         View::Restart => failed(value).unwrap_or_else(|| Rendered::out(act::restart(value))),
         View::Logout => failed(value).unwrap_or_else(|| Rendered::out(act::logout(value))),
         View::StartInput => failed(value).unwrap_or_else(|| Rendered::out(act::start_input(value))),

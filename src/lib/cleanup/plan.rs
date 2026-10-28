@@ -1,9 +1,10 @@
 //! The steps that undo what a task made, and the order they run in: quit
-//! what runs from the task's own copies; undo its copies into the helper,
-//! newest first; remove its copy folders. Each step names the steps it
-//! waits for. Steps for background jobs and collected outputs slot into
-//! this order as kinds of their own, before the copies into the helper are
-//! undone, without changing these.
+//! what runs from the task's own installs and copies; undo its copies into
+//! the helper, newest first; remove its installs, which a copy into the
+//! helper may have written into; remove its copy folders. Each step names
+//! the steps it waits for. Steps for background jobs and collected outputs
+//! slot into this order as kinds of their own, before the copies into the
+//! helper are undone, without changing these.
 use super::receipt::Entry;
 use crate::{control::Token, task::Owned};
 use serde::{Deserialize, Serialize};
@@ -20,6 +21,13 @@ pub(crate) enum Step {
         #[serde(rename = "planId")]
         plan: Token,
     },
+    /// Remove one app installed into the helper's Applications, by its
+    /// install ID; its name is for replies only.
+    RemoveInstall {
+        #[serde(rename = "installId")]
+        install: Token,
+        app: String,
+    },
     /// Remove one copy folder, by its token.
     RemoveCopy { copy: Token },
 }
@@ -30,7 +38,8 @@ impl Step {
         match self {
             Self::Quit { .. } => 0,
             Self::UndoPlan { .. } => 1,
-            Self::RemoveCopy { .. } => 2,
+            Self::RemoveInstall { .. } => 2,
+            Self::RemoveCopy { .. } => 3,
         }
     }
 
@@ -39,6 +48,10 @@ impl Step {
         match self {
             Self::Quit { .. } => None,
             Self::UndoPlan { plan } => Some(Owned::Plan { id: plan.clone() }),
+            Self::RemoveInstall { install, app } => Some(Owned::Install {
+                id: install.clone(),
+                app: app.clone(),
+            }),
             Self::RemoveCopy { copy } => Some(Owned::Copy { id: copy.clone() }),
         }
     }
@@ -48,6 +61,8 @@ impl Step {
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
 pub(crate) enum Bundle {
+    /// An app installed into the helper's Applications, by its install ID.
+    Install(Token),
     /// A copy folder, by its token.
     Copy(Token),
 }
@@ -75,7 +90,7 @@ pub(crate) fn merge(steps: &mut Vec<Entry>, work: &[Undoable]) {
     };
     let mut new: Vec<&Undoable> = Vec::new();
     for undoable in work {
-        let undone = matches!(undoable.owned, Owned::Copy { .. } | Owned::Plan { .. });
+        let undone = !matches!(undoable.owned, Owned::Launch { .. });
         let twice = new.iter().any(|known| known.owned.same(&undoable.owned));
         if undone && !twice && !covered(&undoable.owned, steps) {
             new.push(undoable);
@@ -95,6 +110,7 @@ pub(crate) fn merge(steps: &mut Vec<Entry>, work: &[Undoable]) {
     let bundles: Vec<Bundle> = new
         .iter()
         .filter_map(|undoable| match &undoable.owned {
+            Owned::Install { id, .. } => Some(Bundle::Install(id.clone())),
             Owned::Copy { id } => Some(Bundle::Copy(id.clone())),
             _ => None,
         })
@@ -122,6 +138,21 @@ pub(crate) fn merge(steps: &mut Vec<Entry>, work: &[Undoable]) {
         };
         let entry = Entry::new(number(), Step::UndoPlan { plan: id.clone() }, quits.clone());
         steps.insert(first_plan + offset, entry);
+    }
+
+    // An install waits for every plan too: a copy into the helper may have
+    // written inside it.
+    let before_installs = numbers(steps, |step| {
+        matches!(step, Step::Quit { .. } | Step::UndoPlan { .. })
+    });
+    for undoable in &new {
+        if let Owned::Install { id, app } = &undoable.owned {
+            let step = Step::RemoveInstall {
+                install: id.clone(),
+                app: app.clone(),
+            };
+            place(steps, Entry::new(number(), step, before_installs.clone()));
+        }
     }
 
     for undoable in &new {

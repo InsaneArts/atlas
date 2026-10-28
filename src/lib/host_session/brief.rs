@@ -7,7 +7,11 @@ use super::{
     record::{Leftovers, Record},
     store::Store,
 };
-use crate::{client::Client, ui::text};
+use crate::{
+    client::Client,
+    task::{Owned, State},
+    ui::text,
+};
 
 /// The sentence a session start adds when `session`, or the session before
 /// its `/clear` in the same host process, left something in the helper.
@@ -17,10 +21,15 @@ pub(crate) fn leftovers(client: &Client, session: &HostSession) -> Option<String
     let records = store.all();
     let own = records.iter().find(|record| record.key == *session.key());
 
-    let unfinished = crate::task::store::Store::at(client.output_dir().ok()?)
-        .of_session(session.key())
+    let tasks = crate::task::store::Store::at(client.output_dir().ok()?).of_session(session.key());
+    let unfinished = tasks.iter().any(|task| task.unfinished_cleanup().is_some());
+    let installed = tasks
         .iter()
-        .any(|task| task.unfinished_cleanup().is_some());
+        .flat_map(|task| task.claims())
+        .filter(|(owned, state)| {
+            matches!(owned, Owned::Install { .. }) && matches!(state, State::Intent | State::Made)
+        })
+        .count();
     let cleanup = if unfinished {
         " Its cleanup is unfinished: atlas cleanup shows what is left."
     } else {
@@ -29,11 +38,11 @@ pub(crate) fn leftovers(client: &Client, session: &HostSession) -> Option<String
 
     if let Some(own) = own {
         let left = store.leftovers(own, &causes);
-        if !left.is_empty() {
+        if !left.is_empty() || installed > 0 {
             return Some(format!(
                 "This session left {} in the helper; atlas activity lists {}.{cleanup}",
-                said(&left),
-                them(&left)
+                said(&left, installed),
+                them(&left, installed)
             ));
         }
         if unfinished {
@@ -48,9 +57,9 @@ pub(crate) fn leftovers(client: &Client, session: &HostSession) -> Option<String
     (!left.is_empty()).then(|| {
         format!(
             "The session before /clear left {} in the helper; atlas activity --session {} lists {}.",
-            said(&left),
+            said(&left, 0),
             before.key,
-            them(&left)
+            them(&left, 0)
         )
     })
 }
@@ -71,8 +80,9 @@ fn before_clear<'a>(
         .find(|record| record.key != *session.key() && record.host_process == Some(process))
 }
 
-/// What was left, in words: "1 open copy and 1 applied environment plan".
-fn said(left: &Leftovers) -> String {
+/// What was left, `installed` apps among it, in words: "1 open copy and 1
+/// applied environment plan".
+fn said(left: &Leftovers, installed: usize) -> String {
     let parts: Vec<String> = [
         (left.copies.len(), "open copy", "open copies"),
         (
@@ -80,6 +90,7 @@ fn said(left: &Leftovers) -> String {
             "applied environment plan",
             "applied environment plans",
         ),
+        (installed, "installed app", "installed apps"),
         (left.uncertain, "unknown action", "unknown actions"),
     ]
     .into_iter()
@@ -94,8 +105,8 @@ fn said(left: &Leftovers) -> String {
 }
 
 /// "it" for one thing left, "them" for more.
-fn them(left: &Leftovers) -> &'static str {
-    if left.copies.len() + left.plans + left.uncertain == 1 {
+fn them(left: &Leftovers, installed: usize) -> &'static str {
+    if left.copies.len() + left.plans + installed + left.uncertain == 1 {
         "it"
     } else {
         "them"
@@ -237,16 +248,22 @@ mod tests {
 
     #[test]
     fn what_was_left_is_said_in_plain_counts() {
-        assert_eq!(said(&left(1, 0, 0)), "1 open copy");
+        assert_eq!(said(&left(1, 0, 0), 0), "1 open copy");
         assert_eq!(
-            said(&left(2, 1, 0)),
+            said(&left(2, 1, 0), 0),
             "2 open copies and 1 applied environment plan"
         );
         assert_eq!(
-            said(&left(1, 2, 1)),
+            said(&left(1, 2, 1), 0),
             "1 open copy, 2 applied environment plans and 1 unknown action"
         );
-        assert_eq!(them(&left(1, 0, 0)), "it");
-        assert_eq!(them(&left(1, 1, 0)), "them");
+        assert_eq!(them(&left(1, 0, 0), 0), "it");
+        assert_eq!(them(&left(1, 1, 0), 0), "them");
+        assert_eq!(
+            said(&left(0, 1, 0), 1),
+            "1 applied environment plan and 1 installed app"
+        );
+        assert_eq!(said(&left(0, 0, 0), 2), "2 installed apps");
+        assert_eq!(them(&left(0, 0, 0), 1), "it");
     }
 }

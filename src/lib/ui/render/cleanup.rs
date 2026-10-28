@@ -1,5 +1,6 @@
-//! Views of a task's cleanup: its preview, the steps a run took, and what
-//! was kept on purpose apart from what failed.
+//! Views of what a task installs and cleans up: an install, a cleanup's
+//! preview, the steps a run took, and what was kept on purpose apart from
+//! what failed.
 use super::{Rendered, failed, style, text};
 use serde_json::Value;
 
@@ -47,6 +48,20 @@ pub fn cleanup(value: &Value) -> Rendered {
         },
         None => Rendered::out(out),
     }
+}
+
+/// An app installed into the helper: where it went, and what removes it.
+pub fn install_app(value: &Value) -> String {
+    let app = text::printable(value["app"].as_str().unwrap_or("the app")).into_owned();
+    let mut line = format!("{} Installed {app}", style::ok());
+    if let Some(path) = value["path"].as_str() {
+        line.push_str(&format!(" at {}", text::printable(path)));
+    }
+    line.push_str(&format!(
+        "\n  {}",
+        style::dim("atlas cleanup --apply removes it once the task is done, unless it changed")
+    ));
+    line
 }
 
 /// One step: its number, what it does and to what, and how far it got.

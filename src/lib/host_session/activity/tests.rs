@@ -75,6 +75,46 @@ fn two_sessions(client: &Client) -> (HostSession, HostSession, String) {
 }
 
 #[test]
+fn an_install_or_an_unfinished_cleanup_is_a_leftover() {
+    use crate::task::{Claims, Owned, State, Task, record::CleanupState, store::Store as Tasks};
+
+    let directory = tempfile::tempdir().unwrap();
+    let client = client(directory.path());
+    let claude = session(Host::Claude, "installing");
+    act(&client, &claude, "click", json!({"ok": true}));
+    let output = client.output_dir().unwrap();
+    let task = Task::of(claude.key(), Some("probe")).unwrap();
+    Claims::in_store(Tasks::at(output), task.clone())
+        .claim(
+            &Owned::Install {
+                id: Token::new(),
+                app: "Probe".into(),
+            },
+            State::Made,
+        )
+        .unwrap();
+    Tasks::at(output)
+        .update(&task, 1, |record| {
+            record.noted_cleanup(&Token::new(), CleanupState::Incomplete, 1);
+            Ok(())
+        })
+        .unwrap();
+
+    let one = list(&client, Some(&claude), false, None, 10).unwrap();
+    assert_eq!(one["installs"], json!([{"app": "Probe"}]));
+    assert_eq!(one["cleanup"], "incomplete");
+    assert_eq!(one["tasks"][0]["leftovers"]["installs"], 1);
+    assert!(!one.to_string().contains("Applications"), "never a path");
+
+    let everyone = list(&client, None, true, None, 10).unwrap();
+    let leftovers = &everyone["sessions"][0]["leftovers"];
+    assert_eq!(
+        (&leftovers["installs"], &leftovers["cleanup"]),
+        (&json!(1), &json!("incomplete"))
+    );
+}
+
+#[test]
 fn a_sessions_reply_lists_the_tasks_it_named_with_what_each_left() {
     use crate::task::{Claims, Owned, State, Task, store::Store as Tasks};
 

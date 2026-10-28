@@ -132,6 +132,22 @@ impl Reading<'_> {
         self.store.leftovers(record, &self.causes)
     }
 
+    /// The apps `key`'s tasks installed into the helper that may still be
+    /// there, by name, never by path.
+    fn installs(&self, key: &Key) -> Vec<String> {
+        self.tasks
+            .iter()
+            .filter(|task| task.session == *key)
+            .flat_map(|task| task.claims())
+            .filter_map(|(owned, state)| match owned {
+                Owned::Install { app, .. } if matches!(state, State::Intent | State::Made) => {
+                    Some(app)
+                }
+                _ => None,
+            })
+            .collect()
+    }
+
     /// How far the newest unfinished cleanup of `key`'s work got, when one
     /// has not finished.
     fn cleanup(&self, key: &Key) -> Option<crate::task::record::CleanupState> {
@@ -198,6 +214,10 @@ impl Reading<'_> {
         if let Some(previous) = subject.record.and_then(|record| self.previous(record)) {
             reply["previous"] = previous;
         }
+        let installs = self.installs(subject.key);
+        if !installs.is_empty() {
+            reply["installs"] = installs.iter().map(|app| json!({"app": app})).collect();
+        }
         if let Some(state) = self.cleanup(subject.key) {
             reply["cleanup"] = json!(state);
         }
@@ -226,6 +246,10 @@ impl Reading<'_> {
                     "plans": leftovers.plans,
                     "uncertain": leftovers.uncertain,
                 });
+                let installs = self.installs(&record.key).len();
+                if installs > 0 {
+                    left["installs"] = json!(installs);
+                }
                 if let Some(state) = self.cleanup(&record.key) {
                     left["cleanup"] = json!(state);
                 }
@@ -313,7 +337,7 @@ impl Reading<'_> {
             .into_iter()
             .filter(|task| task.name.is_some())
             .map(|task| {
-                let (mut copies, mut plans) = (0, 0);
+                let (mut copies, mut plans, mut installs) = (0, 0, 0);
                 for (owned, state) in task.claims() {
                     let live = matches!(state, State::Intent | State::Made);
                     match owned {
@@ -327,14 +351,15 @@ impl Reading<'_> {
                         {
                             plans += 1;
                         }
+                        Owned::Install { .. } if live => installs += 1,
                         _ => {}
                     }
                 }
-                json!({
-                    "key": task.key,
-                    "name": task.name,
-                    "leftovers": {"copies": copies, "plans": plans},
-                })
+                let mut left = json!({"copies": copies, "plans": plans});
+                if installs > 0 {
+                    left["installs"] = json!(installs);
+                }
+                json!({"key": task.key, "name": task.name, "leftovers": left})
             })
             .collect()
     }
