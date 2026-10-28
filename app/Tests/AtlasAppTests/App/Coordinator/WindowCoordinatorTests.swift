@@ -4,6 +4,7 @@ import AtlasCommands
 import AtlasCommandsTesting
 import AtlasService
 import AtlasServiceTesting
+import AtlasUI
 import Testing
 
 @testable import AtlasApp
@@ -21,6 +22,19 @@ struct WindowCoordinatorTests {
     #expect(parts.viewersMade == 1)
     #expect(window.presentations == 2)
     #expect(coordinator.viewer?.controller.session.tab == .activity)
+  }
+
+  @Test("All activity from the panel shows every session's work, whichever one the window had chosen")
+  func allActivityChoosesEverySession() throws {
+    let parts = StandInParts()
+    let coordinator = parts.coordinator()
+    coordinator.openViewer(tab: .activity, session: .one("8be20c4d1a77"))
+    let controller = try #require(coordinator.viewer?.controller)
+    #expect(controller.session.sessionChoice == .one("8be20c4d1a77"))
+    coordinator.panelLinks()
+      .openSessions(.all)
+    #expect(controller.session.sessionChoice == .all)
+    #expect(controller.session.tab == .activity)
   }
 
   @Test("opening Settings builds its controller once")

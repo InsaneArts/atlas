@@ -1,9 +1,9 @@
 import SwiftUI
 
 /// A line of what was done, a log you can scan: its time in a column of even digits, its mark, what was done
-/// with why it failed under it, and something at its end, such as "now" or a screenshot to open; 38 high, a
-/// faint fill under the pointer, and a hairline above it from its mark's end when it follows another line
-/// (``EnvironmentValues/drawsListSeparator``).
+/// with why it failed under it, in the attention colour unless it is no problem, and something at its end, such as
+/// "now" or a screenshot to open; 38 high, a faint fill under the pointer, and a hairline above it from its mark's end
+/// when it follows another line (``EnvironmentValues/drawsListSeparator``).
 struct TimelineRow<Mark: View, Trailing: View>: View {
   /// When it started, such as "10:31:42".
   let time: String
@@ -11,6 +11,10 @@ struct TimelineRow<Mark: View, Trailing: View>: View {
   let title: String
   /// Why it did not work, under it in the attention colour; nil for none.
   var reason: String?
+  /// Whether the reason is no problem, as for an action refused before anything was sent, which draws it quiet.
+  var reasonIsQuiet = false
+  /// Whether what was done stands out in semibold, as an action whose outcome is unknown does.
+  var isEmphasized = false
   /// The mark between the time and the words, such as the action's kind in a tile.
   @ViewBuilder let mark: Mark
   /// What stands at the line's end.
@@ -58,12 +62,12 @@ struct TimelineRow<Mark: View, Trailing: View>: View {
   private var words: some View {
     VStack(alignment: .leading, spacing: .zero) {
       Text(title)
-        .font(Typography.font(.body, weight: .medium))
+        .font(Typography.font(.body, weight: isEmphasized ? .semibold : .medium))
         .foregroundStyle(Color.textPrimary)
       if let reason {
         Text(reason)
           .font(Typography.font(.callout))
-          .foregroundStyle(Color.textAttention)
+          .foregroundStyle(reasonIsQuiet ? Color.textTertiary : Color.textAttention)
       }
     }
     .fixedSize(horizontal: false, vertical: true)
@@ -103,6 +107,34 @@ private enum Layout {
         time: String("10:28:30"),
         title: String("Couldn’t click Show Centre in Opie"),
         reason: String("No element is named Show Centre")
+      ) {
+        SymbolTile(icon: .symbol(SymbolName.problem.rawValue), size: .small, tone: .attention)
+      } trailing: {
+        EmptyView()
+      }
+      .environment(\.drawsListSeparator, true)
+    }
+    .frame(width: SampleWidth.column * 2)
+    .sampleSurface()
+  }
+
+  #Preview("Not sent and unknown") {
+    VStack(spacing: .zero) {
+      TimelineRow(
+        time: String("10:30:02"),
+        title: String("Didn't type in Notes"),
+        reason: String("Another app was in front"),
+        reasonIsQuiet: true
+      ) {
+        SymbolTile(icon: .symbol(SymbolName.keyboard.rawValue), size: .small, tone: .quiet)
+      } trailing: {
+        EmptyView()
+      }
+      TimelineRow(
+        time: String("10:29:12"),
+        title: String("Clicked Show Center in Opie"),
+        reason: String("May not have finished. Every session waits until you recover."),
+        isEmphasized: true
       ) {
         SymbolTile(icon: .symbol(SymbolName.problem.rawValue), size: .small, tone: .attention)
       } trailing: {

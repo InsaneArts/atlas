@@ -2,8 +2,8 @@ import AtlasStatus
 import AtlasUI
 
 extension ViewerPresenter {
-  /// The top row: the status, the tabs with Activity's unseen dot, the buttons, and the accent wash while this window
-  /// holds control.
+  /// The top row: the status, the sessions button while it shows, the tabs with Activity's unseen dot, the buttons,
+  /// and the accent wash while this window holds control.
   ///
   /// - Parameter snapshot: What the controller holds.
   /// - Returns: The top row.
@@ -11,6 +11,7 @@ extension ViewerPresenter {
     let session = snapshot.session
     return ViewerTopRowState(
       status: status(snapshot),
+      sessions: sessionsButton(snapshot),
       tabs: CapsuleTabsState(
         tabs: ViewerTab.allCases.map {
           CapsuleTab(id: $0, title: ViewerWords.tab($0), symbol: $0.symbol, help: ShortcutWords.tab($0))
@@ -27,31 +28,63 @@ extension ViewerPresenter {
 
   /// The status at the row's leading edge: the mode's word and its line, Reconnecting… once a picture was lost. While
   /// an agent works and the Screen shows its captions, the line says nothing, since the newest caption on the picture
-  /// says the same; on any other tab, or with no captions, the line carries the action.
+  /// says the same; on any other tab, or with no captions, the line carries the action, led by the name of the session
+  /// that has the helper (``holderLeads(_:)``). While the helper needs the person and sessions show, the line says
+  /// whose action may not have finished.
   ///
   /// - Parameter snapshot: What the controller holds.
   /// - Returns: The status.
   static func status(_ snapshot: ViewerSnapshot) -> StatusSummary {
-    let summary = snapshot.mode.windowSummary(
-      snapshot.reading.statusReading,
+    let reading = snapshot.reading.statusReading
+    var summary = snapshot.mode.windowSummary(
+      reading,
       showing: snapshot.panes.apps.shown?.app,
       reconnecting: snapshot.reading.lastPicture != nil
     )
     let captionsSayIt =
       snapshot.mode.kind == .working && snapshot.session.tab == .screen && snapshot.reading.picture != nil
       && !captions(snapshot).isEmpty
-    return captionsSayIt ? snapshot.mode.summary(line: "") : summary
+    if captionsSayIt { return snapshot.mode.summary(line: "") }
+    switch snapshot.mode.kind {
+    case .working:
+      if let holder = holderLeads(snapshot), !summary.line.isEmpty { summary.line = "\(holder) · \(summary.line)" }
+    case .needsYou:
+      // Input that stopped is the helper's, not a session's: its own line says so.
+      if !reading.inputStopped, let causer = reading.causer {
+        summary.line = Words.unfinishedLine(verb: causer.uncertainVerb, by: Words.hostName(causer))
+      }
+    case .idle, .control, .stopped, .inUseElsewhere, .notReady, .loggedOut, .connecting:
+      break
+    }
+    return summary
+  }
+
+  /// The name that leads the working line: the session that has the helper, while sessions show and every session's
+  /// work does, only when the line's action is its own, and not while the Screen's chip already names it. Its host's
+  /// name alone, so the action keeps the room, unless another live session runs in the same host.
+  ///
+  /// - Parameter snapshot: What the controller holds.
+  /// - Returns: "Claude Code", the holder's full name, or nil for none.
+  static func holderLeads(_ snapshot: ViewerSnapshot) -> String? {
+    let reading = snapshot.reading.statusReading
+    guard snapshot.sessionChoice == .all, let holder = reading.holder,
+      let newest = reading.newestAgentAction, (newest.session ?? "") == holder.key
+    else { return nil }
+    if snapshot.session.tab == .screen, case .holder = chip(snapshot) { return nil }
+    let sharesHost = reading.liveSessions.contains { $0.key != holder.key && $0.host == holder.host }
+    return sharesHost ? holder.name : Words.hostName(holder)
   }
 
   /// What the Activity tab holds unseen: the actions newer than every one seen, orange once one of them
-  /// failed, even after it left the status's few; nothing while Activity shows or before the first reading.
+  /// failed, even after it left the status's few, but never for one refused before anything was sent; nothing while
+  /// Activity shows or before the first reading.
   ///
   /// - Parameter snapshot: What the controller holds.
   /// - Returns: What is unseen.
   static func unseen(_ snapshot: ViewerSnapshot) -> ViewerUnseen {
     guard snapshot.session.tab != .activity, let seen = snapshot.session.activitySeen else { return .none }
     let unseen = seen.unseen(in: snapshot.reading.statusReading.activity(limit: .max))
-    if seen.failed || unseen.contains(where: { !$0.ok }) { return .failed }
+    if seen.failed || unseen.contains(where: \.failed) { return .failed }
     return unseen.isEmpty ? .none : .new
   }
 

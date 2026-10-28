@@ -67,23 +67,43 @@ public struct ActivityGrouping: Sendable {
 
   /// How many rows started today, whatever the filter or the search: the pane's count.
   public var countToday: Int {
+    countToday(in: .all)
+  }
+
+  /// How many of a scope's rows started today, whatever the filter or the search: the pane's count for one host
+  /// session.
+  ///
+  /// - Parameter scope: Whose rows to count.
+  /// - Returns: The count.
+  public func countToday(in scope: ActivityScope) -> Int {
     log.entries
       .filter { entry in
-        start(of: entry)
-          .map { calendar.isDate($0, inSameDayAs: now) } ?? false
+        scope.admits(entry)
+          && start(of: entry)
+            .map { calendar.isDate($0, inSameDayAs: now) } ?? false
       }
       .count
   }
 
-  /// The capture each screenshot row that worked took: the nearest one within ``shotTolerance`` of its start, each
-  /// capture taken once, newest rows first. No other row ever has one.
+  /// The capture each screenshot row that worked took: the one the row names, when the screenshots list it; for a row
+  /// that names none, as an older service's, the nearest one within ``shotTolerance`` of its start, each capture taken
+  /// once, newest rows first. A row whose named capture is gone has none, and no other row ever has one.
   ///
   /// - Parameter captures: The screenshots the service lists.
   /// - Returns: Each matched row's capture name, by the row's id.
   func shots(in captures: [Screenshot]) -> [String: String] {
-    var taken = Set<String>()
+    let listed = Set(
+      captures.map(\.name)
+        .filter { !$0.isEmpty }
+    )
+    let taking = log.entries.filter { $0.operation == Self.screenshotOperation && $0.outcome == .worked }
     var found: [String: String] = [:]
-    for entry in log.entries where entry.operation == Self.screenshotOperation && entry.outcome == .worked {
+    for entry in taking {
+      guard let capture = entry.capture, listed.contains(capture) else { continue }
+      found[entry.id] = capture
+    }
+    var taken = Set(found.values)
+    for entry in taking where entry.capture == nil {
       guard let started = start(of: entry) else { continue }
       let nearest =
         captures
@@ -107,11 +127,17 @@ public struct ActivityGrouping: Sendable {
   ///   - filter: Which rows to list.
   ///   - query: What to search for in what was done; empty keeps every row.
   ///   - captures: The screenshots the service lists, for the screenshot rows.
+  ///   - scope: Whose rows to list; every row by default.
   /// - Returns: The groups, newest first, each period once.
-  public func groups(filter: ActivityFilter, query: String, captures: [Screenshot]) -> [ActivityGroup] {
+  public func groups(
+    filter: ActivityFilter,
+    query: String,
+    captures: [Screenshot],
+    scope: ActivityScope = .all
+  ) -> [ActivityGroup] {
     var groups: [ActivityGroup] = []
     for (period, run) in runs(captures: captures)
-    where filter.admits(run.entry) && Self.matches(run.entry, query: query) {
+    where scope.admits(run.entry) && filter.admits(run.entry) && Self.matches(run.entry, query: query) {
       if let index = groups.firstIndex(where: { $0.period == period }) {
         groups[index].runs.append(run)
       } else {
@@ -119,6 +145,52 @@ public struct ActivityGrouping: Sendable {
       }
     }
     return groups
+  }
+
+  /// The lines the pane lists while it shows every host session: a group for each session in `order`, Terminal's
+  /// included where `order` names it, then for any other session the log names, newest first, then the person's own
+  /// rows as You, and the rows no host named as Terminal last while `order` leaves it out; each with its newest
+  /// `lines` lines and its total. The filter and the search apply inside every
+  /// group, and a group they leave empty is left out. Repeats are found in the log's own order, as ``groups(filter:query:captures:scope:)``
+  /// finds them.
+  ///
+  /// - Parameters:
+  ///   - filter: Which rows to list.
+  ///   - query: What to search for in what was done; empty keeps every row.
+  ///   - captures: The screenshots the service lists, for the screenshot rows.
+  ///   - order: The sessions' keys in the order to list them, the status's; empty for Terminal.
+  ///   - lines: The most lines a group shows; four by default.
+  /// - Returns: The groups, in order.
+  public func sessionGroups(
+    filter: ActivityFilter,
+    query: String,
+    captures: [Screenshot],
+    order: [String],
+    lines: Int = 4
+  ) -> [ActivitySessionGroup] {
+    var found: [String?: [ActivityRun]] = [:]
+    var named: [String] = []
+    for (_, run) in runs(captures: captures) where filter.admits(run.entry) && Self.matches(run.entry, query: query) {
+      let key = Self.group(of: run.entry)
+      if let key, !key.isEmpty, found[key] == nil { named.append(key) }
+      found[key, default: []].append(run)
+    }
+    var keys: [String?] = []
+    for key in order + named where !keys.contains(key) { keys.append(key) }
+    keys.append(nil)
+    if !keys.contains("") { keys.append("") }
+    return keys.compactMap { key in
+      guard let runs = found[key], !runs.isEmpty else { return nil }
+      return ActivitySessionGroup(key: key, runs: Array(runs.prefix(lines)), total: runs.count)
+    }
+  }
+
+  /// The group a row is listed under while the pane shows every session.
+  ///
+  /// - Parameter entry: The row.
+  /// - Returns: Its session's key, empty for an agent's row no host named, or nil for the person's own.
+  static func group(of entry: ActivityLog.Entry) -> String? {
+    entry.actor == .you ? nil : entry.session ?? ""
   }
 
   /// Every line of the log in its own order, each with its stretch of time: a row with no time stays with the row
@@ -143,8 +215,8 @@ public struct ActivityGrouping: Sendable {
     return runs
   }
 
-  /// Whether a row is the same action as the line just above it, by the same actor, with the same outcome: a running
-  /// row and a screenshot row always stand alone.
+  /// Whether a row is the same action as the line just above it, by the same actor in the same host session, with the
+  /// same outcome: a running row and a screenshot row always stand alone.
   ///
   /// - Parameters:
   ///   - newer: The line above.
@@ -155,8 +227,8 @@ public struct ActivityGrouping: Sendable {
     let below = older.entry
     guard above.outcome != .running, above.operation != screenshotOperation, below.operation != screenshotOperation
     else { return false }
-    return above.actor == below.actor && above.says == below.says && above.outcome == below.outcome
-      && above.operation == below.operation && above.reason == below.reason
+    return above.actor == below.actor && above.session == below.session && above.says == below.says
+      && above.outcome == below.outcome && above.operation == below.operation && above.reason == below.reason
   }
 
   /// Whether a row matches a search: in what was done, never in who did it.
@@ -191,6 +263,11 @@ public struct ActivityGrouping: Sendable {
   /// - Parameter entry: The row.
   /// - Returns: "clicked in Opie", say.
   static func done(_ entry: ActivityLog.Entry) -> String {
-    entry.says ?? (entry.outcome == .failed ? "couldn't finish an action" : "did something in the helper")
+    if let says = entry.says { return says }
+    return switch entry.outcome {
+    case .failed: "couldn't finish an action"
+    case .notSent: "didn't send an action"
+    case .running, .worked: "did something in the helper"
+    }
   }
 }

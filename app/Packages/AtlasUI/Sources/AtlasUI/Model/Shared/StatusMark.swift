@@ -8,4 +8,6 @@ public enum StatusMark: Sendable {
   case square
   /// A smaller dot with no glow: nothing can happen yet.
   case small
+  /// An outlined dot with no glow: waiting its turn.
+  case ring
 }

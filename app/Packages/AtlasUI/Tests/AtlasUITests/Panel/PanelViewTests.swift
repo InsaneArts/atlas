@@ -16,5 +16,22 @@
         #expect(image.width == Int(PanelLayout.width), "\(preview.name)")
       }
     }
+
+    @Test("Sessions take Recent's place only while they have rows")
+    func sessionsTakeRecentsPlace() throws {
+      let height = { (state: PanelState) -> CGFloat in
+        NSHostingView(rootView: PanelView(state: state) { _ in })
+          .fittingSize
+          .height
+      }
+      var recentOnly = PreviewStates.panelSessions
+      recentOnly.sessions = []
+      recentOnly.recent = PreviewStates.panelWorking.recent
+      var both = PreviewStates.panelSessions
+      both.recent = PreviewStates.panelWorking.recent
+      #expect(height(both) == height(PreviewStates.panelSessions), "Recent draws nothing while Sessions show")
+      #expect(height(recentOnly) == height(PreviewStates.panelWorking), "with no rows, Recent shows as before")
+      #expect(height(both) != height(recentOnly))
+    }
   }
 #endif

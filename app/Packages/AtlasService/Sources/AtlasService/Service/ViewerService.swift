@@ -92,4 +92,12 @@ public protocol ViewerService: Sendable {
   /// - Returns: The picture's bytes.
   /// - Throws: ``ServiceError`` when the service cannot be read, or no screenshot has that name.
   func screenshot(name: String, full: Bool) async throws(ServiceError) -> Data
+
+  /// Reads the host sessions live or ended within the last seven days, and what each made. Reading them records
+  /// nothing.
+  ///
+  /// - Returns: The sessions, newest last seen first, every missing field at its safe default.
+  /// - Throws: ``ServiceError/notOffered`` from an older service that offers no list, which callers read as no list;
+  ///   else ``ServiceError`` when the service cannot be read or refuses.
+  func sessions() async throws(ServiceError) -> HostSessionList
 }

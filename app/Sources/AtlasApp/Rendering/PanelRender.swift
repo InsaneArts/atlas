@@ -18,6 +18,10 @@ enum PanelRender {
     "observing", "agent", "controlling", "recovering", "loggedOut", "unavailable", "stopped", "connecting",
     "elsewhere",
   ]
+  /// The host sessions `ATLAS_RENDER_SESSIONS` names (``PanelRenderSessions``), each drawn over the mode it goes with:
+  /// one at work, which reads as the panel always has, two, one waiting its turn, one whose action may not have
+  /// finished, and more than the panel's rows.
+  nonisolated static let sessions = ["one", "two", "waiting", "needsYou", "more"]
   /// Each alert window render's file name with the `ATLAS_RENDER_*` settings that draw it: every alert, one whose
   /// command did not run, one whose command runs, and Recover once it worked.
   nonisolated static let alerts: [(file: String, environment: [String: String])] = [

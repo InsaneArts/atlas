@@ -28,6 +28,15 @@ extension ViewerStatus {
     var inFlight = 0
     /// Recent operations, newest first.
     public var activity: [Activity] = []
+    /// Whether every app speaks of host sessions: two or more are live, as the service decides.
+    public var sessionsShown = false
+    /// The key of the host session that has the helper now, when one does; empty for Terminal.
+    public var holder: String?
+    /// The host sessions the service lists, in its order: needing the person, acting, waiting, idle, then ended; each
+    /// in turn by when it was last seen, newest first.
+    public var hostSessions: [HostSession] = []
+    /// How many more sessions there are than the service lists.
+    public var moreSessions = 0
 
     /// How long after an agent's last action Stop Agent stays offered, in seconds: an agent between two steps still
     /// reads as working, so Stop stays where the person reaches for it.
@@ -69,7 +78,7 @@ extension ViewerStatus {
     enum CodingKeys: String, CodingKey {
       /// Each field by the name the service writes.
       case mode, state, label, reason, recoverable, recoveryHelps, account, accountName, display, pending, inFlight,
-        activity
+        activity, sessionsShown, holder, hostSessions, moreSessions
     }
 
     /// Decodes an overview, keeping the default of anything missing or of the wrong type.
@@ -90,6 +99,13 @@ extension ViewerStatus {
       pending = max(0, (try? container.decodeIfPresent(Int.self, forKey: .pending)) ?? 0)
       inFlight = max(0, (try? container.decodeIfPresent(Int.self, forKey: .inFlight)) ?? 0)
       activity = (try? container.decodeIfPresent([Activity].self, forKey: .activity)) ?? []
+      sessionsShown = (try? container.decodeIfPresent(Bool.self, forKey: .sessionsShown)) == true
+      holder = try? container.decodeIfPresent(String.self, forKey: .holder)
+      // Each session decodes on its own, so one odd entry is dropped and the rest are kept.
+      hostSessions =
+        (try? container.decodeIfPresent([Lenient<HostSession>].self, forKey: .hostSessions))?
+        .compactMap(\.value) ?? []
+      moreSessions = max(0, (try? container.decodeIfPresent(Int.self, forKey: .moreSessions)) ?? 0)
     }
   }
 }

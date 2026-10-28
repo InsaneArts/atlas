@@ -28,7 +28,7 @@ extension ViewerController {
     if let shown = session.activitySeen, session.tab != .activity {
       seen = shown
       let unseen = shown.unseen(in: status)
-      seen.failed = shown.failed || unseen.contains { !$0.ok }
+      seen.failed = shown.failed || unseen.contains(where: \.failed)
     } else {
       let log = session.tab == .activity ? panesModel.panes.activity.log?.entries.map(\.id) : nil
       seen = ViewerSeenActivity(ids: Set(log ?? status.map(\.id)))

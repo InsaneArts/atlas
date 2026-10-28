@@ -1,23 +1,32 @@
 import AtlasStatus
 import AtlasUI
+import Foundation
 
 /// Builds the panel's state from what its controller holds. Pure: every choice the panel shows is made here, from
 /// the snapshot, the status table (`Mode+StatusSummary`) and AtlasStatus's rules (``Mode`` and ``StatusReading``). Its
-/// buttons and ⋯ menu are in `PanelPresenter+Controls`.
+/// buttons and ⋯ menu are in `PanelPresenter+Controls`, and its host sessions in `PanelPresenter+Sessions`.
 enum PanelPresenter {
-  /// The panel as it should look now.
+  /// The panel as it should look now. While sessions show they take Recent's place, and the line under the heading
+  /// names who has the helper or whose action may not have finished; a notice still wins over both.
   ///
-  /// - Parameter snapshot: What the controller holds.
+  /// - Parameters:
+  ///   - snapshot: What the controller holds.
+  ///   - now: The time now, which only an ended session's age reads; the panel lists live ones.
   /// - Returns: Everything the panel draws.
-  static func state(_ snapshot: PanelSnapshot) -> PanelState {
+  static func state(_ snapshot: PanelSnapshot, now: Date = .now) -> PanelState {
     let mode = mode(snapshot)
     let reading = StatusReading(snapshot.status)
+    var status = mode.panelSummary(reading, paused: snapshot.session.paused, reconnecting: snapshot.reconnecting)
+    if let line = sessionLine(reading, mode: mode) { status.line = line }
+    let sessions = sessions(reading, mode: mode, now: now)
     return PanelState(
-      status: mode.panelSummary(reading, paused: snapshot.session.paused, reconnecting: snapshot.reconnecting),
+      status: status,
       notice: snapshot.session.notice,
       isMoreOpen: snapshot.session.moreOpen,
       picture: picture(snapshot, mode: mode, reading: reading),
-      recent: hidesRecent(mode) ? [] : recent(reading, mode: mode),
+      recent: hidesRecent(mode) || !sessions.isEmpty ? [] : recent(reading, mode: mode),
+      sessions: sessions,
+      moreSessions: moreSessions(reading, rows: sessions),
       controls: controls(snapshot, mode: mode),
       announcement: snapshot.session.announcement
     )
@@ -37,7 +46,8 @@ enum PanelPresenter {
   /// The picture: the empty stage saying why while the helper is logged out or not ready, the
   /// mark breathing while connecting; else the screen, inside the rim while in control, greyed under the badge while
   /// it needs the person, greyed alone while paused, with the newest action over it while an agent works and the
-  /// picture is live, in orange when it failed. The pause button on it pauses the picture only.
+  /// picture is live, in orange when it failed, led by its session's icon while sessions show. The pause button on it
+  /// pauses the picture only.
   ///
   /// - Parameters:
   ///   - snapshot: What the controller holds.
@@ -62,7 +72,7 @@ enum PanelPresenter {
     let newest = mode.kind == .working && !paused ? reading.captionEntries.last : nil
     var state = PanelPictureState(
       look: look,
-      caption: newest.map { PanelCaption(text: $0.line, time: $0.when, isFailed: $0.mark == .failed) },
+      caption: newest.map { PanelCaption(text: $0.line, time: $0.when, isFailed: $0.mark == .failed, icon: $0.icon) },
       pause: PanelPause(
         isPaused: paused,
         label: paused ? Words.resumePictureItem : Words.pausePictureItem,

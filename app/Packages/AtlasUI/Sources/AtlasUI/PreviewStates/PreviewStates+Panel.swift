@@ -2,7 +2,8 @@
   import SwiftUI
 
   extension PreviewStates {
-    /// Every panel sample, in the order the renders list them, then a stop the service refused, which no card draws.
+    /// Every panel sample, in the order the renders list them, then a stop the service refused, which no card draws,
+    /// then the host sessions' samples.
     @MainActor public static var panel: [PreviewState<PanelState>] {
       [
         PreviewState(name: "Idle", value: panelIdle),
@@ -16,6 +17,10 @@
         PreviewState(name: "Paused", value: panelPaused),
         PreviewState(name: "In use elsewhere", value: panelInUseElsewhere),
         PreviewState(name: "Stop refused", value: panelStopRefused),
+        PreviewState(name: "Sessions", value: panelSessions),
+        PreviewState(name: "Sessions waiting", value: panelSessionsWaiting),
+        PreviewState(name: "Sessions need you", value: panelSessionsNeedsYou),
+        PreviewState(name: "Sessions, more than three", value: panelSessionsMore),
       ]
     }
 
@@ -192,6 +197,66 @@
       state.notice = "The agent could not be stopped. Try again."
       return state
     }()
+
+    /// Two agents at work: Claude Code has the helper and Cursor is idle, so Sessions takes Recent's place, the line
+    /// names the holder and Claude Code's icon leads the caption.
+    @MainActor static let panelSessions = sessions([SessionSamples.claudeActing, SessionSamples.cursorIdle])
+
+    /// Three agents at work: Claude Code has the helper, Codex waits its turn, Cursor is idle.
+    @MainActor static let panelSessionsWaiting = sessions([
+      SessionSamples.claudeActing, SessionSamples.codexWaiting, SessionSamples.cursorIdle,
+    ])
+
+    /// Claude Code's click may not have finished: Needs you names it, its row is orange, and Codex waits until the
+    /// person recovers.
+    @MainActor static let panelSessionsNeedsYou = PanelState(
+      status: StatusSummary(
+        label: "Needs you",
+        tone: .attention,
+        mark: .dot,
+        line: "A click by Claude Code may not have finished"
+      ),
+      picture: screen(.needsYou),
+      recent: [],
+      sessions: [SessionSamples.claudeNeedsYou, SessionSamples.codexRecovery, SessionSamples.cursorIdle],
+      controls: PanelControls(main: recover)
+    )
+
+    /// Five agents at work: the first three rows, then one that opens the other two.
+    @MainActor static let panelSessionsMore: PanelState = {
+      var state = sessions(Array(SessionSamples.panelEntries.prefix(PanelState.mostSessions)))
+      state.moreSessions = "+2 more"
+      return state
+    }()
+
+    /// Agents at work while Claude Code has the helper: its newest action over the screen with its icon, and Stop
+    /// before Open Atlas.
+    ///
+    /// - Parameter sessions: The rows, Claude Code's first.
+    /// - Returns: The panel's state.
+    @MainActor private static func sessions(_ sessions: [PanelSessionEntry]) -> PanelState {
+      PanelState(
+        status: StatusSummary(
+          label: "Working",
+          tone: .active,
+          mark: .pulsing,
+          line: "Claude Code · understudy has the helper"
+        ),
+        picture: PanelPictureState(
+          look: .live,
+          picture: SampleDesktop.picture,
+          caption: PanelCaption(
+            text: SessionSamples.claudeDoing,
+            time: "just now",
+            icon: SessionSamples.claudeIcon
+          ),
+          pause: pictureLive
+        ),
+        recent: [],
+        sessions: sessions,
+        controls: PanelControls(agent: .stop, agentHelp: "Stop Agent (⌘.)", main: openAtlas)
+      )
+    }
 
     /// Recover…, the main action while the helper needs recovering.
     private static let recover = PanelMainButton(

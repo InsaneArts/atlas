@@ -8,7 +8,7 @@
     public static let viewerNarrowest: CGFloat = 860
 
     /// Every main window sample, in the order the previews list them: each top-row state, each alert and each empty
-    /// message, then each tab's pane.
+    /// message, then each tab's pane, then the host sessions' states.
     @MainActor public static var viewer: [PreviewState<ViewerState>] {
       [
         PreviewState(name: "Working", value: viewerWorking),
@@ -41,6 +41,13 @@
         PreviewState(name: "Screenshots", value: viewerShots),
         PreviewState(name: "A screenshot, large", value: viewerShotLarge),
         PreviewState(name: "Screenshots, none yet", value: viewerShotsEmpty),
+        PreviewState(name: "Sessions", value: viewerSessions),
+        PreviewState(name: "Sessions, menu open", value: viewerSessionsMenuOpen),
+        PreviewState(name: "Activity by session", value: viewerActivityBySession),
+        PreviewState(name: "Activity, needs you", value: viewerActivityNeedsYou),
+        PreviewState(name: "Activity, one session", value: viewerActivityOneSession),
+        PreviewState(name: "Session detail", value: viewerSessionDetail),
+        PreviewState(name: "Focus changed", value: viewerFocusChanged),
       ]
     }
 

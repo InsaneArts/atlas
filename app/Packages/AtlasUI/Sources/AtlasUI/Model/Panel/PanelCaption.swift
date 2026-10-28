@@ -7,6 +7,9 @@ public struct PanelCaption: Equatable, Sendable {
   public var time: String
   /// Whether the action failed, which leads it with an orange dot instead of the breathing blue one.
   public var isFailed: Bool
+  /// The icon of the host session that did it, which leads the words in place of the blue dot while sessions show;
+  /// nil for none.
+  public var icon: RowIcon?
 
   /// Creates the caption.
   ///
@@ -14,9 +17,11 @@ public struct PanelCaption: Equatable, Sendable {
   ///   - text: What the agent does, in one line.
   ///   - time: How long ago, in words; empty when unknown.
   ///   - isFailed: Whether the action failed; not by default.
-  public init(text: String, time: String, isFailed: Bool = false) {
+  ///   - icon: The icon of the host session that did it; none by default.
+  public init(text: String, time: String, isFailed: Bool = false, icon: RowIcon? = nil) {
     self.text = text
     self.time = time
     self.isFailed = isFailed
+    self.icon = icon
   }
 }

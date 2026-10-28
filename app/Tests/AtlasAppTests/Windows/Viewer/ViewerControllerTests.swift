@@ -200,7 +200,7 @@ struct ViewerControllerTests {
     clock.advance(by: .seconds(Motion.Duration.leastWork.seconds))
     try await checking.value("Check Again never ended")
     #expect(reads.count == 2)
-    #expect(viewer.state.details?.session.map(\.value) == ["Codex"])
+    #expect(viewer.state.details?.login.map(\.value) == ["Codex"])
     viewer.close()
   }
 

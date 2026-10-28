@@ -51,6 +51,20 @@
         "In use elsewhere": try snapshot("controlling", state: "control"),
         "Paused": paused,
         "Stop refused": refused,
+        "Sessions": try SessionReplies.snapshot([SessionReplies.claudeActing, SessionReplies.cursorIdle]),
+        "Sessions waiting": try SessionReplies.snapshot([
+          SessionReplies.claudeActing, SessionReplies.codexWaiting(), SessionReplies.cursorIdle,
+        ]),
+        "Sessions need you": try SessionReplies.snapshot(
+          [SessionReplies.claudeNeedsYou, SessionReplies.codexWaiting(recovery: true), SessionReplies.cursorIdle],
+          mode: "recovering",
+          state: "needsYou",
+          pending: 1
+        ),
+        "Sessions, more than three": try SessionReplies.snapshot([
+          SessionReplies.claudeActing, SessionReplies.codexWaiting(), SessionReplies.cursorIdle,
+          SessionReplies.terminalIdle, SessionReplies.piIdle,
+        ]),
       ]
       #expect(Set(presented.keys) == Set(PreviewStates.panel.map(\.name)), "every sample has its facts, and no more")
       for preview in PreviewStates.panel {

@@ -22,6 +22,12 @@ extension ActivityLog {
     public var operation: String
     /// How many input actions it carried, for `input`.
     var count: Int?
+    /// The key of the host session it came from; nil for the person's own and for commands no host named.
+    public var session: String?
+    /// The capture a screenshot row took, by Atlas's own file name, when the service says.
+    public var capture: String?
+    /// Whether a refusal before it was done had already sent part of its text, as typing cut short.
+    public var partial: Bool
 
     /// Creates a row.
     ///
@@ -35,6 +41,9 @@ extension ActivityLog {
     ///   - reason: Why it failed or what held it.
     ///   - operation: The operation's name.
     ///   - count: How many input actions it carried.
+    ///   - session: The key of the host session it came from.
+    ///   - capture: The capture a screenshot row took, by its file name.
+    ///   - partial: Whether a refusal had already sent part of its text.
     public init(
       id: String,
       says: String? = nil,
@@ -44,7 +53,10 @@ extension ActivityLog {
       startedAt: Date? = nil,
       reason: String? = nil,
       operation: String = "input",
-      count: Int? = nil
+      count: Int? = nil,
+      session: String? = nil,
+      capture: String? = nil,
+      partial: Bool = false
     ) {
       self.id = id
       self.says = says
@@ -55,12 +67,16 @@ extension ActivityLog {
       self.reason = reason
       self.operation = operation
       self.count = count
+      self.session = session
+      self.capture = capture
+      self.partial = partial
     }
 
     /// The fields of one `activity` row.
     enum CodingKeys: String, CodingKey {
       /// Each field by the name the service writes.
-      case id, says, ok, started, actor, ageSeconds, startedAt, reason, operation, count
+      case id, says, ok, started, actor, ageSeconds, startedAt, reason, operation, count, session, capture, nothingSent,
+        partial
     }
 
     /// Decodes a row, keeping a safe default for anything missing or of the wrong type: a row that says nothing
@@ -77,7 +93,7 @@ extension ActivityLog {
       let flag = { (key: CodingKeys) in (try? container.decodeIfPresent(Bool.self, forKey: key)) == true }
       id = text(.id) ?? ""
       says = text(.says)
-      outcome = Outcome(started: flag(.started), ok: flag(.ok))
+      outcome = Outcome(started: flag(.started), ok: flag(.ok), nothingSent: flag(.nothingSent))
       actor = Actor(word: text(.actor))
       ageSeconds = try? container.decodeIfPresent(Double.self, forKey: .ageSeconds)
       let milliseconds = try? container.decodeIfPresent(Double.self, forKey: .startedAt)
@@ -85,6 +101,9 @@ extension ActivityLog {
       reason = text(.reason)
       operation = text(.operation) ?? "action"
       count = try? container.decodeIfPresent(Int.self, forKey: .count)
+      session = try? container.decodeIfPresent(String.self, forKey: .session)
+      capture = text(.capture)
+      partial = flag(.partial)
     }
   }
 }

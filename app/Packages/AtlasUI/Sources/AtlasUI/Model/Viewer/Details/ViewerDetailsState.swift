@@ -1,6 +1,8 @@
-/// The Details pane beside the main pane: the helper, whether it is ready to act, the picture and the session, each a
-/// group of rows.
+/// The Details pane beside the main pane: the chosen host session, when one is, then the helper, whether it is ready
+/// to act, the picture and the helper's login, each a group of rows.
 public struct ViewerDetailsState: Equatable, Sendable {
+  /// The chosen host session, which leads the pane; nil while every session's work shows, or nothing is known of it.
+  public var hostSession: ViewerSessionDetail?
   /// The helper's rows: its account, its state and its display.
   public var helper: [Fact]
   /// Ready to act's rows: one while every check passes, else those that do not and a count of those that do.
@@ -12,31 +14,34 @@ public struct ViewerDetailsState: Equatable, Sendable {
   /// How old the newest picture is, such as "just now", as of the state; the app's window reads it again as the row
   /// draws (``ViewerView``), so the picture's age ticks there alone.
   public var newest: String
-  /// The session's rows.
-  public var session: [Fact]
+  /// The helper's login's rows: when it logged in, and the agents connected to Atlas.
+  public var login: [Fact]
 
   /// Creates the Details column's state.
   ///
   /// - Parameters:
+  ///   - hostSession: The chosen host session; none by default.
   ///   - helper: The helper's rows.
   ///   - ready: Ready to act's rows.
   ///   - updates: How often the picture updates.
   ///   - newest: How old the newest picture is, as of the state.
-  ///   - session: The session's rows.
+  ///   - login: The helper's login's rows.
   ///   - isChecking: Whether Check Again is reading the helper now.
   public init(
+    hostSession: ViewerSessionDetail? = nil,
     helper: [Fact],
     ready: [ViewerReadyRow],
     updates: String,
     newest: String,
-    session: [Fact],
+    login: [Fact],
     isChecking: Bool = false
   ) {
+    self.hostSession = hostSession
     self.helper = helper
     self.ready = ready
     self.isChecking = isChecking
     self.updates = updates
     self.newest = newest
-    self.session = session
+    self.login = login
   }
 }

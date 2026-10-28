@@ -28,4 +28,11 @@ struct ScreenshotTests {
     #expect(relative.folder == nil)
     #expect(relative.file(named: name) == nil)
   }
+
+  @Test("a capture's time reads from its file name, and a name of another shape has none")
+  func aCapturesTimeReadsFromItsName() {
+    #expect(Screenshot.takenAt(named: "1793163300000000000-capture.png") == Date(timeIntervalSince1970: 1_793_163_300))
+    #expect(Screenshot.takenAt(named: "capture.png") == nil)
+    #expect(Screenshot.takenAt(named: "1793163300000000000.png") == nil)
+  }
 }

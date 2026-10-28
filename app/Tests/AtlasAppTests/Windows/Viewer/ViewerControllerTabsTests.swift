@@ -65,6 +65,20 @@ struct ViewerControllerTabsTests {
     viewer.close()
   }
 
+  @Test("an unseen action refused before anything was sent is new, never orange")
+  func aRefusedActionIsNeverOrange() async throws {
+    let service = ScriptedService()
+    service.reply = Self.reply([Self.row("a1", ok: true)])
+    let viewer = try await ViewerController.watching(service)
+    service.reply = Self.reply([
+      ["id": "a2", "operation": "input", "ok": false, "nothingSent": true, "ageSeconds": 1],
+      Self.row("a1", ok: true),
+    ])
+    try await Self.read(viewer, until: "a2")
+    #expect(viewer.state.top.activityUnseen == .new)
+    viewer.close()
+  }
+
   @Test("an unseen failure keeps the dot orange after newer actions push it out of the status")
   func anUnseenFailureOutlastsTheStatusRows() async throws {
     let service = ScriptedService()

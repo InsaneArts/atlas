@@ -31,8 +31,14 @@
       case .askRestart:
         return viewerRestart
       case .showKeys, .showMore, .copyShot, .showShotInFinder, .thumbnailNeeded, .shotColumns, .moveCorner,
-        .openSettings:
+        .openSettings, .placeSessions:
         return state
+      case .showSessions:
+        return viewerSessionsMenuOpen
+      case .chooseSession(.all):
+        return viewerActivityBySession
+      case .chooseSession(.one):
+        return viewerActivityOneSession
       case .showWindow:
         return viewerShowOnScreen
       case .clearOutline:

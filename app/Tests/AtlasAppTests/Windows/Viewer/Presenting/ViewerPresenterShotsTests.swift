@@ -110,4 +110,32 @@ struct ViewerPresenterShotsTests {
     #expect(apps.meta.isEmpty)
     #expect(!apps.isSearchable)
   }
+
+  @Test("a chosen session shows only its own screenshots")
+  func aChosenSessionShowsOnlyItsOwn() throws {
+    var snapshot = try ViewerSnapshot.listing(ViewerPresenterSessionsTests.three)
+    snapshot.panes.shots.shots = [
+      Screenshot(name: "mine.png", takenAt: snapshot.date, session: "3f9a1c07b2e4"),
+      Screenshot(name: "listed.png", takenAt: snapshot.date.addingTimeInterval(-30)),
+      Screenshot(name: "codex.png", takenAt: snapshot.date.addingTimeInterval(-60), session: "8be20c4d1a77"),
+    ]
+    snapshot.panes.sessions.list = HostSessionList(sessions: [
+      HostSessionRecord(
+        key: "3f9a1c07b2e4",
+        name: "Claude Code · understudy",
+        host: .claude,
+        screenshots: ["listed.png"]
+      )
+    ])
+    #expect(ViewerPresenter.shotOrder(snapshot).count == 3, "every session's while all show")
+    snapshot.session.sessionChoice = .one("3f9a1c07b2e4")
+    let shots = ViewerPresenter.shots(snapshot)
+    let names = shots.days
+      .flatMap(\.shots)
+      .map(\.id)
+    #expect(names == ["mine.png", "listed.png"])
+    #expect(shots.meta == "2 by Claude Code · understudy")
+    // The large view steps through the session's own only.
+    #expect(ViewerPresenter.shotOrder(snapshot) == ["mine.png", "listed.png"])
+  }
 }

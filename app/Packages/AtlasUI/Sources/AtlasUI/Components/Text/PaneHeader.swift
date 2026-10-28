@@ -1,6 +1,7 @@
 import SwiftUI
 
-/// A pane's header: its title, a quiet count or note beside it, and its controls at the end, over a hairline.
+/// A pane's header: its title, led by an icon when it has one, a quiet count or note beside it, and its controls at
+/// the end, over a hairline.
 /// Where they don't fit on one line, as in a narrow window with Details open, the controls move to a second
 /// line under the title, and there they share what width there is, a search field giving up some of its own.
 struct PaneHeader<Trailing: View>: View {
@@ -8,6 +9,8 @@ struct PaneHeader<Trailing: View>: View {
   let title: String
   /// The note beside it, such as "38 actions today".
   let meta: String
+  /// The icon before the title, such as a host session's; nil for none.
+  var icon: RowIcon?
   /// The controls at the end, such as a search field and filters.
   @ViewBuilder let trailing: Trailing
 
@@ -38,8 +41,11 @@ struct PaneHeader<Trailing: View>: View {
 }
 
 extension PaneHeader {
-  /// The title and the note beside it; the note gives way first.
+  /// The icon, the title and the note beside it; the note gives way first.
   @ViewBuilder private var heading: some View {
+    if let icon {
+      SessionIcon(icon: icon, side: ViewerLayout.groupIcon)
+    }
     Text(title)
       .font(Typography.font(.heading, weight: .semibold))
       .layoutPriority(1)
@@ -71,5 +77,13 @@ extension PaneHeader where Trailing == EmptyView {
 #if DEBUG
   #Preview("Samples") {
     PaneHeaderSamples()
+  }
+
+  #Preview("One session") {
+    PaneHeader(title: SessionSamples.claudeName, meta: String("6 actions today"), icon: SessionSamples.claudeIcon) {
+      EmptyView()
+    }
+    .frame(width: SampleWidth.column * 2)
+    .sampleSurface()
   }
 #endif

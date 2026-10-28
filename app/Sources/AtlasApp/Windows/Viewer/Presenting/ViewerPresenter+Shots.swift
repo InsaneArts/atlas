@@ -9,7 +9,8 @@ extension ViewerPresenter {
 
   /// The Screenshots pane: today's count, the screenshots in their groups with the selected one ringed, or why none
   /// shows, and the one shown large. The groups are Activity's: the last hour is Now and the rest of today one group,
-  /// however the day's parts would split it. Times are the person's own clock.
+  /// however the day's parts would split it. Times are the person's own clock. With one host session chosen, only its
+  /// screenshots list, counted by its name.
   ///
   /// - Parameter snapshot: What the controller holds.
   /// - Returns: The pane.
@@ -23,6 +24,7 @@ extension ViewerPresenter {
     }
     let rules = ShotGrouping(now: snapshot.date, calendar: snapshot.zonedCalendar)
     let days = shotDays(snapshot)
+    let listed = listedShots(snapshot)
     let order =
       days
       .flatMap(\.shots)
@@ -39,10 +41,19 @@ extension ViewerPresenter {
         groups.append(ViewerShotDay(id: shotDayID(day.period), title: title, shots: tiles))
       }
     }
+    var meta = days.isEmpty ? "" : ViewerWords.shotsMeta(today: rules.countToday(shots))
+    var empty =
+      days.isEmpty ? EmptyMessageState(headline: ViewerWords.noShots, message: ViewerWords.noShotsMessage) : nil
+    if case .one(let key) = snapshot.sessionChoice {
+      meta = ViewerWords.shotsBy(listed.count, name: sessionName(key, snapshot))
+      if days.isEmpty {
+        empty = EmptyMessageState(headline: ViewerWords.noShots, message: ViewerWords.noSessionShotsMessage)
+      }
+    }
     return ViewerShotsState(
-      meta: days.isEmpty ? "" : ViewerWords.shotsMeta(today: rules.countToday(shots)),
+      meta: meta,
       days: groups,
-      empty: days.isEmpty ? EmptyMessageState(headline: ViewerWords.noShots, message: ViewerWords.noShotsMessage) : nil,
+      empty: empty,
       large: largeShot(snapshot, order: order),
       scrollRequest: facts.scrollRequest
     )
@@ -54,7 +65,19 @@ extension ViewerPresenter {
   /// - Returns: The groups.
   static func shotDays(_ snapshot: ViewerSnapshot) -> [ShotDay] {
     let rules = ShotGrouping(now: snapshot.date, calendar: snapshot.zonedCalendar)
-    return rules.days(snapshot.panes.shots.shots ?? [], matching: "") { clock($0, snapshot) }
+    return rules.days(listedShots(snapshot), matching: "") { clock($0, snapshot) }
+  }
+
+  /// The screenshots the pane lists, newest first: every one, or with a host session chosen only those it took, as
+  /// each screenshot names its session or the sessions' list names it among the session's.
+  ///
+  /// - Parameter snapshot: What the controller holds.
+  /// - Returns: The screenshots.
+  static func listedShots(_ snapshot: ViewerSnapshot) -> [Screenshot] {
+    let shots = snapshot.panes.shots.shots ?? []
+    guard case .one(let key) = snapshot.sessionChoice else { return shots }
+    let named = Set(snapshot.panes.sessions.record(key)?.screenshots ?? [])
+    return shots.filter { ($0.session ?? "") == key || named.contains($0.name) }
   }
 
   /// The screenshots in the order the grid lists them, by name: what Previous and Next walk.

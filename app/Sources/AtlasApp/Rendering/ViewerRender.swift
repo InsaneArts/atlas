@@ -40,6 +40,13 @@
         sample("28-apps-paused", PreviewStates.viewerAppsPaused),
         sample("29-show-on-screen-right-edge", PreviewStates.viewerShowOnScreenRightEdge),
         sample("30-details-checks", PreviewStates.viewerDetailsChecks),
+        sample("31-sessions", PreviewStates.viewerSessions),
+        sample("32-sessions-menu-open", PreviewStates.viewerSessionsMenuOpen),
+        sample("33-activity-by-session", PreviewStates.viewerActivityBySession),
+        sample("34-activity-needs-you", PreviewStates.viewerActivityNeedsYou),
+        sample("35-activity-one-session", PreviewStates.viewerActivityOneSession),
+        sample("36-session-detail", PreviewStates.viewerSessionDetail),
+        sample("37-focus-changed", PreviewStates.viewerFocusChanged),
       ]
     }
 
@@ -61,12 +68,12 @@
     nonisolated static let narrowWidths: [CGFloat] = [860, 900, 1040]
 
     /// The narrow renders, each named by its file and drawn at its window's width and the standard height:
-    /// Working, Stopped and You have control at each of ``narrowWidths``, then Activity, Apps and Screenshots
+    /// Working, Stopped, You have control and the sessions button at each of ``narrowWidths``, then Activity, Apps and Screenshots
     /// with Details open at the least width, where their headers have the least room.
     static var narrowRenders: [PreviewState<ViewerState>] {
       let states = [
         ("working", PreviewStates.viewerWorking), ("stopped", PreviewStates.viewerStopped),
-        ("control", PreviewStates.viewerControl),
+        ("control", PreviewStates.viewerControl), ("sessions", PreviewStates.viewerSessions),
       ]
       let tabs = [
         ("activity", PreviewStates.viewerActivity), ("apps", PreviewStates.viewerApps),

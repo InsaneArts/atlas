@@ -1,26 +1,41 @@
 import AtlasService
+import AtlasStatus
 import AtlasUI
 import Foundation
 
 extension ViewerPresenter {
-  /// The Activity pane: today's count, the search and the filters, and the lines in their groups, or why none shows.
-  /// With nothing in the log yet the header says nothing beside its title, and there is nothing to search or filter.
-  /// Times are the person's own clock (``Words/clockTime(_:locale:timeZone:)``), as Details' Logged in is.
+  /// The Activity pane: its title, today's count, the search and the filters, and the lines in their groups, or why
+  /// none shows. While two or more host sessions are live and every session's work shows, the lines are grouped by
+  /// session in the status's order, unless the person's own filter leaves only theirs; with one session chosen, its
+  /// lines alone, grouped by time under its name, with All and Problems only. With nothing in the log yet the header
+  /// says nothing beside its title, and there is nothing to search or filter. Times are the person's own clock
+  /// (``Words/clockTime(_:locale:timeZone:)``), as Details' Logged in is.
   ///
   /// - Parameter snapshot: What the controller holds.
   /// - Returns: The pane.
   static func activity(_ snapshot: ViewerSnapshot) -> ViewerActivityState {
     let facts = snapshot.panes.activity
+    let chosen: String? =
+      switch snapshot.sessionChoice {
+      case .all: nil
+      case .one(let key): key
+      }
+    let offered = chosen == nil ? ViewerActivityFilter.allCases : [.all, .problems]
+    let filter = offered.contains(facts.filter) ? facts.filter : .all
     let filters = CapsuleTabsState(
-      tabs: ViewerActivityFilter.allCases.map { CapsuleTab(id: $0, title: ViewerWords.filter($0)) },
-      selected: facts.filter,
+      tabs: offered.map { CapsuleTab(id: $0, title: ViewerWords.filter($0)) },
+      selected: filter,
       label: ViewerWords.activityFiltersLabel
     )
+    let title = chosen.map { sessionName($0, snapshot) } ?? ViewerWords.tab(.activity)
+    let titleIcon = chosen.flatMap { sessionIcon($0, snapshot) }
     guard let log = facts.log, let readAt = facts.readAt else {
       let failed = facts.failure.map {
         EmptyMessageState(headline: ViewerWords.activityFailed, message: Words.sentence($0))
       }
       return ViewerActivityState(
+        title: title,
+        titleIcon: titleIcon,
         meta: "",
         query: facts.query,
         filters: filters,
@@ -30,19 +45,102 @@ extension ViewerPresenter {
       )
     }
     let rules = ActivityGrouping(log: log, readAt: readAt, now: snapshot.date, calendar: snapshot.zonedCalendar)
-    let groups = rules.groups(
-      filter: activityFilter(facts.filter),
-      query: facts.query,
-      captures: snapshot.panes.shots.shots ?? []
-    )
-    return ViewerActivityState(
-      meta: log.entries.isEmpty ? "" : ViewerWords.actionsToday(rules.countToday),
+    let captures = snapshot.panes.shots.shots ?? []
+    let scope = chosen.map(ActivityScope.session) ?? .all
+    var state = ViewerActivityState(
+      title: title,
+      titleIcon: titleIcon,
+      meta: log.entries.isEmpty ? "" : ViewerWords.actionsToday(rules.countToday(in: scope)),
       query: facts.query,
       filters: filters,
-      groups: groups.map { group($0, snapshot) },
-      empty: groups.isEmpty ? activityEmpty(log, facts) : nil,
+      groups: [],
       isSearchable: !log.entries.isEmpty,
       findRequests: facts.findRequests
+    )
+    if chosen == nil, snapshot.reading.statusReading.showsSessions, filter != .you {
+      let groups = rules.sessionGroups(
+        filter: activityFilter(filter),
+        query: facts.query,
+        captures: captures,
+        order: sessionOrder(snapshot),
+        lines: ViewerActivityState.mostSessionLines
+      )
+      state.sessions = groups.map { sessionGroup($0, snapshot) }
+      state.empty = groups.isEmpty ? activityEmpty(log, facts) : nil
+      return state
+    }
+    let groups = rules.groups(filter: activityFilter(filter), query: facts.query, captures: captures, scope: scope)
+    state.groups = groups.map { group($0, snapshot) }
+    if groups.isEmpty {
+      let nothingFromIt =
+        chosen != nil
+        && rules.groups(filter: .all, query: "", captures: [], scope: scope)
+          .isEmpty
+      state.empty =
+        nothingFromIt
+        ? EmptyMessageState(headline: ViewerWords.noActivity, message: ViewerWords.noSessionActivityMessage)
+        : activityEmpty(log, facts)
+    }
+    return state
+  }
+
+  /// The order Activity lists the host sessions in while it shows every session's work: the live ones in the
+  /// status's order, which is by state, Terminal's included, so the one needing the person comes first; then the live
+  /// ones the status had no room for, from the sessions' list; then those the list says ended, newest first.
+  ///
+  /// - Parameter snapshot: What the controller holds.
+  /// - Returns: The sessions' keys; empty for Terminal.
+  static func sessionOrder(_ snapshot: ViewerSnapshot) -> [String] {
+    let list = snapshot.panes.sessions.list
+    let listed = snapshot.reading.statusReading.liveSessions.map(\.key)
+    let rest = (list?.live ?? [])
+      .map(\.key)
+    let ended = (list?.sessions ?? [])
+      .filter(isEnded)
+      .map(\.key)
+    var order: [String] = []
+    for key in listed + rest + ended where !order.contains(key) { order.append(key) }
+    return order
+  }
+
+  /// One host session's group as the pane heads it: its icon, its name, its state in its tone while the status or the
+  /// list's live sessions name it, Ended once the list says so, Idle for Terminal otherwise, as it never ends, and
+  /// Show all, naming the session to VoiceOver, while it holds more lines than it lists. The person's own lines are
+  /// "You", with the person's blue dot, and their Show all picks the person's own filter.
+  ///
+  /// - Parameters:
+  ///   - group: The group.
+  ///   - snapshot: What the controller holds.
+  /// - Returns: The group, its lines made.
+  static func sessionGroup(_ group: ActivitySessionGroup, _ snapshot: ViewerSnapshot) -> ViewerActivitySessionGroup {
+    let lines = group.runs.map { line($0, snapshot) }
+    let hasMore = group.total > group.runs.count
+    guard let key = group.key else {
+      return ViewerActivitySessionGroup(
+        id: "you",
+        icon: nil,
+        name: ViewerWords.youGroup,
+        lines: lines,
+        more: hasMore ? ViewerWords.showAll(group.total) : nil,
+        moreLabel: hasMore ? ViewerWords.showAll(group.total, from: ViewerWords.youGroup) : "",
+        showAll: .filterActivity(.you)
+      )
+    }
+    let named = snapshot.reading.statusReading.session(key) ?? snapshot.panes.sessions.live(key)
+    let record = snapshot.panes.sessions.record(key)
+    let ended = named == nil && record.map(isEnded) == true
+    let state: HostSessionState? = named?.state ?? (ended ? .ended : key.isEmpty ? .idle : nil)
+    let name = sessionName(key, snapshot)
+    return ViewerActivitySessionGroup(
+      id: "session-\(key)",
+      icon: sessionIcon(key, snapshot),
+      name: name,
+      state: state.map(Words.sessionState) ?? "",
+      tone: state?.tone ?? .quiet,
+      lines: lines,
+      more: hasMore ? ViewerWords.showAll(group.total) : nil,
+      moreLabel: hasMore ? ViewerWords.showAll(group.total, from: name) : "",
+      showAll: .chooseSession(.one(key))
     )
   }
 
@@ -67,8 +165,10 @@ extension ViewerPresenter {
     return ViewerActivityGroup(id: id, title: title, lines: group.runs.map { line($0, snapshot) })
   }
 
-  /// A line: its start on the person's clock, its mark and kind, its words with the repeat count, why it failed, and
-  /// the screenshot it took with its thumbnail once read.
+  /// A line: its start on the person's clock, its mark and kind, its words with the repeat count, why it failed or was
+  /// not sent, and the screenshot it took with its thumbnail once read. The action whose outcome is unknown, while
+  /// sessions show and the helper needs the person, is marked as a problem, says that every session waits, and offers
+  /// Show Screen and Recover….
   ///
   /// - Parameters:
   ///   - run: The line's rows.
@@ -79,21 +179,25 @@ extension ViewerPresenter {
     let time =
       run.startedAt.map { Words.clockTime($0, locale: snapshot.locale, timeZone: snapshot.timeZone) } ?? Words.unknown
     let text = ViewerWords.repeated(ActivityGrouping.text(entry), count: run.count)
-    let reason = entry.outcome == .failed ? entry.reason : nil
-    let lead = lead(entry)
+    let offersRecovery = run.id == snapshot.reading.statusReading.causer?.uncertainRow
+    let reason =
+      offersRecovery
+      ? ViewerWords.unfinishedReason : entry.outcome == .failed || entry.outcome == .notSent ? entry.reason : nil
+    let mark: ActivityMarkKind = offersRecovery ? .failed : lead(entry)
     return ViewerActivityLine(
       id: run.id,
       time: time,
-      lead: lead,
-      kind: kind(entry),
+      lead: mark,
+      kind: offersRecovery ? .problem : kind(entry),
       text: text,
       reason: reason,
       shot: run.shot.map { ViewerActivityShot(name: $0, thumbnail: snapshot.panes.thumbnails[$0]) },
-      label: ViewerWords.lineLabel(time: time, text: text, reason: reason, live: lead == .live)
+      offersRecovery: offersRecovery,
+      label: ViewerWords.lineLabel(time: time, text: text, reason: reason, live: mark == .live)
     )
   }
 
-  /// A line's mark: running before failed, failed before who acted.
+  /// A line's mark: running before failed or not sent, those before who acted.
   ///
   /// - Parameter entry: The line's row.
   /// - Returns: The mark.
@@ -101,6 +205,7 @@ extension ViewerPresenter {
     switch (entry.outcome, entry.actor) {
     case (.running, _): .live
     case (.failed, _): .failed
+    case (.notSent, _): .notSent
     case (.worked, .you): .person
     case (.worked, .agent), (.worked, .someoneElse): .quiet
     }

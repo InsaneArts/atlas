@@ -73,11 +73,13 @@
             case .typing: "typing"
             case .inControl: "inControl"
             case .paused: "paused"
+            case .holder: "holder"
             }
           }
         }
       )
-      #expect(chips == ["typing", "inControl", "paused"])
+      #expect(chips == ["typing", "inControl", "paused", "holder"])
+      #expect(states.contains { $0.top.sessions != nil })
       #expect(states.contains { $0.details != nil })
       #expect(states.contains { $0.top.actions.pause?.isOn == true })
       #expect(states.contains { $0.toast != nil })

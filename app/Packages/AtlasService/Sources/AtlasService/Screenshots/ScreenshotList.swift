@@ -7,15 +7,19 @@ public struct ScreenshotList: Decodable, Equatable, Sendable {
   public var shots: [Screenshot]
   /// The folder the screenshots are kept in; nil when the service names none, or a path that is not absolute.
   public var folder: URL?
+  /// The host sessions the screenshots name, by key.
+  public var sessions: [String: HostSessionSummary]
 
   /// Creates a list.
   ///
   /// - Parameters:
   ///   - shots: The screenshots, newest first.
   ///   - folder: The folder they are kept in.
-  public init(shots: [Screenshot] = [], folder: URL? = nil) {
+  ///   - sessions: The host sessions the screenshots name, by key.
+  public init(shots: [Screenshot] = [], folder: URL? = nil, sessions: [String: HostSessionSummary] = [:]) {
     self.shots = shots
     self.folder = folder
+    self.sessions = sessions
   }
 
   /// The body's fields this app reads.
@@ -24,10 +28,12 @@ public struct ScreenshotList: Decodable, Equatable, Sendable {
     case shots = "screenshots"
     /// The folder the screenshots are kept in.
     case folder
+    /// The host sessions the screenshots name.
+    case sessions
   }
 
-  /// Decodes the body, keeping no screenshots when the list is missing or of the wrong type, and no folder unless it
-  /// is an absolute path.
+  /// Decodes the body, keeping no screenshots when the list is missing or of the wrong type, no folder unless it is an
+  /// absolute path, and only the sessions that decode.
   ///
   /// - Parameter decoder: The decoder reading `screenshots.json`.
   /// - Throws: `DecodingError` only when the body is not an object.
@@ -36,6 +42,9 @@ public struct ScreenshotList: Decodable, Equatable, Sendable {
     shots = (try? container.decodeIfPresent([Screenshot].self, forKey: .shots)) ?? []
     let path = try? container.decodeIfPresent(String.self, forKey: .folder)
     folder = path.flatMap { $0.hasPrefix("/") ? URL(fileURLWithPath: $0, isDirectory: true) : nil }
+    sessions = HostSessionSummary.map(
+      try? container.decodeIfPresent([String: Lenient<HostSessionSummary>].self, forKey: .sessions)
+    )
   }
 
   /// The file of a listed screenshot: its name inside the folder, and only a name the list holds that names one file

@@ -44,8 +44,9 @@ struct CaptionStack: View {
     .accessibilityLabel(Text(verbatim: "Latest actions"))
   }
 
-  /// One action's chip: its mark, what was done, and how long ago in tertiary digits; behind the front chip, only its
-  /// shell and mark, its words fading in as the pile fans out.
+  /// One action's chip: its mark, its session's icon while sessions show, what was done, and how long ago in
+  /// tertiary digits; behind the front chip, only its shell and mark, its icon and words fading in as the pile fans
+  /// out.
   ///
   /// - Parameters:
   ///   - entry: The action.
@@ -54,7 +55,12 @@ struct CaptionStack: View {
   private func chip(_ entry: ActivityEntry, showsWords: Bool) -> some View {
     GlassChip(lead: Self.lead(entry)) {
       Group {
-        Text(entry.line)
+        HStack(spacing: Spacing.xsPlus) {
+          if let icon = entry.icon {
+            SessionIcon(icon: icon, side: ViewerLayout.captionIcon)
+          }
+          Text(entry.line)
+        }
         // A time changes every second, so it takes no transition.
         Text(entry.when)
           .font(Typography.digits(.callout))
@@ -109,7 +115,8 @@ struct CaptionStack: View {
       .map { index, entry in Shown(entry: entry, depth: newest.count - 1 - index) }
   }
 
-  /// What leads a chip: an orange dot for a failure, a steady blue dot for the newest, nothing otherwise.
+  /// What leads a chip: an orange dot for a failure, a steady blue dot for the newest unless its session's icon leads
+  /// it, nothing otherwise.
   ///
   /// - Parameter entry: The action.
   /// - Returns: The chip's lead.
@@ -205,6 +212,35 @@ extension CaptionStack {
 #if DEBUG
   #Preview("Samples") {
     CaptionStackSamples()
+  }
+
+  #Preview("By session") {
+    CaptionStack(entries: [
+      ActivityEntry(
+        id: "2",
+        line: "Didn't type in Notes",
+        when: "9 s ago",
+        mark: .notSent,
+        isNewest: false,
+        icon: SessionSamples.codexIcon
+      ),
+      ActivityEntry(
+        id: "1",
+        line: "Opened Opie",
+        when: "5 s ago",
+        isNewest: false,
+        icon: SessionSamples.cursorIcon
+      ),
+      ActivityEntry(
+        id: "0",
+        line: SessionSamples.claudeDoing,
+        when: "just now",
+        isNewest: true,
+        icon: SessionSamples.claudeIcon
+      ),
+    ])
+    .padding(Spacing.xxl)
+    .sampleSurface()
   }
 
   #Preview("Interactive") {

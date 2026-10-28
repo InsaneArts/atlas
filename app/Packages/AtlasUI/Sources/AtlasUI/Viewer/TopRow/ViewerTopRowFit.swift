@@ -1,6 +1,6 @@
 /// One of the top row's layouts, widest first: a narrowing window takes the first that fits
-/// (``ViewerLayout/barLayouts``), so the status line goes first, then the tabs' words, then the picture's pause, then
-/// the actions' words. Nothing truncates to a short word; the white capsule keeps its whole title. The pause goes
+/// (``ViewerLayout/barLayouts``), so the status line goes first, then the tabs' and the sessions button's words, then
+/// the picture's pause, then the actions' words. Nothing truncates to a short word; the white capsule keeps its whole title. The pause goes
 /// before Stop and Resume give up their words, so a narrow bar never shows a pause, a stop and a fast-forward side by
 /// side, which would read as one player's buttons when the pause acts on the picture and the others on the agent; it
 /// stays in the View menu and on ⇧⌘P.
@@ -31,6 +31,9 @@ enum ViewerTopRowFit: Hashable, CaseIterable, Sendable {
     case .tabSymbols, .noPause, .actionSymbols: .symbol
     }
   }
+
+  /// Whether the sessions button keeps its words beside its icons: in the widest two layouts, as the tabs keep theirs.
+  var sessionWords: Bool { tabFace == .word }
 
   /// Whether Keys, Stop and Resume keep their words; the white capsule always does.
   var actionWords: Bool { self != .actionSymbols }

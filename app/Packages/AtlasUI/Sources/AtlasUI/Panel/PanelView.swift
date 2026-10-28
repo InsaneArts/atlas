@@ -1,7 +1,7 @@
 import SwiftUI
 
-/// The menu bar panel: the helper's status as its heading, its screen, the newest actions and the actions on the
-/// agent. It draws its state and sends what the person does; it decides nothing. A state change moves every piece at
+/// The menu bar panel: the helper's status as its heading, its screen, the newest actions or, while two or more are
+/// live, the host sessions, and the actions on the agent. It draws its state and sends what the person does; it decides nothing. A state change moves every piece at
 /// once on ``PanelLayout/change``: the word, the line, the picture's look and the buttons ease together, so nothing
 /// ripples down the panel on every flip. It fills the popover that holds it, whose corners, glass and shadow are the
 /// system's; `panelCard()` draws its own where no popover does.
@@ -22,13 +22,15 @@ public struct PanelView: View {
     self.send = send
   }
 
-  /// The header, the picture, Recent when there is any, then the buttons.
+  /// The header, the picture, Sessions while there are any, else Recent when there is any, then the buttons.
   public var body: some View {
     VStack(alignment: .leading, spacing: PanelLayout.gap) {
       PanelHeader(status: state.status, notice: state.notice, isMoreOpen: state.isMoreOpen, send: send)
       PanelPicture(state: state.picture, send: send)
         .animation(PanelLayout.change, value: state.picture.look)
-      if !state.recent.isEmpty {
+      if !state.sessions.isEmpty {
+        PanelSessions(entries: state.sessions, more: state.moreSessions, send: send)
+      } else if !state.recent.isEmpty {
         PanelRecent(entries: state.recent, send: send)
       }
       PanelControlRow(controls: state.controls, send: send)
@@ -107,6 +109,24 @@ public struct PanelView: View {
 
   #Preview("Picture paused") {
     PanelView(state: PreviewStates.panelPaused) { _ in }
+      .panelCard()
+      .padding(Spacing.xxxl)
+  }
+
+  #Preview("Sessions") {
+    PanelView(state: PreviewStates.panelSessions) { _ in }
+      .panelCard()
+      .padding(Spacing.xxxl)
+  }
+
+  #Preview("Sessions waiting") {
+    PanelView(state: PreviewStates.panelSessionsWaiting) { _ in }
+      .panelCard()
+      .padding(Spacing.xxxl)
+  }
+
+  #Preview("Sessions need you") {
+    PanelView(state: PreviewStates.panelSessionsNeedsYou) { _ in }
       .panelCard()
       .padding(Spacing.xxxl)
   }

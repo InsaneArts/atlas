@@ -8,4 +8,10 @@ public enum ViewerScreenChip: Equatable, Sendable {
   case inControl
   /// The picture is paused over the last one.
   case paused
+  /// A host session has the helper, while two or more are live.
+  ///
+  /// - Parameters:
+  ///   - name: The session's name, such as "Claude Code · understudy".
+  ///   - icon: The host's icon.
+  case holder(name: String, icon: RowIcon)
 }

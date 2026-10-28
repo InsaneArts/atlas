@@ -67,14 +67,13 @@ struct PanelControllerTests {
     #expect(read.map { $0?.overview.state } == [.needsYou, nil])
   }
 
-  @Test("the picture opens the main window on Screen, All activity on Activity and Open Atlas on the tab it shows")
+  @Test("the picture opens the main window on Screen and Open Atlas on the tab it shows")
   func theOpenersOpenTheirTabs() {
     var opened: [ViewerTab?] = []
     let controller = PanelController.scripted(links: PanelLinks(openViewer: { opened.append($0) }))
     controller.send(.openScreen)
-    controller.send(.openActivity)
     controller.send(.openAtlas)
-    #expect(opened == [.screen, .activity, nil])
+    #expect(opened == [.screen, nil])
   }
 
   @Test("Recover… and Switch to the Helper… ask first and run nothing themselves")

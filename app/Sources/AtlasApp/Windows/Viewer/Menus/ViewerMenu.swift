@@ -4,4 +4,6 @@ enum ViewerMenu: Equatable {
   case keys
   /// ⋯: what acts on the picture.
   case more
+  /// The host sessions, whose work to show.
+  case sessions
 }

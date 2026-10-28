@@ -22,6 +22,19 @@ public enum ViewerEvent: Equatable, Sendable {
   ///
   /// - Parameter below: The button's frame in the window's content, top left first, which the menu opens under.
   case showMore(below: CGRect)
+  /// The sessions button: offer the host sessions to choose from, in a menu under the button.
+  ///
+  /// - Parameter below: The button's frame in the window's content, top left first, which the menu opens under.
+  case showSessions(below: CGRect)
+  /// The sessions button took its place in the window, moved, or went: where the window opens the sessions menu when
+  /// it is asked to open it by itself, as from the panel.
+  ///
+  /// - Parameter frame: The button's frame in the window's content, top left first; nil once the button is gone.
+  case placeSessions(CGRect?)
+  /// A host session chosen, or every session, whose work Activity and Screenshots show.
+  ///
+  /// - Parameter choice: Whose work.
+  case chooseSession(ViewerSessionChoice)
   /// Details: show the column beside the screen, or hide it.
   case toggleDetails
   /// Check Again in Details: read the helper's status now.

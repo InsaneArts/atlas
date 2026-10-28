@@ -54,6 +54,7 @@ struct ScreenOverlay: View {
     case .typing: 0
     case .inControl: 1
     case .paused: 2
+    case .holder: 3
     }
   }
 }
@@ -71,6 +72,7 @@ struct ScreenOverlay: View {
       Button(String("Type")) { chip = .typing("こんにちは") }
       Button(String("Control")) { chip = .inControl }
       Button(String("Paused")) { chip = .paused }
+      Button(String("Holder")) { chip = .holder(name: SessionSamples.claudeName, icon: SessionSamples.claudeIcon) }
     } content: {
       ScreenOverlay(state: ViewerScreenState(chip: chip))
         .frame(width: SampleWidth.column * 2, height: SampleWidth.column)

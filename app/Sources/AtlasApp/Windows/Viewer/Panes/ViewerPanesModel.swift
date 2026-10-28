@@ -14,7 +14,8 @@ import Observation
 /// screenshot in the folder the service names. The screenshots' thumbnails, which Activity's screenshot lines
 /// and the Screenshots grid share, are read through one queue a couple at a time as their tiles come into view,
 /// decoded off the main actor, kept by name within a bound, and dropped when they come back after the queue was let
-/// go. ``ViewerController`` owns one; its state is written here alone.
+/// go. The host sessions' list is read while the window wants it, whichever tab shows. ``ViewerController`` owns one;
+/// its state is written here alone.
 @Observable
 final class ViewerPanesModel {
   /// 2 s: Activity's pause between readings. An agent acts every second or two, so a new line shows about as soon as
@@ -26,6 +27,10 @@ final class ViewerPanesModel {
   /// 5 s: the Screenshots list's pause. An agent takes one every few seconds at most while it checks its work, and
   /// the list is a folder the service reads; 5 s shows a new one within a glance.
   static let shotsEvery: Duration = .seconds(5)
+  /// 10 s: the host sessions' list's pause. The status says every few seconds which sessions are live and what each
+  /// does; the list adds those that ended and what each made, which changes at an agent's pace, and is a few files the
+  /// service reads.
+  static let sessionsEvery: Duration = .seconds(10)
   /// 2: thumbnails read at once. Each is a JPEG the service makes from a PNG of several megabytes, so two keep the
   /// grid filling steadily without crowding out the status and picture readings, which share the service's few
   /// request slots.
@@ -63,8 +68,9 @@ final class ViewerPanesModel {
 
   /// Reads the shown tab while the window is on screen, every its own pause, and stops reading any other. The
   /// thumbnails being read are let go unless Activity or Screenshots shows, and the large picture follows the window.
-  /// With the window gone, nothing shows.
+  /// With the window gone, nothing shows, and the sessions' list is not read.
   func followPane() {
+    followSessions()
     work.generation += 1
     work.reading?.cancel()
     work.reading = nil
@@ -142,6 +148,62 @@ final class ViewerPanesModel {
     case .showShotInFinder: showShotInFinder()
     case .thumbnailNeeded(let name): thumbnailNeeded(name)
     default: return
+    }
+  }
+
+  /// Reads the host sessions' list while the window is on screen and wants it: while two or more sessions are live, as
+  /// the status says, or one is chosen. It reads at once when it starts or is asked to, then every ``sessionsEvery``;
+  /// otherwise it stops. A service that does not offer the list is asked again with a status reading once
+  /// ``ViewerSessionsFacts/askAgainAfter`` has passed, as it may have been updated meanwhile.
+  ///
+  /// - Parameter readNow: Whether to read at once even while a reading loop runs, as when a session is chosen.
+  func followSessions(readNow: Bool = false) {
+    guard let viewer, viewer.shown, panes.sessions.asks(at: wallClock()),
+      viewer.reading.statusReading.showsSessions || viewer.session.sessionChoice != .all
+    else { return stopSessions() }
+    guard work.sessions == nil || readNow else { return }
+    stopSessions()
+    let number = work.sessionsGeneration
+    work.sessions = Task { [weak self, clock] in
+      while !Task.isCancelled {
+        guard self?.work.sessionsGeneration == number else { return }
+        await self?.readSessions(number)
+        guard self?.work.sessionsGeneration == number, !Task.isCancelled else { return }
+        // A cancelled pause ends at once, and the loop's condition ends the loop.
+        try? await clock.sleep(for: Self.sessionsEvery)
+      }
+    }
+  }
+
+  /// Stops reading the host sessions' list: its loop ends and a late reply is dropped.
+  private func stopSessions() {
+    work.sessionsGeneration += 1
+    work.sessions?.cancel()
+    work.sessions = nil
+  }
+
+  /// Reads the host sessions' list. A reply overtaken by a newer start or stop has no effect; a service that does not
+  /// offer it is left until ``ViewerSessionsFacts/askAgainAfter`` has passed; another failure is kept, and a cancelled
+  /// request says nothing.
+  ///
+  /// - Parameter number: The reading's generation.
+  func readSessions(_ number: Int) async {
+    do {
+      let list = try await service.sessions()
+      let readAt = wallClock()
+      guard number == work.sessionsGeneration else { return }
+      panes.sessions.list = list
+      panes.sessions.readAt = readAt
+      panes.sessions.failure = nil
+      panes.sessions.notOfferedAt = nil
+    } catch {
+      guard number == work.sessionsGeneration, !error.isCancelled else { return }
+      guard !error.isNotOffered else {
+        panes.sessions.notOfferedAt = wallClock()
+        panes.sessions.list = nil
+        return stopSessions()
+      }
+      panes.sessions.failure = error.message
     }
   }
 

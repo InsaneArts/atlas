@@ -13,7 +13,7 @@
         ready: [ViewerReadyRow(id: "all", name: "Ready to act", value: "All checks pass", mark: .ready)],
         updates: "Live",
         newest: "just now",
-        session: [
+        login: [
           Fact(name: "Logged in", value: "09:12"),
           Fact(name: "Agents", value: "Claude, Codex"),
         ]

@@ -16,13 +16,15 @@ struct KeptPaneShift: ViewModifier {
 
   /// Each switch invalidates completions from an interrupted fade.
   @State private var generation = 0
+  @Environment(\.animatesArrivals) private var animatesArrivals
 
   /// The pane, faded while hidden.
   func body(content: Content) -> some View {
     content
       .environment(\.paneShows, isShown)
       .environment(\.paneSettled, settled)
-      .opacity(drawn ? 1 : 0)
+      // A view drawn once, as a render is, draws the pane shown at once rather than at the start of its fade.
+      .opacity(drawn || (isShown && !animatesArrivals) ? 1 : 0)
       .allowsHitTesting(isShown)
       .disabled(!isShown)
       .accessibilityHidden(!isShown)

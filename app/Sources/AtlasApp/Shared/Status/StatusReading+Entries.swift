@@ -3,10 +3,14 @@ import AtlasUI
 
 extension StatusReading {
   /// The few latest actions, oldest first, as the captions over the screen: an agent's by what it did, as the
-  /// line beside Working names it, and the person's as theirs.
+  /// line beside Working names it, led by its session's icon while sessions show, and the person's as theirs.
   var captionEntries: [ActivityEntry] {
     let items = captions()
-    return items.map { Self.entry($0, isNewest: $0.id == items.last?.id) }
+    return items.map { item in
+      var entry = Self.entry(item, isNewest: item.id == items.last?.id)
+      if showsSessions, item.actor == .agent { entry.icon = SessionIcons.icon(of: item.session, in: self) }
+      return entry
+    }
   }
 
   /// The newest actions, newest first, as the panel's Recent lists them: at most three, each with its age in the
@@ -26,8 +30,8 @@ extension StatusReading {
     statusRows.map { ReadinessItem(name: $0.subject.word, text: $0.detail.word, state: $0.state.readiness) }
   }
 
-  /// One action in AtlasUI's terms: what was done, by whom, and its mark, a warning sign for a failure and a quiet dot
-  /// otherwise.
+  /// One action in AtlasUI's terms: what was done, by whom, and its mark: a warning sign for a failure, the not-sent
+  /// mark for an action refused before anything was sent, which is no problem, and a quiet dot otherwise.
   ///
   /// - Parameters:
   ///   - item: The action.
@@ -40,7 +44,7 @@ extension StatusReading {
       id: item.id,
       line: line,
       when: item.when,
-      mark: item.ok ? .quiet : .failed,
+      mark: item.ok ? .quiet : item.row.nothingSent ? .notSent : .failed,
       isNewest: isNewest
     )
   }

@@ -69,6 +69,12 @@ public final class ScriptedService: ViewerService {
   public var shot = Data()
   /// Activity requests made.
   public var activityCalls = 0
+  /// The host sessions `sessions.json` lists.
+  public var sessionList = HostSessionList()
+  /// Whether the service offers `sessions.json`; an older one answers ``ServiceError/notOffered``.
+  public var offersSessions = true
+  /// Session list requests made.
+  public var sessionsCalls = 0
   /// Apps requests made.
   var appsCalls = 0
 
@@ -307,5 +313,17 @@ public final class ScriptedService: ViewerService {
     }
     try await pause("screenshot")
     return answer
+  }
+
+  /// Answers `sessionList`, or ``ServiceError/notOffered`` unless `offersSessions`, unless held or failed.
+  ///
+  /// - Returns: The host sessions.
+  /// - Throws: A ``ServiceError`` when the route fails or is not offered.
+  @MainActor
+  public func sessions() async throws(ServiceError) -> HostSessionList {
+    sessionsCalls += 1
+    try await pause("sessions")
+    guard offersSessions else { throw .notOffered }
+    return sessionList
   }
 }

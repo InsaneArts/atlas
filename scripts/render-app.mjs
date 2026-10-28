@@ -7,7 +7,8 @@
 // - components: the component samples --render-viewer draws beside them;
 // - onboarding: --render-onboarding;
 // - settings: --render-settings;
-// - panel: --render --dark, once a mode in PANEL_MODES plus paused;
+// - panel: --render --dark, once a mode in PANEL_MODES plus paused, then
+//   once a set of host sessions in PANEL_SESSIONS, as sessions-<name>.png;
 // - alerts: --render --dark, once an entry in ALERT_RENDERS, then once a
 //   helper notice in NOTICE_RENDERS (the system alerts --notice shows);
 // - menubar: --render-menubar, the menu bar item in every state of
@@ -49,6 +50,17 @@ export const PANEL_MODES = [
   'stopped',
   'connecting',
   'elsewhere',
+];
+
+// The host sessions ATLAS_RENDER_SESSIONS names, each with the mode it is
+// drawn over. They must match PanelRender.sessions in
+// app/Sources/AtlasApp/Rendering/PanelRender.swift.
+export const PANEL_SESSIONS = [
+  { name: 'one', mode: 'agent' },
+  { name: 'two', mode: 'agent' },
+  { name: 'waiting', mode: 'agent' },
+  { name: 'needsYou', mode: 'recovering' },
+  { name: 'more', mode: 'agent' },
 ];
 
 export const ALERT_RENDERS = [
@@ -129,6 +141,14 @@ export const PANEL_RENDERS = [
       ATLAS_RENDER_PREVIEW: '1',
     },
   },
+  ...PANEL_SESSIONS.map(({ name, mode }) => ({
+    file: `sessions-${name}`,
+    environment: {
+      ATLAS_RENDER_MODE: mode,
+      ATLAS_RENDER_PREVIEW: '1',
+      ATLAS_RENDER_SESSIONS: name,
+    },
+  })),
 ];
 
 const PREVIEW_TIMEOUT_MS = 10 * 60 * 1000;

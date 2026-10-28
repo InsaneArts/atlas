@@ -32,6 +32,7 @@
     ///   - checks: Its checks; every one passing by default.
     ///   - dialogs: How its Save and Open dialogs check stands; passed by default.
     ///   - reason: The helper's reason, as the overview gives it; nil for none.
+    ///   - overviewFields: More of the overview's fields, such as its host sessions; none by default.
     /// - Returns: The decoded status.
     /// - Throws: A decoding error, which a fixed reply never gives.
     func reported(
@@ -42,7 +43,8 @@
         ["name": "Helper running", "ok": true], ["name": "Input service ready", "ok": true],
       ],
       dialogs: [String: Any] = ["state": "passed", "ageSeconds": 600],
-      reason: String? = "The helper's reason"
+      reason: String? = "The helper's reason",
+      overviewFields: [String: Any] = [:]
     ) throws -> ViewerStatus {
       var overview: [String: Any] = [
         "mode": mode,
@@ -54,6 +56,7 @@
         "activity": activity,
       ]
       overview["reason"] = reason
+      overview.merge(overviewFields) { _, more in more }
       let reply: [String: Any] = [
         "ready": true,
         "canObserve": true,
@@ -106,6 +109,7 @@
         .merging(try activitySamples()) { _, tab in tab }
         .merging(try appsSamples()) { _, tab in tab }
         .merging(try shotsSamples()) { _, tab in tab }
+        .merging(try sessionsSamples()) { _, tab in tab }
     }
 
     /// Shows `tab` at `date`, on a German clock in UTC.

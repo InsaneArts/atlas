@@ -75,6 +75,8 @@ public enum SymbolName: String, CaseIterable, Sendable {
   case lock
   /// A popup button's choices.
   case popup = "chevron.up.chevron.down"
+  /// A menu that opens under its button.
+  case menu = "chevron.down"
   /// Screen Recording: the area a screenshot takes.
   case screenArea = "rectangle.dashed"
   /// The drag ghost's hand, its edge.

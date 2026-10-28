@@ -132,7 +132,9 @@ final class PanelController {
     switch event {
     case .openAtlas: links.openViewer(nil)
     case .openScreen: links.openViewer(.screen)
-    case .openActivity: links.openViewer(.activity)
+    case .openActivity: links.openSessions(.all)
+    case .openSession(let key): links.openSessions(.one(key))
+    case .showAllSessions: links.openSessions(nil)
     case .stopAgent: Task { await stopAgent() }
     case .resumeAgent: Task { await resumeAgent() }
     case .giveBack: giveBack()

@@ -1,7 +1,7 @@
 import SwiftUI
 
-/// A status's mark in its tone: a dot that glows, one that breathes while something works, a stop's square, or a
-/// small quiet dot. The breath holds still under Reduce Motion.
+/// A status's mark in its tone: a dot that glows, one that breathes while something works, a stop's square, a small
+/// quiet dot, or a ring while it waits its turn. The breath holds still under Reduce Motion.
 struct StatusDot: View {
   /// How large a dot is; the square and the small dot keep their own sizes.
   enum Size: Sendable {
@@ -43,13 +43,16 @@ struct StatusDot: View {
     case .dot, .pulsing, .small:
       Circle()
         .fill(tone.color)
+    case .ring:
+      Circle()
+        .strokeBorder(tone.color, lineWidth: Stroke.emphasis)
     }
   }
 
   /// Whether the mark breathes.
   private var breathes: Bool { mark == .pulsing }
 
-  /// Whether the mark glows: a dot in any tone but the quiet one; the square and the small dot never do.
+  /// Whether the mark glows: a dot in any tone but the quiet one; the square, the small dot and the ring never do.
   private var glows: Bool {
     (mark == .dot || mark == .pulsing) && tone.glows
   }
@@ -110,6 +113,8 @@ private enum Layout {
           .tag(StatusMark.square)
         Text(verbatim: "Small")
           .tag(StatusMark.small)
+        Text(verbatim: "Ring")
+          .tag(StatusMark.ring)
       }
       Picker(String("Size"), selection: $size) {
         Text(verbatim: "Small")

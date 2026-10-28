@@ -6,7 +6,7 @@ enum PanelLayout {
   static let width: CGFloat = 352
   /// 12: the panel's inset on every side.
   static let inset = Spacing.m
-  /// 10: between the header, the picture, Recent and the buttons.
+  /// 10: between the header, the picture, Recent or Sessions, and the buttons.
   static let gap = Spacing.sPlus
   /// 328 by 205: the picture's frame, the width inside the inset at the screen's 16:10.
   static let picture = CGSize(width: 328, height: 205)
@@ -18,6 +18,19 @@ enum PanelLayout {
   static let emptyInset: CGFloat = 36
   /// 24: a Recent row's least height.
   static let recentRow: CGFloat = 24
+  /// 40: a session row's least height, its name over its line.
+  static let sessionRow: CGFloat = 40
+  /// 24: a session row's icon.
+  static let sessionIcon = IconSize.m
+  /// 3: the most session rows the panel lists, as Recent lists three actions.
+  static let mostSessions = 3
+  /// 4: a session row's inset round its content, inside its hover fill.
+  static let sessionInset = Spacing.xs
+  /// Where a session row's words start: past its inset, its icon and the gap after it, so the row under the sessions
+  /// lines up with their names.
+  static let sessionText = sessionInset + sessionIcon + Spacing.sPlus
+  /// 14: a session's icon before the caption's words.
+  static let captionIcon = IconSize.xsPlus
   /// 8: the inset of whatever sits on the picture's corners: the caption, the pause button, the badge and the expand
   /// symbol.
   static let captionInset = Spacing.s

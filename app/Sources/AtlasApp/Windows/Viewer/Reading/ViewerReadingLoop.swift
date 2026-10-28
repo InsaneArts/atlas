@@ -243,6 +243,8 @@ final class ViewerReadingLoop {
     }
     viewer.forgetRecoveryOnceNoneNeeded()
     viewer.noteActivitySeen()
+    // The sessions' list is read while two or more sessions are live, which the status says.
+    viewer.panesModel.followSessions()
   }
 
   /// Shows a new picture, read with a status that says whether the helper takes input. A picture from a changed

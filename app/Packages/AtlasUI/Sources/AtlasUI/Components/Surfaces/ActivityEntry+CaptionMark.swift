@@ -7,9 +7,10 @@ extension ActivityEntry {
     case newest
   }
 
-  /// The caption's mark: a failure first, whatever its age, then the newest action; older ones have none.
+  /// The caption's mark: a failure first, whatever its age, then the newest action unless its session's icon leads
+  /// it; older ones have none.
   var captionMark: CaptionMark? {
     if mark == .failed { return .failed }
-    return isNewest ? .newest : nil
+    return isNewest && icon == nil ? .newest : nil
   }
 }

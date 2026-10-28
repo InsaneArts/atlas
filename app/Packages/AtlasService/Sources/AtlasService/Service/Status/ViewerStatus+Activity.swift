@@ -16,6 +16,13 @@ extension ViewerStatus {
     public var ageSeconds: Double?
     /// What it did in the service's words, such as "clicked Save in TextEdit", from builds that say so.
     public var says: String?
+    /// The key of the host session it came from; nil for the person's own and for commands no host named.
+    public var session: String?
+    /// Whether it was refused before anything was sent, as when another app was in front: nothing to recover, and
+    /// not a problem.
+    public var nothingSent: Bool
+    /// Whether its outcome is unknown until the person recovers.
+    public var uncertain: Bool
 
     /// Creates an operation.
     ///
@@ -27,6 +34,9 @@ extension ViewerStatus {
     ///   - actor: "viewer" for the person, else an agent.
     ///   - ageSeconds: How long ago it ran, in seconds.
     ///   - says: What it did in the service's words.
+    ///   - session: The key of the host session it came from.
+    ///   - nothingSent: Whether it was refused before anything was sent.
+    ///   - uncertain: Whether its outcome is unknown.
     public init(
       id: String? = nil,
       operation: String,
@@ -34,7 +44,10 @@ extension ViewerStatus {
       actionCount: Int? = nil,
       actor: String = "agent",
       ageSeconds: Double? = nil,
-      says: String? = nil
+      says: String? = nil,
+      session: String? = nil,
+      nothingSent: Bool = false,
+      uncertain: Bool = false
     ) {
       self.id = id
       self.operation = operation
@@ -43,10 +56,16 @@ extension ViewerStatus {
       self.actor = actor
       self.ageSeconds = ageSeconds
       self.says = says
+      self.session = session
+      self.nothingSent = nothingSent
+      self.uncertain = uncertain
     }
 
     /// The fields of one `activity` row.
-    enum CodingKeys: String, CodingKey { case id, operation, ok, actionCount, actor, ageSeconds, says }
+    enum CodingKeys: String, CodingKey {
+      /// Each field by the name the service writes.
+      case id, operation, ok, actionCount, actor, ageSeconds, says, session, nothingSent, uncertain
+    }
 
     /// Decodes an operation; one that names nothing reads as an agent's failed "action".
     ///
@@ -65,6 +84,9 @@ extension ViewerStatus {
         .flatMap { $0.isFinite ? $0 : nil }
       let said = (try? container.decodeIfPresent(String.self, forKey: .says)) ?? nil
       says = said?.isEmpty == false ? said : nil
+      session = try? container.decodeIfPresent(String.self, forKey: .session)
+      nothingSent = (try? container.decodeIfPresent(Bool.self, forKey: .nothingSent)) == true
+      uncertain = (try? container.decodeIfPresent(Bool.self, forKey: .uncertain)) == true
     }
   }
 }

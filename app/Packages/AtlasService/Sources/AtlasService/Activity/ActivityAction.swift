@@ -29,14 +29,18 @@ public enum ActivityAction: Equatable, Sendable {
     }
   }
 
-  /// The kind the service's words name by their verb, after any "couldn't".
+  /// The kind the service's words name by their verb, after any "couldn't", "didn't" or "stopped".
   ///
-  /// - Parameter says: What the row says it did, such as "couldn't click Save".
+  /// - Parameter says: What the row says it did, such as "couldn't click Save" or "didn't type in Notes".
   /// - Returns: The kind, or nil for words that lead with no verb Atlas writes.
   static func said(_ says: String?) -> ActivityAction? {
     guard let says else { return nil }
-    let words = says.hasPrefix(failedLead) ? says.dropFirst(failedLead.count) : Substring(says)
-    guard let verb = words.split(separator: " ").first else { return nil }
+    let lead = leads.first { says.hasPrefix($0) } ?? ""
+    guard
+      let verb = says.dropFirst(lead.count)
+        .split(separator: " ")
+        .first
+    else { return nil }
     return verbs[String(verb)]
   }
 
@@ -48,15 +52,17 @@ public enum ActivityAction: Equatable, Sendable {
     operation == "input" ? .pointer : .command
   }
 
-  /// How the service's words start when something could not be done.
-  private static let failedLead = "couldn't "
+  /// How the service's words start when something could not be done, was not done as another app was in front, or
+  /// was cut short.
+  private static let leads = ["couldn't ", "didn't ", "stopped "]
 
   /// The verbs the service's words lead with (`src/lib/doing.rs`), done, failed and under way, by their kind.
   private static let verbs: [String: ActivityAction] = [
     "clicked": .pointer, "click": .pointer, "double-clicked": .pointer, "double-click": .pointer,
     "right-clicked": .pointer, "right-click": .pointer, "dragged": .pointer, "drag": .pointer,
-    "moved": .pointer, "move": .pointer, "typed": .keys, "type": .keys, "pressed": .keys, "press": .keys,
-    "scrolled": .scroll, "scroll": .scroll, "opened": .window, "open": .window, "opening": .window,
+    "moved": .pointer, "move": .pointer, "clicking": .pointer, "dragging": .pointer, "typed": .keys, "type": .keys,
+    "typing": .keys, "pressed": .keys, "press": .keys, "pressing": .keys, "scrolled": .scroll, "scroll": .scroll,
+    "scrolling": .scroll, "opened": .window, "open": .window, "opening": .window,
     "closed": .window, "close": .window, "closing": .window, "took": .screenshot, "take": .screenshot,
     "ran": .command, "run": .command, "running": .command,
   ]

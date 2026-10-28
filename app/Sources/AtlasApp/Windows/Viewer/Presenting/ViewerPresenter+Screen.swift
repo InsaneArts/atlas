@@ -102,13 +102,16 @@ extension ViewerPresenter {
     )
   }
 
-  /// The chip at the top: what is being typed before control, control before a paused picture.
+  /// The chip at the top: what is being typed before control, control before a paused picture, and a paused picture
+  /// before the host session that has the helper, while sessions show and the picture does.
   ///
   /// - Parameter snapshot: What the controller holds.
   /// - Returns: The chip, or nil for none.
   static func chip(_ snapshot: ViewerSnapshot) -> ViewerScreenChip? {
     if !snapshot.composing.isEmpty { return .typing(snapshot.composing) }
     if snapshot.holdingControl { return .inControl }
-    return snapshot.session.paused && snapshot.reading.picture != nil ? .paused : nil
+    guard snapshot.reading.picture != nil else { return nil }
+    if snapshot.session.paused { return .paused }
+    return snapshot.reading.statusReading.holder.map { .holder(name: $0.name, icon: SessionIcons.icon($0.host)) }
   }
 }

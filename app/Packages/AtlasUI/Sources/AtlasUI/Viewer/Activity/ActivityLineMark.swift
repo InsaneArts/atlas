@@ -25,7 +25,7 @@ struct ActivityLineMark: View {
   /// The tile's tone, by how the line went and who acted.
   private var tone: SymbolTile.Tone {
     switch line.lead {
-    case .live, .quiet: .quiet
+    case .live, .quiet, .notSent: .quiet
     case .person: .accent
     case .failed: .attention
     }

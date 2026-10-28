@@ -76,14 +76,19 @@ struct PanelPicture: View {
       .accessibilityHidden(true)
   }
 
-  /// The newest action on glass while an agent works, on the panel's smaller chip, a new one replacing the last by a
-  /// fade of 0.2 seconds.
+  /// The newest action on glass while an agent works, on the panel's smaller chip, led by its session's icon while
+  /// sessions show, a new one replacing the last by a fade of 0.2 seconds.
   private var caption: some View {
     ZStack(alignment: .bottomLeading) {
       if let caption = state.caption {
         GlassChip(lead: Self.lead(caption), time: caption.time.isEmpty ? nil : caption.time, size: .small) {
-          Text(caption.text)
-            .truncationMode(.tail)
+          HStack(spacing: Spacing.xsPlus) {
+            if let icon = caption.icon {
+              SessionIcon(icon: icon, side: PanelLayout.captionIcon)
+            }
+            Text(caption.text)
+              .truncationMode(.tail)
+          }
         }
         .frame(maxWidth: PanelLayout.captionWidth, alignment: .leading)
         .padding(PanelLayout.captionInset)
@@ -111,13 +116,14 @@ struct PanelPicture: View {
     .padding(PanelLayout.captionInset)
   }
 
-  /// What leads the caption: an orange dot when its action failed, as the viewer's captions mark a failure, else the
-  /// steady blue dot of work under way; the header's dot is the one that breathes.
+  /// What leads the caption: an orange dot when its action failed, as the viewer's captions mark a failure; else the
+  /// steady blue dot of work under way, unless its session's icon leads it; the header's dot is the one that breathes.
   ///
   /// - Parameter caption: The newest action.
   /// - Returns: The chip's lead.
   nonisolated static func lead<Content: View>(_ caption: PanelCaption) -> GlassChip<Content>.Lead {
-    caption.isFailed ? .dot(.attention) : .dot(.active)
+    if caption.isFailed { return .dot(.attention) }
+    return caption.icon == nil ? .dot(.active) : .none
   }
 }
 
