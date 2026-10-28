@@ -181,7 +181,8 @@ fn last_used_by(
 
 /// Whose the pending changes are: `yours` when every one is this
 /// session's and none still runs, false when any is another's, and the
-/// other sessions' names.
+/// other sessions' names. A command with no session of its own is told
+/// only whose they are: none of them can be its.
 fn caused_by(
     client: &Client,
     own: Option<&Key>,
@@ -209,7 +210,9 @@ fn caused_by(
         added.push(("yours", json!(true)));
         added.push(("next", json!(hints::YOURS)));
     } else if !others.is_empty() {
-        added.push(("yours", json!(false)));
+        if own.is_some() {
+            added.push(("yours", json!(false)));
+        }
         let named: Vec<String> = others
             .iter()
             .take(CAUSED_BY)

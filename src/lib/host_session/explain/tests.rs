@@ -249,7 +249,10 @@ fn without_a_session_an_unknown_outcome_says_whose_but_never_yours() {
     abandoned(&client, Some(&claude));
 
     let error = reply(uncertain(), || Some(client.clone()), None).unwrap_err();
-    assert_eq!(error.details["yours"], false);
+    assert!(
+        !error.details.contains_key("yours"),
+        "a command with no session is not told it is not its own"
+    );
     assert_eq!(error.details["causedBy"].as_array().unwrap().len(), 1);
 
     let unlabelled = tempfile::tempdir().unwrap();
