@@ -163,7 +163,8 @@ pub(super) fn failure(error: &Error, advised: bool) -> Value {
 }
 
 /// Add `next` to a failed result (`ok: false` with a code) that has none,
-/// as [`hints::step`] says.
+/// as [`hints::step`] says, or for a focus refusal [`hints::focus_changed`]
+/// from what the result says was sent before it.
 fn advise(value: &mut Value) {
     if value["ok"] != false || value.get("next").is_some() {
         return;
@@ -173,9 +174,21 @@ fn advise(value: &mut Value) {
         return;
     };
 
-    let holder = value["holder"].as_str().and_then(Holder::parse);
-    let next = hints::step(code, holder, value["uncertain"] == true);
+    let uncertain = value["uncertain"] == true;
+    let next = if code == "focus-changed" && !uncertain {
+        hints::focus_changed(sent_before(value), value["reason"] == "unreadable")
+    } else {
+        let holder = value["holder"].as_str().and_then(Holder::parse);
+        hints::step(code, holder, uncertain)
+    };
     value["next"] = json!(next);
+}
+
+/// Whether a failed result says some of its command was sent: actions
+/// performed or characters typed, or the failing action partly sent.
+fn sent_before(value: &Value) -> bool {
+    let counted = |field: &str| value[field].as_u64().is_some_and(|count| count > 0);
+    counted("performed") || counted("typed") || value["partial"] == true
 }
 
 /// Write `text` as it is. A reader that went away (`| head`) ends the
@@ -289,6 +302,57 @@ mod tests {
             advise(&mut untouched);
             assert_eq!(untouched, before);
         }
+    }
+
+    /// A focus refusal says earlier actions were sent only when the result
+    /// counts some, and asks for the app first when what was in front could
+    /// not be read.
+    #[test]
+    fn a_focus_refusal_is_advised_by_what_was_sent_before_it() {
+        let refusal = |fields: Value| {
+            let mut value = json!({"ok": false, "code": "focus-changed", "uncertain": false});
+            value
+                .as_object_mut()
+                .unwrap()
+                .extend(fields.as_object().unwrap().clone());
+            advise(&mut value);
+            value["next"].clone()
+        };
+
+        for (fields, sent, unreadable) in [
+            (
+                json!({"reason": "app", "performed": 0, "partial": false}),
+                false,
+                false,
+            ),
+            (json!({"reason": "point"}), false, false),
+            (json!({"reason": "unreadable", "performed": 0}), false, true),
+            (json!({"reason": "app", "performed": 2}), true, false),
+            (
+                json!({"reason": "app", "typed": 48, "partial": true}),
+                true,
+                false,
+            ),
+            (
+                json!({"reason": "point", "typed": 0, "partial": true}),
+                true,
+                false,
+            ),
+            (json!({"reason": "unreadable", "performed": 1}), true, true),
+        ] {
+            assert_eq!(
+                refusal(fields.clone()),
+                hints::focus_changed(sent, unreadable),
+                "{fields}"
+            );
+        }
+
+        let error = Error::new("focus-changed", "Calculator has keyboard focus")
+            .with("reason", "unreadable");
+        assert_eq!(
+            failure(&error, true)["next"],
+            hints::focus_changed(false, true)
+        );
     }
 
     #[test]

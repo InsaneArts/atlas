@@ -79,13 +79,32 @@ pub fn next(code: &str, holder: Option<Holder>) -> &'static str {
         ("not-ready", _) => "Tell the person what the error says. Don't try again in a loop.",
         ("switch", _) => "Ask the person to lock the screen from the Apple menu and switch there.",
         ("update", _) => "Show the error to the person. Never bypass the signature checks.",
-        ("focus-changed", _) => {
-            "Another app was in front, maybe another agent's. Earlier actions were sent: check typed or performed and what landed, click where your app shows, then send only the rest."
-        }
+        ("focus-changed", _) => focus_changed(false, false),
         ("interrupted", _) => {
             "Atlas was stopped partway, and nothing it did is left unknown. Look at the helper before going on."
         }
         _ => fix(code).unwrap_or("Take a screenshot, then run atlas doctor to see what is wrong."),
+    }
+}
+
+/// What an agent does about an action refused because another app was in
+/// front: `sent` says whether any of the command went before it, and
+/// `unreadable` that Atlas could not tell what was in front at all, as when
+/// the active app has no window.
+pub fn focus_changed(sent: bool, unreadable: bool) -> &'static str {
+    match (sent, unreadable) {
+        (false, false) => {
+            "Another app was in front, maybe another agent's, and nothing of the command was sent. Click where your app shows, then run it again."
+        }
+        (false, true) => {
+            "Atlas could not tell which app was in front, often because the active app has no window, and nothing of the command was sent. Click where your app shows, or open the app if none of it shows, then run it again."
+        }
+        (true, false) => {
+            "Another app was in front, maybe another agent's. Earlier actions were sent: check typed or performed and what landed, click where your app shows, then send only the rest."
+        }
+        (true, true) => {
+            "Atlas could not tell which app was in front, often because the active app has no window. Earlier actions were sent: check typed or performed and what landed, click where your app shows or open the app if none of it shows, then send only the rest."
+        }
     }
 }
 
@@ -249,15 +268,56 @@ mod tests {
     /// takes focus from whoever moved it; a click where the app shows does.
     #[test]
     fn a_focus_refusal_never_sends_an_agent_to_open_the_app() {
-        let said = next("focus-changed", None);
-        assert!(!said.contains("atlas open"), "{said}");
-        assert!(said.contains("click where your app shows"), "{said}");
-        assert!(said.contains("send only the rest"), "{said}");
-        assert!(
-            !said.contains("try again"),
-            "never the whole command: {said}"
+        for sent in [false, true] {
+            for unreadable in [false, true] {
+                let said = focus_changed(sent, unreadable);
+                assert!(!said.contains("atlas open"), "{said}");
+                assert!(
+                    said.to_lowercase().contains("click where your app shows"),
+                    "{said}"
+                );
+            }
+        }
+        assert_eq!(next("focus-changed", None), focus_changed(false, false));
+        assert_eq!(
+            step("focus-changed", None, false),
+            focus_changed(false, false)
         );
-        assert_eq!(step("focus-changed", None, false), said);
+    }
+
+    /// Only a refusal after something of the command was sent says so, and
+    /// asks for the rest alone; one that sent nothing is run again whole.
+    #[test]
+    fn a_focus_refusal_says_earlier_actions_were_sent_only_when_they_were() {
+        for unreadable in [false, true] {
+            let sent = focus_changed(true, unreadable);
+            assert!(sent.contains("Earlier actions were sent"), "{sent}");
+            assert!(sent.contains("send only the rest"), "{sent}");
+            assert!(!sent.contains("run it again"), "{sent}");
+
+            let nothing = focus_changed(false, unreadable);
+            assert!(!nothing.contains("Earlier actions"), "{nothing}");
+            assert!(
+                nothing.contains("nothing of the command was sent"),
+                "{nothing}"
+            );
+            assert!(nothing.contains("run it again"), "{nothing}");
+        }
+    }
+
+    /// When what is in front cannot be read, often because the active app
+    /// has no window, the agent is told to bring its app up first.
+    #[test]
+    fn an_unreadable_front_asks_for_the_app_to_be_clicked_or_opened_first() {
+        for sent in [false, true] {
+            let said = focus_changed(sent, true);
+            assert!(
+                said.contains("could not tell which app was in front"),
+                "{said}"
+            );
+            assert!(said.contains("open the app if none of it shows"), "{said}");
+            assert!(!focus_changed(sent, false).contains("open the app"));
+        }
     }
 
     /// A command a signal stopped while its change was under way left that
