@@ -19,6 +19,7 @@ use crate::{
         ax::{self, Element, Frame, Stop},
         windows::{Bounds, Dock, MENU_LAYER, Screen, Shown, Window, top_at, unobstructed},
     },
+    task,
     transport::{accepted, run_output},
 };
 use serde_json::{Value, json};
@@ -572,6 +573,14 @@ pub async fn open(
     }
 
     let opened = reply["exitCode"] == 0;
+    // An app opened by name is only listed for its task: which of its
+    // processes the launch started, nothing can tell.
+    if let Some(app) = app.filter(|app| opened && copied.is_empty() && !app.contains('/')) {
+        let launch = task::Owned::Launch {
+            app: crate::doing::bounded(app),
+        };
+        let _ = task::Claims::of(client).claim(&launch, task::State::Made);
+    }
     let mut value = json!({ "ok": opened, "opened": opened });
 
     if !copied.is_empty() {

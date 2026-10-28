@@ -14,6 +14,7 @@ use crate::{
     control::{Cause, Token},
     error::{Error, Result},
     handoff,
+    task::{Owned, State},
 };
 use serde_json::{Value, json};
 use std::{collections::BTreeMap, path::Path};
@@ -178,6 +179,7 @@ impl Reading<'_> {
                 .unwrap_or_default(),
             "plans": subject.record.map(plans).unwrap_or_default(),
             "uncertain": uncertain,
+            "tasks": subject.record.map(|record| self.tasks(record)).unwrap_or_default(),
         });
         if let Some(previous) = subject.record.and_then(|record| self.previous(record)) {
             reply["previous"] = previous;
@@ -277,6 +279,41 @@ impl Reading<'_> {
         tokens
             .iter()
             .map(|token| json!({"app": handoff::copy_app(self.store.copies(), token)}))
+            .collect()
+    }
+
+    /// The tasks the session of `record` named with ATLAS_TASK, each with
+    /// what it left: its copy folders still there, and its plans the
+    /// session's record still lists as applied.
+    fn tasks(&self, record: &Record) -> Vec<Value> {
+        crate::task::store::Store::at(self.output)
+            .of_session(&record.key)
+            .into_iter()
+            .filter(|task| task.name.is_some())
+            .map(|task| {
+                let (mut copies, mut plans) = (0, 0);
+                for (owned, state) in task.claims() {
+                    let live = matches!(state, State::Intent | State::Made);
+                    match owned {
+                        Owned::Copy { id }
+                            if live && handoff::copy_exists(self.store.copies(), &id) =>
+                        {
+                            copies += 1;
+                        }
+                        Owned::Plan { id }
+                            if live && record.plans.iter().any(|plan| plan.plan_id == id) =>
+                        {
+                            plans += 1;
+                        }
+                        _ => {}
+                    }
+                }
+                json!({
+                    "key": task.key,
+                    "name": task.name,
+                    "leftovers": {"copies": copies, "plans": plans},
+                })
+            })
             .collect()
     }
 

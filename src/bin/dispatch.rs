@@ -17,6 +17,7 @@ use atlas::{
     error::{Error, Result},
     host_session::{self, HostSession, store::Kind},
     menubar,
+    task::{self, Task},
     transport::with_output,
     ui::{self, progress::Spinner},
     viewer,
@@ -324,11 +325,13 @@ pub(super) async fn execute(config: PathBuf, command: Command, wait: Duration) -
     let host = labelled(&command, actor)
         .then(HostSession::from_env)
         .flatten();
+    let task = Task::from_env(host.as_ref())?;
     let client = || {
         Client::new(Config::load(&config)?).map(|mut client| {
             client.actor = actor;
             client.doing = doing.clone();
             client.host_session = host.clone();
+            client.task = task.clone();
             client.controller = client.controller.labelled(host.as_ref());
             if waits {
                 client.controller = client.controller.waiting(wait);
@@ -368,6 +371,7 @@ pub(super) async fn execute(config: PathBuf, command: Command, wait: Duration) -
             let _ = host_session::store::note(&client, host, kind, doing.as_ref(), &result);
         }
         let _ = host_session::store::forget_rolled_back(&client, kind, &result);
+        let _ = task::settle_rolled_back(&client, kind, &result);
     }
 
     // A refusal that can name the other session, or say whose an unknown

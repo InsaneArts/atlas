@@ -1,0 +1,219 @@
+//! Which task of an agent's session a command belongs to, and the record of
+//! what that task made in the helper, so it can be found and cleaned up
+//! later. A task is a label: it never decides who may act, what is pending
+//! or whether something may be removed.
+pub(crate) mod record;
+pub(crate) mod store;
+
+pub(crate) use record::{Owned, State};
+
+use crate::{
+    client::Client,
+    control::Token,
+    error::{Error, Result},
+    host_session::{
+        HostSession, Key, now_ms,
+        store::{Kind, rolled_back},
+    },
+};
+use serde::{Deserialize, Serialize};
+use serde_json::Value;
+use std::fmt;
+use store::Store;
+
+/// The most bytes a task name keeps.
+const NAME_LIMIT: usize = 64;
+
+/// What names a task of the session a command comes from.
+const VARIABLE: &str = "ATLAS_TASK";
+
+/// A task's name, as ATLAS_TASK gives it: 1 to [`NAME_LIMIT`] bytes of
+/// ASCII letters, digits, `.`, `_`, `:` and `-`, so no other value is ever
+/// kept or shown.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(try_from = "String", into = "String")]
+pub struct Name(String);
+
+impl Name {
+    /// `value` as a task name, when it is a plain one.
+    pub fn parse(value: &str) -> Option<Self> {
+        let plain = (1..=NAME_LIMIT).contains(&value.len())
+            && value.bytes().all(|byte| {
+                byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'_' | b':' | b'-')
+            });
+        plain.then(|| Self(value.to_owned()))
+    }
+
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
+impl TryFrom<String> for Name {
+    type Error = String;
+
+    fn try_from(value: String) -> std::result::Result<Self, Self::Error> {
+        Self::parse(&value).ok_or_else(|| "not a plain task name".to_owned())
+    }
+}
+
+impl From<Name> for String {
+    fn from(name: Name) -> Self {
+        name.0
+    }
+}
+
+impl fmt::Display for Name {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str(&self.0)
+    }
+}
+
+/// The task a command belongs to: its session's default task, or one the
+/// agent named with ATLAS_TASK.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Task {
+    /// The host session's key.
+    session: Key,
+    /// The session's key for its default task; otherwise drawn from the
+    /// session's key and the name. The only form activity rows carry.
+    key: Key,
+    /// The name ATLAS_TASK gave, if any.
+    name: Option<Name>,
+}
+
+impl Task {
+    /// The task of `session` that `name` (ATLAS_TASK's value) names: the
+    /// session's default task when it is unset or empty. A name that is not
+    /// a plain [`Name`] is a usage error, so an agent that meant to split
+    /// its work never finds it silently merged.
+    pub fn of(session: &Key, name: Option<&str>) -> Result<Self> {
+        let name = match name.filter(|name| !name.is_empty()) {
+            None => None,
+            Some(name) => Some(Name::parse(name).ok_or_else(|| {
+                Error::new(
+                    "usage",
+                    format!(
+                        "{VARIABLE} must be 1 to {NAME_LIMIT} letters, digits, '.', '_', ':' or \
+                         '-', so Atlas did nothing. Set it to a short plain name, or unset it."
+                    ),
+                )
+            })?),
+        };
+        let key = match &name {
+            None => session.clone(),
+            Some(name) => Key::digest(&format!("task:{session}:{name}")),
+        };
+
+        Ok(Self {
+            session: session.clone(),
+            key,
+            name,
+        })
+    }
+
+    /// The task of a command from `session`, as this process's ATLAS_TASK
+    /// names it.
+    pub fn from_env(session: Option<&HostSession>) -> Result<Option<Self>> {
+        Self::resolve(session, std::env::var(VARIABLE).ok().as_deref())
+    }
+
+    /// The task `name` names of a command from `session`; none without a
+    /// host session, whatever the name: ATLAS_TASK alone makes no session.
+    pub(crate) fn resolve(
+        session: Option<&HostSession>,
+        name: Option<&str>,
+    ) -> Result<Option<Self>> {
+        session
+            .map(|session| Self::of(session.key(), name))
+            .transpose()
+    }
+
+    pub fn session(&self) -> &Key {
+        &self.session
+    }
+
+    pub fn key(&self) -> &Key {
+        &self.key
+    }
+
+    pub fn name(&self) -> Option<&Name> {
+        self.name.as_ref()
+    }
+}
+
+/// Where one command's claims go: its task's record, or nowhere for a
+/// command without a task. Every claim is best effort: what it fails to
+/// write, the session's record, `close` and the transaction list still
+/// find by their own means.
+pub(crate) struct Claims {
+    task: Option<(Store, Task)>,
+}
+
+impl Claims {
+    /// The claims of `client`'s command.
+    pub fn of(client: &Client) -> Self {
+        let task = client
+            .task
+            .clone()
+            .zip(client.output_dir().ok().map(Store::at));
+        Self {
+            task: task.map(|(task, store)| (store, task)),
+        }
+    }
+
+    /// The claims of `task`, kept in `store`.
+    #[cfg(test)]
+    pub(crate) fn in_store(store: Store, task: Task) -> Self {
+        Self {
+            task: Some((store, task)),
+        }
+    }
+
+    /// Record that the task is about to make `owned` (`intent`), or has
+    /// made it (`made`), written through to the disk before the caller goes
+    /// on.
+    pub fn claim(&self, owned: &Owned, state: State) -> Result<()> {
+        let Some((store, task)) = &self.task else {
+            return Ok(());
+        };
+        let now = now_ms();
+        store.update(task, now, |record| record.claim(owned, state, now))
+    }
+
+    /// Record what became of `owned`, which this task claimed.
+    pub fn settle(&self, owned: &Owned, state: State) -> Result<()> {
+        let Some((store, task)) = &self.task else {
+            return Ok(());
+        };
+        let now = now_ms();
+        store.update(task, now, |record| {
+            record.settle(owned, state, now);
+            Ok(())
+        })
+    }
+}
+
+/// Note, in every task's record that claims it, the plan a rollback in
+/// `result`, to a command of `kind`, undid: `gone` when nothing was kept,
+/// `kept` otherwise. Whoever rolled it back (the person at a terminal,
+/// another session or this one), the plan's own state is what changed. It
+/// decides nothing about the rollback itself.
+pub fn settle_rolled_back(client: &Client, kind: Kind, result: &Result<Value>) -> Result<()> {
+    let Some(reply) = rolled_back(kind, result) else {
+        return Ok(());
+    };
+    let Some(plan_id) = reply["planId"].as_str().and_then(Token::parse) else {
+        return Ok(());
+    };
+    let kept = |field: &str| reply[field].as_array().is_some_and(|kept| !kept.is_empty());
+    let state = if kept("keptTargets") || kept("retainedDirectories") {
+        State::Kept
+    } else {
+        State::Gone
+    };
+    Store::at(client.output_dir()?).settle_everywhere(&Owned::Plan { id: plan_id }, state, now_ms())
+}
+
+#[cfg(test)]
+mod tests;

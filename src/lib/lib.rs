@@ -32,6 +32,7 @@ pub mod session;
 mod session_view;
 pub mod setup;
 pub mod switch;
+pub mod task;
 pub mod transport;
 pub mod ui;
 pub mod uninstall;

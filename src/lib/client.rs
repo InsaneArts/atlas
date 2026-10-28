@@ -17,6 +17,7 @@ use crate::{
         Display, Epoch, FOCUS_APP, FOCUS_DOCK, HOLD, SHUTDOWN, Session, has_capability,
         input_current, input_settled, require_hidden,
     },
+    task::Task,
     transport::{Transport, accepted, refusal, run_output},
 };
 use base64::{Engine, engine::general_purpose::STANDARD};
@@ -265,6 +266,9 @@ pub struct Client {
     /// The host session the command acting through this client comes from,
     /// for the activity log and the session record; never for a decision.
     pub host_session: Option<HostSession>,
+    /// The task of that session the command belongs to, for its rows and
+    /// the task's record; never for a decision.
+    pub task: Option<Task>,
     installed: BuildCache,
 }
 
@@ -437,6 +441,7 @@ impl Client {
             actor: Actor::Agent,
             doing: None,
             host_session: None,
+            task: None,
             config,
         })
     }
@@ -2103,6 +2108,15 @@ impl Client {
             fields.insert("session".into(), json!(session.key()));
         }
 
+        // A task ATLAS_TASK split from its session names its key, never its
+        // name; a session's default task adds nothing.
+        if self.actor == Actor::Agent
+            && let (Some(task), Some(fields)) = (&self.task, row.as_object_mut())
+            && task.name().is_some()
+        {
+            fields.insert("task".into(), json!(task.key()));
+        }
+
         // A screenshot names the file it gave: Atlas's own timestamp name,
         // never a path or a person's file.
         if request["op"] == "screenshot"
@@ -3570,6 +3584,31 @@ mod tests {
             rows(&client)[1].get("session").is_none(),
             "the person's never does"
         );
+    }
+
+    #[test]
+    fn a_default_task_adds_nothing_to_a_row_and_a_named_one_adds_only_its_key() {
+        let dir = tempfile::tempdir().unwrap();
+        let session = labelled(&client_in(dir.path()));
+        let key = session.host_session.as_ref().unwrap().key().clone();
+        let mut default = session.clone();
+        default.task = Some(Task::of(&key, None).unwrap());
+        let mut named = session.clone();
+        named.task = Some(Task::of(&key, Some("settings-sheet")).unwrap());
+        let request = json!({"op": "input", "actions": [{}]});
+        for client in [&session, &default, &named] {
+            client.record_for_test(&request, &json!({"ok": true}));
+        }
+
+        let [plain, by_default, by_name] = <[Value; 3]>::try_from(rows(&session)).unwrap();
+        let fields = |row: &Value| row.as_object().unwrap().keys().cloned().collect::<Vec<_>>();
+        assert_eq!(fields(&by_default), fields(&plain));
+        let task = named.task.as_ref().unwrap().key();
+        assert_eq!(by_name["task"], task.as_str());
+        assert_ne!(task, &key);
+        let line =
+            fs::read_to_string(session.output_dir().unwrap().join("metadata.jsonl")).unwrap();
+        assert!(!line.contains("settings-sheet"), "never the name");
     }
 
     #[test]

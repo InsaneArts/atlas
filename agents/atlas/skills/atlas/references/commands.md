@@ -430,7 +430,7 @@ Global options:
 ```text
 List what this agent session did in the helper.
 
-Its recent actions, its screenshots, the copies open made that are still there, the environment plans it applied and not yet rolled back, and whether an action of its own is unknown. Claude Code, Codex, opencode and Pi name their session themselves; elsewhere set ATLAS_SESSION=NAME. Without a session, or with --all, every session's. It only reads: it works while another agent or the person has control, or after a Stop.
+Its recent actions, its screenshots, the copies open made that are still there, the environment plans it applied and not yet rolled back, whether an action of its own is unknown, and each task it named with ATLAS_TASK=NAME. Claude Code, Codex, opencode and Pi name their session themselves; elsewhere set ATLAS_SESSION=NAME. Without a session, or with --all, every session's. It only reads: it works while another agent or the person has control, or after a Stop.
 
 Usage: atlas activity [OPTIONS]
 

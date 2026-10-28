@@ -924,6 +924,17 @@ mod tests {
     }
 
     #[test]
+    fn shown_rows_never_carry_a_task() {
+        let row = json!({"at": "99000000000", "operation": "input", "ok": true,
+            "actor": "agent", "verb": "click", "session": "3f9a1c07b2e4",
+            "task": "5be0d1a2c3f4"});
+        let shown = shown(&row, NOW);
+
+        assert!(shown.get("task").is_none());
+        assert!(!shown.to_string().contains("5be0d1a2c3f4"));
+    }
+
+    #[test]
     fn the_status_lists_recent_host_sessions_and_who_holds_the_helper() {
         use crate::host_session::{
             Host, HostSession,

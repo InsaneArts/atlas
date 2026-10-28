@@ -17,6 +17,7 @@ use crate::{
     config::parse_toml,
     control::Ownership,
     error::{Error, Result},
+    task::{self, Claims},
     transport::{OutputError, run_output},
 };
 use files::*;
@@ -190,6 +191,7 @@ pub(super) async fn freeze(
             &serde_json::to_vec_pretty(&plan)?,
             0o600,
         )?;
+        claim_plan(client, &id);
 
         result["retainedPlan"] = json!(stage);
         atomic_write(
@@ -252,6 +254,9 @@ async fn apply_frozen(client: &Client, helper: &str, plan_id: &str) -> Result<Va
         ));
     }
 
+    // Claimed again for a plan another task previewed, before the helper
+    // is asked.
+    claim_plan(client, plan_id);
     let result = dispatch(client, helper, &stage, Request::Apply { plan }).await;
     // Discarded while still locked, so nothing else can start on it.
     if settled(&result, "applied") {
@@ -260,6 +265,14 @@ async fn apply_frozen(client: &Client, helper: &str, plan_id: &str) -> Result<Va
 
     drop(lock);
     operation(retained(result, plan_id, &stage), "apply")
+}
+
+/// Note that the command's task made plan `plan_id`. A claim that cannot
+/// be written changes nothing: the transaction list still finds the plan.
+fn claim_plan(client: &Client, plan_id: &str) {
+    if let Some(id) = crate::control::Token::parse(plan_id) {
+        let _ = Claims::of(client).claim(&task::Owned::Plan { id }, task::State::Made);
+    }
 }
 
 /// Preview rollback by default; restore only this transaction's unchanged files.

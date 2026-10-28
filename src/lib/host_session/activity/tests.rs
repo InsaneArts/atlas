@@ -75,6 +75,45 @@ fn two_sessions(client: &Client) -> (HostSession, HostSession, String) {
 }
 
 #[test]
+fn a_sessions_reply_lists_the_tasks_it_named_with_what_each_left() {
+    use crate::task::{Claims, Owned, State, Task, store::Store as Tasks};
+
+    let directory = tempfile::tempdir().unwrap();
+    let client = client(directory.path());
+    let claude = session(Host::Claude, "left");
+    let plan = Token::parse(&applied(&client, &claude)).unwrap();
+    let output = client.output_dir().unwrap();
+    let claims = |name: Option<&str>| {
+        let task = Task::of(claude.key(), name).unwrap();
+        (Claims::in_store(Tasks::at(output), task.clone()), task)
+    };
+    let (named, probe) = claims(Some("probe"));
+    named
+        .claim(&Owned::Plan { id: plan.clone() }, State::Made)
+        .unwrap();
+    named
+        .claim(&Owned::Copy { id: Token::new() }, State::Made)
+        .unwrap();
+    let (default, _) = claims(None);
+    default
+        .claim(&Owned::Plan { id: Token::new() }, State::Made)
+        .unwrap();
+
+    let reply = list(&client, Some(&claude), false, None, 10).unwrap();
+
+    assert_eq!(
+        reply["tasks"],
+        json!([{"key": probe.key(), "name": "probe",
+            "leftovers": {"copies": 0, "plans": 1}}])
+    );
+    let everyone = list(&client, Some(&claude), true, None, 10).unwrap();
+    assert!(
+        !everyone.to_string().contains("probe"),
+        "names stay in one session's reply"
+    );
+}
+
+#[test]
 fn activity_lists_this_sessions_rows_screenshots_copies_and_plans_only() {
     let directory = tempfile::tempdir().unwrap();
     let client = client(directory.path());

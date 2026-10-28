@@ -105,7 +105,13 @@ pub struct Key(String);
 impl Key {
     /// The key of `id` of `host`.
     pub fn of(host: Host, id: &str) -> Self {
-        let digest = Sha256::digest(format!("{}:{id}", host.as_str()).as_bytes());
+        Self::digest(&format!("{}:{id}", host.as_str()))
+    }
+
+    /// The first [`KEY_LEN`] hex digits of SHA-256 of `text`: how every
+    /// key Atlas makes from a label is drawn.
+    pub(crate) fn digest(text: &str) -> Self {
+        let digest = Sha256::digest(text.as_bytes());
         let hex: String = digest.iter().map(|byte| format!("{byte:02x}")).collect();
         Self(hex[..KEY_LEN].to_owned())
     }

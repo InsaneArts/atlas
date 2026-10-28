@@ -9,6 +9,7 @@ use crate::{
     control::{Ownership, Token},
     error::{Error, Result},
     host_session::{HostSession, Key},
+    task::{Claims, Owned, State},
     transport::run_output,
 };
 use serde_json::{Value, json};
@@ -268,13 +269,18 @@ pub(crate) async fn hand_over(
 
     let mut made = Vec::new();
     let session = client.host_session.as_ref().map(HostSession::key);
+    let claims = Claims::of(client);
+    let owner = Owner {
+        session,
+        claims: &claims,
+    };
     let placed = place(
         targets,
         answers,
         running,
         &opened_with,
         client.config.helper_uid,
-        session,
+        &owner,
         &mut made,
     );
 
@@ -289,24 +295,35 @@ pub(crate) async fn hand_over(
         Err(error) => {
             // Nothing has opened these copies yet: they go with the failure.
             for folder in made.iter().filter_map(|(_, copy)| copy.parent()) {
-                let _ = fs::remove_dir_all(folder);
+                if fs::remove_dir_all(folder).is_ok()
+                    && let Some(id) = folder_token(folder)
+                {
+                    let _ = claims.settle(&Owned::Copy { id }, State::Gone);
+                }
             }
             Err(error)
         }
     }
 }
 
+/// Who a copy is made for: the host session its label names, if any, and
+/// the task whose record claims it.
+struct Owner<'a> {
+    session: Option<&'a Key>,
+    claims: &'a Claims,
+}
+
 /// [`hand_over`]'s targets in order, given `answers` (whether the helper
-/// can read each path outside ROOT), for `helper` and the host session of
-/// the command copying, if any; each copy made is added to `made` as
-/// (original, copy) as soon as it exists.
+/// can read each path outside ROOT), for `helper` and the command copying;
+/// each copy made is added to `made` as (original, copy) as soon as it
+/// exists.
 fn place(
     targets: Vec<Target>,
     answers: Vec<bool>,
     running: &[Running],
     opened_with: &[String],
     helper: u32,
-    session: Option<&Key>,
+    owner: &Owner,
     made: &mut Vec<(PathBuf, PathBuf)>,
 ) -> Result<Vec<String>> {
     let root_path = PathBuf::from(ROOT);
@@ -355,9 +372,9 @@ fn place(
                         None => root.insert(self::root(helper)?),
                     };
 
-                    let copy = copy(&path, root)?;
+                    let copy = claimed_copy(&path, root, owner.claims, copy)?;
                     made.push((path.clone(), copy.clone()));
-                    if let (Some(session), Some(folder)) = (session, copy.parent()) {
+                    if let (Some(session), Some(folder)) = (owner.session, copy.parent()) {
                         // A label for close and the session's record; a
                         // lost one leaves the copy everyone's, as before.
                         let _ = label(folder, session);
@@ -381,13 +398,37 @@ fn place(
     Ok(out)
 }
 
-/// Copy `path` into a new folder of its own under `root`, read-only for the
-/// helper: the copy keeps execute bits but nobody else may write to it.
-fn copy(path: &Path, root: &Path) -> Result<PathBuf> {
+/// Copy `path` under `root` with `copy`, into a folder whose token the
+/// command's task claims before the folder is made, so a crash on the way
+/// leaves it findable, and settles once it is known whether it was.
+fn claimed_copy(
+    path: &Path,
+    root: &Path,
+    claims: &Claims,
+    copy: impl FnOnce(&Path, &Path, &Token) -> Result<PathBuf>,
+) -> Result<PathBuf> {
+    let token = Token::new();
+    let owned = Owned::Copy { id: token.clone() };
+    let _ = claims.claim(&owned, State::Intent);
+
+    let copied = copy(path, root, &token);
+    let state = if copied.is_ok() {
+        State::Made
+    } else {
+        State::Gone
+    };
+    let _ = claims.settle(&owned, state);
+    copied
+}
+
+/// Copy `path` into a new folder of its own under `root`, named `token`,
+/// read-only for the helper: the copy keeps execute bits but nobody else
+/// may write to it.
+fn copy(path: &Path, root: &Path, token: &Token) -> Result<PathBuf> {
     let name = path
         .file_name()
         .ok_or_else(|| Error::new("input", format!("Cannot open {}", path.display())))?;
-    let folder = root.join(crate::control::token());
+    let folder = root.join(token.as_str());
     fs::DirBuilder::new()
         .mode(0o700)
         .create(&folder)
@@ -434,6 +475,11 @@ fn labelled(folder: &Path) -> Option<Key> {
 pub(crate) fn token_of(path: &str) -> Option<Token> {
     let rest = Path::new(path).strip_prefix(ROOT).ok()?;
     Token::parse(rest.components().next()?.as_os_str().to_str()?)
+}
+
+/// The token a copy folder is named with, wherever it is.
+fn folder_token(folder: &Path) -> Option<Token> {
+    Token::parse(folder.file_name()?.to_str()?)
 }
 
 /// Whether the copy folder `token` names is still there, under `root`.
@@ -695,8 +741,8 @@ mod tests {
         fs::write(&source, "hello").unwrap();
         fs::set_permissions(&source, fs::Permissions::from_mode(0o666)).unwrap();
 
-        let first = copy(&source, &root).unwrap();
-        let second = copy(&source, &root).unwrap();
+        let first = copy(&source, &root, &Token::new()).unwrap();
+        let second = copy(&source, &root, &Token::new()).unwrap();
         assert_ne!(first.parent(), second.parent(), "never replaced");
         assert_eq!(fs::read_to_string(&first).unwrap(), "hello");
         let mode = fs::metadata(&first).unwrap().mode() & 0o777;
@@ -906,6 +952,72 @@ mod tests {
         assert_eq!(token_of("/tmp/Quarterly Plan.txt"), None);
         assert_eq!(token_of(&format!("{ROOT}/not-a-token/x")), None);
         assert_eq!(token_of(&format!("{ROOT}/../{}", Token::new())), None);
+    }
+
+    /// Claims for a task of a fresh session, kept under `output`, and that
+    /// task.
+    fn claims_in(output: &Path) -> (Claims, crate::task::Task) {
+        let task = crate::task::Task::of(&key("claiming"), Some("probe")).unwrap();
+        let store = crate::task::store::Store::at(output);
+        (Claims::in_store(store, task.clone()), task)
+    }
+
+    #[test]
+    fn a_claim_is_on_disk_before_the_thing_is_made() {
+        let dir = tempfile::tempdir().unwrap();
+        let (claims, task) = claims_in(dir.path());
+        let store = crate::task::store::Store::at(dir.path());
+        let source = dir.path().join("note.txt");
+        fs::write(&source, "hello").unwrap();
+
+        let claimed = |token: &Token| {
+            let record = store.load(task.key()).unwrap();
+            record.claims().any(|(owned, state)| {
+                owned == Owned::Copy { id: token.clone() } && state == State::Intent
+            })
+        };
+        let mut seen = None;
+        let made = claimed_copy(&source, dir.path(), &claims, |_, _, token| {
+            seen = Some(claimed(token));
+            Ok(PathBuf::from("made"))
+        });
+        assert_eq!(made.unwrap(), Path::new("made"));
+        assert_eq!(seen, Some(true), "claimed before the copy began");
+
+        let failed = claimed_copy(&source, dir.path(), &claims, |_, _, _| {
+            Err(problem("Could not copy"))
+        });
+        assert!(failed.is_err());
+        let states: Vec<State> = store
+            .load(task.key())
+            .unwrap()
+            .claims()
+            .map(|(_, state)| state)
+            .collect();
+        assert_eq!(states, [State::Made, State::Gone]);
+    }
+
+    #[test]
+    fn the_record_keeps_no_file_names_or_paths() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().join("root");
+        fs::DirBuilder::new().mode(0o700).create(&root).unwrap();
+        let output = dir.path().join("output");
+        fs::create_dir(&output).unwrap();
+        let (claims, task) = claims_in(&output);
+        let source = dir.path().join("Secret plan.rtf");
+        fs::write(&source, "hello").unwrap();
+
+        let made = claimed_copy(&source, &root, &claims, copy).unwrap();
+
+        assert!(made.ends_with("Secret plan.rtf"));
+        let record = fs::read_to_string(output.join(format!("tasks/{}.json", task.key()))).unwrap();
+        assert!(!record.contains("Secret"), "{record}");
+        assert!(
+            !record.contains(&dir.path().to_string_lossy().into_owned()),
+            "{record}"
+        );
+        assert!(record.contains(folder_token(made.parent().unwrap()).unwrap().as_str()));
     }
 
     #[test]

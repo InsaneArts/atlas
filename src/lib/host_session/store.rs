@@ -478,17 +478,21 @@ pub fn touch(client: &Client, session: &HostSession) -> Result<()> {
 /// `result` undid, whoever ran it: the person at a terminal, another
 /// session or this one. It decides nothing about the rollback itself.
 pub fn forget_rolled_back(client: &Client, kind: Kind, result: &Result<Value>) -> Result<()> {
-    let Ok(reply) = result else {
-        return Ok(());
-    };
+    match rolled_back(kind, result).and_then(plan) {
+        Some(plan) => Store::at(client.output_dir()?).forget_plan(&plan),
+        None => Ok(()),
+    }
+}
+
+/// The reply of a command of `kind` whose `result` says it rolled a plan
+/// back completely, when it did.
+pub(crate) fn rolled_back(kind: Kind, result: &Result<Value>) -> Option<&Value> {
+    let reply = result.as_ref().ok()?;
     let rolled_back = kind == Kind::Environment { changes: true }
         && reply["ok"] == true
         && reply["preview"] != true
         && phase(reply) == Some(Phase::RolledBack);
-    match plan(reply).filter(|_| rolled_back) {
-        Some(plan) => Store::at(client.output_dir()?).forget_plan(&plan),
-        None => Ok(()),
-    }
+    rolled_back.then_some(reply)
 }
 
 /// Note in `record` what `reply`, to a command of `kind`, says it left:
