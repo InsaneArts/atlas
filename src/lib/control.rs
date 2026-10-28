@@ -198,12 +198,19 @@ pub fn probe_write(directory: &Path) -> Result<()> {
     }
 }
 
+/// A wait in whole seconds, rounded to the nearest, as a reply says how
+/// long Atlas waited: a full 30-second wait that ends a few milliseconds
+/// short of it is 30, as its message says.
+pub(crate) fn seconds(waited: Duration) -> u64 {
+    waited.saturating_add(Duration::from_millis(500)).as_secs()
+}
+
 /// Busy because the person has control through a viewer: never waited for.
 /// `waited` is how long a controller given a wait had waited by then.
 fn busy_person(waited: Option<Duration>) -> Error {
     let error = Error::new("busy", crate::error::PERSON_HAS_CONTROL).held_by(Holder::Person);
     match waited {
-        Some(waited) => error.with("waited", waited.as_secs()),
+        Some(waited) => error.with("waited", seconds(waited)),
         None => error,
     }
 }
@@ -216,7 +223,7 @@ fn busy_agent(waited: Option<Duration>, wait: Duration) -> Error {
     let message = match waited {
         Some(_) => format!(
             "Another Atlas command, often another agent's, kept control for all of the {} seconds Atlas could wait.",
-            wait.as_secs()
+            seconds(wait)
         ),
         None => "Another Atlas controller is active: wait for it to finish, or release it in the viewer."
             .to_owned(),
@@ -225,7 +232,7 @@ fn busy_agent(waited: Option<Duration>, wait: Duration) -> Error {
     let error = Error::new("busy", message).held_by(Holder::Agent);
     match waited {
         Some(waited) => error
-            .with("waited", waited.as_secs())
+            .with("waited", seconds(waited))
             .with("next", crate::ui::hints::WAITED),
         None => error,
     }
@@ -2114,6 +2121,27 @@ mod tests {
         assert_eq!(refused.details["next"], crate::ui::hints::WAITED);
         assert_eq!(told(&events), WaitEvent::Began);
         assert_eq!(told(&events), WaitEvent::Ended);
+    }
+
+    /// A wait that used all of its time ends a little short of it, after
+    /// what the command did first: it says as many seconds as its message.
+    #[test]
+    fn a_full_wait_says_the_seconds_its_message_does() {
+        let refused = busy_agent(Some(Duration::from_millis(29_600)), Duration::from_secs(30));
+        assert_eq!(refused.details["waited"], 30);
+        assert!(
+            refused.error.contains("all of the 30 seconds"),
+            "{}",
+            refused.error
+        );
+
+        assert_eq!(
+            busy_person(Some(Duration::from_millis(1_400))).details["waited"],
+            1
+        );
+        assert_eq!(seconds(Duration::from_millis(499)), 0);
+        assert_eq!(seconds(Duration::from_millis(500)), 1);
+        assert_eq!(seconds(Duration::MAX), u64::MAX);
     }
 
     #[test]

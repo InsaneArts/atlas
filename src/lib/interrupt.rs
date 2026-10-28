@@ -203,7 +203,7 @@ impl Interrupt {
                 signal,
                 " while waiting for another Atlas command to finish; nothing was done.",
             )
-            .with("waited", waited.as_secs())),
+            .with("waited", crate::control::seconds(waited))),
         }
     }
 
