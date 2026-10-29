@@ -1109,7 +1109,7 @@ pub async fn wait(
         if matching.is_empty() == gone {
             return Ok(json!({
                 "ok": true,
-                "waitedMs": u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX),
+                "waitedMs": crate::time::ms(started.elapsed()),
                 "windows": matching,
             }));
         }

@@ -94,7 +94,7 @@ impl Record {
     /// Whether the session has not ended and ran a command within
     /// [`ACTIVE_FOR`] of `now`.
     pub fn active(&self, now: u64) -> bool {
-        let within = u64::try_from(ACTIVE_FOR.as_millis()).unwrap_or(u64::MAX);
+        let within = crate::time::ms(ACTIVE_FOR);
         self.ended_at().is_none() && now.saturating_sub(self.last_seen) <= within
     }
 
@@ -128,7 +128,7 @@ impl Record {
             return true;
         }
 
-        let within = u64::try_from(SEEN_WITHIN.as_millis()).unwrap_or(u64::MAX);
+        let within = crate::time::ms(SEEN_WITHIN);
         if self.ended.is_some() || now.saturating_sub(self.last_seen) <= within {
             return false;
         }

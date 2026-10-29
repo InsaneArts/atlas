@@ -397,7 +397,7 @@ fn live(client: &Client, facts: SessionFacts) -> Vec<Listed> {
     };
 
     let now_ms = u64::try_from(facts.now / 1_000_000).unwrap_or(u64::MAX);
-    let live_for = u64::try_from(session_view::LIVE_FOR.as_millis()).unwrap_or(u64::MAX);
+    let live_for = crate::time::ms(session_view::LIVE_FOR);
     let mut unknown: BTreeMap<&Key, usize> = BTreeMap::new();
     for cause in causes.iter().filter(|cause| !cause.running) {
         if let Some(session) = &cause.session {
@@ -531,8 +531,8 @@ fn first_command(key: &Key, note: &crate::control::Note, names: &BTreeMap<Key, S
 /// The agents' commands no host named, listed as one session with no
 /// record: from `started` to `last_seen`.
 fn terminal(started: u64, last_seen: u64, now: u64) -> Value {
-    let active = now.saturating_sub(last_seen)
-        <= u64::try_from(crate::host_session::record::ACTIVE_FOR.as_millis()).unwrap_or(u64::MAX);
+    let active =
+        now.saturating_sub(last_seen) <= crate::time::ms(crate::host_session::record::ACTIVE_FOR);
     json!({
         "key": "",
         "host": "none",

@@ -1369,7 +1369,7 @@ impl Client {
         timeout: Duration,
         pin: Option<SessionPin>,
     ) -> Result<Value> {
-        let timeout_ms = u64::try_from(timeout.as_millis()).unwrap_or(u64::MAX);
+        let timeout_ms = crate::time::ms(timeout);
         let mut request = json!({"op": "run", "argv": argv, "timeoutMs": timeout_ms});
         if let Some(pin) = pin {
             request["session"] = json!(pin);
@@ -2510,7 +2510,7 @@ fn run_request(argv: Vec<String>, timeout: Duration) -> Result<Value> {
         ));
     }
 
-    let timeout_ms = u64::try_from(timeout.as_millis()).unwrap_or(u64::MAX);
+    let timeout_ms = crate::time::ms(timeout);
     Ok(json!({"op": "run", "argv": argv, "timeoutMs": timeout_ms}))
 }
 

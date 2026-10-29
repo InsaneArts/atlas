@@ -392,8 +392,8 @@ impl Records<'_> {
     /// The sessions last seen within the days records are kept for, newest
     /// first, at most [`HISTORY`].
     pub(crate) fn history(&self) -> Vec<Past> {
-        let kept = u64::try_from(IDLE_FOR.as_millis()).unwrap_or(u64::MAX);
-        let live_for = u64::try_from(LIVE_FOR.as_millis()).unwrap_or(u64::MAX);
+        let kept = crate::time::ms(IDLE_FOR);
+        let live_for = crate::time::ms(LIVE_FOR);
         let named = names(self.records);
 
         self.records

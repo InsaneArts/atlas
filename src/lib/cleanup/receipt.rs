@@ -399,7 +399,7 @@ impl Receipts {
         let Ok(_lock) = self.folder.lock() else {
             return;
         };
-        let week = u64::try_from(KEEP.as_millis()).unwrap_or(u64::MAX);
+        let week = crate::time::ms(KEEP);
         let now = now_ms();
         for id in self.folder.listed(LISTED) {
             let old = self.load(&id).is_some_and(|receipt| {

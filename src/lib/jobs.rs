@@ -91,7 +91,7 @@ async fn started(
         "op": "job",
         "action": "start",
         "argv": argv,
-        "lifetimeMs": u64::try_from(lifetime.as_millis()).unwrap_or(u64::MAX),
+        "lifetimeMs": crate::time::ms(lifetime),
         "uid": client.config.helper_uid,
     });
     if let Some(name) = &name {
@@ -339,7 +339,7 @@ pub(crate) async fn stop_held(
         "action": "stop",
         "id": id,
         "expect": expected,
-        "graceMs": u64::try_from(grace.as_millis()).unwrap_or(u64::MAX),
+        "graceMs": crate::time::ms(grace),
     });
     let reply = client.change(request).await?;
     if reply["ok"] == true {
@@ -352,7 +352,7 @@ pub(crate) async fn stop_held(
 /// How a stop that was waited for reads: how the job ended and what left
 /// its group, or that it is still stopping. Pure, for tests.
 fn stopped(id: &JobId, shown: &Value, waited: Duration) -> Value {
-    let waited_ms = u64::try_from(waited.as_millis()).unwrap_or(u64::MAX);
+    let waited_ms = crate::time::ms(waited);
     if shown["state"] != "ended" {
         return json!({
             "ok": false,

@@ -240,7 +240,7 @@ impl Store {
     /// by its recorded node; anything else there is left as it is. Best
     /// effort: what cannot be deleted now is tried again next time.
     fn prune(&self, now: u64) {
-        let held_for = u64::try_from(HELD_FOR.as_millis()).unwrap_or(u64::MAX);
+        let held_for = crate::time::ms(HELD_FOR);
         let private = directory(&self.path.join(HELD), false)
             .ok()
             .flatten()
@@ -301,9 +301,7 @@ impl Store {
 fn now_ms() -> u64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
-        .map_or(0, |since| {
-            u64::try_from(since.as_millis()).unwrap_or(u64::MAX)
-        })
+        .map_or(0, crate::time::ms)
 }
 
 /// Register the app at `path` with LaunchServices for the account this

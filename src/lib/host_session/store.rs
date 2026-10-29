@@ -305,7 +305,7 @@ impl Store {
     /// those with something left last. The record `keep` stays.
     fn prune(&self, keep: &Key, causes: &[Cause]) {
         let now = now_ms();
-        let idle = u64::try_from(IDLE_FOR.as_millis()).unwrap_or(u64::MAX);
+        let idle = crate::time::ms(IDLE_FOR);
         // A session whose tasks still hold something, an unfinished cleanup
         // among them, has something left too.
         let held: Vec<Key> = self

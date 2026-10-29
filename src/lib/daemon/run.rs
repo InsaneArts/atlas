@@ -160,7 +160,7 @@ fn ended(
         "exitCode": status.code(),
         "signal": status.signal().map(signal_name),
         "timedOut": timed_out,
-        "durationMs": u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX),
+        "durationMs": crate::time::ms(started.elapsed()),
     });
 
     if truncated {

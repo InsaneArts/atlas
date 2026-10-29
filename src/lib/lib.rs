@@ -45,6 +45,7 @@ pub mod setup;
 pub mod switch;
 pub mod task;
 mod text;
+mod time;
 pub mod transport;
 pub mod ui;
 pub mod uninstall;

@@ -132,7 +132,7 @@ fn notes(folder: &Path, tidy: bool) -> Vec<(String, Note)> {
         return Vec::new();
     };
     let now = SystemTime::now();
-    let oldest = now_ms().saturating_sub(u64::try_from(STALE.as_millis()).unwrap_or(u64::MAX));
+    let oldest = now_ms().saturating_sub(crate::time::ms(STALE));
 
     entries
         .flatten()

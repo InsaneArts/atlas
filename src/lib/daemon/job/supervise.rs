@@ -260,9 +260,7 @@ impl Jobs {
         note_seen(record, processes, self);
         stopping.refused = None;
 
-        let after = |since: u64, wait: Duration| {
-            now >= since.saturating_add(u64::try_from(wait.as_millis()).unwrap_or(u64::MAX))
-        };
+        let after = |since: u64, wait: Duration| now >= since.saturating_add(crate::time::ms(wait));
         let kill = match (stopping.killed, stopping.killed_last) {
             (None, _) => after(stopping.since, Duration::from_millis(stopping.grace_ms)),
             (Some(first), Some(last)) => {

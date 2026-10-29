@@ -147,7 +147,7 @@ impl Store {
     /// oldest ended ones past [`RECORDS_MAX`]. A record of a job that may
     /// still run, or one that cannot be read, is never removed.
     pub fn prune(&mut self, now: u64) {
-        let week = u64::try_from(KEEP.as_millis()).unwrap_or(u64::MAX);
+        let week = crate::time::ms(KEEP);
         let mut ended: Vec<(u64, JobId)> = self
             .records()
             .into_iter()

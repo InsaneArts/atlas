@@ -303,7 +303,7 @@ pub(crate) fn alive(record: &SessionRecord) -> bool {
 /// record is gone. A cleanup's own notes are written once the work is
 /// taken over, so they never count.
 fn task_alive(task: &TaskRecord, now: u64) -> bool {
-    let within = u64::try_from(ACTIVE_FOR.as_millis()).unwrap_or(u64::MAX);
+    let within = crate::time::ms(ACTIVE_FOR);
     task.adopted_by.is_none() && now.saturating_sub(task.updated) <= within
 }
 

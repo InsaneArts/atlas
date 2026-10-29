@@ -288,7 +288,7 @@ impl Jobs {
                 .unwrap_or_else(|| "job".to_owned())
         });
         let now = now_ms();
-        let lifetime = u64::try_from(start.lifetime.as_millis()).unwrap_or(u64::MAX);
+        let lifetime = crate::time::ms(start.lifetime);
         let mut record = Record {
             version: VERSION,
             id: JobId::new(),
@@ -665,7 +665,7 @@ impl Jobs {
             return refused_by(&verdict, id);
         }
 
-        let grace_ms = u64::try_from(grace.as_millis()).unwrap_or(u64::MAX);
+        let grace_ms = crate::time::ms(grace);
         let before = record.clone();
         record.state = JobState::Stopping;
         record.stopping = Some(Stopping::new(How::Stopped, now_ms(), grace_ms));
