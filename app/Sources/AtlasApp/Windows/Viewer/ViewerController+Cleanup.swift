@@ -35,7 +35,7 @@ extension ViewerController {
       return panesModel.followSessions(readNow: true)
     }
     // The person moved on while it was read: the alert would ask about a session they no longer look at.
-    guard session.sessionChoice == .one(key), shownAlert == nil, !session.alertRunning, !session.recovering else {
+    guard session.chosenSession == .one(key), shownAlert == nil, !session.alertRunning, !session.recovering else {
       return
     }
     ask(

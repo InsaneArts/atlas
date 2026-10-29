@@ -20,7 +20,7 @@ struct ViewerPresenterCleanupTests {
   static func chosen(_ record: HostSessionRecord) throws -> ViewerSnapshot {
     var snapshot = try ViewerSnapshot.listing(ViewerPresenterSessionsTests.three)
     snapshot.detailsShown = true
-    snapshot.session.sessionChoice = .one(record.key)
+    snapshot.session.chosenSession = .one(record.key)
     snapshot.panes.sessions.list = HostSessionList(sessions: [record])
     return snapshot
   }

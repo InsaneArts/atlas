@@ -20,7 +20,7 @@ extension PanelPresenter {
         let state = Words.sessionState(session.state)
         return PanelSessionEntry(
           id: session.key,
-          icon: SessionIcons.icon(session.host),
+          icon: session.host.icon,
           name: session.name,
           line: line,
           isUrgent: session.state == .needsYou,

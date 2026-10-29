@@ -30,7 +30,7 @@ struct ViewerDetailsTests {
       )
     ])
     #expect(ViewerPresenter.details(snapshot).hostSession == nil, "every session's work shows")
-    snapshot.session.sessionChoice = .one("3f9a1c07b2e4")
+    snapshot.session.chosenSession = .one("3f9a1c07b2e4")
     let details = ViewerPresenter.details(snapshot)
     let session = try #require(details.hostSession)
     #expect(session.state == "Acting · has the helper")
@@ -52,7 +52,7 @@ struct ViewerDetailsTests {
   func terminalsHostIsNoneNamed() throws {
     var snapshot = try ViewerSnapshot.listing([SessionReplies.claudeActing, SessionReplies.terminalIdle])
     snapshot.detailsShown = true
-    snapshot.session.sessionChoice = .one("")
+    snapshot.session.chosenSession = .one("")
     snapshot.panes.sessions.list = HostSessionList(sessions: [
       HostSessionRecord(key: "", name: "Terminal", host: .terminal)
     ])

@@ -1,4 +1,5 @@
 import AppKit
+import AtlasService
 import AtlasUI
 import Testing
 
@@ -12,7 +13,7 @@ struct SessionsMenuTests {
   @Test("ended sessions follow under their header and nothing in the menu acts in the helper")
   func endedSessionsFollowUnderTheirHeader() {
     let item = { (key: String, title: String) in
-      ViewerSessionsMenuItem(key: key, title: title, subtitle: "Idle", icon: SessionIcons.icon(.claude))
+      ViewerSessionsMenuItem(key: key, title: title, subtitle: "Idle", icon: SessionHost.claude.icon)
     }
     let value = ViewerSessionsMenu(
       chosen: .one("b"),

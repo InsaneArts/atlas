@@ -18,7 +18,8 @@ extension ViewerWords {
   /// The person's own lines' group in Activity.
   static let youGroup = "You"
   /// The commands no host named, gathered as one session.
-  static let terminalSession = "Terminal"
+  static let terminalSession = SessionHost.terminal
+    .name(label: "", session: "")
   /// A session nothing names any longer, as after its record was pruned.
   static let unnamedSession = "Another session"
   /// The reason under the action that may not have finished.

@@ -76,8 +76,8 @@ struct ViewerSessionsReadingTests {
     viewer.setOpenMenu(nil)
     #expect(!viewer.session.sessionsMenuWanted)
     viewer.send(.chooseSession(.one("8be20c4d1a77")))
-    #expect(viewer.snapshot.sessionChoice == .one("8be20c4d1a77"))
+    #expect(viewer.snapshot.shownSessions == .one("8be20c4d1a77"))
     viewer.send(.chooseSession(.all))
-    #expect(viewer.snapshot.sessionChoice == .all)
+    #expect(viewer.snapshot.shownSessions == .all)
   }
 }

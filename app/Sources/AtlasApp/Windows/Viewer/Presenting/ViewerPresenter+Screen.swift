@@ -112,6 +112,8 @@ extension ViewerPresenter {
     if snapshot.holdingControl { return .inControl }
     guard snapshot.reading.picture != nil else { return nil }
     if snapshot.session.paused { return .paused }
-    return snapshot.reading.statusReading.holder.map { .holder(name: $0.name, icon: SessionIcons.icon($0.host)) }
+    guard let holder = snapshot.reading.statusReading.holder else { return nil }
+    let session = resolvedSession(holder.key, snapshot)
+    return .holder(name: session.name, icon: session.icon ?? holder.host.icon)
   }
 }

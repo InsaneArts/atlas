@@ -128,7 +128,7 @@ struct ViewerPresenterShotsTests {
       )
     ])
     #expect(ViewerPresenter.shotOrder(snapshot).count == 3, "every session's while all show")
-    snapshot.session.sessionChoice = .one("3f9a1c07b2e4")
+    snapshot.session.chosenSession = .one("3f9a1c07b2e4")
     let shots = ViewerPresenter.shots(snapshot)
     let names = shots.days
       .flatMap(\.shots)

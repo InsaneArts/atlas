@@ -21,7 +21,7 @@ struct ViewerPresenterSessionsTests {
     #expect(ViewerPresenter.top(one).sessions == nil)
     #expect(ViewerPresenter.screen(one).chip == nil, "one session has the helper, but no one is told apart")
     #expect(ViewerPresenter.screen(one).captions.allSatisfy { $0.icon == nil })
-    one.session.sessionChoice = .one("3f9a1c07b2e4")
+    one.session.chosenSession = .one("3f9a1c07b2e4")
     #expect(ViewerPresenter.top(one).sessions?.title == "Claude Code · understudy", "a chosen session keeps it")
     let button = try #require(ViewerPresenter.top(try .listing(Self.three)).sessions)
     #expect(button.title == "All sessions")
@@ -62,20 +62,38 @@ struct ViewerPresenterSessionsTests {
     #expect(live == statusOnes.map(\.key) + ["aaaa00000001", "aaaa00000002", "aaaa00000003"])
     let ended = menu.ended.map(\.key)
     #expect(ended == ["c0ffee5e5510"])
-    #expect(menu.live.last?.icon == SessionIcons.icon(.pi), "a first command's session has its host's icon")
-    #expect(ViewerPresenter.sessionName("aaaa00000003", snapshot) == "Pi · first")
+    #expect(menu.live.last?.icon == SessionHost.pi.icon, "a first command's session has its host's icon")
+    #expect(ViewerPresenter.resolvedSession("aaaa00000003", snapshot).name == "Pi · first")
+  }
+
+  @Test("a session only the list names live reads its own state in Details, as its Activity header does")
+  func aSessionOnlyTheListNamesLiveReadsItsOwnState() throws {
+    var snapshot = try ViewerSnapshot.listing(Self.three)
+    let cursor = ViewerStatus.HostSession(key: "aaaa00000002", name: "Cursor · notes", host: .cursor, state: .acting)
+    snapshot.panes.sessions.list = HostSessionList(
+      sessions: [HostSessionRecord(key: "aaaa00000002", name: "Cursor · notes", host: .cursor)],
+      live: [cursor]
+    )
+    snapshot.session.chosenSession = .one("aaaa00000002")
+    let resolved = ViewerPresenter.resolvedSession("aaaa00000002", snapshot)
+    #expect(resolved.state == .acting && resolved.live == cursor && resolved.listed == nil)
+    let detail = try #require(ViewerPresenter.details(snapshot).hostSession)
+    #expect(detail.state == "Acting · has the helper", "not Idle, as the status no longer lists it")
+    #expect(detail.tone == .active)
+    let quiet = ViewerPresenter.resolvedSession("c0ffee5e5510", snapshot)
+    #expect(quiet.state == nil && quiet.name == "Another session", "a session nothing names has no state")
   }
 
   @Test("a session nothing names has no icon, and only Terminal has the >_ tile")
   func anUnknownSessionHasNoIcon() throws {
     var snapshot = try ViewerSnapshot.listing(Self.three)
     snapshot.panes.sessions.list = HostSessionList()
-    #expect(ViewerPresenter.sessionIcon("dead00000000", snapshot) == nil)
-    #expect(ViewerPresenter.sessionIcon("", snapshot) == SessionIcons.icon(.terminal))
+    #expect(ViewerPresenter.resolvedSession("dead00000000", snapshot).icon == nil)
+    #expect(ViewerPresenter.resolvedSession("", snapshot).icon == SessionHost.terminal.icon)
     let reading = snapshot.reading.statusReading
     #expect(SessionIcons.icon(of: "dead00000000", in: reading) == nil)
-    #expect(SessionIcons.icon(of: "", in: reading) == SessionIcons.icon(.terminal))
-    #expect(SessionIcons.icon(of: "8be20c4d1a77", in: reading) == SessionIcons.icon(.codex))
+    #expect(SessionIcons.icon(of: "", in: reading) == SessionHost.terminal.icon)
+    #expect(SessionIcons.icon(of: "8be20c4d1a77", in: reading) == SessionHost.codex.icon)
   }
 
   @Test("the holder leads the bar's line only for its own action, with every session shown and no chip naming it")
@@ -102,9 +120,9 @@ struct ViewerPresenterSessionsTests {
       ViewerPresenter.status(twoClaudes).line == "Claude Code · understudy · Clicking Show Center in Opie",
       "with two sessions in one host, the full name tells them apart"
     )
-    own.session.sessionChoice = .one("8be20c4d1a77")
+    own.session.chosenSession = .one("8be20c4d1a77")
     #expect(ViewerPresenter.status(own).line == "Clicking Show Center in Opie", "a chosen session drops the name")
-    own.session.sessionChoice = .all
+    own.session.chosenSession = .all
     own.session.tab = .screen
     #expect(ViewerPresenter.holderLeads(own) == nil, "the Screen's chip names the holder already")
   }
@@ -136,7 +154,7 @@ struct ViewerPresenterSessionsTests {
   @Test("a copy and a plan say what is known, with no empty value where a time would be")
   func copiesAndPlansSayWhatIsKnown() throws {
     var snapshot = try ViewerSnapshot.listing(Self.three)
-    snapshot.session.sessionChoice = .one("3f9a1c07b2e4")
+    snapshot.session.chosenSession = .one("3f9a1c07b2e4")
     snapshot.detailsShown = true
     snapshot.panes.sessions.list = HostSessionList(sessions: [
       HostSessionRecord(
@@ -163,22 +181,22 @@ struct ViewerPresenterSessionsTests {
   @Test("a chosen session that is gone falls back to all")
   func aChosenSessionThatIsGoneFallsBackToAll() throws {
     var snapshot = try ViewerSnapshot.listing(Self.three)
-    snapshot.session.sessionChoice = .one("c0ffee5e5510")
-    #expect(snapshot.sessionChoice == .all, "neither the status nor the list names it")
+    snapshot.session.chosenSession = .one("c0ffee5e5510")
+    #expect(snapshot.shownSessions == .all, "neither the status nor the list names it")
     snapshot.panes.sessions.list = HostSessionList(sessions: [
       HostSessionRecord(key: "c0ffee5e5510", name: "Pi · notes-sync", host: .pi, state: .ended)
     ])
-    #expect(snapshot.sessionChoice == .one("c0ffee5e5510"), "the list still names it as ended")
+    #expect(snapshot.shownSessions == .one("c0ffee5e5510"), "the list still names it as ended")
     var unread = ViewerSnapshot()
-    unread.session.sessionChoice = .one("3f9a1c07b2e4")
-    #expect(unread.sessionChoice == .one("3f9a1c07b2e4"), "before the first reading the choice holds")
+    unread.session.chosenSession = .one("3f9a1c07b2e4")
+    #expect(unread.shownSessions == .one("3f9a1c07b2e4"), "before the first reading the choice holds")
   }
 
   @Test("the holder chip gives way to typing, control and pause")
   func theHolderChipGivesWay() throws {
     var snapshot = try ViewerSnapshot.listing(Self.three)
     #expect(
-      ViewerPresenter.chip(snapshot) == .holder(name: "Claude Code · understudy", icon: SessionIcons.icon(.claude))
+      ViewerPresenter.chip(snapshot) == .holder(name: "Claude Code · understudy", icon: SessionHost.claude.icon)
     )
     snapshot.session.paused = true
     #expect(ViewerPresenter.chip(snapshot) == .paused)
@@ -213,7 +231,7 @@ struct ViewerPresenterSessionsTests {
   @Test("an older service with no list leaves the menu without Ended and Details without the session")
   func noListLeavesNoEndedAndNoDetail() throws {
     var snapshot = try ViewerSnapshot.listing(Self.three)
-    snapshot.session.sessionChoice = .one("3f9a1c07b2e4")
+    snapshot.session.chosenSession = .one("3f9a1c07b2e4")
     snapshot.detailsShown = true
     snapshot.panes.sessions.notOfferedAt = snapshot.date
     #expect(ViewerPresenter.sessionsMenu(snapshot).ended.isEmpty)

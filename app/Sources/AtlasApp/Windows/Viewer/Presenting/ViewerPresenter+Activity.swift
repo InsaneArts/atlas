@@ -15,11 +15,8 @@ extension ViewerPresenter {
   /// - Returns: The pane.
   static func activity(_ snapshot: ViewerSnapshot) -> ViewerActivityState {
     let facts = snapshot.panes.activity
-    let chosen: String? =
-      switch snapshot.sessionChoice {
-      case .all: nil
-      case .one(let key): key
-      }
+    let chosen = snapshot.shownSessions.key
+    let resolved = chosen.map { resolvedSession($0, snapshot) }
     let offered = chosen == nil ? ViewerActivityFilter.allCases : [.all, .problems]
     let filter = offered.contains(facts.filter) ? facts.filter : .all
     let filters = CapsuleTabsState(
@@ -27,8 +24,8 @@ extension ViewerPresenter {
       selected: filter,
       label: ViewerWords.activityFiltersLabel
     )
-    let title = chosen.map { sessionName($0, snapshot) } ?? ViewerWords.tab(.activity)
-    let titleIcon = chosen.flatMap { sessionIcon($0, snapshot) }
+    let title = resolved?.name ?? ViewerWords.tab(.activity)
+    let titleIcon = resolved?.icon
     guard let log = facts.log, let readAt = facts.readAt else {
       let failed = facts.failure.map {
         EmptyMessageState(headline: ViewerWords.activityFailed, message: Words.sentence($0))
@@ -46,7 +43,7 @@ extension ViewerPresenter {
     }
     let rules = ActivityGrouping(log: log, readAt: readAt, now: snapshot.date, calendar: snapshot.zonedCalendar)
     let captures = snapshot.panes.shots.shots ?? []
-    let scope = chosen.map(ActivityScope.session) ?? .all
+    let scope = ActivityScope(snapshot.shownSessions)
     var state = ViewerActivityState(
       title: title,
       titleIcon: titleIcon,
@@ -103,10 +100,10 @@ extension ViewerPresenter {
     return order
   }
 
-  /// One host session's group as the pane heads it: its icon, its name, its state in its tone while the status or the
-  /// list's live sessions name it, Ended once the list says so, Idle for Terminal otherwise, as it never ends, and
-  /// Show all, naming the session to VoiceOver, while it holds more lines than it lists. The person's own lines are
-  /// "You", with the person's blue dot, and their Show all picks the person's own filter.
+  /// One host session's group as the pane heads it: its icon, its name, its state in its tone
+  /// (``ViewerResolvedSession/state``), none for a session nothing names, and Show all, naming the session to
+  /// VoiceOver, while it holds more lines than it lists. The person's own lines are "You", with the person's blue dot,
+  /// and their Show all picks the person's own filter.
   ///
   /// - Parameters:
   ///   - group: The group.
@@ -126,17 +123,14 @@ extension ViewerPresenter {
         showAll: .filterActivity(.you)
       )
     }
-    let named = snapshot.reading.statusReading.session(key) ?? snapshot.panes.sessions.live(key)
-    let record = snapshot.panes.sessions.record(key)
-    let ended = named == nil && record?.isEnded == true
-    let state: HostSessionState? = named?.state ?? (ended ? .ended : key.isEmpty ? .idle : nil)
-    let name = sessionName(key, snapshot)
+    let session = resolvedSession(key, snapshot)
+    let name = session.name
     return ViewerActivitySessionGroup(
       id: "session-\(key)",
-      icon: sessionIcon(key, snapshot),
+      icon: session.icon,
       name: name,
-      state: state.map(Words.sessionState) ?? "",
-      tone: state?.tone ?? .quiet,
+      state: session.state.map(Words.sessionState) ?? "",
+      tone: session.state?.tone ?? .quiet,
       lines: lines,
       more: hasMore ? ViewerWords.showAll(group.total) : nil,
       moreLabel: hasMore ? ViewerWords.showAll(group.total, from: name) : "",

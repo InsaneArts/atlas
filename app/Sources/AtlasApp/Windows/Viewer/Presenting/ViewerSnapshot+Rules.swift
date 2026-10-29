@@ -54,8 +54,8 @@ extension ViewerSnapshot {
 
   /// Whose work the window shows: the session chosen while the status or the sessions' list still names it, or before
   /// either was read; every session's once it is gone from both.
-  var sessionChoice: ViewerSessionChoice {
-    guard case .one(let key) = session.sessionChoice else { return .all }
+  var shownSessions: ViewerSessionChoice {
+    guard case .one(let key) = session.chosenSession else { return .all }
     let named = reading.statusReading.session(key) != nil || panes.sessions.record(key) != nil
     return named || !reading.hasStatus ? .one(key) : .all
   }

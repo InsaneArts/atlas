@@ -292,8 +292,8 @@ final class ViewerController {
   ///
   /// - Parameter choice: Whose work.
   func chooseSession(_ choice: ViewerSessionChoice) {
-    guard choice != session.sessionChoice else { return }
-    session.sessionChoice = choice
+    guard choice != session.chosenSession else { return }
+    session.chosenSession = choice
     panesModel.closeShot()
     panesModel.followSessions(readNow: true)
   }

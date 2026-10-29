@@ -30,10 +30,10 @@ struct WindowCoordinatorTests {
     let coordinator = parts.coordinator()
     coordinator.openViewer(tab: .activity, session: .one("8be20c4d1a77"))
     let controller = try #require(coordinator.viewer?.controller)
-    #expect(controller.session.sessionChoice == .one("8be20c4d1a77"))
+    #expect(controller.session.chosenSession == .one("8be20c4d1a77"))
     coordinator.panelLinks()
       .openSessions(.all)
-    #expect(controller.session.sessionChoice == .all)
+    #expect(controller.session.chosenSession == .all)
     #expect(controller.session.tab == .activity)
   }
 

@@ -44,8 +44,8 @@ extension ViewerPresenter {
     var meta = days.isEmpty ? "" : ViewerWords.shotsMeta(today: rules.countToday(shots))
     var empty =
       days.isEmpty ? EmptyMessageState(headline: ViewerWords.noShots, message: ViewerWords.noShotsMessage) : nil
-    if case .one(let key) = snapshot.sessionChoice {
-      meta = ViewerWords.shotsBy(listed.count, name: sessionName(key, snapshot))
+    if let key = snapshot.shownSessions.key {
+      meta = ViewerWords.shotsBy(listed.count, name: resolvedSession(key, snapshot).name)
       if days.isEmpty {
         empty = EmptyMessageState(headline: ViewerWords.noShots, message: ViewerWords.noSessionShotsMessage)
       }
@@ -75,7 +75,7 @@ extension ViewerPresenter {
   /// - Returns: The screenshots.
   static func listedShots(_ snapshot: ViewerSnapshot) -> [Screenshot] {
     let shots = snapshot.panes.shots.shots ?? []
-    guard case .one(let key) = snapshot.sessionChoice else { return shots }
+    guard let key = snapshot.shownSessions.key else { return shots }
     let named = Set(snapshot.panes.sessions.record(key)?.screenshots ?? [])
     return shots.filter { $0.sessionKey == key || named.contains($0.name) }
   }

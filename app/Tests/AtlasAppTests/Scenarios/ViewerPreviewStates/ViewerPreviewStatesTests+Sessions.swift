@@ -37,7 +37,7 @@
         snapshot.detailsShown = true
         snapshot.agents = [.claude, .codex]
         snapshot.loggedInAt = Date(timeIntervalSince1970: 9 * 3600 + 12 * 60)
-        snapshot.session.sessionChoice = .one(Self.claudeKey)
+        snapshot.session.chosenSession = .one(Self.claudeKey)
         snapshot.panes.sessions.list = HostSessionList(sessions: [Self.claudeRecord])
         snapshot.panes.apps.apps = [HelperApp(pid: 501, name: "Opie", front: true)]
         Self.keepThumbnails(&snapshot)
@@ -57,7 +57,7 @@
         },
         "Activity, one session": shown(working) { snapshot in
           Self.onSessionsActivity(Self.sessionsLog, &snapshot)
-          snapshot.session.sessionChoice = .one(Self.claudeKey)
+          snapshot.session.chosenSession = .one(Self.claudeKey)
         },
         "Session detail": shown(working, detail),
         "Clean up": shown(working) { snapshot in

@@ -98,13 +98,13 @@ struct ViewerPresenterActivityTests {
   @Test("one session's pane offers All and Problems only")
   func oneSessionOffersAllAndProblemsOnly() throws {
     var snapshot = try Self.onActivity(Self.mixedLog)
-    snapshot.session.sessionChoice = .one("3f9a1c07b2e4")
+    snapshot.session.chosenSession = .one("3f9a1c07b2e4")
     snapshot.panes.activity.filter = .you
     let activity = ViewerPresenter.activity(snapshot)
     #expect(activity.filters.tabs.map(\.id) == [.all, .problems])
     #expect(activity.filters.selected == .all, "a filter that means nothing inside one session reads as All")
     #expect(activity.title == "Claude Code · understudy")
-    #expect(activity.titleIcon == SessionIcons.icon(.claude))
+    #expect(activity.titleIcon == SessionHost.claude.icon)
     #expect(activity.meta == "6 actions today")
     #expect(activity.sessions.isEmpty)
     let lines = activity.groups

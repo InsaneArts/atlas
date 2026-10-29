@@ -91,28 +91,18 @@ extension ViewerPresenter {
   /// - Parameter snapshot: What the controller holds.
   /// - Returns: The detail, or nil.
   static func hostSession(_ snapshot: ViewerSnapshot) -> ViewerSessionDetail? {
-    guard case .one(let key) = snapshot.sessionChoice, let record = snapshot.panes.sessions.record(key) else {
-      return nil
-    }
-    let reading = snapshot.reading.statusReading
-    let named = reading.session(key)
-    let listed = named?.isLive == true ? named : nil
-    let state = listed?.state ?? (record.isEnded ? .ended : .idle)
-    let words =
-      listed.map { ViewerWords.sessionSubtitle($0, line: reading.line(of: $0), now: snapshot.date) }
-      ?? (record.isEnded
-        ? ViewerWords.endedSubtitle(record, now: snapshot.date)
-        : ViewerWords.idle(record.lastSeenAt.map { snapshot.date.timeIntervalSince($0) }))
+    guard let key = snapshot.shownSessions.key, let record = snapshot.panes.sessions.record(key) else { return nil }
+    let session = resolvedSession(key, snapshot)
     let shots = record.screenshots
       .prefix(ViewerSessionDetail.mostShots)
       .map { name in
         ViewerActivityShot(name: name, thumbnail: snapshot.panes.thumbnails[name], label: shotLabel(name, snapshot))
       }
     return ViewerSessionDetail(
-      icon: SessionIcons.icon(record.host),
-      name: listed?.name ?? record.name,
-      state: words,
-      tone: state.tone,
+      icon: session.icon ?? record.host.icon,
+      name: session.name,
+      state: sessionWords(session, snapshot),
+      tone: (session.state ?? .idle).tone,
       facts: sessionFacts(record, snapshot),
       apps: sessionApps(record, snapshot),
       copies: sessionCopies(record),
@@ -136,7 +126,7 @@ extension ViewerPresenter {
   static func sessionFacts(_ record: HostSessionRecord, _ snapshot: ViewerSnapshot) -> [Fact] {
     let host =
       record.host == .terminal
-      ? ViewerWords.noHost : Words.hostName(record.host, label: record.hostLabel, name: record.name)
+      ? ViewerWords.noHost : record.host.name(label: record.hostLabel, session: record.name)
     var facts = [Fact(name: ViewerWords.hostFact, value: host)]
     if let folder = record.folder { facts.append(Fact(name: ViewerWords.folderFact, value: folder)) }
     if let started = record.startedAt {

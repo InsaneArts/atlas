@@ -15,7 +15,7 @@ extension ViewerPresenter {
   /// - Returns: The button, or nil for none.
   static func sessionsButton(_ snapshot: ViewerSnapshot) -> ViewerSessionsButton? {
     let reading = snapshot.reading.statusReading
-    let choice = snapshot.sessionChoice
+    let choice = snapshot.shownSessions
     guard reading.showsSessions || choice != .all else { return nil }
     let icons: [RowIcon]
     let title: String
@@ -23,12 +23,13 @@ extension ViewerPresenter {
     case .all:
       icons = reading.liveSessions
         .prefix(mostButtonIcons)
-        .map { SessionIcons.icon($0.host) }
+        .map { $0.host.icon }
       title = ViewerWords.allSessionsButton
     case .one(let key):
-      icons = [sessionIcon(key, snapshot)]
+      let chosen = resolvedSession(key, snapshot)
+      icons = [chosen.icon]
         .compactMap { $0 }
-      title = sessionName(key, snapshot)
+      title = chosen.name
     }
     return ViewerSessionsButton(
       icons: icons,
@@ -61,61 +62,70 @@ extension ViewerPresenter {
         key: session.key,
         title: session.name,
         subtitle: ViewerWords.sessionSubtitle(session, line: reading.line(of: session), now: snapshot.date),
-        icon: SessionIcons.icon(session.host)
+        icon: session.host.icon
       )
     }
     return ViewerSessionsMenu(
-      chosen: snapshot.sessionChoice,
+      chosen: snapshot.shownSessions,
       live: liveItems,
       ended: ended.map { record in
         ViewerSessionsMenuItem(
           key: record.key,
           title: record.name,
           subtitle: ViewerWords.endedSubtitle(record, now: snapshot.date),
-          icon: SessionIcons.icon(record.host)
+          icon: record.host.icon
         )
       }
     )
   }
 
-  /// A session's name: as the status lists it, else the sessions' list of live and ended ones, else the log's own
-  /// names; Terminal for the commands no host named.
+  /// One session as every surface names it, looked up once: the status first, then the sessions' list's live
+  /// sessions, its records, and last the log's own names, so the menu, Activity, Details, Screenshots and the Screen's
+  /// chip agree on its name, icon and state.
   ///
   /// - Parameters:
   ///   - key: The session's key; empty for Terminal.
   ///   - snapshot: What the controller holds.
-  /// - Returns: "Claude Code · understudy", say.
-  static func sessionName(_ key: String, _ snapshot: ViewerSnapshot) -> String {
-    if let listed = snapshot.reading.statusReading.session(key) { return listed.name }
-    if let live = snapshot.panes.sessions.live(key) { return live.name }
-    if let record = snapshot.panes.sessions.record(key) { return record.name }
-    if let named = snapshot.panes.activity.log?.sessions[key] { return named.name }
-    return key.isEmpty ? ViewerWords.terminalSession : ViewerWords.unnamedSession
+  /// - Returns: The session as resolved.
+  static func resolvedSession(_ key: String, _ snapshot: ViewerSnapshot) -> ViewerResolvedSession {
+    let listed = snapshot.reading.statusReading.session(key)
+    let listLive = snapshot.panes.sessions.live(key)
+    let record = snapshot.panes.sessions.record(key)
+    let logged = snapshot.panes.activity.log?.sessions[key]
+    let live = [listed, listLive]
+      .compactMap { $0 }
+      .first { $0.isLive && $0.state != .ended }
+    let ended = listed?.state == .ended || record?.isEnded == true
+    let named = listed != nil || listLive != nil || record != nil || logged != nil
+    let state: HostSessionState? =
+      if let live { live.state } else if ended { .ended } else if named || key.isEmpty { .idle } else { nil }
+    return ViewerResolvedSession(
+      key: key,
+      name: listed?.name ?? listLive?.name ?? record?.name ?? logged?.name
+        ?? (key.isEmpty ? ViewerWords.terminalSession : ViewerWords.unnamedSession),
+      host: listed?.host ?? listLive?.host ?? record?.host ?? logged?.host ?? (key.isEmpty ? .terminal : nil),
+      state: state,
+      listed: listed,
+      live: live,
+      record: record
+    )
   }
 
-  /// A session's host, as the status, the sessions' list or the log names it: none for Terminal, and nil for a
-  /// session nothing names.
+  /// A resolved session's state and line, as Details heads it: a live one's own, an ended one's age, else Idle with
+  /// how long ago it was last seen.
   ///
   /// - Parameters:
-  ///   - key: The session's key; empty for Terminal.
+  ///   - session: The session, resolved.
   ///   - snapshot: What the controller holds.
-  /// - Returns: The host, or nil when nothing names the session.
-  static func sessionHost(_ key: String, _ snapshot: ViewerSnapshot) -> SessionHost? {
-    if let listed = snapshot.reading.statusReading.session(key) { return listed.host }
-    if let live = snapshot.panes.sessions.live(key) { return live.host }
-    if let record = snapshot.panes.sessions.record(key) { return record.host }
-    if let named = snapshot.panes.activity.log?.sessions[key] { return named.host }
-    return key.isEmpty ? .terminal : nil
-  }
-
-  /// A session's icon, by its host; none for a session nothing names, which is not Terminal's.
-  ///
-  /// - Parameters:
-  ///   - key: The session's key; empty for Terminal.
-  ///   - snapshot: What the controller holds.
-  /// - Returns: The host's logo or mark, the `>_` tile, or nil.
-  static func sessionIcon(_ key: String, _ snapshot: ViewerSnapshot) -> RowIcon? {
-    sessionHost(key, snapshot)
-      .map(SessionIcons.icon)
+  /// - Returns: "Acting · has the helper", "Ended 20 min ago" or "Idle · 4 min ago", say.
+  static func sessionWords(_ session: ViewerResolvedSession, _ snapshot: ViewerSnapshot) -> String {
+    if let live = session.live {
+      return ViewerWords.sessionSubtitle(live, line: snapshot.reading.statusReading.line(of: live), now: snapshot.date)
+    }
+    if session.state == .ended, let record = session.record {
+      return ViewerWords.endedSubtitle(record, now: snapshot.date)
+    }
+    let seen = session.record?.lastSeenAt ?? session.listed?.lastSeenAt
+    return ViewerWords.idle(seen.map { snapshot.date.timeIntervalSince($0) })
   }
 }

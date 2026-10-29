@@ -67,7 +67,7 @@ extension ViewerPresenter {
   /// - Returns: "Claude Code", the holder's full name, or nil for none.
   static func holderLeads(_ snapshot: ViewerSnapshot) -> String? {
     let reading = snapshot.reading.statusReading
-    guard snapshot.sessionChoice == .all, let holder = reading.holder,
+    guard snapshot.shownSessions == .all, let holder = reading.holder,
       let newest = reading.newestAgentAction, newest.sessionKey == holder.key
     else { return nil }
     if snapshot.session.tab == .screen, case .holder = chip(snapshot) { return nil }

@@ -159,7 +159,7 @@ final class ViewerPanesModel {
   /// - Parameter readNow: Whether to read at once even while a reading loop runs, as when a session is chosen.
   func followSessions(readNow: Bool = false) {
     guard let viewer, viewer.shown, panes.sessions.asks(at: wallClock()),
-      viewer.reading.statusReading.showsSessions || viewer.session.sessionChoice != .all
+      viewer.reading.statusReading.showsSessions || viewer.session.chosenSession != .all
     else { return stopSessions() }
     guard work.sessions == nil || readNow else { return }
     stopSessions()

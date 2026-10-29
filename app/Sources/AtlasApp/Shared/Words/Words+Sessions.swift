@@ -83,33 +83,11 @@ extension Words {
     }
   }
 
-  /// A host's name: the service's own words when it gives them, else the host's label, else the session's name, as
-  /// for a session that named itself.
+  /// A session's host's name (``SessionHost/name(label:session:)``).
   ///
   /// - Parameter session: The session.
   /// - Returns: "Claude Code", say.
   static func hostName(_ session: ViewerStatus.HostSession) -> String {
-    hostName(session.host, label: session.hostLabel, name: session.name)
-  }
-
-  /// A host's name: `label` when the service gives one, else the host's label, else the session's name, as for a
-  /// session that named itself.
-  ///
-  /// - Parameters:
-  ///   - host: The app the session runs in.
-  ///   - label: The host's name in the service's words; empty when it gives none.
-  ///   - name: The session's name.
-  /// - Returns: "Claude Code", say.
-  static func hostName(_ host: SessionHost, label: String, name: String) -> String {
-    if !label.isEmpty { return label }
-    return switch host {
-    case .claude: "Claude Code"
-    case .codex: "Codex"
-    case .cursor: "Cursor"
-    case .opencode: "opencode"
-    case .pi: "Pi"
-    case .terminal: "Terminal"
-    case .other: name
-    }
+    session.host.name(label: session.hostLabel, session: session.name)
   }
 }
