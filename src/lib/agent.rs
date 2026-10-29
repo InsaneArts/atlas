@@ -19,7 +19,7 @@ pub use expect::{Expected, act};
 pub(crate) use guide::CORE;
 pub(crate) use guide::REFERENCES;
 pub use guide::{ERRORS, GUIDE, skill};
-pub use input::{click, drag, keys, type_text};
+pub use input::{click, drag, keys, move_to, scroll, type_text};
 pub use launch::open;
 pub use quit::close;
 pub(crate) use quit::{QUIT_WAIT, Quitting, quit_until};

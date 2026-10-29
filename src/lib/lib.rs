@@ -3,7 +3,7 @@ pub mod actions;
 pub mod activity_log;
 pub mod agent;
 pub mod agents;
-mod app_selection;
+pub mod app_selection;
 pub mod approval;
 mod bounded;
 pub mod capability;

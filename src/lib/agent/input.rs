@@ -44,6 +44,16 @@ pub fn drag(from: (f64, f64), to: (f64, f64), which: Button) -> Value {
     }])
 }
 
+/// Move the pointer to `x`, `y`.
+pub fn move_to(x: f64, y: f64) -> Value {
+    json!([{ "type": "move", "x": x, "y": y }])
+}
+
+/// Scroll at `at` by `by` lines: down and right are positive.
+pub fn scroll(at: (f64, f64), by: (i32, i32)) -> Value {
+    json!([{ "type": "scroll", "x": at.0, "y": at.1, "dx": by.0, "dy": by.1 }])
+}
+
 /// Text in pieces of at most `limit` characters, never splitting a
 /// grapheme cluster (an emoji sequence or a letter with combining marks); a
 /// longer cluster goes on its own.

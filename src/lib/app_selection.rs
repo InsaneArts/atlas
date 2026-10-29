@@ -1,6 +1,6 @@
 //! Shared application-selection policy for close-all and held logout.
 use crate::ui::text::same_text;
-use serde_json::Value;
+use serde_json::{Value, json};
 
 /// Whether a running app (as `apps` lists it) belongs to macOS or to Atlas
 /// itself; neither is ever closed. Atlas is known by its bundle identifier
@@ -136,9 +136,92 @@ pub(crate) fn left_open(apps: &Value) -> Vec<String> {
         .collect()
 }
 
+/// The helper's `apps` reply as `atlas apps` shows it: apps with a Dock
+/// icon and menu bar apps that are not part of macOS, unless `all`, with
+/// `more` saying how many processes were left out.
+pub fn listed(mut reply: Value, all: bool) -> Value {
+    let Some(apps) = reply.get_mut("apps").and_then(Value::as_array_mut) else {
+        return reply;
+    };
+    let before = apps.len();
+
+    if !all {
+        apps.retain(|app| {
+            let executable = app["executable"].as_str().unwrap_or("");
+            match app["policy"].as_str() {
+                Some("regular") => true,
+                Some("accessory") => {
+                    !executable.is_empty()
+                        && !executable.starts_with("/System/")
+                        && !executable.starts_with("/usr/")
+                }
+                _ => false,
+            }
+        });
+    }
+
+    let more = before - apps.len();
+    reply["more"] = json!(more);
+    reply
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn apps_lists_apps_and_third_party_menu_bar_apps_unless_all() {
+        let reply = json!({"ok": true, "apps": [
+            {"name": "TextEdit", "pid": 1, "policy": "regular",
+             "executable": "/System/Applications/TextEdit.app/Contents/MacOS/TextEdit"},
+            {"name": "Opie", "pid": 2, "policy": "accessory",
+             "executable": "/Applications/Opie.app/Contents/MacOS/Opie"},
+            {"name": "Siri", "pid": 3, "policy": "accessory",
+             "executable": "/System/Library/CoreServices/Siri.app/Contents/MacOS/Siri"},
+            {"name": "loginwindow", "pid": 4, "policy": "accessory",
+             "executable": "/usr/libexec/loginwindow"},
+            {"name": "cfprefsd", "pid": 5, "policy": "prohibited",
+             "executable": "/usr/sbin/cfprefsd"},
+        ]});
+
+        let shown = listed(reply.clone(), false);
+        let names: Vec<&str> = shown["apps"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|app| app["name"].as_str().unwrap())
+            .collect();
+        assert_eq!(names, ["TextEdit", "Opie"]);
+        assert_eq!(shown["more"], 3);
+        assert_eq!(shown["ok"], true);
+
+        let every = listed(reply, true);
+        assert_eq!(every["apps"].as_array().unwrap().len(), 5);
+        assert_eq!(every["more"], 0);
+    }
+
+    #[test]
+    fn a_process_that_cannot_be_placed_is_left_out_unless_all() {
+        let reply = json!({"ok": true, "apps": [
+            {"name": "Unnamed agent", "pid": 6, "policy": "accessory"},
+            {"name": "No policy", "pid": 7,
+             "executable": "/Applications/Tool.app/Contents/MacOS/Tool"},
+            {"name": "Odd policy", "pid": 8, "policy": "unknown",
+             "executable": "/Applications/Odd.app/Contents/MacOS/Odd"},
+        ]});
+
+        let shown = listed(reply.clone(), false);
+        assert_eq!(shown["apps"], json!([]));
+        assert_eq!(shown["more"], 3);
+
+        assert_eq!(listed(reply, true)["apps"].as_array().unwrap().len(), 3);
+        assert_eq!(
+            listed(json!({"ok": false, "code": "apps"}), false),
+            json!({"ok": false, "code": "apps"}),
+            "a failed reply is passed on as it is"
+        );
+    }
+
     use serde_json::json;
 
     #[test]
