@@ -151,9 +151,10 @@ pub(super) fn nothing(
     output: &Path,
     scope: &Scope,
     loaded: &Loaded,
-    preview: bool,
+    mode: super::Mode,
     running: Option<&Value>,
 ) -> Value {
+    let preview = mode == super::Mode::Preview;
     json!({
         "ok": true,
         "preview": preview,

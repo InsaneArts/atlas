@@ -38,20 +38,27 @@ use serde_json::{Value, json};
 use std::path::Path;
 use targets::{install_in, targets};
 
-/// See what a session's tasks left in the helper (`apply` false: read
-/// only, without control), or clean it up. For an agent, another session's
-/// work is cleaned up only once that session has ended.
+/// Whether a cleanup only says what it would do or does it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Mode {
+    /// Read only, without control.
+    Preview,
+    Apply,
+}
+
+/// See what a session's tasks left in the helper, or clean it up, as
+/// `mode` says. For an agent, another session's work is cleaned up only
+/// once that session has ended.
 pub async fn cleanup(
     client: &Client,
     session: Option<&Key>,
     task: Option<&Key>,
-    apply: bool,
+    mode: Mode,
 ) -> Result<Value> {
     let scope = Scope::of(client, session, task)?;
-    if apply {
-        apply_scope(client, &scope).await
-    } else {
-        preview_scope(client, &scope).await
+    match mode {
+        Mode::Apply => apply_scope(client, &scope).await,
+        Mode::Preview => preview_scope(client, &scope).await,
     }
 }
 
@@ -59,9 +66,9 @@ pub async fn cleanup(
 /// preview, with whether that session may still be working, or the
 /// cleanup itself, which passes every proof an agent's does and is not
 /// held back by the session looking alive.
-pub async fn for_person(client: &Client, session: &Key, apply: bool) -> Result<Value> {
+pub async fn for_person(client: &Client, session: &Key, mode: Mode) -> Result<Value> {
     let scope = Scope::for_person(session);
-    if apply {
+    if mode == Mode::Apply {
         return apply_scope(client, &scope).await;
     }
     let mut reply = preview_scope(client, &scope).await?;
@@ -102,7 +109,7 @@ pub(crate) async fn preview(
             output,
             scope,
             loaded,
-            true,
+            Mode::Preview,
             running.as_ref(),
         ));
     }
@@ -293,7 +300,7 @@ pub(crate) async fn apply(
             output,
             scope,
             loaded,
-            false,
+            Mode::Apply,
             running.as_ref(),
         ));
     }

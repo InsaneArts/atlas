@@ -547,7 +547,14 @@ async fn carry_out(
             apply,
             session,
             task,
-        } => atlas::cleanup::cleanup(&client()?, session.as_ref(), task.as_ref(), apply).await,
+        } => {
+            let mode = if apply {
+                atlas::cleanup::Mode::Apply
+            } else {
+                atlas::cleanup::Mode::Preview
+            };
+            atlas::cleanup::cleanup(&client()?, session.as_ref(), task.as_ref(), mode).await
+        }
         Command::Close { app, .. } => {
             let client = client()?;
             let closing = app

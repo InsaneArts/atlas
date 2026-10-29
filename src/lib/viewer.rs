@@ -850,7 +850,7 @@ impl Viewer {
         let client = self.client();
         tokio::time::timeout(
             READ_DEADLINE,
-            crate::cleanup::for_person(&client, &session, false),
+            crate::cleanup::for_person(&client, &session, crate::cleanup::Mode::Preview),
         )
         .await
         .map_err(|_| late())?
@@ -865,7 +865,7 @@ impl Viewer {
             return Err(Error::new(Code::Busy, "Release control before cleaning up"));
         }
         let session = cleanup_session(body["session"].as_str())?;
-        crate::cleanup::for_person(&self.client(), &session, true).await
+        crate::cleanup::for_person(&self.client(), &session, crate::cleanup::Mode::Apply).await
     }
 
     /// Take, renew or end control, or send input, as `route` asks.
