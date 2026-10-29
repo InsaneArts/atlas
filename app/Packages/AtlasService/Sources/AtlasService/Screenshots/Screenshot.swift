@@ -11,8 +11,10 @@ public struct Screenshot: Decodable, Equatable, Sendable, Identifiable {
   public var width: Int?
   /// Its height in pixels, when its header reads.
   public var height: Int?
-  /// The key of the host session that took it; nil when no host named one.
+  /// The key of the host session that took it; nil when no host named one, never empty.
   public var session: String?
+  /// The key of the host session that took it: Terminal's empty key when no host named one.
+  public var sessionKey: String { session ?? "" }
 
   /// The screenshot's identity in a list: its file name.
   public var id: String { name }
@@ -51,7 +53,9 @@ public struct Screenshot: Decodable, Equatable, Sendable, Identifiable {
     takenAt = milliseconds.map { Date(timeIntervalSince1970: $0 / 1000) }
     width = try? container.decodeIfPresent(Int.self, forKey: .width)
     height = try? container.decodeIfPresent(Int.self, forKey: .height)
-    session = try? container.decodeIfPresent(String.self, forKey: .session)
+    // An empty key is Terminal's, as a missing one is, so both read as none.
+    session = (try? container.decodeIfPresent(String.self, forKey: .session))
+      .flatMap { $0?.isEmpty == false ? $0 : nil }
   }
 
   /// When a capture was taken, read from its file name as Atlas writes it, nanoseconds since 1970 then a dash, such as

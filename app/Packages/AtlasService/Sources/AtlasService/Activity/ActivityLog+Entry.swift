@@ -22,12 +22,19 @@ extension ActivityLog {
     public var operation: String
     /// How many input actions it carried, for `input`.
     var count: Int?
-    /// The key of the host session it came from; nil for the person's own and for commands no host named.
+    /// The key of the host session it came from; nil for the person's own and for commands no host named, never empty.
     public var session: String?
     /// The capture a screenshot row took, by Atlas's own file name, when the service says.
     public var capture: String?
     /// Whether a refusal before it was done had already sent part of its text, as typing cut short.
     public var partial: Bool
+
+    /// The key of the host session an agent's row came from: Terminal's empty key for one no host named.
+    public var sessionKey: String { session ?? "" }
+
+    /// The group the row is listed under while every session's work shows: its session's key, Terminal's empty one
+    /// for an agent's row no host named, or nil for the person's own.
+    public var groupKey: String? { actor == .you ? nil : sessionKey }
 
     /// Creates a row.
     ///
@@ -101,7 +108,8 @@ extension ActivityLog {
       reason = text(.reason)
       operation = text(.operation) ?? "action"
       count = try? container.decodeIfPresent(Int.self, forKey: .count)
-      session = try? container.decodeIfPresent(String.self, forKey: .session)
+      // An empty key is Terminal's, as a missing one is, so both read as none.
+      session = text(.session)
       capture = text(.capture)
       partial = flag(.partial)
     }

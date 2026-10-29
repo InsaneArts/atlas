@@ -68,7 +68,7 @@ extension ViewerPresenter {
   static func holderLeads(_ snapshot: ViewerSnapshot) -> String? {
     let reading = snapshot.reading.statusReading
     guard snapshot.sessionChoice == .all, let holder = reading.holder,
-      let newest = reading.newestAgentAction, (newest.session ?? "") == holder.key
+      let newest = reading.newestAgentAction, newest.sessionKey == holder.key
     else { return nil }
     if snapshot.session.tab == .screen, case .holder = chip(snapshot) { return nil }
     let sharesHost = reading.liveSessions.contains { $0.key != holder.key && $0.host == holder.host }

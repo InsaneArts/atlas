@@ -74,7 +74,7 @@ struct ViewerPresenterSessionsTests {
     #expect(ViewerPresenter.sessionIcon("", snapshot) == SessionIcons.icon(.terminal))
     let reading = snapshot.reading.statusReading
     #expect(SessionIcons.icon(of: "dead00000000", in: reading) == nil)
-    #expect(SessionIcons.icon(of: nil, in: reading) == SessionIcons.icon(.terminal))
+    #expect(SessionIcons.icon(of: "", in: reading) == SessionIcons.icon(.terminal))
     #expect(SessionIcons.icon(of: "8be20c4d1a77", in: reading) == SessionIcons.icon(.codex))
   }
 

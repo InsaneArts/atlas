@@ -171,7 +171,7 @@ public struct ActivityGrouping: Sendable {
     var found: [String?: [ActivityRun]] = [:]
     var named: [String] = []
     for (_, run) in runs(captures: captures) where filter.admits(run.entry) && Self.matches(run.entry, query: query) {
-      let key = Self.group(of: run.entry)
+      let key = run.entry.groupKey
       if let key, !key.isEmpty, found[key] == nil { named.append(key) }
       found[key, default: []].append(run)
     }
@@ -183,14 +183,6 @@ public struct ActivityGrouping: Sendable {
       guard let runs = found[key], !runs.isEmpty else { return nil }
       return ActivitySessionGroup(key: key, runs: Array(runs.prefix(lines)), total: runs.count)
     }
-  }
-
-  /// The group a row is listed under while the pane shows every session.
-  ///
-  /// - Parameter entry: The row.
-  /// - Returns: Its session's key, empty for an agent's row no host named, or nil for the person's own.
-  static func group(of entry: ActivityLog.Entry) -> String? {
-    entry.actor == .you ? nil : entry.session ?? ""
   }
 
   /// Every line of the log in its own order, each with its stretch of time: a row with no time stays with the row

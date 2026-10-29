@@ -16,13 +16,16 @@ extension ViewerStatus {
     public var ageSeconds: Double?
     /// What it did in the service's words, such as "clicked Save in TextEdit", from builds that say so.
     public var says: String?
-    /// The key of the host session it came from; nil for the person's own and for commands no host named.
+    /// The key of the host session it came from; nil for the person's own and for commands no host named, never empty.
     public var session: String?
     /// Whether it was refused before anything was sent, as when another app was in front: nothing to recover, and
     /// not a problem.
     public var nothingSent: Bool
     /// Whether its outcome is unknown until the person recovers.
     public var uncertain: Bool
+
+    /// The key of the host session an agent's operation came from: Terminal's empty key for one no host named.
+    public var sessionKey: String { session ?? "" }
 
     /// Creates an operation.
     ///
@@ -84,7 +87,9 @@ extension ViewerStatus {
         .flatMap { $0.isFinite ? $0 : nil }
       let said = (try? container.decodeIfPresent(String.self, forKey: .says)) ?? nil
       says = said?.isEmpty == false ? said : nil
-      session = try? container.decodeIfPresent(String.self, forKey: .session)
+      // An empty key is Terminal's, as a missing one is, so both read as none.
+      session = (try? container.decodeIfPresent(String.self, forKey: .session))
+        .flatMap { $0?.isEmpty == false ? $0 : nil }
       nothingSent = (try? container.decodeIfPresent(Bool.self, forKey: .nothingSent)) == true
       uncertain = (try? container.decodeIfPresent(Bool.self, forKey: .uncertain)) == true
     }

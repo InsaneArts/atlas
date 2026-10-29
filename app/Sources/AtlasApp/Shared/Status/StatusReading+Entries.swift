@@ -8,7 +8,7 @@ extension StatusReading {
     let items = captions()
     return items.map { item in
       var entry = Self.entry(item, isNewest: item.id == items.last?.id)
-      if showsSessions, item.actor == .agent { entry.icon = SessionIcons.icon(of: item.session, in: self) }
+      if showsSessions, item.actor == .agent { entry.icon = SessionIcons.icon(of: item.sessionKey, in: self) }
       return entry
     }
   }

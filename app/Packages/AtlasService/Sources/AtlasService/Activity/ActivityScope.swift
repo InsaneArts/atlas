@@ -15,7 +15,7 @@ public enum ActivityScope: Hashable, Sendable {
   func admits(_ entry: ActivityLog.Entry) -> Bool {
     switch self {
     case .all: true
-    case .session(let key): entry.actor != .you && (entry.session ?? "") == key
+    case .session(let key): entry.groupKey == key
     }
   }
 }

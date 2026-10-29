@@ -28,11 +28,11 @@ enum SessionIcons {
   /// session's host. A session the status does not list gets none, since nothing says which host runs it.
   ///
   /// - Parameters:
-  ///   - key: The action's session key; nil or empty for Terminal.
+  ///   - key: The action's session key; empty for Terminal.
   ///   - reading: The status, read.
   /// - Returns: The icon, or nil for a session the status does not list.
-  static func icon(of key: String?, in reading: StatusReading) -> RowIcon? {
-    guard let key, !key.isEmpty else { return icon(.terminal) }
+  static func icon(of key: String, in reading: StatusReading) -> RowIcon? {
+    guard !key.isEmpty else { return icon(.terminal) }
     return reading.session(key)
       .map { icon($0.host) }
   }

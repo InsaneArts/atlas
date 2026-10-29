@@ -77,7 +77,7 @@ extension ViewerPresenter {
     let shots = snapshot.panes.shots.shots ?? []
     guard case .one(let key) = snapshot.sessionChoice else { return shots }
     let named = Set(snapshot.panes.sessions.record(key)?.screenshots ?? [])
-    return shots.filter { ($0.session ?? "") == key || named.contains($0.name) }
+    return shots.filter { $0.sessionKey == key || named.contains($0.name) }
   }
 
   /// The screenshots in the order the grid lists them, by name: what Previous and Next walk.
