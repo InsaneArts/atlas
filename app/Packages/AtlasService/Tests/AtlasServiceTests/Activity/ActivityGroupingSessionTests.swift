@@ -45,7 +45,7 @@ struct ActivityGroupingSessionTests {
       Self.row("a4", "claude", 6, says: "opened Opie"),
       Self.row("a5", "claude", 7, says: "dragged"),
     ])
-    let groups = rules.sessionGroups(filter: .all, query: "", captures: [], order: ["claude", "codex"])
+    let groups = rules.sessionGroups(filter: .all, query: "", captures: [], order: ["claude", "codex"], lines: 4)
     #expect(groups.map(\.key) == ["claude", "codex"])
     #expect(groups.first?.runs.map(\.id) == ["a1", "a2", "a3", "a4"], "the newest four lines")
     #expect(groups.map(\.total) == [5, 2])
@@ -59,7 +59,7 @@ struct ActivityGroupingSessionTests {
       Self.row("e1", "ended", 3, says: "opened Notes"),
       Self.row("a1", "claude", 4, says: "clicked Save"),
     ])
-    let groups = rules.sessionGroups(filter: .all, query: "", captures: [], order: ["claude"])
+    let groups = rules.sessionGroups(filter: .all, query: "", captures: [], order: ["claude"], lines: 4)
     #expect(groups.map(\.key) == ["claude", "ended", nil, ""], "a session the status no longer lists follows")
     let terminal = rules.groups(filter: .all, query: "", captures: [], scope: .session(""))
       .flatMap(\.runs)
@@ -75,7 +75,7 @@ struct ActivityGroupingSessionTests {
       Self.row("e1", "ended", 3, says: "opened Notes"),
       Self.row("t1", nil, 4, says: "took a screenshot"),
     ])
-    let groups = rules.sessionGroups(filter: .all, query: "", captures: [], order: ["", "claude"])
+    let groups = rules.sessionGroups(filter: .all, query: "", captures: [], order: ["", "claude"], lines: 4)
     #expect(groups.map(\.key) == ["", "claude", "ended", nil])
   }
 

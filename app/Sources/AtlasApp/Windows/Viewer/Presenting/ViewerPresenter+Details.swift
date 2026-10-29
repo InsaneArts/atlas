@@ -14,7 +14,7 @@ extension ViewerPresenter {
     let holdingControl = snapshot.holdingControl
     let facts = reading.facts(holdingControl: holdingControl)
     return ViewerDetailsState(
-      hostSession: hostSession(snapshot),
+      sessionDetail: sessionDetail(snapshot),
       helper: [
         Fact(name: ViewerWords.accountRow, value: account(snapshot.reading.status)),
         Fact(name: ViewerWords.stateRow, value: facts.input.word),
@@ -90,7 +90,7 @@ extension ViewerPresenter {
   ///
   /// - Parameter snapshot: What the controller holds.
   /// - Returns: The detail, or nil.
-  static func hostSession(_ snapshot: ViewerSnapshot) -> ViewerSessionDetail? {
+  static func sessionDetail(_ snapshot: ViewerSnapshot) -> ViewerSessionDetail? {
     guard let key = snapshot.shownSessions.key, let record = snapshot.panes.sessions.record(key) else { return nil }
     let session = resolvedSession(key, snapshot)
     let shots = record.screenshots

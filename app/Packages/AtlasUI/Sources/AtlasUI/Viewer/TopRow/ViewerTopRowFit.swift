@@ -1,9 +1,9 @@
 /// One of the top row's layouts, widest first: a narrowing window takes the first that fits
 /// (``ViewerLayout/barLayouts``), so the status line goes first, then the tabs' and the sessions button's words, then
-/// the picture's pause, then the actions' words. Nothing truncates to a short word; the white capsule keeps its whole title. The pause goes
-/// before Stop and Resume give up their words, so a narrow bar never shows a pause, a stop and a fast-forward side by
-/// side, which would read as one player's buttons when the pause acts on the picture and the others on the agent; it
-/// stays in the View menu and on ⇧⌘P.
+/// the picture's pause, then the actions' words. Nothing truncates to a short word; the white capsule keeps its whole
+/// title. The pause goes before Stop and Resume give up their words, so a narrow bar never shows a pause, a stop and a
+/// fast-forward side by side, which would read as one player's buttons when the pause acts on the picture and the
+/// others on the agent; it stays in the View menu and on ⇧⌘P.
 ///
 /// The tabs stay centred, so the status's column is as wide as the buttons'. Only the widest layout asks for room for
 /// the status line; the others show it only in whatever room the buttons' width leaves the status, cut short, and not

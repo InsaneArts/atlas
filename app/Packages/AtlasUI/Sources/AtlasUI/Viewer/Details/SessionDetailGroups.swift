@@ -81,7 +81,7 @@ struct SessionDetailGroups: View {
 
 #if DEBUG
   #Preview("Samples") {
-    if let detail = PreviewStates.viewerSessionDetail.details?.hostSession {
+    if let detail = PreviewStates.viewerSessionDetail.details?.sessionDetail {
       SessionDetailGroups(detail: detail) { _ in }
         .frame(width: ViewerLayout.detailsWidth)
         .sampleSurface()
@@ -89,7 +89,7 @@ struct SessionDetailGroups: View {
   }
 
   #Preview("Cleaned up") {
-    if let detail = PreviewStates.viewerSessionCleanedUp.details?.hostSession {
+    if let detail = PreviewStates.viewerSessionCleanedUp.details?.sessionDetail {
       SessionDetailGroups(detail: detail) { _ in }
         .frame(width: ViewerLayout.detailsWidth)
         .sampleSurface()
@@ -98,7 +98,7 @@ struct SessionDetailGroups: View {
 
   #Preview("Interactive") {
     @Previewable @State var last = String("Nothing pressed")
-    if let detail = PreviewStates.viewerSessionDetail.details?.hostSession {
+    if let detail = PreviewStates.viewerSessionDetail.details?.sessionDetail {
       InteractivePreview {
         Text(last)
       } content: {

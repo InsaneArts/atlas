@@ -29,10 +29,10 @@ struct ViewerDetailsTests {
         screenshots: ["a.png", "b.png", "c.png", "d.png"]
       )
     ])
-    #expect(ViewerPresenter.details(snapshot).hostSession == nil, "every session's work shows")
+    #expect(ViewerPresenter.details(snapshot).sessionDetail == nil, "every session's work shows")
     snapshot.session.chosenSession = .one("3f9a1c07b2e4")
     let details = ViewerPresenter.details(snapshot)
-    let session = try #require(details.hostSession)
+    let session = try #require(details.sessionDetail)
     #expect(session.state == "Acting · has the helper")
     #expect(session.facts.map(\.name) == ["Host", "Folder", "Started", "Last seen"])
     #expect(session.facts.first?.value == "Claude Code")
@@ -45,7 +45,7 @@ struct ViewerDetailsTests {
     #expect(session.allShots == "See all 4")
     #expect(details.login.map(\.name) == ["Agents"], "the helper's login keeps its rows, under Login")
     snapshot.panes.apps.apps = [HelperApp(pid: 1, name: "Opie")]
-    #expect(ViewerPresenter.details(snapshot).hostSession?.apps.map(\.value) == ["Open · a copy", "Closed"])
+    #expect(ViewerPresenter.details(snapshot).sessionDetail?.apps.map(\.value) == ["Open · a copy", "Closed"])
   }
 
   @Test("a sessions' list that cannot be read says so under the chosen session")
@@ -56,10 +56,10 @@ struct ViewerDetailsTests {
     snapshot.panes.sessions.list = HostSessionList(sessions: [
       HostSessionRecord(key: "", name: "Terminal", host: .terminal)
     ])
-    #expect(ViewerPresenter.details(snapshot).hostSession?.facts.last?.name != "Sessions")
+    #expect(ViewerPresenter.details(snapshot).sessionDetail?.facts.last?.name != "Sessions")
     snapshot.panes.sessions.failure = "The service did not answer"
     let unread = Fact(name: "Sessions", value: "Couldn't read sessions; this may be out of date")
-    #expect(ViewerPresenter.details(snapshot).hostSession?.facts.last == unread)
+    #expect(ViewerPresenter.details(snapshot).sessionDetail?.facts.last == unread)
   }
 
   @Test("Terminal's host is none named")
@@ -70,6 +70,6 @@ struct ViewerDetailsTests {
     snapshot.panes.sessions.list = HostSessionList(sessions: [
       HostSessionRecord(key: "", name: "Terminal", host: .terminal)
     ])
-    #expect(ViewerPresenter.details(snapshot).hostSession?.facts.first == Fact(name: "Host", value: "None named"))
+    #expect(ViewerPresenter.details(snapshot).sessionDetail?.facts.first == Fact(name: "Host", value: "None named"))
   }
 }

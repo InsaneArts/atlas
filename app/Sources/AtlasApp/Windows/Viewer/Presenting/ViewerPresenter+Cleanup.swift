@@ -11,13 +11,13 @@ extension ViewerPresenter {
   ///   - record: The session, as the list has it.
   ///   - snapshot: What the controller holds.
   /// - Returns: The cleanup, or nil when there is nothing to clean up.
-  static func cleanup(_ record: HostSessionRecord, _ snapshot: ViewerSnapshot) -> SessionCleanup? {
+  static func cleanup(_ record: HostSessionRecord, _ snapshot: ViewerSnapshot) -> ViewerSessionCleanup? {
     let state = snapshot.session.cleanup
     let receipt = state.receipts[record.key]
     let running = state.isBusy(for: record.key)
     // Terminal's session has no key a cleanup can name.
     guard !record.key.isEmpty, record.leftWork || receipt != nil || running else { return nil }
-    let stage: SessionCleanup.Stage =
+    let stage: ViewerSessionCleanup.Stage =
       if running {
         .working
       } else if let receipt {
@@ -25,7 +25,7 @@ extension ViewerPresenter {
       } else {
         .ready
       }
-    return SessionCleanup(
+    return ViewerSessionCleanup(
       session: record.key,
       title: ViewerWords.cleanUpSession,
       workingTitle: ViewerWords.cleaningUp,

@@ -2,7 +2,7 @@
 /// to act, the picture and the helper's login, each a group of rows.
 public struct ViewerDetailsState: Equatable, Sendable {
   /// The chosen host session, which leads the pane; nil while every session's work shows, or nothing is known of it.
-  public var hostSession: ViewerSessionDetail?
+  public var sessionDetail: ViewerSessionDetail?
   /// The helper's rows: its account, its state and its display.
   public var helper: [Fact]
   /// Ready to act's rows: one while every check passes, else those that do not and a count of those that do.
@@ -20,7 +20,7 @@ public struct ViewerDetailsState: Equatable, Sendable {
   /// Creates the Details column's state.
   ///
   /// - Parameters:
-  ///   - hostSession: The chosen host session; none by default.
+  ///   - sessionDetail: The chosen host session; none by default.
   ///   - helper: The helper's rows.
   ///   - ready: Ready to act's rows.
   ///   - updates: How often the picture updates.
@@ -28,7 +28,7 @@ public struct ViewerDetailsState: Equatable, Sendable {
   ///   - login: The helper's login's rows.
   ///   - isChecking: Whether Check Again is reading the helper now.
   public init(
-    hostSession: ViewerSessionDetail? = nil,
+    sessionDetail: ViewerSessionDetail? = nil,
     helper: [Fact],
     ready: [ViewerReadyRow],
     updates: String,
@@ -36,7 +36,7 @@ public struct ViewerDetailsState: Equatable, Sendable {
     login: [Fact],
     isChecking: Bool = false
   ) {
-    self.hostSession = hostSession
+    self.sessionDetail = sessionDetail
     self.helper = helper
     self.ready = ready
     self.isChecking = isChecking

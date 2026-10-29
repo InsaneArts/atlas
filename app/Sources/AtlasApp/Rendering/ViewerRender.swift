@@ -77,9 +77,9 @@
     /// each side of a step (`ViewerLayout.topRowFit`).
     nonisolated static let narrowWidths: [CGFloat] = [860, 900, 1040]
 
-    /// The narrow renders, each named by its file and drawn at its window's width and the standard height:
-    /// Working, Stopped, You have control and the sessions button at each of ``narrowWidths``, then Activity, Apps and Screenshots
-    /// with Details open at the least width, where their headers have the least room.
+    /// The narrow renders, each named by its file and drawn at its window's width and the standard height: Working,
+    /// Stopped, You have control and the sessions button at each of ``narrowWidths``, then Activity, Apps and
+    /// Screenshots with Details open at the least width, where their headers have the least room.
     static var narrowRenders: [PreviewState<ViewerState>] {
       let states = [
         ("working", PreviewStates.viewerWorking), ("stopped", PreviewStates.viewerStopped),

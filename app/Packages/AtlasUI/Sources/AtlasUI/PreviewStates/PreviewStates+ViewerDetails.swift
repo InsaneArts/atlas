@@ -68,8 +68,8 @@
     /// since it was installed, and the copy of Opie still in use, each step's outcome above the button.
     @MainActor public static let viewerSessionCleanedUp: ViewerState = {
       var state = viewerSessionDetail
-      state.details?.hostSession?.plans = []
-      state.details?.hostSession?.cleanup = SessionCleanup(
+      state.details?.sessionDetail?.plans = []
+      state.details?.sessionDetail?.cleanup = ViewerSessionCleanup(
         session: SessionSamples.claudeKey,
         title: "Clean Up This Session's Work…",
         workingTitle: "Cleaning Up…",

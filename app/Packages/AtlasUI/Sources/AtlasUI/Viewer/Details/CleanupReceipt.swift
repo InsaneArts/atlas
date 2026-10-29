@@ -42,7 +42,7 @@ struct CleanupReceipt: View {
 
 #if DEBUG
   #Preview("Samples") {
-    if let steps = PreviewStates.viewerSessionCleanedUp.details?.hostSession?.cleanup?.receipt {
+    if let steps = PreviewStates.viewerSessionCleanedUp.details?.sessionDetail?.cleanup?.receipt {
       CleanupReceipt(steps: steps)
         .frame(width: ViewerLayout.detailsWidth)
         .sampleSurface()

@@ -5,7 +5,7 @@ import SwiftUI
 /// title, and it takes no press; while another session's cleanup runs, it takes no press either.
 struct SessionCleanupButton: View {
   /// The cleanup.
-  let cleanup: SessionCleanup
+  let cleanup: ViewerSessionCleanup
   /// Receives what the person does.
   let send: @MainActor (ViewerEvent) -> Void
 
@@ -23,7 +23,7 @@ struct SessionCleanupButton: View {
 
 #if DEBUG
   #Preview("Samples") {
-    if let cleanup = PreviewStates.viewerSessionDetail.details?.hostSession?.cleanup {
+    if let cleanup = PreviewStates.viewerSessionDetail.details?.sessionDetail?.cleanup {
       VStack(spacing: Spacing.m) {
         SessionCleanupButton(cleanup: cleanup) { _ in }
         SessionCleanupButton(
@@ -48,7 +48,7 @@ struct SessionCleanupButton: View {
 
   #Preview("Interactive") {
     @Previewable @State var working = false
-    if let cleanup = PreviewStates.viewerSessionDetail.details?.hostSession?.cleanup {
+    if let cleanup = PreviewStates.viewerSessionDetail.details?.sessionDetail?.cleanup {
       InteractivePreview {
         Toggle(String("Working"), isOn: $working)
       } content: {

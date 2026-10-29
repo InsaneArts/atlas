@@ -24,7 +24,7 @@ public struct ViewerSessionDetail: Equatable, Sendable {
   /// "See all 6" under them; nil with three or fewer.
   public var allShots: String?
   /// Cleaning up its work; nil when it left nothing to clean up.
-  public var cleanup: SessionCleanup?
+  public var cleanup: ViewerSessionCleanup?
 
   /// Creates the session's detail.
   ///
@@ -51,7 +51,7 @@ public struct ViewerSessionDetail: Equatable, Sendable {
     plans: [Fact] = [],
     shots: [ViewerActivityShot] = [],
     allShots: String? = nil,
-    cleanup: SessionCleanup? = nil
+    cleanup: ViewerSessionCleanup? = nil
   ) {
     self.icon = icon
     self.name = name

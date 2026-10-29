@@ -32,7 +32,7 @@ struct SessionDetailHeader: View {
 
 #if DEBUG
   #Preview("Samples") {
-    if let detail = PreviewStates.viewerSessionDetail.details?.hostSession {
+    if let detail = PreviewStates.viewerSessionDetail.details?.sessionDetail {
       SessionDetailHeader(detail: detail)
         .frame(width: ViewerLayout.detailsWidth)
         .sampleSurface()
@@ -41,7 +41,7 @@ struct SessionDetailHeader: View {
 
   #Preview("Interactive") {
     @Previewable @State var ended = false
-    if let detail = PreviewStates.viewerSessionDetail.details?.hostSession {
+    if let detail = PreviewStates.viewerSessionDetail.details?.sessionDetail {
       InteractivePreview {
         Toggle(String("Ended"), isOn: $ended)
       } content: {

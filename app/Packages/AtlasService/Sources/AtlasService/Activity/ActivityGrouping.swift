@@ -149,24 +149,23 @@ public struct ActivityGrouping: Sendable {
 
   /// The lines the pane lists while it shows every host session: a group for each session in `order`, Terminal's
   /// included where `order` names it, then for any other session the log names, newest first, then the person's own
-  /// rows as You, and the rows no host named as Terminal last while `order` leaves it out; each with its newest
-  /// `lines` lines and its total. The filter and the search apply inside every
-  /// group, and a group they leave empty is left out. Repeats are found in the log's own order, as ``groups(filter:query:captures:scope:)``
-  /// finds them.
+  /// rows as You, and the rows no host named as Terminal last while `order` leaves it out; each with its newest `lines`
+  /// lines and its total. The filter and the search apply inside every group, and a group they leave empty is left out.
+  /// Repeats are found in the log's own order, as ``groups(filter:query:captures:scope:)`` finds them.
   ///
   /// - Parameters:
   ///   - filter: Which rows to list.
   ///   - query: What to search for in what was done; empty keeps every row.
   ///   - captures: The screenshots the service lists, for the screenshot rows.
   ///   - order: The sessions' keys in the order to list them, the status's; empty for Terminal.
-  ///   - lines: The most lines a group shows; four by default.
+  ///   - lines: The most lines a group shows.
   /// - Returns: The groups, in order.
   public func sessionGroups(
     filter: ActivityFilter,
     query: String,
     captures: [Screenshot],
     order: [String],
-    lines: Int = 4
+    lines: Int
   ) -> [ActivitySessionGroup] {
     var found: [String?: [ActivityRun]] = [:]
     var named: [String] = []

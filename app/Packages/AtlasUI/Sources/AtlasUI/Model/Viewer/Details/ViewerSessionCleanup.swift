@@ -1,6 +1,6 @@
 /// Cleaning up the chosen host session's work, last in its part of Details: the button that asks first, and once a
 /// cleanup ran, what each of its steps did.
-public struct SessionCleanup: Equatable, Sendable {
+public struct ViewerSessionCleanup: Equatable, Sendable {
   /// The session's key, which the button's event names.
   public var session: String
   /// The button's title, such as "Clean Up This Session's Work…".

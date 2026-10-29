@@ -1,10 +1,10 @@
 import SwiftUI
 
 /// The menu bar panel: the helper's status as its heading, its screen, the newest actions or, while two or more are
-/// live, the host sessions, and the actions on the agent. It draws its state and sends what the person does; it decides nothing. A state change moves every piece at
-/// once on ``PanelLayout/change``: the word, the line, the picture's look and the buttons ease together, so nothing
-/// ripples down the panel on every flip. It fills the popover that holds it, whose corners, glass and shadow are the
-/// system's; `panelCard()` draws its own where no popover does.
+/// live, the host sessions, and the actions on the agent. It draws its state and sends what the person does; it decides
+/// nothing. A state change moves every piece at once on ``PanelLayout/change``: the word, the line, the picture's look
+/// and the buttons ease together, so nothing ripples down the panel on every flip. It fills the popover that holds it,
+/// whose corners, glass and shadow are the system's; `panelCard()` draws its own where no popover does.
 public struct PanelView: View {
   /// What the panel shows.
   private let state: PanelState

@@ -185,9 +185,12 @@ extension ViewerPresenter {
       run.startedAt.map { Words.clockTime($0, locale: snapshot.locale, timeZone: snapshot.timeZone) } ?? Words.unknown
     let text = ViewerWords.repeated(ActivityGrouping.text(entry), count: run.count)
     let offersRecovery = run.id == snapshot.reading.statusReading.causer?.uncertainRow
-    let reason =
-      offersRecovery
-      ? ViewerWords.unfinishedReason : entry.outcome == .failed || entry.outcome == .notSent ? entry.reason : nil
+    let reason: String? =
+      switch (offersRecovery, entry.outcome) {
+      case (true, _): ViewerWords.unfinishedReason
+      case (false, .failed), (false, .notSent): entry.reason
+      case (false, .running), (false, .worked): nil
+      }
     let mark: ActivityMarkKind = offersRecovery ? .failed : lead(entry)
     return ViewerActivityLine(
       id: run.id,

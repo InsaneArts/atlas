@@ -71,7 +71,7 @@ struct ViewerPresenterCleanupTests {
   @Test("the button shows only when the session left something")
   func theButtonShowsOnlyWhenTheSessionLeftSomething() throws {
     let cleanup = { (record: HostSessionRecord) in
-      ViewerPresenter.details(try Self.chosen(record)).hostSession?.cleanup
+      ViewerPresenter.details(try Self.chosen(record)).sessionDetail?.cleanup
     }
     #expect(try cleanup(Self.record()) == nil, "a session that left nothing has no button")
     #expect(try cleanup(Self.record(cleanup: .complete)) == nil, "a cleanup that finished leaves nothing")
@@ -192,7 +192,7 @@ struct ViewerPresenterCleanupTests {
     #expect(ViewerPresenter.cleanupOutcome(unknown) == "Kept", "a reason this app does not know is never shown")
     var snapshot = try Self.chosen(Self.record(copies: [HostSessionCopy(app: "Probe")]))
     snapshot.session.cleanup.receipts[Self.key] = applied
-    let cleanup = try #require(ViewerPresenter.details(snapshot).hostSession?.cleanup)
+    let cleanup = try #require(ViewerPresenter.details(snapshot).sessionDetail?.cleanup)
     #expect(cleanup.receipt.count == 9, "the receipt shows above the button, which can be pressed again")
     #expect(cleanup.isEnabled)
   }
@@ -243,7 +243,7 @@ struct ViewerPresenterCleanupTests {
     let viewer = try await ViewerController.watching(service)
     viewer.send(.chooseSession(.one(Self.key)))
     try await settle("the list was never read") { viewer.panes.sessions.list != nil }
-    let cleanup = { ViewerPresenter.details(viewer.snapshot).hostSession?.cleanup }
+    let cleanup = { ViewerPresenter.details(viewer.snapshot).sessionDetail?.cleanup }
     #expect(cleanup()?.isEnabled == true)
 
     service.hold = ["cleanup.json"]
@@ -278,14 +278,14 @@ struct ViewerPresenterCleanupTests {
   func anotherSessionsCleanupHoldsTheButtonWithoutASpinner() throws {
     var snapshot = try Self.chosen(Self.record(copies: [HostSessionCopy(app: "Probe")]))
     snapshot.session.cleanup.running = "8be20c4d1a77"
-    let held = try #require(ViewerPresenter.details(snapshot).hostSession?.cleanup)
+    let held = try #require(ViewerPresenter.details(snapshot).sessionDetail?.cleanup)
     #expect(!held.isEnabled && !held.isWorking && held.waitsForAnother)
     snapshot.session.cleanup.running = nil
     snapshot.session.cleanup.unanswered = ViewerUnansweredCleanup(session: "8be20c4d1a77", sentAt: .distantPast)
-    let waiting = try #require(ViewerPresenter.details(snapshot).hostSession?.cleanup)
+    let waiting = try #require(ViewerPresenter.details(snapshot).sessionDetail?.cleanup)
     #expect(!waiting.isEnabled && !waiting.isWorking)
     snapshot.session.cleanup.unanswered = ViewerUnansweredCleanup(session: Self.key, sentAt: .distantPast)
-    let own = try #require(ViewerPresenter.details(snapshot).hostSession?.cleanup)
+    let own = try #require(ViewerPresenter.details(snapshot).sessionDetail?.cleanup)
     #expect(!own.isEnabled && own.isWorking && !own.waitsForAnother)
     #expect(own.workingTitle == "Cleaning Up…", "VoiceOver hears it working")
   }
@@ -334,7 +334,7 @@ struct ViewerPresenterCleanupTests {
     let viewer = try await ViewerController.watching(service)
     viewer.send(.chooseSession(.one(Self.key)))
     try await settle("the list was never read") { viewer.panes.sessions.list != nil }
-    let cleanup = { ViewerPresenter.details(viewer.snapshot).hostSession?.cleanup }
+    let cleanup = { ViewerPresenter.details(viewer.snapshot).sessionDetail?.cleanup }
     viewer.send(.askCleanup(session: Self.key))
     try await settle("the alert never asked") { viewer.session.alert != nil }
 

@@ -200,7 +200,13 @@ public struct ViewerClient: ViewerService {
       let on: Bool
     }
     let data = try await post("control/hold", Body(on: stopped))
-    return Self.decoded(StopOutcome.self, from: data) ?? StopOutcome()
+    guard let outcome = Self.decoded(StopOutcome.self, from: data) else {
+      // A reply that does not read says no more than that agents are held as asked.
+      var asked = StopOutcome()
+      asked.held = stopped
+      return asked
+    }
+    return outcome
   }
 
   /// Posts to `input`.

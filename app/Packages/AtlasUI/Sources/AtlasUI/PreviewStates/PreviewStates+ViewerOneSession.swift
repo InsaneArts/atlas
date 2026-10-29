@@ -52,7 +52,7 @@
     /// Claude Code's cleanup being read or run from Details: its button holds a spinner.
     @MainActor public static let viewerSessionCleaningUp: ViewerState = {
       var state = viewerSessionDetail
-      state.details?.hostSession?.cleanup?.stage = .working
+      state.details?.sessionDetail?.cleanup?.stage = .working
       return state
     }()
 
@@ -65,7 +65,7 @@
         title: SessionSamples.piName,
         help: "Choose whose work to show"
       )
-      state.details?.hostSession = ViewerSessionDetail(
+      state.details?.sessionDetail = ViewerSessionDetail(
         icon: SessionSamples.piIcon,
         name: SessionSamples.piName,
         state: "Ended 20 min ago",

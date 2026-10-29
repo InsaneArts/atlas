@@ -77,7 +77,7 @@ struct ViewerPresenterSessionsTests {
     snapshot.session.chosenSession = .one("aaaa00000002")
     let resolved = ViewerPresenter.resolvedSession("aaaa00000002", snapshot)
     #expect(resolved.state == .acting && resolved.live == cursor && resolved.listed == nil)
-    let detail = try #require(ViewerPresenter.details(snapshot).hostSession)
+    let detail = try #require(ViewerPresenter.details(snapshot).sessionDetail)
     #expect(detail.state == "Acting · has the helper", "not Idle, as the status no longer lists it")
     #expect(detail.tone == .active)
     let quiet = ViewerPresenter.resolvedSession("c0ffee5e5510", snapshot)
@@ -169,7 +169,7 @@ struct ViewerPresenterSessionsTests {
         screenshots: ["1793163300000000000-capture.png"]
       )
     ])
-    let detail = try #require(ViewerPresenter.details(snapshot).hostSession)
+    let detail = try #require(ViewerPresenter.details(snapshot).sessionDetail)
     #expect(detail.copies == [Fact(name: "Copy of Opie", value: ""), Fact(name: "Copies of Notes", value: "2")])
     let plans = detail.plans.map(\.name)
     #expect(plans == ["Applied · can roll back", "A plan"])
@@ -235,6 +235,6 @@ struct ViewerPresenterSessionsTests {
     snapshot.detailsShown = true
     snapshot.panes.sessions.notOfferedAt = snapshot.date
     #expect(ViewerPresenter.sessionsMenu(snapshot).ended.isEmpty)
-    #expect(ViewerPresenter.details(snapshot).hostSession == nil)
+    #expect(ViewerPresenter.details(snapshot).sessionDetail == nil)
   }
 }

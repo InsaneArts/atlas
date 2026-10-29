@@ -4,7 +4,8 @@ import SwiftUI
 
 extension RowIcon {
   /// Each icon's menu image once drawn, by what it shows and the scale it was drawn at. Only the main actor, which
-  /// builds menus, reads and writes it.
+  /// builds menus, reads and writes it. It needs no bound: the icons are those of the hosts ``SessionHost`` names, at
+  /// the few scales a Mac's displays have.
   @MainActor private static var menuImages: [String: NSImage] = [:]
 
   /// The icon as a menu item's image, ``SessionIcon/menuSide`` points square, drawn once per icon and scale through

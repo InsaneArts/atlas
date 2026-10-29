@@ -1,9 +1,9 @@
 import SwiftUI
 
 /// One screenshot in the grid: its thumbnail at the screen's shape, a brighter ring under the pointer with nothing
-/// moving, as a Finder icon highlights rather than jumps, ringed in blue while selected, and its time under it. A click selects it, a double click shows it large, zooming
-/// from here, and it can be dragged out where the app allows. While it is shown large its picture has left the grid
-/// for the large view, so its place stays empty.
+/// moving, as a Finder icon highlights rather than jumps, ringed in blue while selected, and its time under it. A click
+/// selects it, a double click shows it large, zooming from here, and it can be dragged out where the app allows. While
+/// it is shown large its picture has left the grid for the large view, so its place stays empty.
 struct ShotTileView: View {
   /// The screenshot.
   let tile: ViewerShotTile

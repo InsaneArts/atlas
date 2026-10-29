@@ -14,8 +14,8 @@ struct ViewerDetailsGroups: View {
   /// The groups, 14 points apart.
   var body: some View {
     VStack(alignment: .leading, spacing: ViewerLayout.detailsInset) {
-      if let hostSession = state.hostSession {
-        SessionDetailGroups(detail: hostSession, send: send)
+      if let sessionDetail = state.sessionDetail {
+        SessionDetailGroups(detail: sessionDetail, send: send)
       }
       FactGroup("Helper") {
         ForEach(state.helper) { FactRow($0.name, value: $0.value) }

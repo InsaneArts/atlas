@@ -21,7 +21,8 @@ extension StatusTone {
     }
   }
 
-  /// A host session's state word's paint: blue while it acts, orange while it needs the person, grey otherwise.
+  /// A host session's state word's paint: blue while it acts, orange while it needs the person, green while ready,
+  /// grey otherwise.
   var stateColor: Color {
     switch self {
     case .active, .link: .textLink

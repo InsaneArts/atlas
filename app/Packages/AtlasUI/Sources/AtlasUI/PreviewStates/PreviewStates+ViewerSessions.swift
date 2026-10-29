@@ -333,7 +333,7 @@
       state.top.sessions = claudeButton
       state.top.actions.details = viewerDetailsToggle(shown: true)
       state.details = viewerDetails.details
-      state.details?.hostSession = ViewerSessionDetail(
+      state.details?.sessionDetail = ViewerSessionDetail(
         icon: SessionSamples.claudeIcon,
         name: SessionSamples.claudeName,
         state: "Acting · has the helper",
@@ -352,7 +352,7 @@
             ViewerActivityShot(name: name, thumbnail: shotPicture(name), label: "Screenshot taken at \(time)")
           },
         allShots: "See all 6",
-        cleanup: SessionCleanup(
+        cleanup: ViewerSessionCleanup(
           session: SessionSamples.claudeKey,
           title: "Clean Up This Session's Work…",
           workingTitle: "Cleaning Up…"

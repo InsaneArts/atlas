@@ -1,4 +1,4 @@
-extension SessionCleanup {
+extension ViewerSessionCleanup {
   /// Where cleaning up a session's work stands.
   public enum Stage: Equatable, Sendable {
     /// Nothing runs: the button asks first.

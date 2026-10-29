@@ -2,9 +2,8 @@ import SwiftUI
 
 /// Details, an inspector beside the stage: a quiet card, 280 wide, its header with Check Again, then the chosen host
 /// session when one is, the helper, whether it is ready to act, the picture and the helper's login, each a group of
-/// facts at 12 points, scrolling when the
-/// window is short; floating over the stage in a narrow window, the card is thick glass with a shadow. The bar's
-/// `sidebar.right` button shows and hides it.
+/// facts at 12 points, scrolling when the window is short; floating over the stage in a narrow window, the card is
+/// thick glass with a shadow. The bar's `sidebar.right` button shows and hides it.
 struct ViewerDetails: View {
   /// What the inspector shows.
   let state: ViewerDetailsState
