@@ -8,6 +8,7 @@ use std::{
     io::{Read, Write},
     os::unix::fs::{MetadataExt, OpenOptionsExt, PermissionsExt},
     path::Path,
+    time::{Duration, Instant},
 };
 
 /// Random bytes in a [`token`]; it is twice as many hexadecimal digits.
@@ -184,6 +185,57 @@ pub(crate) fn open_lock(path: &Path) -> Result<File> {
     Ok(file)
 }
 
+/// How a lock is held: beside other readers, or by one holder alone.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum Lock {
+    Shared,
+    Exclusive,
+}
+
+/// Another holder kept a lock past the patience given for it.
+#[derive(Debug)]
+pub(crate) struct Held;
+
+/// How often a lock that looks held is tried again.
+const LOCK_POLL: Duration = Duration::from_millis(5);
+
+/// Take `lock` on `file`, trying again until `patience` has passed; none at
+/// all tries once. A process being spawned elsewhere briefly holds every
+/// open file of its parent, close-on-exec ones too, until it executes, so a
+/// lock just let go of can look held for a few milliseconds; a real holder
+/// keeps it far longer.
+pub(crate) fn lock_within(
+    file: &File,
+    lock: Lock,
+    patience: Duration,
+) -> std::result::Result<(), Held> {
+    lock_retrying(file, lock, patience, |deadline| Instant::now() < deadline)
+}
+
+/// [`lock_within`], trying again only while `retry` says to, given the
+/// moment `patience` runs out.
+pub(crate) fn lock_retrying(
+    file: &File,
+    lock: Lock,
+    patience: Duration,
+    mut retry: impl FnMut(Instant) -> bool,
+) -> std::result::Result<(), Held> {
+    let deadline = Instant::now() + patience;
+    loop {
+        let taken = match lock {
+            Lock::Shared => fs2::FileExt::try_lock_shared(file),
+            Lock::Exclusive => fs2::FileExt::try_lock_exclusive(file),
+        };
+        if taken.is_ok() {
+            return Ok(());
+        }
+        if !retry(deadline) {
+            return Err(Held);
+        }
+        std::thread::sleep(LOCK_POLL);
+    }
+}
+
 /// Refuse a file that is not a plain file of this account; one that others
 /// may touch (made with a wider mode before) is tightened to 0600.
 fn own_private(file: &File, path: &Path) -> Result<()> {
@@ -234,4 +286,30 @@ pub(crate) fn own_folder(folder: &Path) -> bool {
             && !metadata.file_type().is_symlink()
             && metadata.uid() == nix::unistd::getuid().as_raw()
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{Held, Lock, lock_within, open_lock};
+    use std::time::{Duration, Instant};
+
+    #[test]
+    fn a_held_lock_is_refused_once_its_patience_runs_out() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("lock");
+        let (first, second) = (open_lock(&path).unwrap(), open_lock(&path).unwrap());
+
+        lock_within(&first, Lock::Shared, Duration::ZERO).unwrap();
+        lock_within(&second, Lock::Shared, Duration::ZERO).expect("readers share it");
+        fs2::FileExt::unlock(&second).unwrap();
+
+        let started = Instant::now();
+        let refused = lock_within(&second, Lock::Exclusive, Duration::from_millis(30));
+        assert!(matches!(refused, Err(Held)));
+        assert!(started.elapsed() >= Duration::from_millis(30), "it waited");
+
+        fs2::FileExt::unlock(&first).unwrap();
+        lock_within(&second, Lock::Exclusive, Duration::ZERO)
+            .expect("a free lock is taken at once");
+    }
 }

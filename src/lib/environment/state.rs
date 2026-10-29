@@ -1,41 +1,17 @@
 //! Private write-ahead state. Preview opens existing state without creating it.
 use super::{model::*, *};
-use fs2::FileExt;
+use crate::files::{Lock, lock_retrying};
 
-/// How long a lock that looks held is retried. A process being spawned
-/// elsewhere briefly holds every open file of its parent, close-on-exec ones
-/// too, until it executes, so a just-released lock can look held for a few
-/// milliseconds; a real concurrent operation holds it far longer.
+/// How long a lock that looks held is retried, as [`lock_retrying`] says.
 const LOCK_PATIENCE: std::time::Duration = std::time::Duration::from_millis(250);
 
 /// Why the store could not be used: another operation has it.
 const RUNNING: &str = "Another environment operation is running";
 
 /// Take the store lock without blocking on a real holder.
-fn take(
-    lock: &fs::File,
-    write: bool,
-    mut retry: impl FnMut(std::time::Instant) -> bool,
-) -> Result<()> {
-    let deadline = std::time::Instant::now() + LOCK_PATIENCE;
-
-    loop {
-        let taken = if write {
-            lock.try_lock_exclusive()
-        } else {
-            FileExt::try_lock_shared(lock)
-        };
-
-        if taken.is_ok() {
-            return Ok(());
-        }
-
-        if !retry(deadline) {
-            return Err(problem(RUNNING));
-        }
-
-        std::thread::sleep(std::time::Duration::from_millis(5));
-    }
+fn take(lock: &fs::File, write: bool, retry: impl FnMut(std::time::Instant) -> bool) -> Result<()> {
+    let held = if write { Lock::Exclusive } else { Lock::Shared };
+    lock_retrying(lock, held, LOCK_PATIENCE, retry).map_err(|_| problem(RUNNING))
 }
 
 pub(super) struct Store {

@@ -5,17 +5,16 @@
 //! never do.
 use crate::{
     error::{Error, Result},
-    files::{Durability, Token, own_folder, read_own, write_private_with},
+    files::{Durability, Held, Lock, Token, lock_within, own_folder, read_own, write_private_with},
     host_session::Key,
 };
-use fs2::FileExt;
 use std::{
     fmt::Display,
     fs::{self, File, OpenOptions},
     marker::PhantomData,
     os::unix::fs::{DirBuilderExt, OpenOptionsExt},
     path::{Path, PathBuf},
-    time::{Duration, Instant, SystemTime},
+    time::{Duration, SystemTime},
 };
 
 /// What a record is named by: one of Atlas's own names, so a file name
@@ -44,8 +43,6 @@ impl RecordName for crate::daemon::protocol::JobId {
 
 /// The most entries of a records folder looked at.
 pub(crate) const LISTED: usize = 256;
-/// How often a writer tries the folder's lock while it waits.
-const LOCK_POLL: Duration = Duration::from_millis(10);
 
 /// What kind of records a folder keeps, and how.
 pub(crate) struct Records {
@@ -175,19 +172,15 @@ impl<K: RecordName> RecordFolder<K> {
             ));
         }
 
-        let until = Instant::now() + wait;
-        while FileExt::try_lock_exclusive(&lock).is_err() {
-            if Instant::now() >= until {
-                return Err(Error::new(
-                    "busy",
-                    format!(
-                        "Another Atlas command is writing the {} records",
-                        self.records.noun
-                    ),
-                ));
-            }
-            std::thread::sleep(LOCK_POLL);
-        }
+        lock_within(&lock, Lock::Exclusive, wait).map_err(|Held| {
+            Error::new(
+                "busy",
+                format!(
+                    "Another Atlas command is writing the {} records",
+                    self.records.noun
+                ),
+            )
+        })?;
         Ok(lock)
     }
 

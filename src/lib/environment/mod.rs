@@ -781,13 +781,8 @@ fn lock_stage(stage: &Path) -> Result<fs::File> {
     // spawned elsewhere briefly holds every open file of its parent: a lock
     // held that briefly is waited out; a command using the plan holds it
     // far longer.
-    let until = std::time::Instant::now() + STAGE_PATIENCE;
-    while lock.try_lock_exclusive().is_err() {
-        if std::time::Instant::now() >= until {
-            return Err(problem("This environment plan is already running"));
-        }
-        std::thread::sleep(Duration::from_millis(5));
-    }
+    crate::files::lock_within(&lock, crate::files::Lock::Exclusive, STAGE_PATIENCE)
+        .map_err(|_| problem("This environment plan is already running"))?;
 
     Ok(lock)
 }

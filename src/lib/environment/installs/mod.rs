@@ -25,7 +25,10 @@ mod tests;
 mod translocate;
 
 use super::*;
-use crate::fs_move::{FileName, Moved, move_between};
+use crate::{
+    files::{Lock, lock_within},
+    fs_move::{FileName, Moved, move_between},
+};
 pub(super) use print::{BundlePrint, Limits};
 use print::{Unprinted, print_at};
 pub(super) use processes::Looks;
@@ -51,6 +54,9 @@ const HELD_FOR: Duration = Duration::from_secs(HELD_DAYS * 24 * 60 * 60);
 /// runs it: the helper, here. No safe binding of `LSRegisterURL` exists.
 const LSREGISTER: &str = "/System/Library/Frameworks/CoreServices.framework/Frameworks/\
                           LaunchServices.framework/Support/lsregister";
+/// How long the store's lock that looks held is tried again, as
+/// [`lock_within`] says.
+const LOCK_PATIENCE: Duration = Duration::from_millis(250);
 /// How long registering one install with LaunchServices may take.
 const REGISTERING: Duration = Duration::from_secs(10);
 /// The most installs one read asks about.
@@ -157,21 +163,9 @@ impl Store {
         let lock = open_regular(&path.join("lock"), write)?;
         if let Some(lock) = &lock {
             validate_private(lock, false)?;
-            let until = Instant::now() + Duration::from_millis(250);
-            loop {
-                let taken = if write {
-                    lock.try_lock_exclusive()
-                } else {
-                    FileExt::try_lock_shared(lock)
-                };
-                if taken.is_ok() {
-                    break;
-                }
-                if Instant::now() >= until {
-                    return Err(problem("Another install in the helper is running"));
-                }
-                std::thread::sleep(Duration::from_millis(5));
-            }
+            let held = if write { Lock::Exclusive } else { Lock::Shared };
+            lock_within(lock, held, LOCK_PATIENCE)
+                .map_err(|_| problem("Another install in the helper is running"))?;
         }
         Ok(Some(Self {
             path,
