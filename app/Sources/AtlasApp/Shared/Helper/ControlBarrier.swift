@@ -12,7 +12,7 @@ final class ControlBarrier {
   /// 10 s: how long a lease the service grants stays alive unrenewed (`LEASE_SECONDS`, src/lib/viewer.rs).
   static let leaseLifetime: Duration = .seconds(10)
   /// 8 s: the client's request timeout (`ViewerClient.timeout`). The service runs every request to its end after the
-  /// client gives up (src/lib/viewer.rs, `handle`), so a lost acquisition may still be granted after its reply was
+  /// client gives up (src/lib/viewer/http.rs, `handle`), so a lost acquisition may still be granted after its reply was
   /// given up on; this bounds how much later, short of a service that hangs, which the status check below covers.
   static let lateGrant: Duration = .seconds(8)
   /// 1 s: between the status readings that end the hold on a lost acquisition, as often as the panel's own.
