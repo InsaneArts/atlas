@@ -2,7 +2,10 @@ use super::{
     list::{Labels, SHOWN, frozen, list_as, listing},
     *,
 };
-use crate::test_support::{Helper, UID};
+use crate::{
+    files::Lock,
+    test_support::{Helper, UID},
+};
 use base64::{Engine, engine::general_purpose::STANDARD};
 use std::{
     cell::Cell,
@@ -101,7 +104,7 @@ fn rollback_restores_observed_bytes_and_mode_without_inventing_legacy_metadata()
     fs::write(&path, b"old").unwrap();
     fs::set_permissions(&path, fs::Permissions::from_mode(0o640)).unwrap();
 
-    let state = state::Store::open(&sandbox.home, true).unwrap();
+    let state = state::Store::open(&sandbox.home, Lock::Exclusive).unwrap();
     let legacy = json!({"files": {"config": digest(b"old")}});
     atomic_write(
         &state.path.join("files.json"),
@@ -121,7 +124,7 @@ fn rollback_restores_observed_bytes_and_mode_without_inventing_legacy_metadata()
     assert_eq!(fs::read(&path).unwrap(), b"old");
     assert_eq!(fs::metadata(&path).unwrap().mode() & 0o777, 0o640);
 
-    let state = state::Store::open(&sandbox.home, false).unwrap();
+    let state = state::Store::open(&sandbox.home, Lock::Shared).unwrap();
     assert!(matches!(
         state.ledger().unwrap().files[Path::new("config")],
         Entry::Legacy(_)
@@ -471,7 +474,7 @@ fn bounded_extended_attributes_are_preserved_and_compared_exactly() {
     attributes.insert("user.atlas-test".into(), STANDARD.encode([0_u8, 1, 255, 3]));
     restore_attributes(&path, &attributes).unwrap();
 
-    let state = state::Store::open(&sandbox.home, true).unwrap();
+    let state = state::Store::open(&sandbox.home, Lock::Exclusive).unwrap();
     state
         .save_ledger(&Ledger {
             version: 0,
@@ -613,7 +616,7 @@ fn lost_install_acknowledgement_uses_the_prepared_inode_not_just_its_hash() {
     let path = sandbox.home.join("file");
     let installed_inode = fs::metadata(&path).unwrap().ino();
 
-    let store = state::Store::open(&sandbox.home, true).unwrap();
+    let store = state::Store::open(&sandbox.home, Lock::Exclusive).unwrap();
     let mut transaction = store.transaction(&plan.id).unwrap().unwrap();
     // This is the on-disk boundary after rename and before ledger acknowledgement.
     transaction.phase = Phase::Applying;
@@ -642,7 +645,7 @@ fn rollback_of_an_unacknowledged_prepared_file_leaves_no_owned_candidate() {
 
     let candidate = sandbox.home.join(format!(".atlas-{}-0-install", plan.id));
     fs::rename(sandbox.home.join("file"), &candidate).unwrap();
-    let store = state::Store::open(&sandbox.home, true).unwrap();
+    let store = state::Store::open(&sandbox.home, Lock::Exclusive).unwrap();
     let mut transaction = store.transaction(&plan.id).unwrap().unwrap();
     transaction.phase = Phase::Applying;
     transaction.progress[0] = Progress::default();
@@ -702,7 +705,7 @@ fn rollback_checks_every_backup_before_restoring_any_selected_file() {
     ]);
     assert_eq!(sandbox.apply(&second)["ok"], true);
 
-    let store = state::Store::open(&sandbox.home, true).unwrap();
+    let store = state::Store::open(&sandbox.home, Lock::Exclusive).unwrap();
     fs::write(store.blob(&second.id, 0, true), b"corrupt").unwrap();
     drop(store);
 
@@ -815,17 +818,17 @@ fn shipped_manifest_and_profile_examples_parse_as_toml() {
 #[test]
 fn a_briefly_held_store_lock_is_waited_for_but_a_held_one_is_refused() {
     let sandbox = Sandbox::new();
-    let mut first = Some(state::Store::open(&sandbox.home, true).unwrap());
-    state::Store::open_with_retry(&sandbox.home, true, |_| {
+    let mut first = Some(state::Store::open(&sandbox.home, Lock::Exclusive).unwrap());
+    state::Store::open_with_retry(&sandbox.home, Lock::Exclusive, |_| {
         drop(first.take().expect("the first retry releases the lock"));
         true
     })
     .expect("a lock released on retry is taken");
     assert!(first.is_none(), "the held lock required a retry");
 
-    let held = state::Store::open(&sandbox.home, true).unwrap();
+    let held = state::Store::open(&sandbox.home, Lock::Exclusive).unwrap();
     let mut retries = 0;
-    let refused = state::Store::open_with_retry(&sandbox.home, true, |_| {
+    let refused = state::Store::open_with_retry(&sandbox.home, Lock::Exclusive, |_| {
         retries += 1;
         retries < 2
     })
@@ -1175,7 +1178,7 @@ fn a_preview_refuses_when_the_state_appears_while_it_reads() {
     let other_operation = || {
         guards.set(guards.get() + 1);
         if guards.get() == 2 {
-            drop(state::Store::open(&sandbox.home, true).unwrap());
+            drop(state::Store::open(&sandbox.home, Lock::Exclusive).unwrap());
         }
         Ok(())
     };
@@ -1608,7 +1611,7 @@ fn an_apply_refused_by_a_running_preview_is_not_resumable() {
     assert_eq!(sandbox.apply(&first)["ok"], true);
     let plan = sandbox.plan(vec![sandbox.payload("file", b"replacement")]);
 
-    let preview = state::Store::open(&sandbox.home, false).unwrap();
+    let preview = state::Store::open(&sandbox.home, Lock::Shared).unwrap();
     let error = worker::apply_plan(&sandbox.home, &plan, &|| Ok(())).unwrap_err();
     drop(preview);
     assert_eq!(error.error, "Another environment operation is running");
@@ -1784,7 +1787,7 @@ fn retrying_a_finished_rollback_clears_its_active_marker_before_another_profile_
     assert_eq!(sandbox.apply(&plan)["applied"], true);
     assert_eq!(sandbox.rollback(&plan, true)["rolledBack"], true);
 
-    let store = state::Store::open(&sandbox.home, true).unwrap();
+    let store = state::Store::open(&sandbox.home, Lock::Exclusive).unwrap();
     assert_eq!(
         store.transaction(&plan.id).unwrap().unwrap().phase,
         Phase::RolledBack
@@ -2009,7 +2012,7 @@ fn new_contents_do_not_inherit_the_download_mark() {
     );
     restore_attributes(&path, &attributes).unwrap();
 
-    let state = state::Store::open(&sandbox.home, true).unwrap();
+    let state = state::Store::open(&sandbox.home, Lock::Exclusive).unwrap();
     state
         .save_ledger(&Ledger {
             version: 0,
@@ -2374,7 +2377,7 @@ fn an_adopted_file_a_later_undo_put_back_can_still_be_undone() {
     assert_eq!(fs::read(&path).unwrap(), b"same");
     assert_eq!(fs::metadata(&path).unwrap().ino(), inode);
 
-    let store = state::Store::open(&sandbox.home, false).unwrap();
+    let store = state::Store::open(&sandbox.home, Lock::Shared).unwrap();
     assert!(
         !store
             .ledger()
@@ -2398,7 +2401,7 @@ fn a_restore_copy_written_before_it_was_recorded_goes_when_a_helper_edit_is_kept
 
     // The undo stopped right after writing its restore copy, before
     // recording it.
-    let store = state::Store::open(&sandbox.home, true).unwrap();
+    let store = state::Store::open(&sandbox.home, Lock::Exclusive).unwrap();
     let mut transaction = store.transaction(&second.id).unwrap().unwrap();
     transaction.phase = Phase::RollingBack;
     store.save(&transaction).unwrap();
@@ -2427,7 +2430,7 @@ fn an_unrecorded_restore_copy_with_other_contents_is_kept_for_inspection() {
     let second = sandbox.plan(vec![sandbox.payload("file", b"new")]);
     assert_eq!(sandbox.apply(&second)["ok"], true);
 
-    let store = state::Store::open(&sandbox.home, true).unwrap();
+    let store = state::Store::open(&sandbox.home, Lock::Exclusive).unwrap();
     let mut transaction = store.transaction(&second.id).unwrap().unwrap();
     transaction.phase = Phase::RollingBack;
     store.save(&transaction).unwrap();
@@ -2535,7 +2538,7 @@ fn a_stopped_apply_is_listed_as_one_to_finish() {
     let sandbox = Sandbox::new();
     let plan = sandbox.plan(vec![sandbox.payload("file", b"copied")]);
     assert_eq!(sandbox.apply(&plan)["ok"], true);
-    let store = state::Store::open(&sandbox.home, true).unwrap();
+    let store = state::Store::open(&sandbox.home, Lock::Exclusive).unwrap();
     let mut transaction = store.transaction(&plan.id).unwrap().unwrap();
     transaction.phase = Phase::Applying;
     store.save(&transaction).unwrap();
@@ -2554,7 +2557,7 @@ fn an_invalid_record_is_counted_not_listed() {
     let sandbox = Sandbox::new();
     let plan = sandbox.plan(vec![sandbox.payload("file", b"copied")]);
     assert_eq!(sandbox.apply(&plan)["ok"], true);
-    let store = state::Store::open(&sandbox.home, true).unwrap();
+    let store = state::Store::open(&sandbox.home, Lock::Exclusive).unwrap();
     let broken = crate::files::token();
     fs::create_dir(store.folder(&broken)).unwrap();
     atomic_write(
@@ -2656,7 +2659,7 @@ fn rolled_back_plans_never_push_an_older_applied_one_out_of_the_list() {
     let sandbox = Sandbox::new();
     let applied = sandbox.plan(vec![sandbox.payload("file", b"copied")]);
     assert_eq!(sandbox.apply(&applied)["ok"], true);
-    let store = state::Store::open(&sandbox.home, true).unwrap();
+    let store = state::Store::open(&sandbox.home, Lock::Exclusive).unwrap();
     let older = std::time::SystemTime::now() - Duration::from_secs(10_000);
     fs::File::open(store.folder(&applied.id).join("transaction.json"))
         .unwrap()
@@ -2734,7 +2737,7 @@ fn the_list_is_newest_first_and_bounded() {
     let sandbox = Sandbox::new();
     let plan = sandbox.plan(vec![sandbox.payload("file", b"copied")]);
     assert_eq!(sandbox.apply(&plan)["ok"], true);
-    let store = state::Store::open(&sandbox.home, true).unwrap();
+    let store = state::Store::open(&sandbox.home, Lock::Exclusive).unwrap();
     let mut transaction = store.transaction(&plan.id).unwrap().unwrap();
     let then = std::time::SystemTime::now() - Duration::from_secs(1000);
     for age in 0..229_u64 {
@@ -2997,7 +3000,7 @@ fn the_transaction_replies_keep_their_wire_shape() {
     said.push(shaped(&sandbox.rollback(&undone, false), &plans));
     said.push(shaped(&sandbox.rollback(&undone, true), &plans));
     said.push(shaped(&sandbox.rollback(&undone, true), &plans));
-    let store = state::Store::open(&sandbox.home, true).unwrap();
+    let store = state::Store::open(&sandbox.home, Lock::Exclusive).unwrap();
     fs::File::open(store.folder(&kept.id).join("transaction.json"))
         .unwrap()
         .set_modified(std::time::SystemTime::now() - Duration::from_secs(10_000))

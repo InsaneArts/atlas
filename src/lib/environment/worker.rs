@@ -5,6 +5,7 @@ use super::{
     state::Store,
     *,
 };
+use crate::files::Lock;
 use crate::task::record::Lenient;
 
 /// The helper's answer for a plan it never applied.
@@ -81,7 +82,7 @@ pub(super) fn transactions(
         validate_id(id)?;
     }
     let (mut recorded, active) = {
-        let store = Store::open(home, false)?;
+        let store = Store::open(home, Lock::Shared)?;
         let read = (recorded_transactions(&store.path), store.active()?);
         store.confirm_read()?;
         read
@@ -96,7 +97,7 @@ pub(super) fn transactions(
             more += 1;
             continue;
         }
-        match Store::open(home, false)?.transaction(id) {
+        match Store::open(home, Lock::Shared)?.transaction(id) {
             Ok(Some(transaction))
                 if !all && !asked(id) && transaction.phase == Phase::RolledBack =>
             {
@@ -181,7 +182,7 @@ pub(super) fn preview(
     validate_id(id)?;
     guard()?;
 
-    let store = Store::open(home, false)?;
+    let store = Store::open(home, Lock::Shared)?;
     store.require_available(id)?;
     let ledger = store.ledger()?;
     validate_files(files.iter())?;
@@ -333,7 +334,7 @@ pub(super) fn apply_plan(
     guard()?;
 
     {
-        let store = Store::open(home, false)?;
+        let store = Store::open(home, Lock::Shared)?;
         store.require_available(&plan.id)?;
 
         if store.transaction(&plan.id)?.is_none() {
@@ -342,7 +343,7 @@ pub(super) fn apply_plan(
     }
 
     guard()?;
-    let store = Store::open(home, true)?;
+    let store = Store::open(home, Lock::Exclusive)?;
     store.require_available(&plan.id)?;
     let mut ledger = store.ledger()?;
 
@@ -795,7 +796,7 @@ pub(super) fn rollback(
     validate_id(id)?;
     guard()?;
 
-    let store = Store::open(home, apply)?;
+    let store = Store::open(home, if apply { Lock::Exclusive } else { Lock::Shared })?;
     store.require_available(id)?;
     let mut ledger = store.ledger()?;
     let mut transaction = store.transaction(id)?.ok_or_else(|| problem(MISSING))?;

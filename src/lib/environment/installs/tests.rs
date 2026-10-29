@@ -45,7 +45,7 @@ impl Homes {
     }
 
     fn store(&self) -> Store {
-        Store::open(&self.home, true).unwrap().unwrap()
+        Store::open(&self.home, Lock::Exclusive).unwrap().unwrap()
     }
 
     fn record(&self, id: &str) -> Install {

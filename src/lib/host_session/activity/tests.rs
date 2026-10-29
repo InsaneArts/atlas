@@ -97,13 +97,13 @@ fn an_install_or_an_unfinished_cleanup_is_a_leftover() {
         })
         .unwrap();
 
-    let one = list(&client, Some(&claude), false, None, 10).unwrap();
+    let one = list(&client, Some(&claude), Scope::Own, 10).unwrap();
     assert_eq!(one["installs"], json!([{"app": "Probe"}]));
     assert_eq!(one["cleanup"], "incomplete");
     assert_eq!(one["tasks"][0]["leftovers"]["installs"], 1);
     assert!(!one.to_string().contains("Applications"), "never a path");
 
-    let everyone = list(&client, None, true, None, 10).unwrap();
+    let everyone = list(&client, None, Scope::Everyone, 10).unwrap();
     let leftovers = &everyone["sessions"][0]["leftovers"];
     assert_eq!(
         (&leftovers["installs"], &leftovers["cleanup"]),
@@ -136,14 +136,14 @@ fn a_sessions_reply_lists_the_tasks_it_named_with_what_each_left() {
         .claim(&Owned::Plan { id: Token::new() }, State::Made)
         .unwrap();
 
-    let reply = list(&client, Some(&claude), false, None, 10).unwrap();
+    let reply = list(&client, Some(&claude), Scope::Own, 10).unwrap();
 
     assert_eq!(
         reply["tasks"],
         json!([{"key": probe.key(), "name": "probe",
             "leftovers": {"copies": 0, "plans": 1}}])
     );
-    let everyone = list(&client, Some(&claude), true, None, 10).unwrap();
+    let everyone = list(&client, Some(&claude), Scope::Everyone, 10).unwrap();
     assert!(
         !everyone.to_string().contains("probe"),
         "names stay in one session's reply"
@@ -156,7 +156,7 @@ fn activity_lists_this_sessions_rows_screenshots_copies_and_plans_only() {
     let client = client(directory.path());
     let (claude, codex, plan) = two_sessions(&client);
 
-    let reply = list(&client, Some(&claude), false, None, 10).unwrap();
+    let reply = list(&client, Some(&claude), Scope::Own, 10).unwrap();
     assert_eq!(reply["session"]["key"], claude.key.as_str());
     assert_eq!(reply["session"]["this"], true);
     assert_eq!(reply["session"]["hostSession"], "left");
@@ -199,8 +199,8 @@ fn activity_after_compaction_finds_the_same_session() {
         process: Instance::current(),
         ..session(Host::Claude, "left")
     };
-    let earlier = list(&client, Some(&before), false, None, 10).unwrap();
-    let reply = list(&client, Some(&after), false, None, 10).unwrap();
+    let earlier = list(&client, Some(&before), Scope::Own, 10).unwrap();
+    let reply = list(&client, Some(&after), Scope::Own, 10).unwrap();
     assert_eq!(after.key, before.key);
     for field in ["counts", "recent", "screenshots"] {
         assert_eq!(reply[field], earlier[field], "{field}");
@@ -213,7 +213,7 @@ fn all_lists_every_session_with_counts_but_no_paths_or_host_ids() {
     let client = client(directory.path());
     let (claude, codex, plan) = two_sessions(&client);
 
-    let reply = list(&client, Some(&claude), true, None, 10).unwrap();
+    let reply = list(&client, Some(&claude), Scope::Everyone, 10).unwrap();
     assert_eq!(
         reply["session"]["key"],
         claude.key.as_str(),
@@ -244,7 +244,7 @@ fn without_a_session_activity_lists_everyone() {
     let client = client(directory.path());
     two_sessions(&client);
 
-    let reply = list(&client, None, false, None, 10).unwrap();
+    let reply = list(&client, None, Scope::Own, 10).unwrap();
     assert_eq!(reply["session"], Value::Null);
     assert_eq!(reply["sessions"].as_array().unwrap().len(), 2);
 }
@@ -256,11 +256,11 @@ fn an_unknown_key_is_refused_with_input() {
     let (_, codex, _) = two_sessions(&client);
 
     let unknown = Key::of(Host::Pi, "nobody");
-    let refused = list(&client, None, false, Some(&unknown), 10).unwrap_err();
+    let refused = list(&client, None, Scope::Session(&unknown), 10).unwrap_err();
     assert_eq!(refused.code, "input");
     assert!(refused.error.contains("atlas activity --all"));
 
-    let other = list(&client, None, false, Some(&codex.key), 10).unwrap();
+    let other = list(&client, None, Scope::Session(&codex.key), 10).unwrap();
     assert_eq!(other["session"]["this"], false);
     assert_eq!(other["session"]["key"], codex.key.as_str());
 }
@@ -271,12 +271,12 @@ fn only_the_session_itself_is_told_its_host_id() {
     let client = client(directory.path());
     let (claude, codex, _) = two_sessions(&client);
 
-    let other = list(&client, Some(&claude), false, Some(codex.key()), 10).unwrap();
+    let other = list(&client, Some(&claude), Scope::Session(codex.key()), 10).unwrap();
     assert_eq!(other["session"]["this"], false);
     assert!(other["session"].get("hostSession").is_none(), "{other}");
     assert!(!other.to_string().contains("\"right\""));
 
-    let itself = list(&client, Some(&codex), false, Some(codex.key()), 10).unwrap();
+    let itself = list(&client, Some(&codex), Scope::Session(codex.key()), 10).unwrap();
     assert_eq!(itself["session"]["this"], true, "its own key is itself");
     assert_eq!(itself["session"]["hostSession"], "right");
 }
@@ -301,18 +301,18 @@ fn only_the_session_itself_is_told_to_recover_and_only_when_every_unknown_is_its
     let (claude, codex, _) = two_sessions(&client);
     abandoned(&client, &claude);
 
-    let own = list(&client, Some(&claude), false, None, 10).unwrap();
+    let own = list(&client, Some(&claude), Scope::Own, 10).unwrap();
     assert_eq!(own["uncertain"], 1);
     assert_eq!(own["next"], crate::ui::hints::UNKNOWN_OWN);
 
-    let asked = list(&client, Some(&codex), false, Some(claude.key()), 10).unwrap();
+    let asked = list(&client, Some(&codex), Scope::Session(claude.key()), 10).unwrap();
     assert_eq!(asked["uncertain"], 1, "another's count is said");
     assert!(asked.get("next").is_none(), "but never to recover it");
-    let unlabelled = list(&client, None, false, Some(claude.key()), 10).unwrap();
+    let unlabelled = list(&client, None, Scope::Session(claude.key()), 10).unwrap();
     assert!(unlabelled.get("next").is_none());
 
     abandoned(&client, &codex);
-    let both = list(&client, Some(&claude), false, None, 10).unwrap();
+    let both = list(&client, Some(&claude), Scope::Own, 10).unwrap();
     assert_eq!(both["uncertain"], 1);
     assert!(
         both.get("next").is_none(),
@@ -345,9 +345,9 @@ fn activity_writes_nothing() {
     let (claude, ..) = two_sessions(&client);
     let before = snapshot(directory.path());
 
-    list(&client, Some(&claude), false, None, 10).unwrap();
-    list(&client, Some(&claude), true, None, 10).unwrap();
-    list(&client, None, false, None, 50).unwrap();
+    list(&client, Some(&claude), Scope::Own, 10).unwrap();
+    list(&client, Some(&claude), Scope::Everyone, 10).unwrap();
+    list(&client, None, Scope::Own, 50).unwrap();
 
     assert_eq!(snapshot(directory.path()), before);
 }
@@ -365,7 +365,7 @@ fn activity_works_while_another_controller_holds_the_lock_and_after_a_stop() {
         .acquire(false)
         .unwrap();
     client.controller.note_stop(true).unwrap();
-    let reply = list(&client, Some(&claude), true, None, 10).unwrap();
+    let reply = list(&client, Some(&claude), Scope::Everyone, 10).unwrap();
     assert_eq!(reply["sessions"].as_array().unwrap().len(), 2);
     let holding = reply["sessions"]
         .as_array()
@@ -391,12 +391,12 @@ fn a_previous_session_with_leftovers_is_mentioned_and_one_without_is_not() {
     let (first, second, third) = (labelled("first"), labelled("second"), labelled("third"));
     applied(&client, &first);
     act(&client, &second, "click", json!({"ok": true}));
-    let reply = list(&client, Some(&second), false, None, 10).unwrap();
+    let reply = list(&client, Some(&second), Scope::Own, 10).unwrap();
     assert_eq!(reply["previous"]["key"], first.key.as_str());
     assert_eq!(reply["previous"]["plans"], 1);
 
     act(&client, &third, "click", json!({"ok": true}));
-    let reply = list(&client, Some(&third), false, None, 10).unwrap();
+    let reply = list(&client, Some(&third), Scope::Own, 10).unwrap();
     assert!(reply.get("previous").is_none(), "the second left nothing");
 }
 
@@ -445,7 +445,7 @@ fn a_sessions_jobs_and_collections_are_listed_without_their_names_or_arguments()
         })
         .unwrap();
 
-    let one = list(&client, Some(&codex), false, None, 10).unwrap();
+    let one = list(&client, Some(&codex), Scope::Own, 10).unwrap();
     assert_eq!(
         one["jobs"],
         json!([{"id": "7c2e91a04b3f", "name": "web", "state": "running"}])

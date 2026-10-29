@@ -153,7 +153,8 @@ struct Store {
 }
 
 impl Store {
-    fn open(home: &Path, write: bool) -> Result<Option<Self>> {
+    fn open(home: &Path, lock: Lock) -> Result<Option<Self>> {
+        let write = lock == Lock::Exclusive;
         let path = home.join(INSTALLS);
         let folder = if write {
             Some(private_directory(&path)?)
@@ -165,10 +166,10 @@ impl Store {
         };
         validate_private(&folder, true)?;
 
+        let held = lock;
         let lock = open_regular(&path.join("lock"), write)?;
         if let Some(lock) = &lock {
             validate_private(lock, false)?;
-            let held = if write { Lock::Exclusive } else { Lock::Shared };
             lock_within(lock, held, LOCK_PATIENCE)
                 .map_err(|_| problem("Another install in the helper is running"))?;
         }
@@ -384,7 +385,8 @@ fn install_moving(
     }
     guard()?;
 
-    let store = Store::open(home, true)?.ok_or_else(|| problem("Missing install store"))?;
+    let store =
+        Store::open(home, Lock::Exclusive)?.ok_or_else(|| problem("Missing install store"))?;
     if !matches!(store.load(id), Found::Missing) {
         return Err(refused("An install with this ID was already made"));
     }
@@ -657,7 +659,8 @@ fn remove_moving(
     if directory(&home.join(INSTALLS), false)?.is_none() {
         return Ok(removal(id, &Outcome::AlreadyGone, None, home));
     }
-    let store = Store::open(home, true)?.ok_or_else(|| problem("Missing install store"))?;
+    let store =
+        Store::open(home, Lock::Exclusive)?.ok_or_else(|| problem("Missing install store"))?;
     let removing = Removing {
         home,
         store: &store,
@@ -905,7 +908,7 @@ pub(super) fn installs(
     for id in ids {
         validate_id(id)?;
     }
-    let store = Store::open(home, false)?;
+    let store = Store::open(home, Lock::Shared)?;
     let running = if ids.is_empty() {
         Vec::new()
     } else {

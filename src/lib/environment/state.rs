@@ -22,15 +22,18 @@ pub(super) struct Store {
 }
 
 impl Store {
-    pub fn open(home: &Path, write: bool) -> Result<Self> {
-        Self::open_with_retry(home, write, |deadline| std::time::Instant::now() < deadline)
+    /// The store in `home`, its lock held as `lock` says: shared to read,
+    /// exclusive to change it, which makes its folder when it is not there.
+    pub fn open(home: &Path, lock: Lock) -> Result<Self> {
+        Self::open_with_retry(home, lock, |deadline| std::time::Instant::now() < deadline)
     }
 
     pub(super) fn open_with_retry(
         home: &Path,
-        write: bool,
+        lock: Lock,
         retry: impl FnMut(std::time::Instant) -> bool,
     ) -> Result<Self> {
+        let write = lock == Lock::Exclusive;
         let path = home.join(STATE);
 
         let directory = if write {

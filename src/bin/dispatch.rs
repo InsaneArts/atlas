@@ -354,7 +354,16 @@ async fn carry_out(
             all,
             session,
             limit,
-        } => host_session::activity::list(&client()?, host, all, session.as_ref(), limit.into()),
+        } => {
+            use host_session::activity::Scope;
+
+            let scope = match (session.as_ref(), all) {
+                (Some(key), _) => Scope::Session(key),
+                (None, true) => Scope::Everyone,
+                (None, false) => Scope::Own,
+            };
+            host_session::activity::list(&client()?, host, scope, limit.into())
+        }
         Command::Doctor {
             login_timing: true, ..
         } => atlas::login_log::timing(),

@@ -26,15 +26,24 @@ const ROWS: usize = 256;
 /// How many of a session's screenshots are listed.
 const SCREENSHOTS: usize = 5;
 
-/// What a host session did, or every session's: read from the activity log,
-/// the session records, the copy folders and the marker; nothing is changed.
-/// `key` asks for another session's; `all`, or no session of its own, for
-/// everyone's. At most `limit` recent actions are listed.
+/// Whose activity a list shows.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Scope<'a> {
+    /// The caller's own session's, or everyone's when it has none.
+    Own,
+    /// Every session's.
+    Everyone,
+    /// One session's, by its key.
+    Session(&'a Key),
+}
+
+/// What a host session did, or every session's, as `scope` says: read
+/// from the activity log, the session records, the copy folders and the
+/// marker; nothing is changed. At most `limit` recent actions are listed.
 pub fn list(
     client: &Client,
     own: Option<&HostSession>,
-    all: bool,
-    key: Option<&Key>,
+    scope: Scope,
     limit: usize,
 ) -> Result<Value> {
     let output = client.output_dir()?;
@@ -56,7 +65,7 @@ pub fn list(
         tasks: crate::task::store::Store::at(output).all(),
     };
 
-    if let Some(key) = key {
+    if let Scope::Session(key) = scope {
         let record = reading.record(key).ok_or_else(|| {
             Error::new(
                 Code::Input,
@@ -68,7 +77,7 @@ pub fn list(
     }
 
     match own {
-        Some(own) if !all => Ok(reading.one(&reading.subject(own), limit)),
+        Some(own) if scope == Scope::Own => Ok(reading.one(&reading.subject(own), limit)),
         _ => Ok(reading.everyone(own, limit)),
     }
 }
