@@ -41,12 +41,15 @@ extension ViewerPresenter {
     guard !open.isEmpty else { return preview.isEmpty ? [] : [ViewerWords.finishLastCleanup] }
     let kinds = { (kind: CleanupStepKind) in open.filter { $0.kind == kind } }
     var lines: [String] = []
+    if !kinds(.checkOutputs).isEmpty { lines.append(ViewerWords.checksOutputs) }
     let quits = kinds(.quit)
     if !quits.isEmpty {
       var apps: [String] = []
       for app in quits.flatMap(\.apps) where !apps.contains(app) { apps.append(app) }
       lines.append(ViewerWords.quits(apps))
     }
+    let jobs = kinds(.stopJob)
+    if !jobs.isEmpty { lines.append(ViewerWords.stopsJobs(jobs.compactMap(\.name))) }
     let plans = kinds(.undoPlan).count
     if plans > 0 { lines.append(ViewerWords.undoesChanges(plans)) }
     for install in kinds(.removeInstall) {
@@ -70,13 +73,22 @@ extension ViewerPresenter {
   }
 
   /// What each step of a cleanup that ran did: its name what the step did, its value how it went, so a step kept on
-  /// purpose reads apart from one that failed.
+  /// purpose reads apart from one that failed; after a job's step, what left the job and still runs, and after a
+  /// check of the collected files, how many of them are no longer kept here.
   ///
   /// - Parameter reply: The apply's reply.
-  /// - Returns: One fact a step, in order.
+  /// - Returns: A fact a step, and one more for each of those, in order.
   static func cleanupReceipt(_ reply: CleanupReply) -> [Fact] {
-    reply.steps.map { step in
-      Fact(name: cleanupStepName(step), value: cleanupOutcome(step))
+    reply.steps.flatMap { step in
+      var facts = [Fact(name: cleanupStepName(step), value: cleanupOutcome(step))]
+      if !step.left.isEmpty {
+        let names = step.left.map(\.name)
+        facts.append(Fact(name: ViewerWords.stillRunning, value: ViewerWords.leftRunning(names)))
+      }
+      if !step.notKept.isEmpty {
+        facts.append(Fact(name: ViewerWords.notKept, value: ViewerWords.notKeptFiles(step.notKept.count)))
+      }
+      return facts
     }
   }
 
@@ -86,7 +98,9 @@ extension ViewerPresenter {
   /// - Returns: "Remove Probe from Applications".
   static func cleanupStepName(_ step: CleanupStep) -> String {
     switch step.kind {
+    case .checkOutputs: ViewerWords.checkOutputs
     case .quit: ViewerWords.quit(step.apps)
+    case .stopJob: ViewerWords.stopJob(step.name)
     case .undoPlan: ViewerWords.undoChange
     case .removeInstall: ViewerWords.removeInstall(step.app)
     case .removeCopy: ViewerWords.removeCopy(step.app)
@@ -121,7 +135,7 @@ extension ViewerPresenter {
   static func cleanupNotice(_ reply: CleanupReply) -> String {
     switch reply.state {
     case .uncertain: return ViewerWords.cleanupUncertain
-    case .blocked: return ViewerWords.cleanupBlocked
+    case .blocked: return blockedNotice(reply.steps)
     case .complete, .incomplete, .unknown, nil: break
     }
     guard reply.ok, reply.state == nil || reply.state == .complete else { return ViewerWords.cleanupUnfinished }
@@ -138,6 +152,19 @@ extension ViewerPresenter {
     let states = preview.steps.compactMap(\.state)
     guard !states.isEmpty else { return nil }
     if states.contains(where: { $0 == .started || $0 == .uncertain }) { return ViewerWords.cleanupUncertain }
-    return states.contains(.blocked) ? ViewerWords.cleanupBlocked : ViewerWords.cleanupUnfinished
+    return states.contains(.blocked) ? blockedNotice(preview.steps) : ViewerWords.cleanupUnfinished
+  }
+
+  /// Why a cleanup that did not run every step was held back, by what its blocked steps say: a collected copy that is
+  /// no longer kept, a helper that could not be reached to stop a job, or agents stopped.
+  ///
+  /// - Parameter steps: The cleanup's steps.
+  /// - Returns: The notice.
+  static func blockedNotice(_ steps: [CleanupStep]) -> String {
+    let reasons = steps.filter { $0.state == .blocked }
+      .map(\.reason)
+    if reasons.contains("output-not-kept") { return ViewerWords.cleanupOutputsNotKept }
+    if reasons.contains("daemon") { return ViewerWords.cleanupJobsUnreached }
+    return ViewerWords.cleanupBlocked
   }
 }

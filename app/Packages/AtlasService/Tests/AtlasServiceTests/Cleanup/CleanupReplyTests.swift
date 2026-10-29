@@ -141,4 +141,48 @@ struct CleanupReplyTests {
     let body = try JSONSerialization.jsonObject(with: try #require(apply.httpBody)) as? [String: String]
     #expect(body == ["session": "3f9a1c07b2e4"])
   }
+
+  @Test("a check of collected files and a job's stop decode with what each left")
+  func aCheckOfCollectedFilesAndAJobsStopDecodeWithWhatEachLeft() throws {
+    let applied = try decoded(
+      """
+      {"ok": false, "preview": false, "state": "blocked", "code": "cleanup",
+       "steps": [
+         {"n": 1, "do": "check-outputs", "receipts": ["1761650000123-a1b2c3", 7], "state": "failed",
+          "reason": "output-not-kept",
+          "notKept": [{"source": "/Users/atlas/atlas-work/report.pdf", "inHome": "atlas-work/report.pdf"},
+                      {"source": "/private/tmp/out.png"}, {"inHome": "no source"}]},
+         {"n": 2, "do": "stop-job", "id": "7c2e91a04b3f", "name": "web", "state": "done",
+          "left": [{"pid": 4377, "name": "sleep"}, {"pid": "x"}]},
+         {"n": 3, "do": "stop-job", "id": "8d3f02b15c4e", "name": "worker", "state": "failed",
+          "reason": "still-stopping", "retry": true},
+         {"n": 4, "do": "undo-plan", "state": "blocked", "reason": "output-not-kept"}
+       ]}
+      """
+    )
+    #expect(applied.steps.map(\.kind) == [.checkOutputs, .stopJob, .stopJob, .undoPlan])
+    let check = applied.steps[0]
+    #expect(check.receipts == ["1761650000123-a1b2c3"], "an entry that is not a receipt is dropped")
+    #expect(
+      check.notKept == [
+        CleanupFile(source: "/Users/atlas/atlas-work/report.pdf", inHome: "atlas-work/report.pdf"),
+        CleanupFile(source: "/private/tmp/out.png"),
+      ]
+    )
+    #expect(applied.steps[1].job == "7c2e91a04b3f")
+    #expect(applied.steps[1].name == "web")
+    #expect(applied.steps[1].left == [CleanupProcess(pid: 4377, name: "sleep")])
+    #expect(applied.steps[2].reason == "still-stopping" && applied.steps[2].retry)
+    #expect(applied.steps[3].left.isEmpty && applied.steps[3].notKept.isEmpty)
+
+    let preview = try decoded(
+      """
+      {"ok": true, "preview": true, "steps": [
+         {"n": 1, "do": "check-outputs", "receipts": ["1761650000123-a1b2c3"], "intact": false},
+         {"n": 2, "do": "stop-job", "id": "7c2e91a04b3f", "name": "web", "jobState": "running"}]}
+      """
+    )
+    #expect(preview.steps[0].intact == false)
+    #expect(preview.steps[1].jobState == "running")
+  }
 }

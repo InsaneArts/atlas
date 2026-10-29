@@ -352,4 +352,84 @@ struct ViewerPresenterCleanupTests {
     #expect(viewer.session.notice == "The cleanup didn't finish. Details lists each step.")
     viewer.close()
   }
+
+  @Test("the confirmation checks collected files first and names the background job it stops")
+  func theConfirmationChecksCollectedFilesAndNamesTheJob() {
+    let preview = CleanupReply(
+      preview: true,
+      steps: [
+        CleanupStep(number: 1, kind: .checkOutputs),
+        CleanupStep(number: 2, kind: .stopJob, job: "7c2e91a04b3f", name: "web"),
+        CleanupStep(number: 3, kind: .undoPlan),
+      ]
+    )
+    #expect(
+      ViewerPresenter.cleanupSteps(preview) == [
+        "Checks the files it collected are still kept",
+        "Stops the background job web",
+        "Undoes 1 environment change",
+      ]
+    )
+    let two = CleanupReply(
+      preview: true,
+      steps: [
+        CleanupStep(number: 1, kind: .stopJob, name: "web"),
+        CleanupStep(number: 2, kind: .stopJob, name: "worker"),
+      ]
+    )
+    #expect(ViewerPresenter.cleanupSteps(two) == ["Stops 2 background jobs"])
+  }
+
+  @Test("the receipt says which processes left a stopped job and how many collected files are not kept")
+  func theReceiptSaysWhatLeftAJobAndWhatIsNotKept() {
+    let applied = CleanupReply(
+      state: .blocked,
+      steps: [
+        CleanupStep(
+          number: 1,
+          kind: .checkOutputs,
+          state: .failed,
+          reason: "output-not-kept",
+          retry: true,
+          notKept: [CleanupFile(source: "/Users/atlas/a.pdf"), CleanupFile(source: "/private/tmp/b.png")]
+        ),
+        CleanupStep(
+          number: 2,
+          kind: .stopJob,
+          state: .done,
+          name: "web",
+          left: [CleanupProcess(pid: 4377, name: "sleep")]
+        ),
+        CleanupStep(number: 3, kind: .stopJob, state: .failed, reason: "still-stopping", retry: true, name: "worker"),
+        CleanupStep(number: 4, kind: .stopJob, state: .failed, reason: "identity"),
+        CleanupStep(number: 5, kind: .stopJob, state: .failed, reason: "other-account"),
+        CleanupStep(number: 6, kind: .undoPlan, state: .blocked, reason: "output-not-kept"),
+      ]
+    )
+    #expect(
+      ViewerPresenter.cleanupReceipt(applied) == [
+        Fact(name: "Check the collected files", value: "Couldn't: a collected copy is missing or changed. Try again."),
+        Fact(name: "Not kept here", value: "2 collected files; the helper keeps them"),
+        Fact(name: "Stop the background job web", value: "Done"),
+        Fact(name: "Still running", value: "sleep; Atlas didn't stop it"),
+        Fact(name: "Stop the background job worker", value: "Couldn't: the job is still stopping. Try again."),
+        Fact(name: "Stop a background job", value: "Couldn't: the job is no longer the process Atlas started"),
+        Fact(name: "Stop a background job", value: "Couldn't: part of the job runs as another account"),
+        Fact(name: "Undo an environment change", value: "Didn't run: a collected copy is missing or changed"),
+      ]
+    )
+    #expect(ViewerPresenter.cleanupNotice(applied) == ViewerWords.cleanupOutputsNotKept)
+    #expect(!ViewerPresenter.cleanupReceipt(applied).contains { $0.value.contains("/Users/atlas") }, "never a path")
+  }
+
+  @Test("a cleanup held back by a helper it could not reach says so, apart from a Stop")
+  func aCleanupHeldBackByAnUnreachedHelperSaysSo() {
+    let unreached = CleanupReply(
+      state: .blocked,
+      steps: [CleanupStep(number: 1, kind: .stopJob, state: .blocked, reason: "daemon")]
+    )
+    #expect(ViewerPresenter.cleanupNotice(unreached) == ViewerWords.cleanupJobsUnreached)
+    #expect(ViewerWords.stepBlocked("daemon") == "Didn't run: Atlas couldn't reach the helper")
+    #expect(ViewerPresenter.unansweredCleanupNotice(unreached) == ViewerWords.cleanupJobsUnreached)
+  }
 }

@@ -25,6 +25,12 @@ extension ViewerWords {
     "Atlas doesn't know whether the last step finished. Recover the helper first, then clean up again."
   /// The notice when the person stopped agents between steps, which stopped the cleanup too.
   static let cleanupBlocked = "Agents are stopped, so the cleanup stopped. Resume, then clean up again."
+  /// The notice when a collected copy is missing or changed, so the cleanup kept the files it came from.
+  static let cleanupOutputsNotKept =
+    "A file collected from the helper is no longer kept here, so the cleanup left what it came from. Collect it again, then clean up again."
+  /// The notice when the helper could not be reached to stop a background job, which held the rest back.
+  static let cleanupJobsUnreached =
+    "Atlas couldn't reach the helper to stop a background job. Recover the helper, then clean up again."
   /// The notice when the cleanup's reply never came: it may still run, and the button waits until it ended.
   static let cleanupUnanswered = "The cleanup is taking a while. Details shows each step once it ends."
 
@@ -80,6 +86,17 @@ extension ViewerWords {
     "Removes \(copies(count))"
   }
 
+  /// The alert's line for checking the files the session collected out of the helper.
+  static let checksOutputs = "Checks the files it collected are still kept"
+
+  /// The alert's line for stopping background jobs.
+  ///
+  /// - Parameter names: The jobs' names; empty for a job the service names none for.
+  /// - Returns: "Stops the background job web", or "Stops 2 background jobs".
+  static func stopsJobs(_ names: [String]) -> String {
+    names.count == 1 ? "Stops the background job \(names[0])" : "Stops \(names.count) background jobs"
+  }
+
   /// The alert's line for steps this app does not know.
   ///
   /// - Parameter count: How many there are.
@@ -113,6 +130,39 @@ extension ViewerWords {
   /// - Returns: "Remove the copy of Probe", or "Remove a copy".
   static func removeCopy(_ app: String?) -> String {
     app.map { "Remove the copy of \($0)" } ?? "Remove a copy"
+  }
+
+  /// What a check of the collected files did, in the receipt.
+  static let checkOutputs = "Check the collected files"
+
+  /// What a job's step did, in the receipt.
+  ///
+  /// - Parameter name: The job's name; nil when the service names none.
+  /// - Returns: "Stop the background job web", or "Stop a background job".
+  static func stopJob(_ name: String?) -> String {
+    name.map { "Stop the background job \($0)" } ?? "Stop a background job"
+  }
+
+  /// The receipt's name for the processes that left a stopped job and still run.
+  static let stillRunning = "Still running"
+
+  /// The processes that left a stopped job and still run, which Atlas did not stop.
+  ///
+  /// - Parameter names: Their command names, in order.
+  /// - Returns: "sleep and node; Atlas didn't stop them".
+  static func leftRunning(_ names: [String]) -> String {
+    "\(listed(names)); Atlas didn't stop \(names.count == 1 ? "it" : "them")"
+  }
+
+  /// The receipt's name for the files whose collected copies are missing or changed.
+  static let notKept = "Not kept here"
+
+  /// The files whose collected copies are missing or changed, which the helper keeps.
+  ///
+  /// - Parameter count: How many.
+  /// - Returns: "1 collected file; the helper keeps it", or "2 collected files; the helper keeps them".
+  static func notKeptFiles(_ count: Int) -> String {
+    count == 1 ? "1 collected file; the helper keeps it" : "\(count) collected files; the helper keeps them"
   }
 
   /// What a step this app does not know did, in the receipt.
@@ -181,6 +231,12 @@ extension ViewerWords {
     case "stopped": "agents are stopped"
     case "other-volume": "it could not be moved aside without copying"
     case "unreadable": "Atlas couldn't read its record of it"
+    case "output-not-kept": "a collected copy is missing or changed"
+    case "still-stopping": "the job is still stopping"
+    case "identity": "the job is no longer the process Atlas started"
+    case "other-account": "part of the job runs as another account"
+    case "daemon": "Atlas couldn't reach the helper"
+    case "leader-gone": "the job's first process is gone"
     default: nil
     }
   }
