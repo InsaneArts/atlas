@@ -306,3 +306,21 @@ pub fn login(value: &Value) -> String {
         format!("{} The menu bar does not open at login", style::unknown())
     }
 }
+
+pub fn menubar(value: &Value) -> String {
+    if value["alreadyRunning"] != true {
+        return String::new();
+    }
+
+    format!(
+        "{} The menu bar is already running. Click Atlas at the top of the screen; quit it from its menu.",
+        style::ok()
+    )
+}
+
+pub fn monitor() -> String {
+    format!(
+        "{} The viewer is open. Watch the helper there, or take control.",
+        style::ok()
+    )
+}

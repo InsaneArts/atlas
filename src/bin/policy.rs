@@ -411,11 +411,9 @@ fn view(command: &Command) -> View {
         Command::Update { .. } => View::Update,
         Command::Uninstall { .. } => View::Uninstall,
         Command::Menubar { login: Some(_), .. } => View::Login,
-        Command::Init
-        | Command::Monitor { .. }
-        | Command::Watch { .. }
-        | Command::Mcp { .. }
-        | Command::Menubar { .. } => View::Quiet,
+        Command::Menubar { .. } => View::Menubar,
+        Command::Monitor { .. } => View::Monitor,
+        Command::Init | Command::Watch { .. } | Command::Mcp { .. } => View::Quiet,
         _ => View::Generic,
     }
 }

@@ -622,6 +622,26 @@ fn removal_and_login_read_as_sentences() {
 }
 
 #[test]
+fn the_menu_bar_says_only_that_it_already_runs_and_the_viewer_that_it_opened() {
+    let running = show(
+        View::Menubar,
+        json!({"ok": true, "alreadyRunning": true, "running": true, "pid": 42}),
+    );
+    assert_eq!(
+        running.out,
+        "✓ The menu bar is already running. Click Atlas at the top of the screen; quit it from its menu."
+    );
+    let rendered = show(View::Menubar, json!({"ok": true, "paths": ["/tmp/a.png"]}));
+    assert_eq!(rendered, Rendered::default());
+
+    let opened = show(View::Monitor, json!({"ok": true, "viewer": "open"}));
+    assert_eq!(
+        opened.out,
+        "✓ The viewer is open. Watch the helper there, or take control."
+    );
+}
+
+#[test]
 fn readiness_marks_each_item() {
     let shown = show(
         View::Readiness,

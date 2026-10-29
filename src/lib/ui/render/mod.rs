@@ -65,6 +65,11 @@ pub enum View {
     Update,
     Uninstall,
     Login,
+    /// The menu bar asked to start: said only when it already ran, as one
+    /// that starts tells the person itself.
+    Menubar,
+    /// The viewer window opened.
+    Monitor,
     /// A flow that already told the person everything as it went.
     Quiet,
     Generic,
@@ -166,6 +171,8 @@ pub fn render(view: &View, value: &Value) -> Rendered {
         View::Update => manage::update(value),
         View::Uninstall => failed(value).unwrap_or_else(|| Rendered::out(manage::uninstall(value))),
         View::Login => failed(value).unwrap_or_else(|| Rendered::out(manage::login(value))),
+        View::Menubar => failed(value).unwrap_or_else(|| Rendered::out(manage::menubar(value))),
+        View::Monitor => failed(value).unwrap_or_else(|| Rendered::out(manage::monitor())),
         View::Quiet => failed(value).unwrap_or_default(),
         View::Generic => failed(value).unwrap_or_else(|| Rendered::out(generic(value))),
     }

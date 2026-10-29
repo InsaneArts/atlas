@@ -411,8 +411,7 @@ async fn carry_out(
         }
         Command::Monitor { port } => {
             let client = client()?;
-            viewer::monitor(config, port, client.output_dir()?).await?;
-            Ok(Value::Null)
+            viewer::monitor(config, port, client.output_dir()?).await
         }
         Command::Menubar {
             port,
@@ -771,8 +770,7 @@ async fn menu_bar(
             if serve {
                 let _ = nix::unistd::setsid();
             }
-            viewer::serve(client, port, program).await?;
-            Ok(Value::Null)
+            viewer::serve(client, port, program).await
         }
         None => {
             let output = client.output_dir()?.to_path_buf();

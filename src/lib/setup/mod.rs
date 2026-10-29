@@ -124,19 +124,40 @@ pub fn account_with_uid(uid: u32) -> Result<Option<Account>> {
 
 /// The full name of account `name`, as people know it, if it has one.
 pub fn real_name(name: &str) -> Option<String> {
-    asked_real_name(name).flatten()
+    asked_real_name(name).titled()
 }
 
-/// What directory services say of account `name`'s full name: `None` when
-/// they did not answer in time, `Some(None)` when it has none.
-pub fn asked_real_name(name: &str) -> Option<Option<String>> {
-    let output = crate::bounded::output(
+/// What directory services say of an account's full name.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) enum Title {
+    /// They did not answer in time.
+    Unknown,
+    /// The account has none.
+    Untitled,
+    /// The account's full name.
+    Titled(String),
+}
+
+impl Title {
+    /// The full name, when the account has one.
+    pub(crate) fn titled(self) -> Option<String> {
+        match self {
+            Self::Titled(title) => Some(title),
+            Self::Unknown | Self::Untitled => None,
+        }
+    }
+}
+
+/// What directory services say of account `name`'s full name.
+pub(crate) fn asked_real_name(name: &str) -> Title {
+    let Ok(output) = crate::bounded::output(
         Command::new("/usr/bin/dscl").args([".", "-read", &format!("/Users/{name}"), "RealName"]),
         crate::bounded::LOOKUP,
-    )
-    .ok()?;
+    ) else {
+        return Title::Unknown;
+    };
 
-    Some(parse_real_name(&output.stdout))
+    parse_real_name(&output.stdout).map_or(Title::Untitled, Title::Titled)
 }
 
 /// The full name in `dscl -read`'s answer for RealName, if it has one.
