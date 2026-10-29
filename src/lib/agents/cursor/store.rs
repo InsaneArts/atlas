@@ -700,16 +700,11 @@ fn sync_directory(path: &Path) -> Result<()> {
 /// Publish only into an absent name; another process's empty directory is
 /// still its own and must not be replaced.
 #[cfg(target_os = "macos")]
-#[allow(unsafe_code)] // FFI: macOS renamex_np(RENAME_EXCL) has no safe nix binding.
 fn rename_exclusive(from: &Path, to: &Path) -> Result<()> {
     use std::{ffi::CString, os::unix::ffi::OsStrExt};
     let from = CString::new(from.as_os_str().as_bytes()).map_err(|e| problem(e.to_string()))?;
     let to = CString::new(to.as_os_str().as_bytes()).map_err(|e| problem(e.to_string()))?;
-    // SAFETY: both paths are live NUL-terminated C strings. RENAME_EXCL
-    // renames the entry or fails without replacing an existing destination.
-    if unsafe { libc::renamex_np(from.as_ptr(), to.as_ptr(), libc::RENAME_EXCL) } != 0 {
-        return Err(std::io::Error::last_os_error().into());
-    }
+    crate::fs_move::rename_path(&from, &to, crate::fs_move::Replace::Never)?;
     Ok(())
 }
 

@@ -419,10 +419,6 @@ fn verify(work: &Path, name: &str, allow_unnotarized: bool) -> Result<PathBuf> {
 }
 
 /// Exchange two paths in one atomic step (both must exist).
-#[allow(
-    unsafe_code,
-    reason = "FFI: renamex_np(RENAME_SWAP) has no safe binding"
-)]
 fn exchange(first: &Path, second: &Path) -> Result<()> {
     use std::{ffi::CString, os::unix::ffi::OsStrExt};
 
@@ -431,12 +427,7 @@ fn exchange(first: &Path, second: &Path) -> Result<()> {
     };
     let (first, second) = (path(first)?, path(second)?);
 
-    // SAFETY: two NUL-terminated paths; RENAME_SWAP exchanges them or fails
-    // leaving both in place.
-    if unsafe { libc::renamex_np(first.as_ptr(), second.as_ptr(), libc::RENAME_SWAP) } != 0 {
-        return Err(std::io::Error::last_os_error().into());
-    }
-
+    crate::fs_move::rename_path(&first, &second, crate::fs_move::Replace::Swap)?;
     Ok(())
 }
 

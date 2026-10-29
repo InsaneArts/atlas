@@ -1,12 +1,69 @@
 //! Moving one entry from a folder to another without ever replacing what
 //! is at the destination, between folders held open by descriptor: how
 //! cleanup puts something it is about to delete into quarantine, and how
-//! an install is put in place. libc's `renameatx_np` has no safe binding.
+//! an install is put in place. Every rename Atlas makes goes through
+//! here, as libc's `renameatx_np` has no safe binding.
 use std::{
     ffi::{CStr, CString},
     fs, io,
-    os::fd::AsRawFd,
+    os::fd::{AsRawFd, RawFd},
 };
+
+/// How a rename treats what is at its destination.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum Replace {
+    /// Never replaced: an existing destination fails the rename atomically,
+    /// with `AlreadyExists`.
+    Never,
+    /// Replaced, when there is one.
+    Allowed,
+    /// Exchanged with the entry renamed, in one atomic step: both must
+    /// exist, and a failure leaves both in place.
+    Swap,
+}
+
+/// `renameatx_np`: rename `from`, named relative to the folder `from_dir`
+/// or `AT_FDCWD`, to `to`, named relative to `to_dir`, replacing what is
+/// at `to` only as `replace` allows.
+fn rename_at(
+    from_dir: RawFd,
+    from: &CStr,
+    to_dir: RawFd,
+    to: &CStr,
+    replace: Replace,
+) -> io::Result<()> {
+    let flags = match replace {
+        Replace::Never => libc::RENAME_EXCL,
+        Replace::Allowed => 0,
+        Replace::Swap => libc::RENAME_SWAP,
+    };
+    // SAFETY: the descriptors are live ones borrowed for the call, or
+    // AT_FDCWD, and both names are NUL-terminated strings borrowed for the
+    // call too; the kernel only reads them. A descriptor that is not a
+    // folder fails the call with ENOTDIR.
+    let status = unsafe { libc::renameatx_np(from_dir, from.as_ptr(), to_dir, to.as_ptr(), flags) };
+    if status != 0 {
+        return Err(io::Error::last_os_error());
+    }
+    Ok(())
+}
+
+/// Rename `from` to `to` inside the folder `folder`, replacing what is at
+/// `to` only as `replace` allows.
+pub(crate) fn rename_within(
+    folder: &fs::File,
+    from: &CStr,
+    to: &CStr,
+    replace: Replace,
+) -> io::Result<()> {
+    rename_at(folder.as_raw_fd(), from, folder.as_raw_fd(), to, replace)
+}
+
+/// Rename the path `from` to the path `to`, replacing what is at `to` only
+/// as `replace` allows.
+pub(crate) fn rename_path(from: &CStr, to: &CStr, replace: Replace) -> io::Result<()> {
+    rename_at(libc::AT_FDCWD, from, libc::AT_FDCWD, to, replace)
+}
 
 /// One plain file name: not empty, not `.` or `..`, without `/` or NUL, so
 /// a call that takes it names exactly one entry of the folder it is given.
@@ -44,23 +101,15 @@ pub(crate) fn move_between(
     to_dir: &fs::File,
     to: &FileName,
 ) -> io::Result<Moved> {
-    // SAFETY: both descriptors are open folders borrowed for the length of
-    // the call, and both names are NUL-terminated plain file names
-    // (`FileName` refuses `/`, `.`, `..` and NUL), each borrowed for the
-    // call too; RENAME_EXCL makes the rename refuse an existing target
-    // instead of replacing it.
-    let status = unsafe {
-        libc::renameatx_np(
-            from_dir.as_raw_fd(),
-            from.as_c_str().as_ptr(),
-            to_dir.as_raw_fd(),
-            to.as_c_str().as_ptr(),
-            libc::RENAME_EXCL,
-        )
-    };
-    if status != 0 {
-        return Err(io::Error::last_os_error());
-    }
+    // Both names are plain file names (`FileName` refuses `/`, `.`, `..`
+    // and NUL), so each names exactly one entry of its folder.
+    rename_at(
+        from_dir.as_raw_fd(),
+        from.as_c_str(),
+        to_dir.as_raw_fd(),
+        to.as_c_str(),
+        Replace::Never,
+    )?;
 
     match from_dir.sync_all().and_then(|()| to_dir.sync_all()) {
         Ok(()) => Ok(Moved::Synced),
