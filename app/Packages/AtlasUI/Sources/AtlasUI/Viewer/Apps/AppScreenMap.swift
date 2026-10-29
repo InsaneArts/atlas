@@ -15,7 +15,9 @@ struct AppScreenMap: View {
         Path(roundedRect: display, cornerRadius: ViewerLayout.appMapRadius, style: .continuous),
         with: .color(.fillControl)
       )
-      for (index, share) in map.windows.enumerated().reversed() {
+      for (index, share) in map.windows.enumerated()
+        .reversed()
+      {
         let window = CGRect(
           x: share.minX * size.width,
           y: share.minY * size.height,

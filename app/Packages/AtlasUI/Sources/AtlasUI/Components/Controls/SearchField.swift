@@ -59,9 +59,9 @@ struct SearchField: View {
     }
     .padding(.horizontal, Spacing.sPlus)
     .frame(
-      minWidth: fills ? nil : Layout.leastWidth,
-      idealWidth: fills ? nil : Layout.width,
-      maxWidth: fills ? .infinity : Layout.width
+      minWidth: fills ? nil : SearchFieldLayout.leastWidth,
+      idealWidth: fills ? nil : SearchFieldLayout.width,
+      maxWidth: fills ? .infinity : SearchFieldLayout.width
     )
     .frame(height: ControlHeight.s)
     .background(
@@ -101,7 +101,7 @@ struct SearchField: View {
       .strokeBorder(Color.strokeFocus, lineWidth: Stroke.regular)
       .background(
         CapsuleEdge()
-          .stroke(Color.accentRing, lineWidth: Layout.haloWidth)
+          .stroke(Color.accentRing, lineWidth: SearchFieldLayout.haloWidth)
       )
       .opacity(focused ? 1 : 0)
       .allowsHitTesting(false)
@@ -126,16 +126,6 @@ struct SearchField: View {
     }
     return .handled
   }
-}
-
-/// The field's own measures, from the pane header's search.
-private enum Layout {
-  /// 200: the field's width where there is room.
-  static let width: CGFloat = 200
-  /// 120: the least it narrows to, still holding a short query beside its magnifier.
-  static let leastWidth: CGFloat = 120
-  /// 3: the focus ring's soft halo, as a form's field draws it.
-  static let haloWidth: CGFloat = 3
 }
 
 #if DEBUG

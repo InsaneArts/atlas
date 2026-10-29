@@ -67,7 +67,12 @@
 
     /// The moves, a row of buttons for every ``rowLength``.
     private static let rows = stride(from: 0, to: ViewerMotionMove.allCases.count, by: rowLength)
-      .map { Array(ViewerMotionMove.allCases.dropFirst($0).prefix(rowLength)) }
+      .map {
+        Array(
+          ViewerMotionMove.allCases.dropFirst($0)
+            .prefix(rowLength)
+        )
+      }
 
     /// Plays the last move again every 1.5 seconds while auto-repeat is on.
     private func repeatLast() async {

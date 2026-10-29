@@ -16,7 +16,7 @@ enum AppsMotion {
     Motion.animation(Motion.listMove, reduceMotion: reduceMotion)
   }
 
-  /// How a card comes and goes, in place, from or to ``Layout/grown`` of its size: out with a quick fade on
+  /// How a card comes and goes, in place, from or to ``AppsMotionLayout/grown`` of its size: out with a quick fade on
   /// ``Motion/swapOut`` before the others move; in once they have made room, on ``Motion/listIn``; only fading under
   /// Reduce Motion.
   ///
@@ -28,7 +28,7 @@ enum AppsMotion {
         .animation(Motion.crossfadeReduced)
     }
     let faded = AnyTransition.opacity
-      .combined(with: .scale(scale: Layout.grown))
+      .combined(with: .scale(scale: AppsMotionLayout.grown))
     return .asymmetric(
       insertion: faded.animation(Motion.listIn),
       removal: faded.animation(Motion.swapOut)
@@ -44,7 +44,7 @@ enum AppsMotion {
     Motion.animation(Motion.state, reduceMotion: reduceMotion, reduced: Motion.crossfadeReduced)
   }
 
-  /// How a tag comes and goes, as "In front" moves from one card to another: in with a fade from ``Layout/tagGrown``
+  /// How a tag comes and goes, as "In front" moves from one card to another: in with a fade from ``AppsMotionLayout/tagGrown``
   /// of its size on ``Motion/arrive``, out on ``Motion/leave``; only fading under Reduce Motion.
   ///
   /// - Parameter reduceMotion: Whether the Reduce Motion setting is on.
@@ -55,7 +55,7 @@ enum AppsMotion {
         .animation(Motion.crossfadeReduced)
     }
     let faded = AnyTransition.opacity
-      .combined(with: .scale(scale: Layout.tagGrown))
+      .combined(with: .scale(scale: AppsMotionLayout.tagGrown))
     return .asymmetric(
       insertion: faded.animation(Motion.arrive),
       removal: faded.animation(Motion.leave)
@@ -66,12 +66,4 @@ enum AppsMotion {
   /// Motion keeps. Each new frame of the window's picture replaces the last with no animation, as the live picture
   /// does.
   static var picture: Animation { Motion.fade }
-}
-
-/// The list's own measures for its motion.
-private enum Layout {
-  /// 0.96: how large a card starts as it comes in, and ends as it goes.
-  static let grown: CGFloat = 0.96
-  /// 0.94: how large a tag starts as it comes in, and ends as it goes.
-  static let tagGrown: CGFloat = 0.94
 }

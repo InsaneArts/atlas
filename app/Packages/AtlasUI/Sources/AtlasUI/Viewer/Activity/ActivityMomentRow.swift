@@ -30,7 +30,7 @@ struct ActivityMomentRow: View {
     .background(alignment: .bottomLeading) {
       if moment.isOpen {
         ActivityTimelineSegment()
-          .frame(height: Layout.lineUnderIcon)
+          .frame(height: ActivityMomentRowLayout.lineUnderIcon)
           .transition(.opacity)
       }
     }
@@ -139,25 +139,15 @@ struct ActivityMomentRow: View {
         // Only the turn takes the header's animation, so the chevron moves with the header as the rest of it does.
         Image(systemName: SymbolName.next.rawValue)
           .animation(ActivityMotion.header(reduceMotion: reduceMotion)) { chevron in
-            chevron.rotationEffect(moment.isOpen ? Layout.turned : .zero)
+            chevron.rotationEffect(moment.isOpen ? ActivityMomentRowLayout.turned : .zero)
           }
       }
     }
     .font(Typography.font(.caption, weight: .semibold))
     .foregroundStyle(Color.textTertiary)
-    .frame(width: Layout.chevron)
+    .frame(width: ActivityMomentRowLayout.chevron)
     .accessibilityHidden(true)
   }
-}
-
-/// The header's own measures.
-private enum Layout {
-  /// 90°: the chevron's turn while the moment is open.
-  static let turned = Angle.degrees(90)
-  /// 16: the chevron's column.
-  static let chevron: CGFloat = 16
-  /// 7: the line under the icon, from the icon's lower edge to the header's.
-  static let lineUnderIcon = (ViewerLayout.momentHeight - ViewerLayout.appIcon) / 2
 }
 
 #if DEBUG

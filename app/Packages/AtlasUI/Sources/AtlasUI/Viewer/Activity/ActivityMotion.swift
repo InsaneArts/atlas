@@ -36,7 +36,7 @@ enum ActivityMotion {
   }
 
   /// How a row comes and goes: out with a quick fade where it stands on ``Motion/swapOut``, before anything moves
-  /// over it; in, once the rows moving have made room, with a fade and a drop of ``Layout/drop`` on
+  /// over it; in, once the rows moving have made room, with a fade and a drop of ``ActivityMotionLayout/drop`` on
   /// ``Motion/listIn``; only fading under Reduce Motion, and with no transition at all while the person has scrolled
   /// down, so what they read never moves.
   ///
@@ -51,7 +51,7 @@ enum ActivityMotion {
         .animation(Motion.crossfadeReduced)
     }
     let dropped = AnyTransition.opacity
-      .combined(with: .offset(y: -Layout.drop))
+      .combined(with: .offset(y: -ActivityMotionLayout.drop))
     return .asymmetric(
       insertion: dropped.animation(Motion.listIn),
       removal: AnyTransition.opacity
@@ -92,10 +92,4 @@ enum ActivityMotion {
   /// How a step's disc changes colour, as the live blue moves on to the newest step: ``Motion/crossfade``, which only
   /// changes colour, so Reduce Motion keeps it.
   static var disc: Animation { Motion.crossfade }
-}
-
-/// The list's own measures for its motion.
-private enum Layout {
-  /// 6: how far a step drops as it comes in.
-  static let drop = Spacing.xsPlus
 }
