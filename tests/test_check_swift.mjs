@@ -114,6 +114,26 @@ test('the modifier checker passes calls that each start a line, and calls inside
   assert.equal(status, 0, lines.join('\n'));
 });
 
+test('the surfaces checker flags SwiftUI and AppKit glass and every material', () => {
+  const { status, lines } = check('surfaces', 'dirty');
+  assert.equal(status, 1);
+  assert.deepEqual(lines, [
+    'dirty/Chip.swift:9: glass: glassEffect; draw an opaque fill instead',
+    'dirty/Chip.swift:11: glass: .glass; draw an opaque fill instead',
+    'dirty/Chip.swift:13: material: ultraThinMaterial; draw an opaque fill instead',
+    'dirty/Chip.swift:14: glass: GlassEffectContainer; draw an opaque fill instead',
+    'dirty/Chip.swift:16: glass: .glassProminent; draw an opaque fill instead',
+    'dirty/Chip.swift:21: glass: NSGlassEffectView; draw an opaque fill instead',
+    'dirty/Chip.swift:21: material: NSVisualEffectView; draw an opaque fill instead',
+  ]);
+});
+
+test('the surfaces checker passes opaque fills, and glass or a material named only in comments and strings', () => {
+  const { status, lines } = check('surfaces', 'clean');
+  assert.equal(status, 0, lines.join('\n'));
+  assert.deepEqual(lines, []);
+});
+
 test("the docs checker flags a package declaration, a local wire type or its field, and a field on its type's line, without a doc comment", () => {
   const { status, lines, stdout } = check('docs', 'dirty');
   assert.equal(status, 1);
