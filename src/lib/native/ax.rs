@@ -5,33 +5,21 @@
 //! capped before anything is copied, and a long text is read only from its
 //! start. An element's attributes are asked for in one request. A scan that
 //! hit a limit or a communication failure reports itself incomplete.
-// FFI boundary: Accessibility reads return values through out-pointers.
-#![allow(unsafe_code)]
 use crate::{
     error::{Error, Result},
     native::windows::{self, Dock, MENU_LAYER},
 };
-use objc2_application_services::{
-    AXCopyMultipleAttributeOptions, AXError, AXUIElement, AXValue, AXValueType,
-};
+use objc2_application_services::{AXError, AXUIElement, AXValue, AXValueType};
 use objc2_core_foundation::{
-    CFArray, CFBoolean, CFIndex, CFNull, CFNumber, CFRange, CFRetained, CFString, CFType, CGPoint,
-    CGSize,
+    CFArray, CFBoolean, CFIndex, CFNull, CFNumber, CFRange, CFRetained, CFString, CFType,
 };
 use serde::{Deserialize, Serialize};
 use std::{
     collections::{BTreeSet, HashSet},
-    ptr::NonNull,
     time::{Duration, Instant},
 };
 
-// The bindings' constructors panic on a null element; these report it.
-#[link(name = "ApplicationServices", kind = "framework")]
-unsafe extern "C-unwind" {
-    fn AXUIElementCreateApplication(pid: libc::pid_t) -> Option<NonNull<AXUIElement>>;
-    fn AXUIElementCreateSystemWide() -> Option<NonNull<AXUIElement>>;
-}
-
+mod ffi;
 mod keyboard;
 pub(crate) use keyboard::{Focused, Judged, Keyboard, Unread, Within, keyboard};
 
@@ -115,8 +103,8 @@ fn bounded_string(value: &CFString) -> Option<(String, bool)> {
     let full = value.length();
     let truncated = full > TEXT_LIMIT;
     let length = if truncated {
-        // SAFETY: the index is inside the string (it is longer than it).
-        unsafe { value.range_of_composed_characters_at_index(TEXT_LIMIT) }.location
+        // The index is inside the string: it is longer than it.
+        ffi::composed_start(value, TEXT_LIMIT)?
     } else {
         full
     };
@@ -125,8 +113,7 @@ fn bounded_string(value: &CFString) -> Option<(String, bool)> {
         location: 0,
         length,
     };
-    // SAFETY: a live string, the default allocator and a range within it.
-    let part = unsafe { CFString::with_substring(None, Some(value), range) }?;
+    let part = ffi::substring(value, range)?;
 
     Some((part.to_string(), truncated))
 }
@@ -165,16 +152,11 @@ enum Slot {
 /// it holds (one that cannot be read, or that claims success, is taken as
 /// a failure), a null is no value, and anything else is the value.
 fn slot(value: CFRetained<CFType>) -> Slot {
-    if let Some(answer) = value.downcast_ref::<AXValue>() {
-        // SAFETY: a live AXValue.
-        if unsafe { answer.r#type() } == AXValueType::AXError {
-            let mut code = AXError::Failure;
-            // SAFETY: an error value read into the 32-bit code it holds.
-            let read =
-                unsafe { answer.value(AXValueType::AXError, NonNull::from(&mut code).cast()) };
-            let failed = read && code != AXError::Success;
-            return Slot::Failed(if failed { code } else { AXError::Failure });
-        }
+    if let Some(answer) = value.downcast_ref::<AXValue>()
+        && ffi::kind(answer) == AXValueType::AXError
+    {
+        let code = ffi::error(answer).filter(|code| *code != AXError::Success);
+        return Slot::Failed(code.unwrap_or(AXError::Failure));
     }
 
     if value.downcast_ref::<CFNull>().is_some() {
@@ -347,15 +329,6 @@ pub(crate) fn telling(key: &str) -> bool {
     code.is_none_or(|code| !ABSENT.iter().any(|absent| absent.0 == code))
 }
 
-/// Take over the reference a successful Copy wrote to `slot`, if any.
-///
-/// # Safety
-/// `slot` must hold null or a reference the caller owns (from a Copy).
-unsafe fn adopt<T: objc2_core_foundation::Type>(slot: *const T) -> Option<CFRetained<T>> {
-    // SAFETY: per contract; ownership of the one reference moves here.
-    NonNull::new(slot.cast_mut()).map(|value| unsafe { CFRetained::from_raw(value) })
-}
-
 /// One traversal: its deadline, whether anything made it incomplete and
 /// why, the selector attributes the current element failed to read or
 /// reported only in part, and how often each attribute returned each AX
@@ -429,17 +402,13 @@ impl Scan {
         }
 
         let name = CFString::from_static_str(attribute);
-        let mut value: *const CFType = std::ptr::null();
-        // SAFETY: a valid output slot; on success the Copy hands over one
-        // owned reference, adopted below.
-        let status = unsafe { element.copy_attribute_value(&name, NonNull::from(&mut value)) };
-        if status == AXError::Success {
-            // SAFETY: a successful Copy wrote an owned reference (or null).
-            return unsafe { adopt(value) };
+        match ffi::copy(element, &name) {
+            Ok(value) => value,
+            Err(status) => {
+                self.failed(status, attribute);
+                None
+            }
         }
-
-        self.failed(status, attribute);
-        None
     }
 
     /// An attribute from a batch, its failure recorded as a single read's
@@ -468,28 +437,10 @@ impl Scan {
             return Some(Batch::unread());
         }
 
-        let mut values: *const CFArray = std::ptr::null();
-        // SAFETY: the names are an array of CFStrings as required and the
-        // output slot is valid; on success the Copy hands over one owned
-        // array, adopted below.
-        let status = unsafe {
-            element.copy_multiple_attribute_values(
-                self.names.as_opaque(),
-                AXCopyMultipleAttributeOptions::empty(),
-                NonNull::from(&mut values),
-            )
-        };
-        // SAFETY: adopted only after a successful Copy, which wrote an owned
-        // array (or null).
-        let values = (status == AXError::Success)
-            .then(|| unsafe { adopt(values) })
-            .flatten()
-            .map(|values| {
-                // SAFETY: every element of a CFArray is a CF object, each
-                // checked before use.
-                unsafe { CFRetained::cast_unchecked::<CFArray<CFType>>(values) }
-            });
-        self.received(status, values.as_deref())
+        match ffi::copy_many(element, &self.names) {
+            Ok(values) => self.received(AXError::Success, values.as_deref()),
+            Err(status) => self.received(status, None),
+        }
     }
 
     /// The batch a request returned with `status` and `values`. A request
@@ -601,28 +552,19 @@ impl Scan {
             return Err(None);
         }
 
-        let range = prefix_range(characters);
-        // SAFETY: a pointer to a live CFRange, the type the value is made as.
-        let parameter = unsafe { AXValue::new(AXValueType::CFRange, NonNull::from(&range).cast()) }
-            .ok_or(None)?;
+        let parameter = ffi::range(prefix_range(characters)).ok_or(None)?;
         let name = CFString::from_static_str("AXStringForRange");
-        let mut value: *const CFType = std::ptr::null();
-        // SAFETY: it takes a range value and the output slot is valid; on
-        // success the Copy hands over one owned reference, adopted below.
-        let status = unsafe {
-            element.copy_parameterized_attribute_value(&name, &parameter, NonNull::from(&mut value))
-        };
-        if status != AXError::Success {
-            // An element that cannot read by range just has its value read
-            // whole; that says nothing went wrong.
-            if status != AXError::ParameterizedAttributeUnsupported {
-                self.failed(status, "AXStringForRange");
+        let value = match ffi::copy_for(element, &name, &parameter) {
+            Ok(value) => value.ok_or(None)?,
+            Err(status) => {
+                // An element that cannot read by range just has its value
+                // read whole; that says nothing went wrong.
+                if status != AXError::ParameterizedAttributeUnsupported {
+                    self.failed(status, "AXStringForRange");
+                }
+                return Err(Some(status));
             }
-            return Err(Some(status));
-        }
-
-        // SAFETY: a successful Copy wrote an owned reference (or null).
-        let value = unsafe { adopt(value) }.ok_or(None)?;
+        };
         prefix_text(&value).ok_or(None)
     }
 
@@ -633,15 +575,10 @@ impl Scan {
             position.downcast_ref::<AXValue>()?,
             size.downcast_ref::<AXValue>()?,
         );
-        let (mut point, mut extent) = (CGPoint::ZERO, CGSize::ZERO);
+        let point = ffi::point(position)?;
+        let extent = ffi::size(size)?;
 
-        // SAFETY: each AXValue is read into the struct its type names.
-        let read = unsafe {
-            position.value(AXValueType::CGPoint, NonNull::from(&mut point).cast())
-                && size.value(AXValueType::CGSize, NonNull::from(&mut extent).cast())
-        };
-
-        read.then_some(Frame {
+        Some(Frame {
             x: point.x,
             y: point.y,
             width: extent.width,
@@ -670,26 +607,21 @@ impl Scan {
             self.stop(Stop::Count);
         }
 
-        let mut array: *const CFArray = std::ptr::null();
-        // SAFETY: a valid output slot; on success the Copy hands over one
-        // owned array, adopted below.
-        let status =
-            unsafe { element.copy_attribute_values(&name, 0, wanted, NonNull::from(&mut array)) };
-
-        // SAFETY: a successful Copy wrote an owned array (or null).
-        let Some(array) = (status == AXError::Success)
-            .then(|| unsafe { adopt(array) })
-            .flatten()
-        else {
-            self.failed(status, attribute);
-            self.stop(Stop::Unread);
-            return Vec::new();
+        let values = match ffi::copy_values(element, &name, wanted) {
+            Ok(Some(values)) => values,
+            Ok(None) => {
+                self.failed(AXError::Success, attribute);
+                self.stop(Stop::Unread);
+                return Vec::new();
+            }
+            Err(status) => {
+                self.failed(status, attribute);
+                self.stop(Stop::Unread);
+                return Vec::new();
+            }
         };
 
-        // SAFETY: every element of a CFArray is a CF object; each is checked
-        // to be an AXUIElement before use.
-        let values = unsafe { CFRetained::cast_unchecked::<CFArray<CFType>>(array) };
-
+        // Each value is checked to be an AXUIElement before use.
         values
             .iter()
             .filter_map(|value| value.downcast::<AXUIElement>().ok())
@@ -733,19 +665,17 @@ impl Scan {
         }
 
         let name = CFString::from_static_str(attribute);
-        let mut count: CFIndex = 0;
-        // SAFETY: a valid output slot for the count.
-        let status = unsafe { element.attribute_value_count(&name, NonNull::from(&mut count)) };
-        if status != AXError::Success {
-            self.failed(status, attribute);
-            if !ABSENT.contains(&status) {
-                self.stop(Stop::Unread);
+        match ffi::count(element, &name) {
+            Ok(count) => count,
+            Err(status) => {
+                self.failed(status, attribute);
+                if !ABSENT.contains(&status) {
+                    self.stop(Stop::Unread);
+                }
+
+                0
             }
-
-            return 0;
         }
-
-        count
     }
 
     /// What the app draws in `bounds`, one of its windows at the menu layer:
@@ -771,22 +701,13 @@ impl Scan {
                 bounds.x + bounds.width / 2.0,
                 bounds.y + bounds.height * fraction,
             );
-            let mut hit: *const AXUIElement = std::ptr::null();
-
-            // SAFETY: a valid output slot; on success the Copy hands over one
-            // owned element, adopted below.
-            let status = unsafe {
-                app.copy_element_at_position(x as f32, y as f32, NonNull::from(&mut hit))
-            };
-
-            if status != AXError::Success {
-                self.failed(status, "AXElementAtPosition");
-                continue;
-            }
-
-            // SAFETY: a successful Copy wrote an owned reference (or null).
-            let Some(leaf) = (unsafe { adopt(hit) }) else {
-                continue;
+            let leaf = match ffi::element_at(app, x as f32, y as f32) {
+                Ok(Some(leaf)) => leaf,
+                Ok(None) => continue,
+                Err(status) => {
+                    self.failed(status, "AXElementAtPosition");
+                    continue;
+                }
             };
 
             let mut element = Some(leaf.clone());
@@ -1045,41 +966,27 @@ fn unreachable(error: Option<AXError>, trusted: bool, exists: bool) -> Error {
 pub fn focused_pid(timeout: Duration) -> Result<Option<i64>> {
     let unreadable = || Error::new("native", "The focused app could not be read");
 
-    // SAFETY: a plain constructor returning an owned element or null.
-    let system =
-        unsafe { AXUIElementCreateSystemWide().map(|system| CFRetained::from_raw(system)) }
-            .ok_or_else(unreadable)?;
-    // SAFETY: the system-wide element sets this process's global messaging
-    // timeout, which covers the read below. A read without it could wait
-    // on an unresponsive app for far longer.
-    if unsafe { system.set_messaging_timeout(timeout.as_secs_f32()) } != AXError::Success {
+    let system = ffi::system_wide().ok_or_else(unreadable)?;
+    // The system-wide element sets this process's global messaging timeout,
+    // which covers the read below. A read without it could wait on an
+    // unresponsive app for far longer.
+    if ffi::set_timeout(&system, timeout) != AXError::Success {
         return Err(unreadable());
     }
 
     let name = CFString::from_static_str("AXFocusedApplication");
-    let mut value: *const CFType = std::ptr::null();
-    // SAFETY: a valid output slot; on success the Copy hands over one owned
-    // reference, adopted below.
-    let status = unsafe { system.copy_attribute_value(&name, NonNull::from(&mut value)) };
-    match status {
-        AXError::Success => {}
-        AXError::NoValue => return Ok(None),
-        _ => return Err(unreadable()),
-    }
-
-    // SAFETY: a successful Copy wrote an owned reference (or null).
-    let focused = unsafe { adopt(value) }.ok_or_else(unreadable)?;
+    let focused = match ffi::copy(&system, &name) {
+        Ok(focused) => focused.ok_or_else(unreadable)?,
+        Err(AXError::NoValue) => return Ok(None),
+        Err(_) => return Err(unreadable()),
+    };
     let app = focused
         .downcast_ref::<AXUIElement>()
         .ok_or_else(unreadable)?;
-    let mut pid: libc::pid_t = 0;
-    // SAFETY: a valid `pid_t` slot for the element's process.
-    let status = unsafe { app.pid(NonNull::from(&mut pid)) };
-    if status != AXError::Success || pid <= 0 {
-        return Err(unreadable());
+    match ffi::owner(app) {
+        Ok(pid) if pid > 0 => Ok(Some(pid.into())),
+        _ => Err(unreadable()),
     }
-
-    Ok(Some(pid.into()))
 }
 
 /// The longest a read of where the Dock takes clicks may take.
@@ -1106,16 +1013,12 @@ pub fn dock(windows: &[windows::Window], timeout: Duration) -> Dock {
         return Dock::Unread;
     };
 
-    // SAFETY: a plain constructor returning an owned element or null.
-    let Some(app) = (unsafe { AXUIElementCreateApplication(pid) })
-        // SAFETY: the constructor handed over one owned reference.
-        .map(|app| unsafe { CFRetained::from_raw(app) })
-    else {
+    let Some(app) = ffi::application(pid) else {
         return Dock::Unread;
     };
-    // SAFETY: sets this one element's messaging timeout, which bounds each
-    // read below; nothing else in the process is affected.
-    if unsafe { app.set_messaging_timeout(timeout.as_secs_f32()) } != AXError::Success {
+    // This one element's messaging timeout bounds each read below; nothing
+    // else in the process is affected.
+    if ffi::set_timeout(&app, timeout) != AXError::Success {
         return Dock::Unread;
     }
 
@@ -1157,16 +1060,13 @@ pub fn dock(windows: &[windows::Window], timeout: Duration) -> Dock {
 /// the active app, then the menus it has open (a menu bar, status item or
 /// context menu). Closed menus are left out: nothing in them is on screen.
 pub fn elements(pid: i32, limits: Limits) -> Result<Snapshot> {
-    // SAFETY: plain constructors returning an owned element or null; the
-    // system-wide element sets this process's global messaging timeout,
+    // The system-wide element sets this process's global messaging timeout,
     // which covers every read below.
-    let app = unsafe {
-        if let Some(system) = AXUIElementCreateSystemWide() {
-            CFRetained::from_raw(system).set_messaging_timeout(1.0);
-        }
-        AXUIElementCreateApplication(pid).map(|app| CFRetained::from_raw(app))
+    if let Some(system) = ffi::system_wide() {
+        ffi::set_timeout(&system, Duration::from_secs(1));
     }
-    .ok_or_else(|| Error::new("elements", "No accessibility element for that process"))?;
+    let app = ffi::application(pid)
+        .ok_or_else(|| Error::new("elements", "No accessibility element for that process"))?;
 
     let mut scan = Scan::new(Instant::now() + limits.time);
     let windows = scan.children(&app, "AXWindows", limits.count);
@@ -1394,7 +1294,7 @@ pub fn elements(pid: i32, limits: Limits) -> Result<Snapshot> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use objc2_core_foundation::{Type, kCFNull};
+    use objc2_core_foundation::Type;
 
     /// What a sheet holds is judged against the sheet, not the window it
     /// hangs from; anything else keeps its window.
@@ -1512,12 +1412,6 @@ mod tests {
 
         near.width += 2.0;
         assert!(!frame.matches(&near));
-    }
-
-    #[test]
-    fn null_references_are_never_owned() {
-        // SAFETY: null is never adopted.
-        assert!(unsafe { adopt::<CFType>(std::ptr::null()) }.is_none());
     }
 
     /// The named AX errors are the raw codes the scan has always sorted on.
@@ -1737,35 +1631,7 @@ mod tests {
         }
     }
 
-    /// An AX error as a batched read returns it in a slot.
-    fn error_value(code: AXError) -> CFRetained<CFType> {
-        // SAFETY: a pointer to a live 32-bit code, the type the value is made as.
-        unsafe { AXValue::new(AXValueType::AXError, NonNull::from(&code).cast()) }
-            .unwrap()
-            .into()
-    }
-
-    /// The null a batched read returns for an attribute with no value.
-    fn null() -> CFRetained<CFType> {
-        // SAFETY: a constant CoreFoundation defines for the life of the process.
-        unsafe { kCFNull }.unwrap().retain().into()
-    }
-
-    fn point(x: f64, y: f64) -> CFRetained<CFType> {
-        let point = CGPoint { x, y };
-        // SAFETY: a pointer to a live CGPoint, the type the value is made as.
-        unsafe { AXValue::new(AXValueType::CGPoint, NonNull::from(&point).cast()) }
-            .unwrap()
-            .into()
-    }
-
-    fn size(width: f64, height: f64) -> CFRetained<CFType> {
-        let size = CGSize { width, height };
-        // SAFETY: a pointer to a live CGSize, the type the value is made as.
-        unsafe { AXValue::new(AXValueType::CGSize, NonNull::from(&size).cast()) }
-            .unwrap()
-            .into()
-    }
+    use super::ffi::made::{error as error_value, null, point, size};
 
     fn string(text: &str) -> CFRetained<CFType> {
         CFString::from_str(text).into()
@@ -2002,15 +1868,11 @@ mod tests {
     }
 
     fn system_wide() -> CFRetained<AXUIElement> {
-        // SAFETY: a plain constructor returning an owned element or null,
-        // adopted here.
-        unsafe { AXUIElementCreateSystemWide().map(|system| CFRetained::from_raw(system)) }.unwrap()
+        ffi::system_wide().unwrap()
     }
 
     fn application(pid: libc::pid_t) -> CFRetained<AXUIElement> {
-        // SAFETY: a plain constructor returning an owned element or null,
-        // adopted here.
-        unsafe { AXUIElementCreateApplication(pid).map(|app| CFRetained::from_raw(app)) }.unwrap()
+        ffi::application(pid).unwrap()
     }
 
     #[test]

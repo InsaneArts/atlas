@@ -1979,6 +1979,7 @@ mod tests {
             include_str!("focus.rs"),
             include_str!("ax.rs"),
             include_str!("ax/keyboard.rs"),
+            include_str!("ax/ffi.rs"),
         ] {
             let code = source.split("#[cfg(test)]").next().unwrap_or_default();
             for setter in [

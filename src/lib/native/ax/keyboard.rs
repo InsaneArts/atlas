@@ -5,17 +5,12 @@
 //! apart from one that failed or answered something else, and each request
 //! is bounded by what is left of one deadline. Only copies are made;
 //! nothing is set but each element's own messaging timeout.
-// FFI boundary: Accessibility reads return values through out-pointers.
-#![allow(unsafe_code)]
-use super::{ABSENT, AXUIElementCreateApplication, Element, Frame, adopt, bounded_string};
+use super::{ABSENT, Element, Frame, bounded_string, ffi};
 use crate::error::{Error, Result};
 use objc2_application_services::{AXError, AXUIElement, AXValue, AXValueType};
-use objc2_core_foundation::{CFBoolean, CFNull, CFRetained, CFString, CFType, CGPoint, CGSize};
+use objc2_core_foundation::{CFBoolean, CFNull, CFRetained, CFString, CFType};
 use serde::Serialize;
-use std::{
-    ptr::NonNull,
-    time::{Duration, Instant},
-};
+use std::time::{Duration, Instant};
 
 /// Most steps from the focused element up to its window. No app nests a
 /// field this deep; the read's deadline ends a long walk well before it.
@@ -398,11 +393,7 @@ fn read<A: Ask>(ask: A, app: &A::Element, deadline: Instant, judged: Judged) -> 
 pub(crate) fn keyboard(pid: i64, timeout: Duration, judged: Judged) -> Result<Keyboard> {
     let deadline = Instant::now() + timeout;
     let pid = libc::pid_t::try_from(pid).map_err(|_| Unread::Failed.error())?;
-    // SAFETY: a plain constructor returning an owned element or null.
-    let app = unsafe { AXUIElementCreateApplication(pid) }
-        // SAFETY: the constructor handed over one owned reference.
-        .map(|app| unsafe { CFRetained::from_raw(app) })
-        .ok_or_else(|| Unread::Failed.error())?;
+    let app = ffi::application(pid).ok_or_else(|| Unread::Failed.error())?;
 
     read(Live, &app, deadline, judged)
 }
@@ -418,37 +409,26 @@ impl Ask for Live {
     }
 
     fn bound(&mut self, element: &Self::Element, timeout: Duration) -> bool {
-        // SAFETY: sets this one element's messaging timeout, which bounds
-        // the next request to it; nothing else in the process is affected.
-        let status = unsafe { element.set_messaging_timeout(timeout.as_secs_f32()) };
-        status == AXError::Success
+        // This one element's messaging timeout bounds the next request to
+        // it; nothing else in the process is affected.
+        ffi::set_timeout(element, timeout) == AXError::Success
     }
 
     fn ask(&mut self, element: &Self::Element, attribute: &'static str) -> Answer<Self::Element> {
         let name = CFString::from_static_str(attribute);
-        let mut value: *const CFType = std::ptr::null();
-        // SAFETY: a valid output slot; on success the Copy hands over one
-        // owned reference, adopted below.
-        let status = unsafe { element.copy_attribute_value(&name, NonNull::from(&mut value)) };
-        if ABSENT.contains(&status) {
-            return Answer::Absent;
-        }
-        if status != AXError::Success {
-            return Answer::Failed(status);
-        }
-
-        // SAFETY: a successful Copy wrote an owned reference (or null).
-        match unsafe { adopt(value) } {
-            Some(value) => answer(value),
-            None => Answer::Absent,
+        match ffi::copy(element, &name) {
+            Ok(Some(value)) => answer(value),
+            Ok(None) => Answer::Absent,
+            Err(status) if ABSENT.contains(&status) => Answer::Absent,
+            Err(status) => Answer::Failed(status),
         }
     }
 
     fn owner(&mut self, element: &Self::Element) -> Option<i64> {
-        let mut pid: libc::pid_t = 0;
-        // SAFETY: a valid `pid_t` slot for the element's process.
-        let status = unsafe { element.pid(NonNull::from(&mut pid)) };
-        (status == AXError::Success && pid > 0).then_some(pid.into())
+        ffi::owner(element)
+            .ok()
+            .filter(|pid| *pid > 0)
+            .map(i64::from)
     }
 }
 
@@ -478,30 +458,15 @@ fn answer(value: CFRetained<CFType>) -> Answer<CFRetained<AXUIElement>> {
 
 /// A point or a size, read into the struct its type names.
 fn geometric(value: &AXValue) -> Answer<CFRetained<AXUIElement>> {
-    // SAFETY: a live AXValue.
-    let kind = unsafe { value.r#type() };
-    if kind == AXValueType::CGPoint {
-        let mut point = CGPoint::ZERO;
-        // SAFETY: a point value read into a CGPoint.
-        let read = unsafe { value.value(AXValueType::CGPoint, NonNull::from(&mut point).cast()) };
-        return if read {
-            Answer::Point(point.x, point.y)
-        } else {
-            Answer::Other
-        };
+    match ffi::kind(value) {
+        AXValueType::CGPoint => {
+            ffi::point(value).map_or(Answer::Other, |point| Answer::Point(point.x, point.y))
+        }
+        AXValueType::CGSize => {
+            ffi::size(value).map_or(Answer::Other, |size| Answer::Size(size.width, size.height))
+        }
+        _ => Answer::Other,
     }
-    if kind == AXValueType::CGSize {
-        let mut size = CGSize::ZERO;
-        // SAFETY: a size value read into a CGSize.
-        let read = unsafe { value.value(AXValueType::CGSize, NonNull::from(&mut size).cast()) };
-        return if read {
-            Answer::Size(size.width, size.height)
-        } else {
-            Answer::Other
-        };
-    }
-
-    Answer::Other
 }
 
 #[cfg(test)]
