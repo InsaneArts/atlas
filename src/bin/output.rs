@@ -1,5 +1,5 @@
 //! Result presentation, output streams and process result classification.
-use super::cli::{AgentsCommand, Command, EnvironmentCommand};
+use super::cli::{AgentsCommand, Command, EnvironmentCommand, JobCommand};
 use atlas::{
     error::{Error, Holder},
     ui::{
@@ -67,6 +67,16 @@ pub(super) fn view(command: &Command) -> View {
         } => View::Environment,
         Command::Close { .. } => View::Close,
         Command::Cleanup { .. } => View::Cleanup,
+        Command::Job {
+            command: JobCommand::Start { .. } | JobCommand::Stop { .. },
+        } => View::Job,
+        Command::Job {
+            command: JobCommand::List { .. },
+        } => View::Jobs,
+        Command::Job {
+            command: JobCommand::Log { .. },
+        } => View::JobLog,
+        Command::Collect { .. } => View::Collect,
         Command::InstallApp { .. } => View::InstallApp,
         Command::Environment {
             command: Some(EnvironmentCommand::Discover { .. }),

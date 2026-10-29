@@ -1192,3 +1192,94 @@ fn an_install_says_where_it_went_and_only_when_macos_has_not_registered_it() {
         "{unregistered}"
     );
 }
+
+#[test]
+fn a_stopped_job_says_what_it_left_running() {
+    let shown = show(
+        View::Job,
+        json!({"ok": true, "id": "7c2e91a04b3f", "state": "ended", "how": "stopped",
+            "left": [{"pid": 4377, "name": "sleep"}]}),
+    );
+    assert!(
+        shown.out.contains("Job 7c2e91a04b3f ended: stopped"),
+        "{}",
+        shown.out
+    );
+    assert!(
+        shown.out.contains("never signalled: sleep (4377)"),
+        "{}",
+        shown.out
+    );
+
+    let shown = show(
+        View::Jobs,
+        json!({"ok": true, "jobs": [
+            {"id": "7c2e91a04b3f", "name": "web", "state": "ended", "how": "leader-gone",
+                "left": [{"pid": 9, "name": "node"}]},
+            {"id": "000000000000", "name": "db", "state": "stopping", "refused": "identity",
+                "mismatch": true},
+        ]}),
+    );
+    assert!(
+        shown.out.contains("Atlas signalled nothing"),
+        "{}",
+        shown.out
+    );
+    assert!(shown.out.contains("node (9)"));
+    assert!(shown.out.contains("not signalled: identity"));
+    assert!(shown.out.contains("another process than the task's"));
+}
+
+#[test]
+fn a_collection_lists_its_copies_and_what_it_did_not_keep() {
+    let shown = show(
+        View::Collect,
+        json!({"ok": false, "code": "collect", "error": "1 of 2 files was not collected",
+            "uncertain": false,
+            "collected": [{"path": "/x/files/blob.bin", "size": 3, "sha256": "ab"}],
+            "failed": [{"source": "grow.log", "reason": "changing",
+                "error": "grow.log changed in the last 2 seconds"}]}),
+    );
+    assert!(
+        shown
+            .out
+            .contains("/x/files/blob.bin (3 bytes, SHA-256 ab)")
+    );
+    assert!(shown.out.contains("grow.log changed"));
+    assert!(shown.err.contains("1 of 2 files was not collected"));
+}
+
+#[test]
+fn a_blocked_cleanup_step_says_why_and_what_it_kept() {
+    let shown = show(
+        View::Cleanup,
+        json!({"ok": false, "code": "cleanup", "preview": false, "state": "blocked",
+        "error": "Cleanup is not finished", "uncertain": false, "left": [],
+        "steps": [
+            {"n": 1, "do": "check-outputs", "state": "failed", "reason": "output-not-kept",
+                "notKept": [{"source": "/Users/atlas/a.pdf"}]},
+            {"n": 2, "do": "stop-job", "id": "7c2e91a04b3f", "name": "web", "state": "done",
+                "left": [{"pid": 77, "name": "sleep"}]},
+            {"n": 3, "do": "undo-plan", "planId": "p", "state": "blocked",
+                "reason": "output-not-kept"},
+            {"n": 4, "do": "remove-copy", "path": "/c", "state": "blocked", "reason": "daemon"},
+        ]}),
+    );
+    assert!(
+        shown.out.contains("kept in the helper: /Users/atlas/a.pdf"),
+        "{}",
+        shown.out
+    );
+    assert!(shown.out.contains("never signalled: sleep (77)"));
+    assert!(
+        shown
+            .out
+            .contains("not run: a collected copy is missing or changed")
+    );
+    assert!(
+        shown
+            .out
+            .contains("not run: the helper could not be reached")
+    );
+    assert!(!shown.out.contains("agents are stopped"));
+}

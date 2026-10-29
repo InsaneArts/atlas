@@ -4,6 +4,7 @@
 mod act;
 mod activity;
 mod cleanup;
+mod jobs;
 mod manage;
 mod observe;
 
@@ -40,6 +41,14 @@ pub enum View {
     Cleanup,
     /// An app installed into the helper for a task.
     InstallApp,
+    /// A background job started or stopped.
+    Job,
+    /// A task's background jobs.
+    Jobs,
+    /// The end of a job's output.
+    JobLog,
+    /// The copies a collection kept.
+    Collect,
     /// What was opened.
     Open(String),
     Wait {
@@ -137,6 +146,10 @@ pub fn render(view: &View, value: &Value) -> Rendered {
         }
         View::Close => failed(value).unwrap_or_else(|| Rendered::out(act::close(value))),
         View::Cleanup => cleanup::cleanup(value),
+        View::Job => jobs::job(value),
+        View::Jobs => jobs::jobs(value),
+        View::JobLog => jobs::log(value),
+        View::Collect => jobs::collect(value),
         View::InstallApp => {
             failed(value).unwrap_or_else(|| Rendered::out(cleanup::install_app(value)))
         }

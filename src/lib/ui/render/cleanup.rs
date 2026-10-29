@@ -118,6 +118,12 @@ fn step(step: &Value) -> String {
             "Move {} from Applications aside in the helper",
             text::printable(step["app"].as_str().unwrap_or("the app"))
         ),
+        Some("check-outputs") => "Check the copies of collected files are still kept".to_owned(),
+        Some("stop-job") => format!(
+            "Stop background job {} ({})",
+            step["id"].as_str().unwrap_or("?"),
+            text::printable(step["name"].as_str().unwrap_or("job"))
+        ),
         Some("remove-copy") => {
             let path = text::printable(step["path"].as_str().unwrap_or("?")).into_owned();
             match step["app"].as_str() {
@@ -149,11 +155,44 @@ fn step(step: &Value) -> String {
             format!(" · couldn't: {reason}; try again")
         }
         (Some("failed"), Some(reason)) => format!(" · couldn't: {reason}"),
-        (Some("blocked"), _) => " · not run: agents are stopped".to_owned(),
+        (Some("blocked"), Some(reason)) => format!(" · not run: {reason}"),
+        (Some("blocked"), None) => " · not run".to_owned(),
         (Some("uncertain"), _) => " · outcome unknown".to_owned(),
         _ => String::new(),
     };
-    format!("{mark} {n}. {what}{}", style::dim(said))
+    let mut line = format!("{mark} {n}. {what}{}", style::dim(said));
+    for file in step["notKept"].as_array().into_iter().flatten() {
+        let source = match file["source"].as_str().filter(|source| !source.is_empty()) {
+            Some(source) => text::printable(source).into_owned(),
+            None => "files a collection whose receipt is gone kept".to_owned(),
+        };
+        line.push_str(&format!(
+            "\n     {}",
+            style::dim(format!("not kept here, so kept in the helper: {source}"))
+        ));
+    }
+    let escaped: Vec<String> = step["left"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .map(|process| {
+            format!(
+                "{} ({})",
+                text::printable(process["name"].as_str().unwrap_or("a process")),
+                process["pid"]
+            )
+        })
+        .collect();
+    if !escaped.is_empty() {
+        line.push_str(&format!(
+            "\n     {}",
+            style::dim(format!(
+                "still running, never signalled: {}",
+                escaped.join(", ")
+            ))
+        ));
+    }
+    line
 }
 
 /// Why a step was kept or failed, in words.
@@ -172,6 +211,11 @@ fn reason(reason: &str) -> &str {
         "helper" => "the helper could not do it",
         "needs-step" => "a step before it is not done",
         "stopped" => "agents are stopped",
+        "output-not-kept" => "a collected copy is missing or changed",
+        "still-stopping" => "the job has not ended yet",
+        "identity" => "the job is no longer the process Atlas started",
+        "other-account" => "part of the job runs as another account",
+        "daemon" => "the helper could not be reached",
         other => other,
     }
 }
