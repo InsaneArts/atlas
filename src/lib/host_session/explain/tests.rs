@@ -408,6 +408,33 @@ fn an_unknown_outcome_of_a_session_running_its_first_command_names_it() {
 }
 
 #[test]
+fn an_unknown_outcome_of_a_session_killed_on_its_first_command_names_it_as_its_record_would() {
+    let directory = tempfile::tempdir().unwrap();
+    let client = client(directory.path());
+    let (agent, codex) = (first_command("agent-first"), session(Host::Codex, "right"));
+    let labelled = client.controller.clone().labelled(Some(&agent));
+    labelled.abandon_command(labelled.quarantine_command().unwrap());
+
+    let error = reply(uncertain(), || Some(client.clone()), Some(&codex)).unwrap_err();
+    assert_eq!(error.details["causedBy"], json!(["agent-first · left"]));
+    assert_eq!(error.details["yours"], false);
+}
+
+#[test]
+fn an_unknown_outcome_of_a_recorded_named_session_names_it_as_its_record_does() {
+    let directory = tempfile::tempdir().unwrap();
+    let client = client(directory.path());
+    let (agent, codex) = (first_command("agent-a"), session(Host::Codex, "right"));
+    recorded(&client, &agent);
+    abandoned(&client, Some(&agent));
+    let labelled = client.controller.clone().labelled(Some(&agent));
+    labelled.abandon_command(labelled.quarantine_command().unwrap());
+
+    let error = reply(uncertain(), || Some(client.clone()), Some(&codex)).unwrap_err();
+    assert_eq!(error.details["causedBy"], json!(["agent-a · left"]));
+}
+
+#[test]
 fn an_unknown_outcome_of_its_own_beside_another_sessions_command_is_still_yours() {
     let directory = tempfile::tempdir().unwrap();
     let client = client(directory.path());

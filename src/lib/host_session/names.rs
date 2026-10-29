@@ -60,12 +60,21 @@ pub(crate) fn names_with<'a>(
     records: impl IntoIterator<Item = &'a Record>,
     notes: impl IntoIterator<Item = &'a Note>,
 ) -> BTreeMap<Key, String> {
+    names_with_left(records, notes, [])
+}
+
+/// [`names_with`], also naming each session only a note of `left` names,
+/// live or not: the note a command killed on its session's first command
+/// left with its unknown outcome, so that session is named as its record
+/// would have named it.
+pub(crate) fn names_with_left<'a>(
+    records: impl IntoIterator<Item = &'a Record>,
+    notes: impl IntoIterator<Item = &'a Note>,
+    left: impl IntoIterator<Item = &'a Note>,
+) -> BTreeMap<Key, String> {
     let mut sessions: Vec<Naming<'a>> = records.into_iter().map(Naming::from).collect();
-    for first in notes
-        .into_iter()
-        .filter(|note| note.live())
-        .filter_map(Naming::of_note)
-    {
+    let live = notes.into_iter().filter(|note| note.live());
+    for first in live.chain(left).filter_map(Naming::of_note) {
         if sessions.iter().all(|known| known.key != first.key) {
             sessions.push(first);
         }
@@ -291,5 +300,37 @@ mod tests {
         assert_eq!(names[&records[0].key], "Claude Code · left · 14:02");
         assert_eq!(names[&two], "Claude Code · left · 14:30");
         assert_eq!(names[&three], three.to_string(), "no label, so its key");
+    }
+
+    #[test]
+    fn a_note_a_killed_command_left_names_its_session_only_where_asked() {
+        let session = HostSession::new(Host::Named, "agent-a")
+            .unwrap()
+            .in_folder(Some("left"));
+        let current = crate::host_session::Process::current().unwrap();
+        let note = Note {
+            session: Some(session.key().clone()),
+            host: Some(Host::Named),
+            folder: Some("left".into()),
+            named: HostId::parse("agent-a"),
+            process: crate::host_session::Process::new(i32::MAX, current.start),
+            since: DAY,
+        };
+
+        assert!(
+            !names_with([], [&note]).contains_key(session.key()),
+            "a note whose command ended names nobody"
+        );
+        assert_eq!(
+            names_with_left([], [], [&note])[session.key()],
+            "agent-a · left",
+            "as its record would have named it"
+        );
+        let recorded = [record(Host::Named, "agent-a", Some("right"), DAY)];
+        assert_eq!(
+            names_with_left(&recorded, [], [&note])[session.key()],
+            "agent-a · right",
+            "a record names it first"
+        );
     }
 }

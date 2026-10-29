@@ -5,7 +5,7 @@
 //! why, stays as it was.
 use super::{
     Asker, HostSession, Key, Recovery,
-    names::{name_of, names_with},
+    names::{name_of, names_with, names_with_left},
     store::Store,
 };
 use crate::{
@@ -124,23 +124,27 @@ fn additions(refusal: &Refusal, client: &Client, own: Option<&Key>) -> Vec<(&'st
     };
     // A session on its first command, holding, waiting or running a
     // command, is named as the status names it: from its note.
-    let named = || {
-        let recent = Store::at(output).recent();
-        let notes: Vec<_> = client
-            .controller
-            .holder_note()
-            .into_iter()
-            .chain(client.controller.waiting_notes())
-            .chain(client.controller.running_notes())
-            .collect();
-        names_with(recent.iter().map(|seen| &seen.record), &notes)
-    };
+    let recent = Store::at(output).recent();
+    let notes: Vec<_> = client
+        .controller
+        .holder_note()
+        .into_iter()
+        .chain(client.controller.waiting_notes())
+        .chain(client.controller.running_notes())
+        .collect();
+    let named = || names_with(recent.iter().map(|seen| &seen.record), &notes);
 
     match refusal {
         Refusal::Busy => held_by(client, &named()),
         Refusal::CommandRunning => running_for(client, &named()),
         Refusal::FocusChanged(app) => last_used_by(output, app, own, &named()),
-        Refusal::Uncertain => caused_by(client, own, &named()),
+        // One killed on its session's first command is named by the note
+        // it left, as its record would have named it.
+        Refusal::Uncertain => {
+            let left = client.controller.pending_notes();
+            let names = names_with_left(recent.iter().map(|seen| &seen.record), &notes, &left);
+            caused_by(client, own, &names)
+        }
     }
 }
 

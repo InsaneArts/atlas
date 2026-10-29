@@ -983,6 +983,22 @@ impl Controller {
         notes
     }
 
+    /// The notes of the commands agents started with `run` whose change is
+    /// still pending, live or not: a command killed on its session's first
+    /// command leaves no record, and only its note names that session, as
+    /// its record would have. For naming whose an unknown outcome is, never
+    /// to decide anything.
+    pub fn pending_notes(&self) -> Vec<Note> {
+        let Ok(pending) = self.pending() else {
+            return Vec::new();
+        };
+        running::read(&self.running)
+            .into_iter()
+            .filter(|(generation, _)| pending.contains(generation))
+            .map(|(_, note)| note)
+            .collect()
+    }
+
     /// Where the holder note is kept, for tests that stand in for another
     /// command's.
     #[cfg(test)]
@@ -1355,7 +1371,8 @@ impl Controller {
 
     /// Leave a command an agent started with `run` whose outcome became
     /// unknown as any other unknown outcome: its mark goes, then its claim,
-    /// while its marker entry stays for recovery. It is never settled here.
+    /// while its marker entry stays for recovery, and its note with it, to
+    /// name its session. It is never settled here.
     pub(crate) fn abandon_command(&self, claim: Pending) {
         if let Ok(_lock) = self.lock_marker() {
             let kept: Vec<String> = pending(&self.marker)
@@ -1364,7 +1381,6 @@ impl Controller {
                 .filter(|entry| entry != claim.generation())
                 .collect();
             let _ = commands::keep(&self.commands, &kept);
-            let _ = running::keep(&self.running, &kept);
         }
         drop(claim);
     }

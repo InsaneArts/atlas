@@ -237,7 +237,12 @@ fn a_labelled_command_is_noted_while_it_runs_and_forgotten_once_it_stops() {
         other.running_notes().is_empty(),
         "an unknown outcome is no command running"
     );
-    assert!(!other.running.exists());
+    let left = other.pending_notes();
+    assert_eq!(left.len(), 1, "its note names its session until recovery");
+    assert_eq!(left[0].session.as_ref(), Some(agent.key()));
+    other.clear().unwrap();
+    assert!(other.pending_notes().is_empty());
+    assert!(!other.running.exists(), "recovered, its note goes");
 }
 
 #[test]
