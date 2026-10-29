@@ -34,8 +34,8 @@ public enum AgentMarkKind: Equatable, Sendable {
       ]
     case .terminal:
       [
-        "M104 168L144 128L272 256L144 384L104 344L192 256Z",
-        "M288 328H416V384H288Z",
+        "M 104 168L144 128L272 256L144 384L104 344L192 256Z",
+        "M 288 328H416V384H288Z",
       ]
     }
   }
