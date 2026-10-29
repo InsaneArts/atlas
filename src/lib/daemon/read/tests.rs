@@ -421,3 +421,29 @@ fn nothing_is_opened_or_sent_once_the_guard_refuses() {
     let reply = read(&digest, &places, uid(), &guard, &mut |_| true);
     assert_eq!(reply, refusal(), "nor is it hashed");
 }
+
+#[test]
+fn a_digest_stops_once_the_helper_may_no_longer_be_read() {
+    let (_dir, places) = home();
+    still(&places, "big.bin", &vec![9_u8; 3 * 1024 * 1024 + 5]);
+    settle();
+    let mut asked = request("big.bin", 0, 0);
+    asked.digest = true;
+    let checks = std::cell::Cell::new(0);
+    let guard = || {
+        checks.set(checks.get() + 1);
+        if checks.get() <= 3 {
+            Ok(())
+        } else {
+            Err(failure("on-console", "The helper is on the screen"))
+        }
+    };
+    let reply = read(&asked, &places, uid(), &guard, &mut |_| true);
+    assert_eq!(reply["code"], "on-console", "{reply}");
+    assert!(reply.get("sha256").is_none());
+    assert!(
+        checks.get() < 8,
+        "it stopped partway through: {}",
+        checks.get()
+    );
+}

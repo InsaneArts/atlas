@@ -195,7 +195,7 @@ fn served(
 
     if request.digest {
         guard().map_err(Stop::Guard)?;
-        reply["sha256"] = json!(digest(&file, identity.size)?);
+        reply["sha256"] = json!(digest(&file, identity.size, guard)?);
         reply["length"] = json!(0);
     } else {
         let length = request
@@ -437,17 +437,20 @@ fn send(
     Ok(())
 }
 
-/// SHA-256 of the first `size` bytes of `file`, which must be all of it.
-fn digest(file: &File, size: u64) -> Result<String, Refused> {
+/// SHA-256 of the first `size` bytes of `file`, which must be all of it,
+/// asking `guard` before each mebibyte, so a helper that came on screen is
+/// not read on to the end.
+fn digest(file: &File, size: u64, guard: &dyn Fn() -> Result<(), Value>) -> Result<String, Stop> {
     let mut hasher = Sha256::new();
     let mut buffer = vec![0_u8; 1024 * 1024];
     let mut read = 0;
     while read < size {
+        guard().map_err(Stop::Guard)?;
         let count = file
             .read_at(&mut buffer, read)
             .map_err(|_| Refused::Unreadable)?;
         if count == 0 {
-            return Err(Refused::Changing);
+            return Err(Refused::Changing.into());
         }
         let count = usize::try_from(size - read).map_or(count, |left| count.min(left));
         hasher.update(&buffer[..count]);
