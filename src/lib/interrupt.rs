@@ -2,7 +2,7 @@
 //! asked. What is under way (a pending change, or a step that reports how
 //! far it got) may finish within a grace, after which it is cut and left
 //! as it is: pending when unacknowledged.
-use crate::error::{Error, Result};
+use crate::error::{Code, Error, Result};
 use nix::sys::signal::Signal;
 use std::{
     future::Future,
@@ -428,7 +428,7 @@ fn cut_error(signal: Signal) -> Error {
 /// left.
 fn interrupted(signal: Signal, how: &str) -> Error {
     let name = signal.as_str();
-    Error::new("interrupted", format!("Stopped by {name}{how}")).with("signal", name)
+    Error::new(Code::Interrupted, format!("Stopped by {name}{how}")).with("signal", name)
 }
 
 #[cfg(test)]

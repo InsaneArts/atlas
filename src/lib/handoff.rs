@@ -6,7 +6,7 @@
 use crate::{
     client::Client,
     control::Ownership,
-    error::{Error, Result},
+    error::{Code, Error, Result},
     files::Token,
     host_session::{HostSession, Key},
     task::{Claims, Owned, State},
@@ -31,7 +31,7 @@ pub const ROOT: &str = "/Users/Shared/Atlas/Open";
 const KEEP: Duration = Duration::from_secs(7 * 24 * 60 * 60);
 
 fn problem(message: impl Into<String>) -> Error {
-    Error::new("io", message)
+    Error::new(Code::Io, message)
 }
 
 /// Whether `path` is a real folder (never a link) owned by this account and
@@ -73,7 +73,7 @@ fn root(helper: u32) -> Result<PathBuf> {
     let account = nix::unistd::User::from_uid(nix::unistd::Uid::from_raw(helper))
         .ok()
         .flatten()
-        .ok_or_else(|| Error::new("identity", "The helper account was not found"))?;
+        .ok_or_else(|| Error::new(Code::Identity, "The helper account was not found"))?;
 
     // The grant is set once; it is replaced only when it names someone else,
     // so the helper is never shut out of copies it is using.
@@ -185,7 +185,7 @@ done"#;
         .collect();
     if reply["exitCode"] != 0 || answers.len() != paths.len() {
         return Err(Error::new(
-            "input",
+            Code::Input,
             "The helper could not check what it can read",
         ));
     }
@@ -337,7 +337,7 @@ fn placement(targets: Vec<Target>, answers: Vec<bool>, running: &[Running]) -> R
                 if path.is_dir() && path.extension().is_none_or(|extension| extension != "app") {
                     // A whole folder could be any size; only apps and files are copied.
                     return Err(Error::new(
-                        "input",
+                        Code::Input,
                         format!(
                             "The helper cannot read {}. Atlas copies apps and files, not folders; share a project with atlas environment.",
                             path.display()
@@ -351,7 +351,7 @@ fn placement(targets: Vec<Target>, answers: Vec<bool>, running: &[Running]) -> R
                     app.executable.starts_with(ROOT) && names(&path).contains(&app.name)
                 }) {
                     return Err(Error::new(
-                        "input",
+                        Code::Input,
                         format!(
                             "An earlier copy of {0} is still running in the helper. Close it first: atlas close --app '{0}'",
                             earlier.name
@@ -495,7 +495,7 @@ impl Owner<'_> {
 fn copy(path: &Path, root: &Path, token: &Token) -> Result<PathBuf> {
     let name = path
         .file_name()
-        .ok_or_else(|| Error::new("input", format!("Cannot open {}", path.display())))?;
+        .ok_or_else(|| Error::new(Code::Input, format!("Cannot open {}", path.display())))?;
     let folder = root.join(token.as_str());
     fs::DirBuilder::new()
         .mode(0o700)

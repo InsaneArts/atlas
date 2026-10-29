@@ -1,7 +1,7 @@
 //! Protocol v1 requests the helper daemon accepts, validated before anything
 //! runs. Refusals keep their exact wording: clients and the live checks
 //! match on it.
-use crate::host_session::Key;
+use crate::{error::Code, host_session::Key};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use std::time::Duration;
@@ -176,12 +176,12 @@ pub enum Request {
 
 /// A refusal in the shape every Atlas failure has, so a reader needs one
 /// parser. Nothing here is of unknown outcome: the request never ran.
-pub fn failure(code: &str, error: impl Into<String>) -> Value {
+pub fn failure(code: Code, error: impl Into<String>) -> Value {
     json!({"ok": false, "code": code, "error": error.into(), "uncertain": false})
 }
 
 fn bad(error: impl Into<String>) -> Value {
-    failure("bad-request", error)
+    failure(Code::BadRequest, error)
 }
 
 /// Parse one request line, or the reply that refuses it.

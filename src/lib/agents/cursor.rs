@@ -2,7 +2,7 @@
 //! stay untouched; registration is independent of a running host session.
 use super::{ASK, Agent, Presence, Removal, connection_lock, problem};
 use crate::{
-    error::Result,
+    error::{Code, Result},
     host_session::{Host, HostSession},
 };
 use serde_json::{Value, json};
@@ -47,7 +47,7 @@ pub(super) fn presence() -> Presence {
         Ok(output) if output.status.success() => {
             Presence::Installed(String::from_utf8_lossy(&output.stdout).trim().into())
         }
-        Err(error) if error.code == "agents" => Presence::Silent(error.error),
+        Err(error) if error.code == Code::Agents => Presence::Silent(error.error),
         _ => Presence::Missing,
     }
 }

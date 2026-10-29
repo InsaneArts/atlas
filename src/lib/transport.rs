@@ -1,7 +1,7 @@
 //! One request to a helper-side socket and its reply: a JSON line in, event
 //! lines and a final reply out, within one deadline, from a peer the kernel
 //! says is the helper account.
-use crate::error::{Error, Result};
+use crate::error::{Code, Error, Result};
 use base64::{Engine, engine::general_purpose::STANDARD};
 use serde_json::{Value, json};
 use std::{path::PathBuf, time::Duration};
@@ -44,11 +44,11 @@ impl Transport {
         let deadline = started + self.timeout;
         let stream = timeout_at(deadline, UnixStream::connect(&self.path))
             .await
-            .map_err(|_| Error::new("transport", "Connection timed out"))?
+            .map_err(|_| Error::new(Code::Transport, "Connection timed out"))?
             .map_err(refused)?;
         if stream.peer_cred()?.uid() != self.peer_uid {
             return Err(Error::new(
-                "identity",
+                Code::Identity,
                 format!(
                     "{} is not served by the configured helper account",
                     self.path.display()
@@ -79,7 +79,7 @@ impl Transport {
 fn refused(error: std::io::Error) -> Error {
     if error.raw_os_error() == Some(libc::EPERM) {
         return Error::new(
-            "blocked",
+            Code::Blocked,
             "This shell may not connect to the helper (operation not permitted). An agent's \
              sandbox blocks local sockets: run atlas outside the sandbox. The helper itself \
              may be fine.",
@@ -93,7 +93,7 @@ impl Pending {
     pub async fn dispatch(mut self, request: &Value) -> Result<Self> {
         let mut payload = serde_json::to_vec(request)?;
         if payload.len() > MAX_REQUEST {
-            return Err(Error::new("protocol", "Request exceeds 1 MiB"));
+            return Err(Error::new(Code::Protocol, "Request exceeds 1 MiB"));
         }
 
         // The newline goes last, in the same write: JSON escapes any newline
@@ -115,7 +115,7 @@ impl Pending {
         Err(self
             .waiting_refusal()
             .await
-            .unwrap_or_else(|| Error::new("transport", failed)))
+            .unwrap_or_else(|| Error::new(Code::Transport, failed)))
     }
 
     /// A definite refusal the peer sent before it hung up, if one is waiting.
@@ -131,7 +131,7 @@ impl Pending {
         timeout_at(deadline, self.receive())
             .await
             .map_err(|_| {
-                Error::new("transport", "Helper exceeded the request deadline").uncertain()
+                Error::new(Code::Transport, "Helper exceeded the request deadline").uncertain()
             })?
             .map_err(Error::uncertain)
     }
@@ -147,7 +147,7 @@ impl Pending {
         timeout_at(deadline, self.receive_each(each))
             .await
             .map_err(|_| {
-                Error::new("transport", "Helper exceeded the request deadline").uncertain()
+                Error::new(Code::Transport, "Helper exceeded the request deadline").uncertain()
             })?
             .map_err(Error::uncertain)
     }
@@ -181,14 +181,14 @@ impl Pending {
             let count = self.stream.read(&mut buffer).await?;
             if count == 0 {
                 return Err(Error::new(
-                    "protocol",
+                    Code::Protocol,
                     "Connection ended without a final reply",
                 ));
             }
 
             total += count;
             if total > MAX_REPLY {
-                return Err(Error::new("protocol", "Reply exceeds 64 MiB"));
+                return Err(Error::new(Code::Protocol, "Reply exceeds 64 MiB"));
             }
 
             // Scan incoming bytes once; large PNG lines never rescan the prefix.
@@ -202,10 +202,10 @@ impl Pending {
 
                 let object = row
                     .as_object_mut()
-                    .ok_or_else(|| Error::new("protocol", "Reply must be a JSON object"))?;
+                    .ok_or_else(|| Error::new(Code::Protocol, "Reply must be a JSON object"))?;
                 if let Some(ok) = object.get("ok") {
                     if !ok.is_boolean() {
-                        return Err(Error::new("protocol", "Invalid success flag"));
+                        return Err(Error::new(Code::Protocol, "Invalid success flag"));
                     }
 
                     object.insert(
@@ -220,7 +220,7 @@ impl Pending {
                     || events >= MAX_REPLY_EVENTS
                 {
                     return Err(Error::new(
-                        "protocol",
+                        Code::Protocol,
                         "Malformed or excessive helper events",
                     ));
                 }
@@ -250,8 +250,8 @@ pub(crate) fn refusal(reply: &Value) -> Error {
     let error = Error::new(
         reply["code"]
             .as_str()
-            .and_then(crate::error::code)
-            .unwrap_or("daemon"),
+            .and_then(crate::error::Code::parse)
+            .unwrap_or(Code::Daemon),
         reply["error"]
             .as_str()
             .unwrap_or("The helper refused the request"),
@@ -386,6 +386,7 @@ pub fn with_output(mut reply: Value) -> Value {
 #[cfg(test)]
 mod tests {
     use super::{OUTPUT_LIMIT, OutputError, Transport, accepted, refused, run_output, with_output};
+    use crate::error::Code;
     use base64::{Engine, engine::general_purpose::STANDARD};
     use serde_json::json;
 
@@ -434,7 +435,7 @@ mod tests {
 
         assert_eq!(
             (refused.code, refused.error.as_str()),
-            ("protocol", "Request exceeds 1 MiB")
+            (Code::Protocol, "Request exceeds 1 MiB")
         );
         assert!(!refused.uncertain, "nothing was sent");
     }
@@ -448,7 +449,7 @@ mod tests {
             while let Ok((stream, _)) = listener.accept().await {
                 crate::native::endpoint::turn_away(
                     stream,
-                    &crate::daemon::protocol::failure("busy", "Too many requests"),
+                    &crate::daemon::protocol::failure(Code::Busy, "Too many requests"),
                 );
             }
         });
@@ -464,7 +465,7 @@ mod tests {
 
         assert_eq!(
             (refused.code, refused.error.as_str()),
-            ("busy", "Too many requests")
+            (Code::Busy, "Too many requests")
         );
         assert!(!refused.uncertain, "nothing ran");
     }
@@ -533,12 +534,12 @@ mod tests {
         let refused = super::refusal(
             &json!({"ok": false, "code": "bad-request", "error": "no", "uncertain": false}),
         );
-        assert_eq!((refused.code, refused.uncertain), ("bad-request", false));
+        assert_eq!((refused.code, refused.uncertain), (Code::BadRequest, false));
 
         let unknown = super::refusal(
             &json!({"ok": false, "code": "something-new", "error": "?", "uncertain": true}),
         );
-        assert_eq!((unknown.code, unknown.uncertain), ("daemon", true));
+        assert_eq!((unknown.code, unknown.uncertain), (Code::Daemon, true));
     }
 
     #[test]

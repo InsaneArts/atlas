@@ -4,7 +4,7 @@
 //! process that reused its PID.
 use super::Pending;
 use crate::{
-    error::{Error, Result},
+    error::{Code, Error, Result},
     files::token,
     process::Start,
 };
@@ -95,7 +95,7 @@ pub(super) fn publish_executor_with(
     write: impl FnOnce(&mut File, &[u8]) -> std::io::Result<()>,
 ) -> Result<()> {
     let Some(directory) = live.parent() else {
-        return Err(Error::new("state", "A claim needs a folder"));
+        return Err(Error::new(Code::State, "A claim needs a folder"));
     };
     let path = live.with_extension("executor.live");
     let temporary = live.with_extension(format!("{EXECUTOR_WRITING}{}", token()));

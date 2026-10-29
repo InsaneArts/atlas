@@ -8,7 +8,7 @@ use super::{
 use crate::{
     actions::Expect,
     client::{Check, Client, Verified},
-    error::{Error, Result},
+    error::{Code, Error, Result},
     native::windows::Window,
 };
 use serde_json::Value;
@@ -67,7 +67,7 @@ impl Expected {
             (Some(app), None) => Place::App(app),
             (None, None) if field.is_some() => {
                 return Err(Error::new(
-                    "usage",
+                    Code::Usage,
                     "--field needs the app it is in: add --app NAME or --window NUMBER",
                 ));
             }
@@ -115,7 +115,7 @@ pub(super) fn window_owner(listed: &[Window], number: i64) -> Result<&Window> {
         .find(|window| window.number == number && window.is_apps())
         .ok_or_else(|| {
             Error::new(
-                "windows",
+                Code::Windows,
                 format!("No window {number} is on screen; run atlas windows to see their numbers"),
             )
         })
@@ -129,7 +129,7 @@ pub(super) fn other_app(window: &Window, app: &Target) -> Error {
         Target::Pid(pid) => format!("process {pid}"),
     };
     Error::new(
-        "usage",
+        Code::Usage,
         format!(
             "Window {} is {owner}'s, not {named}'s: name one app, or leave out --app",
             window.number

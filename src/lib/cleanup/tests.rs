@@ -5,7 +5,10 @@ use crate::{
     host_session::{Host, HostSession},
     task::{Claims, store::Store as Tasks},
 };
-use crate::{error::Error, task::record::CleanupState};
+use crate::{
+    error::{Code, Error},
+    task::record::CleanupState,
+};
 use run::{Hands, Quitted};
 use scope::Adopter;
 use std::{
@@ -180,7 +183,7 @@ impl Hands for Fake {
 
     async fn jobs_of(&self, _: &Key, task: Option<&Key>) -> Result<Vec<plan::Job>> {
         if self.unlisted.get() {
-            return Err(Error::new("transport", "The helper did not answer"));
+            return Err(Error::new(Code::Transport, "The helper did not answer"));
         }
         Ok(self
             .daemon_jobs
@@ -601,7 +604,7 @@ async fn an_uncertain_step_ends_the_run_and_is_never_taken_for_a_failure() {
     let fake = Fake::at(&place.root);
     fake.undo.borrow_mut().insert(
         newer.clone(),
-        Err(Error::new("transport", "The reply was lost").uncertain()),
+        Err(Error::new(Code::Transport, "The reply was lost").uncertain()),
     );
 
     let reply = place.apply(&fake, &own(&key)).await;
@@ -1087,7 +1090,7 @@ fn a_key_that_names_no_record_is_said_and_no_session_is_a_usage_error() {
         Loaded::of(&place.output, &scope)
             .err()
             .map(|error| error.code),
-        Some("input")
+        Some(Code::Input)
     );
 
     let directory = tempfile::tempdir().unwrap();
@@ -1677,8 +1680,10 @@ async fn a_job_step_says_what_left_and_why_it_could_not_stop() {
     );
     fake.job_stops.borrow_mut().insert(
         foreign.to_string(),
-        Err(Error::new("job", "Part of the job runs as another account")
-            .with("reason", "other-account")),
+        Err(
+            Error::new(Code::Job, "Part of the job runs as another account")
+                .with("reason", "other-account"),
+        ),
     );
 
     let reply = place.apply(&fake, &own(&key)).await;
@@ -1707,7 +1712,10 @@ async fn a_job_whose_helper_cannot_be_reached_is_blocked_and_a_lost_stop_is_unce
     let fake = Fake::at(&place.root);
     fake.job_stops.borrow_mut().insert(
         unreachable.to_string(),
-        Err(Error::new("daemon", "The helper is running an older Atlas")),
+        Err(Error::new(
+            Code::Daemon,
+            "The helper is running an older Atlas",
+        )),
     );
     let reply = place.apply(&fake, &own(&key)).await;
     assert_eq!(reply["state"], "blocked", "{reply}");
@@ -1719,7 +1727,7 @@ async fn a_job_whose_helper_cannot_be_reached_is_blocked_and_a_lost_stop_is_unce
     let fake = Fake::at(&place.root);
     fake.job_stops.borrow_mut().insert(
         lost.to_string(),
-        Err(Error::new("transport", "Helper exceeded the request deadline").uncertain()),
+        Err(Error::new(Code::Transport, "Helper exceeded the request deadline").uncertain()),
     );
     let reply = place.apply(&fake, &own(&key)).await;
     assert_eq!(reply["state"], "uncertain", "{reply}");

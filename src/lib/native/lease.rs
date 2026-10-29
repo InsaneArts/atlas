@@ -1,6 +1,6 @@
 //! Ownership is independent of the event engine, so cancellation never queues
 //! behind a drag, text insertion or wait. Posting holds this gate briefly.
-use crate::error::{Error, Holder, Result};
+use crate::error::{Code, Error, Holder, Result};
 use std::sync::{Arc, Mutex, MutexGuard};
 use std::time::Instant;
 
@@ -57,14 +57,14 @@ impl State {
                 self.cancelled = None;
                 // The person's stop says so, to the agent it cut off.
                 return Err(if stopped {
-                    Error::new("stopped", crate::error::STOPPED)
+                    Error::stopped()
                 } else {
-                    Error::new("cancelled", "Native control was stopped")
+                    Error::new(Code::Cancelled, "Native control was stopped")
                 });
             }
 
             return Err(Error::new(
-                "lease-lost",
+                Code::LeaseLost,
                 "Native control was released or expired",
             ));
         }
@@ -77,7 +77,7 @@ impl Gate {
     fn lock(&self) -> Result<MutexGuard<'_, State>> {
         self.0
             .lock()
-            .map_err(|_| Error::new("native", "Input ownership failed"))
+            .map_err(|_| Error::new(Code::Native, "Input ownership failed"))
     }
 
     pub fn active(&self) -> Result<bool> {
@@ -103,19 +103,19 @@ impl Gate {
         state.expire();
 
         if state.held && who == Who::Agent && !state.closed {
-            return Err(Error::new("stopped", crate::error::STOPPED));
+            return Err(Error::stopped());
         }
 
         // An agent finding the person in control is told to wait for them.
         if !state.closed && state.owner.is_some() && state.person && who == Who::Agent {
             return Err(
-                Error::new("busy", crate::error::PERSON_HAS_CONTROL).held_by(Holder::Person)
+                Error::new(Code::Busy, crate::error::PERSON_HAS_CONTROL).held_by(Holder::Person)
             );
         }
 
         if state.closed || state.owner.is_some() {
             let error = Error::new(
-                "busy",
+                Code::Busy,
                 "The native input service is unavailable or already controlled",
             );
             return Err(match (state.closed, state.person) {
@@ -127,7 +127,7 @@ impl Gate {
 
         // Owners are `files::token()`s: two hexadecimal digits a byte.
         if crate::files::Token::parse(owner).is_none() {
-            return Err(Error::new("input", "Invalid native owner token"));
+            return Err(Error::new(Code::Input, "Invalid native owner token"));
         }
 
         state.owner = Some(owner.to_owned());
@@ -167,7 +167,7 @@ impl Gate {
             && state.previous.as_deref() != Some(owner)
         {
             return Err(Error::new(
-                "lease-lost",
+                Code::LeaseLost,
                 "This token cannot release another controller",
             ));
         }
@@ -245,7 +245,7 @@ mod tests {
     }
 
     fn code<T>(result: Result<T>) -> &'static str {
-        result.err().map_or("ok", |error| error.code)
+        result.err().map_or("ok", |error| error.code.as_str())
     }
 
     #[test]
@@ -277,7 +277,7 @@ mod tests {
         };
         assert_eq!(
             said(Who::Agent),
-            Some(("busy", crate::error::PERSON_HAS_CONTROL.to_owned()))
+            Some((Code::Busy, crate::error::PERSON_HAS_CONTROL.to_owned()))
         );
         let holder = |gate: &Arc<Gate>, who| gate.acquire(&owner('b'), who).err()?.holder;
         assert_eq!(holder(&gate, Who::Agent), Some(Holder::Person));

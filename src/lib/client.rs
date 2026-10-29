@@ -5,7 +5,7 @@
 //! screenshots and activity log in the private output folder.
 use crate::{
     actions::{self, Expect},
-    activity_log::{self, Op, Row, Step},
+    activity_log::{self, Failure, Op, Row, Step},
     config::Config,
     control::{Beside, Controller, Ownership, SharedLease},
     daemon::protocol::{
@@ -14,7 +14,7 @@ use crate::{
     },
     digest::file_sha256,
     doing::Doing,
-    error::{Error, Holder, Result},
+    error::{Code, Error, Holder, Result},
     host_session::HostSession,
     last_capture,
     session::{
@@ -72,13 +72,13 @@ fn cropped(reply: &Value, crop: Option<&Crop>, display: &Display) -> Result<Opti
         (None, None) => return Ok(None),
         (None, Some(_)) => {
             return Err(Error::new(
-                "protocol",
+                Code::Protocol,
                 "The helper sent a crop that was not asked for",
             ));
         }
         (Some(_), None) => {
             return Err(Error::new(
-                "daemon",
+                Code::Daemon,
                 "The helper is running an older Atlas that cannot crop screenshots; run atlas \
                  restart, then try again",
             ));
@@ -86,7 +86,7 @@ fn cropped(reply: &Value, crop: Option<&Crop>, display: &Display) -> Result<Opti
         (Some(crop), Some(sent)) => (crop, sent),
     };
 
-    let malformed = |what: &str| Error::new("protocol", format!("The helper sent {what}"));
+    let malformed = |what: &str| Error::new(Code::Protocol, format!("The helper sent {what}"));
     let region: Region = serde_json::from_value(sent.clone())
         .map_err(|_| malformed("a crop that could not be read"))?;
     let (left, top) = (i64::from(region.x), i64::from(region.y));
@@ -323,7 +323,7 @@ fn shared_folder(folder: &Path) -> Result<()> {
     let open = metadata.uid() == 0 && metadata.mode() & 0o022 != 0;
     if !metadata.file_type().is_dir() || foreign || open {
         return Err(Error::new(
-            "install",
+            Code::Install,
             format!(
                 "{} belongs to another account, or others can change it. Atlas is set up for \
                  one person per Mac; if no one else uses it, remove the folder (an \
@@ -386,9 +386,9 @@ impl Client {
             return Ok(json!({ "ok": true, "path": target, "alreadyInstalled": true }));
         }
 
-        let parent = target
-            .parent()
-            .ok_or_else(|| Error::new("config", "Shared executable needs a parent directory"))?;
+        let parent = target.parent().ok_or_else(|| {
+            Error::new(Code::Config, "Shared executable needs a parent directory")
+        })?;
         fs::create_dir_all(parent)?;
 
         // Atlas.app's executable is sealed with its bundle: a copy would
@@ -397,7 +397,7 @@ impl Client {
         if crate::update::app_of(&source).is_some() {
             if !crate::update::reachable_by_others(&source) {
                 return Err(Error::new(
-                    "install",
+                    Code::Install,
                     "The helper account cannot reach Atlas.app here; install it in /Applications",
                 ));
             }
@@ -481,7 +481,7 @@ impl Client {
             || metadata.mode() & 0o077 != 0
         {
             return Err(Error::new(
-                "config",
+                Code::Config,
                 format!(
                     "Output directory {} must be a private (0700) directory you own",
                     path.display()
@@ -530,7 +530,7 @@ impl Client {
         let reply = self.transport.call(&request).await?;
         if reply["ok"] != true || reply["exitCode"] != 0 || reply["timedOut"] != false {
             return Err(Error::new(
-                "identity",
+                Code::Identity,
                 format!(
                     "The helper cannot run the shared Atlas command at {}. Run atlas \
                      install.",
@@ -540,7 +540,7 @@ impl Client {
         }
 
         let output = run_output(&reply, 4096)
-            .map_err(|_| Error::new("identity", "Malformed or oversized identity output"))?;
+            .map_err(|_| Error::new(Code::Identity, "Malformed or oversized identity output"))?;
 
         Ok(serde_json::from_slice(&output)?)
     }
@@ -567,13 +567,13 @@ impl Client {
     ) -> Result<(Frame, Option<Cropped>)> {
         let maximum = size.longest();
         if maximum.is_some_and(|m| m == 0 || m > 8192) {
-            return Err(Error::new("input", "Maximum dimension must be 1–8192"));
+            return Err(Error::new(Code::Input, "Maximum dimension must be 1–8192"));
         }
 
         let before = self.identity().await?;
         if expected.is_some_and(|epoch| *epoch != before.epoch) {
             return Err(Error::new(
-                "session-changed",
+                Code::SessionChanged,
                 "The helper changed since the app was found; look again",
             ));
         }
@@ -586,7 +586,7 @@ impl Client {
                 let display = &before.epoch.display;
                 if !meets(region, display) {
                     return Err(Error::new(
-                        "usage",
+                        Code::Usage,
                         format!(
                             "The region lies outside the display, which is {} × {} points",
                             display.width, display.height
@@ -604,7 +604,7 @@ impl Client {
             }
 
             return Err(Error::new(
-                "capture",
+                Code::Capture,
                 reply["error"].as_str().unwrap_or("Capture failed"),
             ));
         }
@@ -613,16 +613,16 @@ impl Client {
         let at = Instant::now();
         let encoded = reply["png"]
             .as_str()
-            .ok_or_else(|| Error::new("capture", "Missing PNG"))?;
+            .ok_or_else(|| Error::new(Code::Capture, "Missing PNG"))?;
         let png = STANDARD
             .decode(encoded)
-            .map_err(|_| Error::new("capture", "Invalid PNG encoding"))?;
+            .map_err(|_| Error::new(Code::Capture, "Invalid PNG encoding"))?;
         let (width, height) = png_dimensions(&png)?;
         if reply["width"].as_u64() != Some(width.into())
             || reply["height"].as_u64() != Some(height.into())
         {
             return Err(Error::new(
-                "capture",
+                Code::Capture,
                 "PNG dimensions disagree with metadata",
             ));
         }
@@ -630,7 +630,7 @@ impl Client {
         let after = self.identity().await?;
         if before.epoch != after.epoch {
             return Err(Error::new(
-                "session-changed",
+                Code::SessionChanged,
                 "Session changed during capture; observe again",
             ));
         }
@@ -780,7 +780,7 @@ impl Client {
         loop {
             match self.acquire_input(owner, epoch).await {
                 Err(error)
-                    if error.code == "busy"
+                    if error.code == Code::Busy
                         && error.holder == Some(Holder::Agent)
                         && !error.uncertain =>
                 {
@@ -795,7 +795,7 @@ impl Client {
                     // The service may not have heard of a Stop the person's
                     // side has saved.
                     if self.stop_marked() {
-                        return Err(Error::new("stopped", crate::error::STOPPED));
+                        return Err(Error::stopped());
                     }
                     self.controller.interrupt().check()?;
                 }
@@ -863,7 +863,9 @@ impl Client {
                 (Some(json!(jobs)), warning)
             }
             Ok(reply) if reply["code"] == "bad-request" => (None, None),
-            Err(error) if error.code == "io" && !self.config.socket_path.exists() => (None, None),
+            Err(error) if error.code == Code::Io && !self.config.socket_path.exists() => {
+                (None, None)
+            }
             _ => (
                 None,
                 Some("Atlas could not reach the helper to end its background jobs".to_owned()),
@@ -875,7 +877,7 @@ impl Client {
     async fn hold_input(&self, on: bool) -> Result<Value> {
         if !on && self.actor != Actor::Viewer {
             return Err(Error::new(
-                "stopped",
+                Code::Stopped,
                 "Only the person resumes agents, from the Atlas menu bar",
             ));
         }
@@ -896,7 +898,7 @@ impl Client {
                     Ok(false)
                 ) {
                     return Err(Error::new(
-                        "stopped",
+                        Code::Stopped,
                         format!("{why} Recover input before agents can resume."),
                     ));
                 }
@@ -970,7 +972,7 @@ impl Client {
         let marked = self.stop_marked();
         let hello = self.input_transport().call(&json!({"op": "hello"})).await;
         if marked || hello.is_ok_and(|hello| hello["held"] == true) {
-            return Err(Error::new("stopped", crate::error::STOPPED));
+            return Err(Error::stopped());
         }
 
         Ok(())
@@ -987,15 +989,15 @@ impl Client {
         if result["ok"] != true {
             let error = Error::new(
                 match result["code"].as_str() {
-                    Some("busy") => "busy",
-                    Some("lease-lost") => "lease-lost",
-                    Some("cancelled") => "cancelled",
-                    Some("stopped") => "stopped",
-                    Some("identity") => "identity",
-                    Some("session-changed") => "session-changed",
-                    Some("permission") => "permission",
-                    Some("focus-changed") => "focus-changed",
-                    _ => "native",
+                    Some("busy") => Code::Busy,
+                    Some("lease-lost") => Code::LeaseLost,
+                    Some("cancelled") => Code::Cancelled,
+                    Some("stopped") => Code::Stopped,
+                    Some("identity") => Code::Identity,
+                    Some("session-changed") => Code::SessionChanged,
+                    Some("permission") => Code::Permission,
+                    Some("focus-changed") => Code::FocusChanged,
+                    _ => Code::Native,
                 },
                 result["error"]
                     .as_str()
@@ -1076,7 +1078,7 @@ impl Client {
     async fn repin(&self, session: Session) -> Result<Session> {
         let unavailable = || {
             Error::new(
-                "startup",
+                Code::Startup,
                 "The native input service is unavailable; run atlas start-input",
             )
         };
@@ -1102,7 +1104,7 @@ impl Client {
 
         if !same_size {
             return Err(Error::new(
-                "session-changed",
+                Code::SessionChanged,
                 "The helper's display changed size. Take a new screenshot, then try again.",
             ));
         }
@@ -1158,7 +1160,7 @@ impl Client {
 
         if expected.is_some_and(|(epoch, _)| *epoch != session.epoch) {
             return Err(Error::new(
-                "session-changed",
+                Code::SessionChanged,
                 "The helper changed since this frame",
             ));
         }
@@ -1173,7 +1175,7 @@ impl Client {
         // The service whose capability was read is the one that checks.
         if expect.is_some() && session.epoch.input_pid != input_pid {
             return Err(Error::new(
-                "session-changed",
+                Code::SessionChanged,
                 "The helper's input service changed meanwhile",
             ));
         }
@@ -1245,16 +1247,16 @@ impl Client {
             }
             if let Err(cleanup) = cleanup {
                 // A release the stop cut short says so, as its input may.
-                if cleanup.code == "interrupted" {
+                if cleanup.code == Code::Interrupted {
                     return Err(cleanup);
                 }
                 let error = match result {
                     Ok(_) => Error::new(
-                        "uncertain",
+                        Code::Uncertain,
                         "Input finished but native release was not confirmed",
                     ),
                     Err(error) => Error::new(
-                        "uncertain",
+                        Code::Uncertain,
                         format!("{} Native release was not confirmed either.", error.error),
                     ),
                 };
@@ -1318,7 +1320,7 @@ impl Client {
     /// [`Client::inspect`] bounded by `limit`. A read changes nothing, so
     /// its failure is never uncertain.
     pub(crate) async fn inspect_within(&self, argv: Vec<String>, limit: Duration) -> Result<Value> {
-        self.run_pending(argv, limit).await.map_err(certain)
+        self.run_pending(argv, limit).await.map_err(Error::certain)
     }
 
     /// [`Client::inspect_within`] in the helper session `verified` names,
@@ -1336,7 +1338,9 @@ impl Client {
             self.identity().await?;
         }
 
-        self.run_verified(argv, limit, pin).await.map_err(certain)
+        self.run_verified(argv, limit, pin)
+            .await
+            .map_err(Error::certain)
     }
 
     /// [`Client::inspect_within`] with a run's usual limit, under controller
@@ -1394,7 +1398,7 @@ impl Client {
             self.identity().await?;
             self.listed_apps(json!({"op": "apps"})).await
         };
-        read.await.map_err(certain)
+        read.await.map_err(Error::certain)
     }
 
     /// [`Client::apps`] in the helper session `verified` names, as
@@ -1407,7 +1411,7 @@ impl Client {
 
         self.listed_apps(json!({"op": "apps", "session": pin}))
             .await
-            .map_err(certain)
+            .map_err(Error::certain)
     }
 
     /// The app list `request` asks the helper daemon for, once the helper
@@ -1438,7 +1442,7 @@ impl Client {
         let status = self.status().await;
         let session = require_hidden(&status, self.config.helper_uid)?;
         if !has_capability(&status["daemon"], capability) {
-            return Err(Error::new("daemon", older));
+            return Err(Error::new(Code::Daemon, older));
         }
         let pinned = has_capability(&status["daemon"], SESSION_PIN);
         Ok(Verified { session, pinned })
@@ -1513,7 +1517,7 @@ impl Client {
 
             if !self.identity().await?.input {
                 return Err(Error::new(
-                    "startup",
+                    Code::Startup,
                     "Native input did not become ready after reset",
                 ));
             }
@@ -1553,14 +1557,14 @@ impl Client {
 
         if !status["installedBuild"].is_string() {
             return Err(Error::new(
-                "startup",
+                Code::Startup,
                 "The installed executable cannot be read; refusing to replace the running service",
             ));
         }
 
         if !has_capability(native, SHUTDOWN) {
             return Err(Error::new(
-                "startup",
+                Code::Startup,
                 "The running input service predates authenticated shutdown and cannot be \
                  replaced automatically. Stop that process in the helper account (or log the \
                  helper out and in), then run atlas start-input.",
@@ -1569,7 +1573,7 @@ impl Client {
 
         if native["controlActive"] != false {
             return Err(Error::new(
-                "busy",
+                Code::Busy,
                 "The input service has an active controller; release it before upgrading",
             ));
         }
@@ -1578,7 +1582,9 @@ impl Client {
             .as_u64()
             .and_then(|pid| u32::try_from(pid).ok())
             .filter(|pid| *pid > 1)
-            .ok_or_else(|| Error::new("startup", "The running input service has no valid PID"))?;
+            .ok_or_else(|| {
+                Error::new(Code::Startup, "The running input service has no valid PID")
+            })?;
         let generation = self.controller.quarantine()?;
 
         if let Err(error) = self.stop_input(previous).await {
@@ -1592,7 +1598,7 @@ impl Client {
         let state = self.status().await;
         if !input_current(&state, self.config.helper_uid, pid) {
             return Err(Error::new(
-                "uncertain",
+                Code::Uncertain,
                 "The replacement input service is not confirmed current with nothing held",
             )
             .uncertain());
@@ -1642,7 +1648,7 @@ impl Client {
 
             if Instant::now() >= deadline {
                 return Err(Error::new(
-                    "uncertain",
+                    Code::Uncertain,
                     "The previous input service did not confirm exit",
                 )
                 .uncertain());
@@ -1683,7 +1689,7 @@ impl Client {
             .filter(|pid| *pid > 1)
             .ok_or_else(|| {
                 Error::new(
-                    "startup",
+                    Code::Startup,
                     "The helper could not launch the Rust input service",
                 )
                 .uncertain()
@@ -1701,7 +1707,7 @@ impl Client {
 
             if Instant::now() >= deadline {
                 return Err(Error::new(
-                    "startup",
+                    Code::Startup,
                     "Input service did not become ready. Check ~/Library/Logs/Atlas-input.log \
                      in the helper account and confirm that identity_probe points to the current Rust binary.",
                 )
@@ -1758,9 +1764,11 @@ impl Client {
         let (input_pid, _) = self.ensure_input(&initial).await?;
         let session = self.identity().await?;
         if session.epoch.input_pid != input_pid {
-            return Err(
-                Error::new("uncertain", "The input service changed while recovering").uncertain(),
-            );
+            return Err(Error::new(
+                Code::Uncertain,
+                "The input service changed while recovering",
+            )
+            .uncertain());
         }
 
         let cleanup = self
@@ -1768,7 +1776,7 @@ impl Client {
             .await?;
         if cleanup["released"] != true {
             return Err(
-                Error::new("uncertain", "Native input cleanup was not confirmed").uncertain(),
+                Error::new(Code::Uncertain, "Native input cleanup was not confirmed").uncertain(),
             );
         }
 
@@ -1827,7 +1835,7 @@ impl Client {
             .await
             .map_err(|_| {
                 Error::new(
-                    "restart",
+                    Code::Restart,
                     "Restart acknowledged, but no new hidden helper was confirmed",
                 )
                 .uncertain()
@@ -1893,7 +1901,7 @@ impl Client {
 
         if force {
             return Err(Error::new(
-                "logout",
+                Code::Logout,
                 "macOS took the request but the helper is still logged in",
             )
             .uncertain());
@@ -1911,7 +1919,7 @@ impl Client {
         };
 
         Err(Error::new(
-            "logout-held",
+            Code::LogoutHeld,
             format!("The helper has not logged out yet; an app may be asking to save.{still}"),
         )
         .uncertain())
@@ -1972,7 +1980,7 @@ impl Client {
             && (self.config.input_socket.with_extension("stopped").exists()
                 || self.controller.stop_noted())
         {
-            return Err(Error::new("stopped", crate::error::STOPPED));
+            return Err(Error::stopped());
         }
 
         // Connect without holding the lease. Release can cancel slow preflight.
@@ -2007,7 +2015,7 @@ impl Client {
 
         if observed_at.is_some_and(|at| at.elapsed() >= Duration::from_secs(8)) {
             return Err(Error::new(
-                "stale-frame",
+                Code::StaleFrame,
                 "The observation expired before dispatch",
             ));
         }
@@ -2067,7 +2075,7 @@ impl Client {
                 biased;
                 reply = finishing => reply,
                 () = self.stopped_while_running() => {
-                    Err(Error::new("stopped", crate::error::STOPPED).uncertain())
+                    Err(Error::stopped().uncertain())
                 }
                 signal = cut => Err(interrupt.cut_short(signal)),
             };
@@ -2184,7 +2192,7 @@ impl Client {
         let (client, request, reply) = (self.clone(), request.clone(), reply.clone());
         tokio::task::spawn_blocking(move || client.write_row(&request, &reply, elapsed, step))
             .await
-            .map_err(|_| Error::new("state", "The activity row could not be written"))?
+            .map_err(|_| Error::new(Code::State, "The activity row could not be written"))?
     }
 
     /// [`Client::record_start`] on this thread, for tests.
@@ -2243,7 +2251,7 @@ impl Client {
             && !ok
             && let Some(code) = failure_code(reply)
         {
-            if code == "focus-changed" {
+            if code == Failure::Code(Code::FocusChanged) {
                 let sent = reply["performed"]
                     .as_u64()
                     .is_some_and(|performed| performed > 0);
@@ -2319,7 +2327,7 @@ fn expectation(native: &Value, check: Option<Check>) -> Result<Option<Expect>> {
             Ok(Some(expect))
         }
         Some(Check::Required(_)) => Err(Error::new(
-            "startup",
+            Code::Startup,
             "The helper's input service is from an older Atlas: run atlas start-input, then try again",
         )),
     }
@@ -2342,9 +2350,9 @@ fn capture_name(saved: &Value) -> Option<&str> {
 /// The code a failure is recorded with: `uncertain` when it may have
 /// finished in the helper all the same, so the activity never says it
 /// didn't happen.
-fn recorded_code(error: &Error) -> &'static str {
+fn recorded_code(error: &Error) -> Code {
     if error.uncertain {
-        "uncertain"
+        Code::Uncertain
     } else {
         error.code
     }
@@ -2353,20 +2361,20 @@ fn recorded_code(error: &Error) -> &'static str {
 /// Why a mutation failed, as a fixed code: the helper's error code, or
 /// `timeout` and `exit` for a command that ran too long or failed. Only a
 /// short lowercase code is kept, so no message text reaches the log.
-fn failure_code(reply: &Value) -> Option<String> {
+fn failure_code(reply: &Value) -> Option<Failure> {
     if let Some(code) = reply["code"].as_str() {
         let fixed = !code.is_empty()
             && code.len() <= 32
             && code
                 .bytes()
                 .all(|byte| byte.is_ascii_lowercase() || byte == b'-');
-        return fixed.then(|| code.to_owned());
+        return fixed.then(|| Failure::parse(code));
     }
     if reply["timedOut"] == true {
-        return Some("timeout".into());
+        return Some(Failure::Timeout);
     }
     (!reply["signal"].is_null() || reply["exitCode"].as_i64().is_some_and(|code| code != 0))
-        .then(|| "exit".into())
+        .then_some(Failure::Exit)
 }
 
 /// Why a focus refusal in `reply` was refused, when it is one of the input
@@ -2439,7 +2447,11 @@ pub fn validate_completion(request: &Value, reply: &Value) -> Result<()> {
     if valid {
         Ok(())
     } else {
-        Err(Error::new("protocol", "Helper did not confirm operation completion").uncertain())
+        Err(Error::new(
+            Code::Protocol,
+            "Helper did not confirm operation completion",
+        )
+        .uncertain())
     }
 }
 
@@ -2467,29 +2479,20 @@ fn job_started(request: &Value, job: &JobView) -> bool {
 fn run_request(argv: Vec<String>, timeout: Duration) -> Result<Value> {
     if argv.is_empty() || argv[0].is_empty() || argv.iter().any(|a| a.contains('\0')) {
         return Err(Error::new(
-            "input",
+            Code::Input,
             "Provide a command and arguments after run --",
         ));
     }
 
     if timeout.is_zero() || timeout > RUN_TIMEOUT_MAX {
         return Err(Error::new(
-            "usage",
+            Code::Usage,
             "A command may run for 1 second to 10 minutes",
         ));
     }
 
     let timeout_ms = crate::time::ms(timeout);
     Ok(json!({"op": "run", "argv": argv, "timeoutMs": timeout_ms}))
-}
-
-/// `error` from something that only read: whatever it says, nothing in the
-/// helper may have changed.
-fn certain(error: Error) -> Error {
-    Error {
-        uncertain: false,
-        ..error
-    }
 }
 
 /// `reply` as an app list: accepted, with `apps` an array of objects, each
@@ -2509,7 +2512,7 @@ pub(crate) fn app_list(reply: Value) -> Result<Value> {
         Ok(reply)
     } else {
         Err(Error::new(
-            "protocol",
+            Code::Protocol,
             "The helper's list of running apps was malformed, so Atlas cannot tell what is running",
         ))
     }
@@ -2536,7 +2539,7 @@ fn listed_app(app: &Value) -> bool {
 }
 
 pub fn png_dimensions(png: &[u8]) -> Result<(u32, u32)> {
-    let invalid = || Error::new("capture", "Invalid PNG header or dimensions");
+    let invalid = || Error::new(Code::Capture, "Invalid PNG header or dimensions");
 
     if png.len() < 33 || &png[..16] != b"\x89PNG\r\n\x1a\n\0\0\0\rIHDR" {
         return Err(invalid());
@@ -2570,7 +2573,7 @@ fn require_accessibility(status: &Value) -> Result<()> {
         || status["inputService"]["accessibility"] == false
     {
         return Err(Error::new(
-            "permission",
+            Code::Permission,
             "The helper does not allow Atlas Accessibility yet, which input needs. In the \
              helper's System Settings › Privacy & Security › Accessibility, turn Atlas on \
              (atlas init guides this).",
@@ -3017,7 +3020,7 @@ mod tests {
     /// its own program. Any other refusal is the answer.
     fn once_free(acquire: impl Fn() -> Result<Ownership>) -> Result<Ownership> {
         let held = |error: &Error| {
-            error.code == "busy"
+            error.code == Code::Busy
                 && error.holder == Some(crate::error::Holder::Agent)
                 && !error.details.contains_key("running")
         };
@@ -3531,7 +3534,7 @@ mod tests {
                 .await
                 .expect("answered after one try")
                 .unwrap_err();
-            assert_eq!(error.code, reply["code"], "{reply}");
+            assert_eq!(error.code.as_str(), reply["code"], "{reply}");
         }
     }
 
@@ -4225,7 +4228,7 @@ mod tests {
             1
         );
 
-        let refused = Error::new("native", "refused");
+        let refused = Error::new(Code::Native, "refused");
         assert!(
             client
                 .pending_until_known(async { Err::<(), _>(refused) })
@@ -4237,7 +4240,7 @@ mod tests {
             "known outcomes clear"
         );
 
-        let lost = Error::new("transport", "reply lost").uncertain();
+        let lost = Error::new(Code::Transport, "reply lost").uncertain();
         assert!(
             client
                 .pending_until_known(async { Err::<(), _>(lost) })
@@ -4599,7 +4602,7 @@ mod tests {
         let started = Instant::now();
         loop {
             match other.controller.acquire_beside_commands() {
-                Err(error) if error.code == "uncertain" => break,
+                Err(error) if error.code == Code::Uncertain => break,
                 _ => {
                     assert!(started.elapsed() < Duration::from_secs(2), "never unknown");
                     tokio::time::sleep(Duration::from_millis(10)).await;
@@ -4704,7 +4707,7 @@ mod tests {
         let actions = json!([{"type": "key", "key": "a"}]);
         let beside = client.input(&actions, None, None).await.unwrap_err();
         assert!(
-            !["busy", "uncertain"].contains(&beside.code),
+            ![Code::Busy, Code::Uncertain].contains(&beside.code),
             "only the helper refuses it: {beside:?}"
         );
         running.controller.clear_if(&command).unwrap();
@@ -4995,7 +4998,7 @@ mod tests {
         let rows = crate::activity_log::recent(client.output_dir().unwrap(), 5);
         assert_eq!(rows.len(), 1);
         assert_eq!(rows[0].ok, Some(false));
-        assert_eq!(rows[0].code.as_deref(), Some("exit"));
+        assert_eq!(rows[0].code, Some(Failure::Exit));
     }
 
     fn display() -> Display {
@@ -5133,7 +5136,10 @@ mod tests {
 
         assert_eq!(
             (refused.code, refused.error.as_str()),
-            ("protocol", "The helper sent a crop that was not asked for")
+            (
+                Code::Protocol,
+                "The helper sent a crop that was not asked for"
+            )
         );
     }
 
@@ -5392,7 +5398,7 @@ mod tests {
         let failed = json!({"ok": false, "code": "apps", "uncertain": false,
             "error": "Running applications could not be listed"});
 
-        for (reply, code) in [(busy, "busy"), (failed, "apps")] {
+        for (reply, code) in [(busy, Code::Busy), (failed, Code::Apps)] {
             let error = app_list(reply).unwrap_err();
             assert_eq!((error.code, error.uncertain), (code, false));
         }
@@ -5419,7 +5425,7 @@ mod tests {
             let error = app_list(reply.clone()).unwrap_err();
             assert_eq!(
                 (error.code, error.uncertain),
-                ("protocol", false),
+                (Code::Protocol, false),
                 "{reply}"
             );
         }
@@ -5445,6 +5451,6 @@ mod tests {
         // The stand-in takes the request and hangs up without a reply.
         let error = helper.serve(client.apps(), |_| None).await.unwrap_err();
 
-        assert_eq!((error.code, error.uncertain), ("protocol", false));
+        assert_eq!((error.code, error.uncertain), (Code::Protocol, false));
     }
 }

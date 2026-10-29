@@ -1,6 +1,7 @@
 //! Views of what was done in the helper: input, typing, commands, opening,
 //! waiting and recovery.
 use super::{Rendered, advised_card, card, element_name, failed, style, text, with_sessions};
+use crate::error::Code;
 use serde_json::Value;
 
 /// An input action, said as done; a failure says how far it got.
@@ -52,7 +53,7 @@ pub fn typed(value: &Value) -> Rendered {
         );
         let shown = match value["code"].as_str() {
             Some(_) => advised_card(&message, value),
-            None => card(&message, Some("input"), value["uncertain"] == true),
+            None => card(&message, Some(Code::Input), value["uncertain"] == true),
         };
         return Rendered::err(with_sessions(shown, value));
     }

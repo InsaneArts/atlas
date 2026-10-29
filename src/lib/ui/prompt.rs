@@ -5,7 +5,7 @@
 //! a choice; Ctrl-C stops any question. Atlas never asks for a
 //! password: sudo and macOS ask in their own words.
 use super::interactive;
-use crate::error::{Error, Result};
+use crate::error::{Code, Error, Result};
 use console::style;
 use dialoguer::{Confirm, Input, Select, theme::ColorfulTheme};
 
@@ -25,14 +25,14 @@ fn needs_terminal(instead: &str) -> Error {
     };
 
     Error::new(
-        "terminal",
+        Code::Terminal,
         format!("This asks you a question, so run it in a terminal{instead}."),
     )
 }
 
 /// The person stopped at a question.
 pub fn cancelled() -> Error {
-    Error::new("cancelled", "Stopped.")
+    Error::new(Code::Cancelled, "Stopped.")
 }
 
 /// Keys pressed before the question appeared (a stray Return during a long

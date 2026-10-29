@@ -4,7 +4,7 @@
 //! reader never sees half of one; writers take the folder's lock, readers
 //! never do.
 use crate::{
-    error::{Error, Result},
+    error::{Code, Error, Result},
     files::{Durability, Held, Lock, Token, lock_within, own_folder, read_own, write_private_with},
     host_session::Key,
 };
@@ -164,7 +164,7 @@ impl<K: RecordName> RecordFolder<K> {
             .map_err(|error| Error::writing(&path, error))?;
         if !lock.metadata()?.is_file() {
             return Err(Error::new(
-                "state",
+                Code::State,
                 format!(
                     "The {} records' lock is not a plain file",
                     self.records.noun
@@ -174,7 +174,7 @@ impl<K: RecordName> RecordFolder<K> {
 
         lock_within(&lock, Lock::Exclusive, wait).map_err(|Held| {
             Error::new(
-                "busy",
+                Code::Busy,
                 format!(
                     "Another Atlas command is writing the {} records",
                     self.records.noun
@@ -204,7 +204,7 @@ impl<K: RecordName> RecordFolder<K> {
             Ok(())
         } else {
             Err(Error::new(
-                "state",
+                Code::State,
                 format!(
                     "{} is a link or not a folder of this account",
                     self.directory.display()

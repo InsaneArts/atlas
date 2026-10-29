@@ -12,7 +12,7 @@ use crate::{
     client::{Client, timestamp},
     config::home,
     control::Ownership,
-    error::{Error, Result},
+    error::{Code, Error, Result},
     files::write_private,
     native::windows::{Bounds, Screen, Shown, Window, frontmost_pid, unobstructed, visible_point},
     session::{Display, Epoch, require_hidden},
@@ -105,7 +105,7 @@ impl Record {
 }
 
 fn problem(message: impl Into<String>) -> Error {
-    Error::new("native", message)
+    Error::new(Code::Native, message)
 }
 
 fn record_path(uid: u32) -> Result<PathBuf> {
@@ -895,7 +895,7 @@ pub async fn verify(client: &Client, fixture: &Path) -> Result<Value> {
     // A development check: its test app is built from a checkout, never shipped.
     if !fixture.is_file() {
         return Err(Error::new(
-            "native",
+            Code::Native,
             format!(
                 "verify-native is a development check: it needs Atlas's test app at {}, built \
                  from tests/live/DesktopFixture.swift in a checkout.",
@@ -913,7 +913,7 @@ pub async fn verify(client: &Client, fixture: &Path) -> Result<Value> {
         .map(|session| session.epoch)
         .ok_or_else(|| {
             Error::new(
-                "permission",
+                Code::Permission,
                 "verify-native needs a hidden helper with ready input; see atlas doctor",
             )
         })?;

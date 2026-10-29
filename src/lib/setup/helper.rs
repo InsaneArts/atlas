@@ -6,7 +6,7 @@ use super::account_with_uid;
 use crate::{
     acl::Acl,
     digest::file_sha256,
-    error::{Error, Result},
+    error::{Code, Error, Result},
 };
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
@@ -97,7 +97,7 @@ impl Request {
 }
 
 fn problem(message: impl Into<String>) -> Error {
-    Error::new("setup", message)
+    Error::new(Code::Setup, message)
 }
 
 /// A refusal that changed nothing, as the worker reports it: `unchanged`

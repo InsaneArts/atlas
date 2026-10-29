@@ -33,7 +33,7 @@ use super::{
     run,
 };
 use crate::{
-    error::{Error, Result},
+    error::{Code, Error, Result},
     host_session::now_ms,
 };
 use base64::{Engine, engine::general_purpose::STANDARD};
@@ -195,7 +195,7 @@ impl Jobs {
                 tokio::task::spawn_blocking(move || answer(&jobs))
                     .await
                     .unwrap_or_else(|_| {
-                        failure("job", "The helper could not answer about its jobs")
+                        failure(Code::Job, "The helper could not answer about its jobs")
                     })
             }
         };
@@ -203,7 +203,7 @@ impl Jobs {
             JobRequest::Start { start, uid, .. } => {
                 if uid != self.uid {
                     return failure(
-                        "identity",
+                        Code::Identity,
                         "This helper daemon runs as another account than the one asked for",
                     );
                 }
@@ -234,7 +234,7 @@ impl Jobs {
         let prepared = match tokio::task::spawn_blocking(move || jobs.prepare(&asked)).await {
             Ok(Ok(prepared)) => prepared,
             Ok(Err(refusal)) => return refusal,
-            Err(_) => return failure("spawn-failed", "The job could not be prepared"),
+            Err(_) => return failure(Code::SpawnFailed, "The job could not be prepared"),
         };
         let id = prepared.record.id.clone();
         let reply = self.launch(prepared, &start).await;
@@ -246,7 +246,7 @@ impl Jobs {
     /// and log: the job, or the refusal.
     fn prepare(&self, start: &JobStart) -> std::result::Result<Prepared, Value> {
         let Some(program) = start.argv.first() else {
-            return Err(failure("spawn-failed", "No command to run"));
+            return Err(failure(Code::SpawnFailed, "No command to run"));
         };
         let home = run::home();
         let path = run::search_path(home.as_deref());
@@ -325,7 +325,7 @@ impl Jobs {
         if let Err(error) = created {
             state.store.forget(&record.id);
             return Err(failure(
-                "spawn-failed",
+                Code::SpawnFailed,
                 format!("The job's log could not be made: {error}"),
             ));
         }
@@ -379,7 +379,7 @@ impl Jobs {
             Ok(child) => child,
             Err(error) => {
                 self.forget(&record.id).await;
-                return failure("spawn-failed", format!("{program}: {error}"));
+                return failure(Code::SpawnFailed, format!("{program}: {error}"));
             }
         };
 
@@ -411,13 +411,13 @@ impl Jobs {
             let _ = tokio::time::timeout(REAP, child.wait()).await;
             self.forget(&record.id).await;
             return failure(
-                "spawn-failed",
+                Code::SpawnFailed,
                 "The job's process could not be observed or recorded",
             );
         };
         record = recorded;
         let Some(identity) = record.identity() else {
-            return failure("spawn-failed", "The job's process could not be observed");
+            return failure(Code::SpawnFailed, "The job's process could not be observed");
         };
 
         let go = match child.stdin.take() {
@@ -444,7 +444,7 @@ impl Jobs {
                 return match tokio::time::timeout(REAP, child.wait()).await {
                     Ok(_) => {
                         self.forget(&record.id).await;
-                        failure("spawn-failed", said)
+                        failure(Code::SpawnFailed, said)
                     }
                     Err(_) => {
                         let jobs = self.clone();
@@ -453,7 +453,7 @@ impl Jobs {
                         })
                         .await
                         .unwrap_or_else(|_| {
-                            failure("job", "The job's start could not be confirmed")
+                            failure(Code::Job, "The job's start could not be confirmed")
                         })
                     }
                 };
@@ -467,7 +467,7 @@ impl Jobs {
         let jobs = self.clone();
         tokio::task::spawn_blocking(move || jobs.running_now(record, child, lifetime, &identity))
             .await
-            .unwrap_or_else(|_| failure("job", "The job's start could not be confirmed"))
+            .unwrap_or_else(|_| failure(Code::Job, "The job's start could not be confirmed"))
     }
 
     /// The last step of a start: the job's leader checked, its record written
@@ -560,7 +560,7 @@ impl Jobs {
             .unwrap_or(false);
             if ended {
                 self.forget(&id).await;
-                return failure("spawn-failed", said);
+                return failure(Code::SpawnFailed, said);
             }
             if tokio::time::Instant::now() >= until {
                 break;
@@ -577,7 +577,7 @@ impl Jobs {
             unconfirmed(&record, &said)
         })
         .await
-        .unwrap_or_else(|_| failure("job", "The job's start could not be confirmed"))
+        .unwrap_or_else(|_| failure(Code::Job, "The job's start could not be confirmed"))
     }
 
     /// Keep `record`'s job, which may run, supervised but unconfirmed: its
@@ -814,7 +814,10 @@ impl Jobs {
             Ok(read) => read,
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => (Vec::new(), 0),
             Err(error) => {
-                return failure("io", format!("The job's log could not be read: {error}"));
+                return failure(
+                    Code::Io,
+                    format!("The job's log could not be read: {error}"),
+                );
             }
         };
         JobReply::Log(Logged {
@@ -835,7 +838,7 @@ impl Jobs {
 
 /// This boot's identity.
 fn process_boot() -> Result<String> {
-    crate::process::boot().map_err(|error| Error::new("job", error.error))
+    crate::process::boot().map_err(|error| Error::new(Code::Job, error.error))
 }
 
 /// Wait for a launcher to say it is a session of its own and then exec:

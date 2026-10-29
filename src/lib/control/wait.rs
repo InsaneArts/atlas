@@ -106,7 +106,7 @@ impl Controller {
             return Err(busy_person(waited));
         }
         if self.heeds_stop && waited.is_some() && self.stop_noted() {
-            return Err(Error::new("stopped", crate::error::STOPPED));
+            return Err(Error::stopped());
         }
         if taken {
             return Ok(true);

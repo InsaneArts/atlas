@@ -9,7 +9,7 @@ pub(crate) use record::{Owned, State};
 
 use crate::{
     client::Client,
-    error::{Error, Result},
+    error::{Code, Error, Result},
     files::Token,
     host_session::{
         HostSession, Key, now_ms,
@@ -126,7 +126,7 @@ impl Task {
 /// Why an ATLAS_TASK value was refused.
 fn not_plain() -> Error {
     Error::new(
-        "usage",
+        Code::Usage,
         format!(
             "{VARIABLE} must be 1 to {NAME_LIMIT} letters, digits, '.', '_', ':' or '-', so \
              Atlas did nothing. Set it to a short plain name, or unset it."

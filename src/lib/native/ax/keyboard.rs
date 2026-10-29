@@ -6,7 +6,7 @@
 //! is bounded by what is left of one deadline. Only copies are made;
 //! nothing is set but each element's own messaging timeout.
 use super::{ABSENT, Element, Frame, ffi, text::bounded_string};
-use crate::error::{Error, Result};
+use crate::error::{Code, Error, Result};
 use objc2_application_services::{AXError, AXUIElement, AXValue, AXValueType};
 use objc2_core_foundation::{CFBoolean, CFNull, CFRetained, CFString, CFType};
 use serde::Serialize;
@@ -90,7 +90,7 @@ impl Unread {
                 "The app withheld its windows, as apps do while the Mac's screen is locked"
             }
         };
-        Error::new("native", said).with("unread", self)
+        Error::new(Code::Native, said).with("unread", self)
     }
 }
 

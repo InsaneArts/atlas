@@ -2,7 +2,7 @@
 //! release an interrupted press before accepting another controller.
 use crate::{
     actions::Button,
-    error::{Error, Result},
+    error::{Code, Error, Result},
     files::{Durability, write_private_with},
     session::InputEpoch,
 };
@@ -55,7 +55,12 @@ impl Journal {
 /// The input a crashed service left held in this login, if any. A journal
 /// from an earlier login is set aside, never returned.
 pub fn load(path: &Path, epoch: &InputEpoch) -> Result<Option<Held>> {
-    let foreign = || Error::new("identity", "Held-input journal must belong to the helper");
+    let foreign = || {
+        Error::new(
+            Code::Identity,
+            "Held-input journal must belong to the helper",
+        )
+    };
 
     // A symlink is never followed (O_NOFOLLOW fails with ELOOP), and the
     // checks are made on the opened descriptor, so the file read is the file
@@ -80,7 +85,7 @@ pub fn load(path: &Path, epoch: &InputEpoch) -> Result<Option<Held>> {
     (&mut file).take(4097).read_to_end(&mut bytes)?;
 
     if bytes.len() > 4096 {
-        return Err(Error::new("native", "Held-input journal is invalid"));
+        return Err(Error::new(Code::Native, "Held-input journal is invalid"));
     }
 
     let held: Held = serde_json::from_slice(&bytes)?;
@@ -93,7 +98,7 @@ pub fn load(path: &Path, epoch: &InputEpoch) -> Result<Option<Held>> {
         || held.mouse_number < 0
     {
         return Err(Error::new(
-            "identity",
+            Code::Identity,
             "Held-input journal belongs to a different login or is invalid",
         ));
     }
@@ -134,7 +139,7 @@ fn set_aside(path: &Path, held: &Held) -> Result<PathBuf> {
         .find(|kept| fs::symlink_metadata(kept).is_err())
     else {
         return Err(Error::new(
-            "identity",
+            Code::Identity,
             "Held input from an earlier login could not be set aside; it will not be replayed \
              into this login",
         ));
@@ -142,7 +147,7 @@ fn set_aside(path: &Path, held: &Held) -> Result<PathBuf> {
 
     fs::rename(path, &kept).map_err(|error| {
         Error::new(
-            "identity",
+            Code::Identity,
             format!(
                 "Held input from an earlier login could not be set aside ({error}); it \
                  will not be replayed into this login"

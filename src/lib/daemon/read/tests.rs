@@ -446,7 +446,7 @@ fn a_digest_stops_once_the_helper_may_no_longer_be_read() {
         if checks.get() <= 3 {
             Ok(())
         } else {
-            Err(failure("on-console", "The helper is on the screen"))
+            Err(failure(Code::OnConsole, "The helper is on the screen"))
         }
     };
     let reply = read_now(&asked, &places, &guard, &mut |_| true);

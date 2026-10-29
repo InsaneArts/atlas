@@ -21,7 +21,7 @@ use crate::{
     client::Client,
     config::parse_toml,
     control::Ownership,
-    error::{Error, Result},
+    error::{Code, Error, Result},
     task::{self, Claims},
     transport::{OutputError, run_output},
 };
@@ -71,7 +71,7 @@ pub(super) struct Selection {
 }
 
 fn problem(message: impl Into<String>) -> Error {
-    Error::new("environment", message)
+    Error::new(Code::Environment, message)
 }
 
 /// Identity and search-path variables the helper runner owns.
@@ -113,7 +113,7 @@ pub(super) fn selectable_variable(name: &str) -> bool {
 /// Freeze the selected bytes, then preview or apply the resulting plan.
 pub async fn sync(client: &Client, manifest: &Path, apply_now: bool) -> Result<Value> {
     let manifest = fs::canonicalize(manifest)
-        .map_err(|error| Error::new("io", format!("{}: {error}", manifest.display())))?;
+        .map_err(|error| Error::new(Code::Io, format!("{}: {error}", manifest.display())))?;
     let selection: Manifest = parse_toml(&read_limited(&manifest, MAX_MANIFEST)?, &manifest)?;
     freeze(client, &manifest, selection.files, apply_now).await
 }
@@ -656,8 +656,8 @@ fn refused(reply: Value, request: &str) -> Result<Value> {
         Some(error) => Err(Error::new(
             error["code"]
                 .as_str()
-                .and_then(crate::error::code)
-                .unwrap_or("environment"),
+                .and_then(crate::error::Code::parse)
+                .unwrap_or(Code::Environment),
             error["error"]
                 .as_str()
                 .unwrap_or("The helper environment refused"),

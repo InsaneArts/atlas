@@ -11,7 +11,7 @@ use crate::{
     actions::{Button, Expect},
     client::{Check, Client, Verified},
     daemon::protocol::{Crop, Region},
-    error::{Error, Result},
+    error::{Code, Error, Result},
     native::{
         ax::{self, Element, Frame, Stop},
         windows::{Bounds, Dock, Screen, Shown, Window, owning_window, top_at, unobstructed},
@@ -46,7 +46,7 @@ impl Scanned {
     pub(super) fn from_probe(mut value: Value) -> Result<Self> {
         if value["ok"] != true {
             return Err(Error::new(
-                "elements",
+                Code::Elements,
                 value["error"]
                     .as_str()
                     .unwrap_or("The accessibility probe failed")
@@ -55,7 +55,7 @@ impl Scanned {
         }
 
         let elements = serde_json::from_value(value["elements"].take())
-            .map_err(|_| Error::new("elements", "Malformed accessibility elements"))?;
+            .map_err(|_| Error::new(Code::Elements, "Malformed accessibility elements"))?;
 
         let mut reasons: Vec<Stop> = value["reasons"]
             .as_array()
@@ -105,7 +105,7 @@ impl Scanned {
             .map(|why| format!(" ({why})"))
             .unwrap_or_default();
         let mut error = Error::new(
-            "elements",
+            Code::Elements,
             format!(
                 "The accessibility scan was incomplete{why}, so a unique match cannot be \
                  established"
@@ -144,7 +144,7 @@ async fn app_elements(client: &Client, verified: &Verified, pid: i64) -> Result<
     let value = run_output(&reply, 8 << 20)
         .ok()
         .and_then(|bytes| serde_json::from_slice::<Value>(&bytes).ok())
-        .ok_or_else(|| Error::new("elements", "The accessibility probe returned no result"))?;
+        .ok_or_else(|| Error::new(Code::Elements, "The accessibility probe returned no result"))?;
 
     Scanned::from_probe(value)
 }
@@ -180,7 +180,7 @@ pub async fn screenshot(
     let (crop, verified) = match (target, region) {
         (Some(_), Some(_)) => {
             return Err(Error::new(
-                "usage",
+                Code::Usage,
                 "Give an app or a region to capture, not both",
             ));
         }
@@ -201,8 +201,8 @@ pub async fn screenshot(
         None => client.capture(size, crop.as_ref(), new_file).await,
     };
     captured.map_err(|error| match target {
-        Some(Target::Name(name)) if error.code == "no-window" => Error::new(
-            "no-window",
+        Some(Target::Name(name)) if error.code == Code::NoWindow => Error::new(
+            Code::NoWindow,
             format!(
                 "{name} has no window on screen: open one, or take a full screenshot to see \
                      its menu bar"
@@ -409,7 +409,7 @@ pub(super) fn choose<'a>(elements: &'a [Element], filter: &ElementFilter) -> Res
             " The closest names are in candidates."
         };
         let error = Error::new(
-            "elements",
+            Code::Elements,
             match matching.len() {
                 0 if menu_open => format!(
                     "No item of the open menu matches. Run atlas elements --app NAME to see it, \
@@ -443,7 +443,7 @@ pub(super) fn choose<'a>(elements: &'a [Element], filter: &ElementFilter) -> Res
     });
     if doubtful {
         return Err(Error::new(
-            "elements",
+            Code::Elements,
             "Another element's name could not be read whole, so this match may not be unique",
         ));
     }
@@ -531,7 +531,7 @@ pub async fn click_element(
 ) -> Result<Value> {
     if filter.role.is_none() && filter.name.is_none() {
         return Err(Error::new(
-            "input",
+            Code::Input,
             "Select the element with --name, --role or both",
         ));
     }
@@ -562,7 +562,7 @@ pub async fn click_element(
         // The menu bar shows the active app's titles, and only those.
         if active_pid(client).await? != Some(pid) {
             return Err(Error::new(
-                "elements",
+                Code::Elements,
                 "The app is no longer active, so the menu bar does not show its titles",
             ));
         }
@@ -577,7 +577,7 @@ pub async fn click_element(
 
     if !window.is_some_and(|window| unobstructed(&windows, window, x, y, &screen)) {
         return Err(Error::new(
-            "elements",
+            Code::Elements,
             hidden_element(&windows, x, y, &screen),
         ));
     }

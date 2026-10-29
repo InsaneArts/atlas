@@ -11,7 +11,7 @@
 //! in). Otherwise the helper is read directly.
 use crate::{
     client::{Client, png_dimensions},
-    error::{Error, Result},
+    error::{Code, Error, Result},
     files::{Durability, write_private_with},
     host_session::{HostSession, Key},
     overview::READ_DEADLINE,
@@ -499,7 +499,7 @@ fn private_folder(folder: &Path) -> Result<()> {
         || metadata.mode() & 0o077 != 0
     {
         return Err(Error::new(
-            "usage",
+            Code::Usage,
             format!(
                 "{} must be a private (0700) folder you own",
                 folder.display()

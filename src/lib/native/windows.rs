@@ -2,7 +2,7 @@
 //! inside the helper login through CGWindowList. Read-only; titles appear only
 //! where the session's capture permission allows them.
 use crate::{
-    error::{Error, Result},
+    error::{Code, Error, Result},
     native::{ax::Frame, cf},
 };
 use objc2_core_graphics::CGWindowListOption;
@@ -337,7 +337,7 @@ pub fn windows() -> Result<Vec<Window>> {
     let options =
         CGWindowListOption::OptionOnScreenOnly | CGWindowListOption::ExcludeDesktopElements;
     let list = cf::windows(options)
-        .ok_or_else(|| Error::new("windows", "The window list is unavailable"))?;
+        .ok_or_else(|| Error::new(Code::Windows, "The window list is unavailable"))?;
 
     Ok(list.iter().filter_map(|entry| read_window(entry)).collect())
 }

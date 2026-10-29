@@ -7,7 +7,7 @@ use super::{Name, Task};
 use crate::{
     collect::ReceiptId,
     daemon::protocol::{Expected, How, JobId, JobState},
-    error::{Error, Result},
+    error::{Code, Error, Result},
     files::Token,
     host_session::Key,
 };
@@ -136,7 +136,7 @@ impl Record {
                 || self.oldest(|claim| matches!(claim.owned(), Some(Owned::Launch { .. })));
             let Some(place) = finished.or_else(listed) else {
                 return Err(Error::new(
-                    "state",
+                    Code::State,
                     "This task's record is full of things it has not cleaned up",
                 ));
             };

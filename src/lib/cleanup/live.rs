@@ -14,7 +14,7 @@ use crate::{
     control::Ownership,
     daemon::protocol::{JobId, Shown},
     environment::{self, InstallState, PlanState, Undone},
-    error::{Error, Result},
+    error::{Code, Error, Result},
     files::Token,
     host_session::Key,
 };
@@ -60,7 +60,7 @@ impl<'a> Live<'a> {
 
     fn held(&self) -> Result<&Ownership> {
         self.ownership
-            .ok_or_else(|| Error::new("state", "A cleanup preview changes nothing"))
+            .ok_or_else(|| Error::new(Code::State, "A cleanup preview changes nothing"))
     }
 }
 

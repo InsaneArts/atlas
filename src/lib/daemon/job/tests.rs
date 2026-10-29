@@ -367,7 +367,7 @@ impl Table {
 
     fn read(&self) -> Result<Vec<Info>> {
         if self.failing.load(Ordering::SeqCst) {
-            return Err(Error::new("state", "The process list is unavailable"));
+            return Err(Error::new(Code::State, "The process list is unavailable"));
         }
         Ok(self.processes.lock().unwrap().clone())
     }

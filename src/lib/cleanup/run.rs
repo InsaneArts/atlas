@@ -14,7 +14,7 @@ use crate::{
     collect::{Intact, Kept},
     daemon::protocol::{JobId, JobRefusal, JobState, Left, Shown},
     environment::{InstallState, KeptReason, Outcome as Removed, PlanState, Removal, Undone},
-    error::{Error, Result},
+    error::{Code, Error, Result},
     files::Token,
     handoff::{self, CopyRemoval, Running},
     host_session::Key,
@@ -494,7 +494,7 @@ async fn stop_job(hands: &impl Hands, task: &Key, id: &JobId) -> Outcome {
     let shown = match hands.job(id).await {
         Ok(shown) => shown,
         Err(error)
-            if error.code == "job"
+            if error.code == Code::Job
                 && crate::jobs::refusal_of(&error) == Some(JobRefusal::Unknown) =>
         {
             return Outcome::gone();
@@ -534,11 +534,11 @@ fn job_failed(error: &Error) -> Outcome {
         return Outcome::erred(error, Reason::Helper);
     }
     let (state, reason) = match (error.code, crate::jobs::refusal_of(error)) {
-        ("job", Some(JobRefusal::Identity)) => (StepState::Failed, Reason::Identity),
-        ("job", Some(JobRefusal::OtherAccount)) => (StepState::Failed, Reason::OtherAccount),
-        ("job", Some(JobRefusal::StillStopping)) => (StepState::Failed, Reason::StillStopping),
-        ("stopped", _) => (StepState::Blocked, Reason::Stopped),
-        ("daemon" | "transport" | "on-console" | "logged-out" | "blocked", _) => {
+        (Code::Job, Some(JobRefusal::Identity)) => (StepState::Failed, Reason::Identity),
+        (Code::Job, Some(JobRefusal::OtherAccount)) => (StepState::Failed, Reason::OtherAccount),
+        (Code::Job, Some(JobRefusal::StillStopping)) => (StepState::Failed, Reason::StillStopping),
+        (Code::Stopped, _) => (StepState::Blocked, Reason::Stopped),
+        (Code::Daemon | Code::Transport | Code::OnConsole | Code::LoggedOut | Code::Blocked, _) => {
             (StepState::Blocked, Reason::Daemon)
         }
         _ => (StepState::Failed, Reason::Helper),

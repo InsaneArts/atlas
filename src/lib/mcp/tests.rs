@@ -907,7 +907,7 @@ async fn a_late_failure_on_older_control_never_ends_control_taken_since() {
     let server = server(dir.path());
     let now = Instant::now();
     let lost = Err(Error::new(
-        "lease-lost",
+        Code::LeaseLost,
         "Native control was released or expired",
     ));
 
@@ -916,13 +916,13 @@ async fn a_late_failure_on_older_control_never_ends_control_taken_since() {
     assert_eq!(server.held.lock().await.as_ref().unwrap().lease, "b");
 
     server
-        .settle(&held("b", now), &Err(Error::new("busy", "busy")), true)
+        .settle(&held("b", now), &Err(Error::new(Code::Busy, "busy")), true)
         .await;
     assert!(
         server.held.lock().await.is_some(),
         "a busy helper ends nothing"
     );
-    let unanswered = Err(Error::new("menubar", "Atlas's menu bar didn't answer"));
+    let unanswered = Err(Error::new(Code::Menubar, "Atlas's menu bar didn't answer"));
     server.settle(&held("b", now), &unanswered, true).await;
     assert!(
         server.held.lock().await.is_some(),

@@ -41,7 +41,7 @@ pub(super) fn read(answer: Value, field: &str, malformed: &str) -> Result<Value>
         return Err(crate::transport::refusal(&answer));
     }
     if answer["ok"] != true || !answer[field].is_array() {
-        return Err(Error::new("protocol", malformed.to_owned()));
+        return Err(Error::new(Code::Protocol, malformed.to_owned()));
     }
     Ok(answer)
 }

@@ -13,7 +13,7 @@ use crate::{
     activity_log::{self, Row},
     client::Client,
     control::Cause,
-    error::{Error, Result},
+    error::{Code, Error, Result},
     files::Token,
     handoff,
     task::{Owned, State},
@@ -59,7 +59,7 @@ pub fn list(
     if let Some(key) = key {
         let record = reading.record(key).ok_or_else(|| {
             Error::new(
-                "input",
+                Code::Input,
                 format!("No session {key} is recorded here; atlas activity --all lists them"),
             )
         })?;

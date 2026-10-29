@@ -3,6 +3,7 @@ use atlas::{
     client::{Client, Size, png_dimensions, validate_completion},
     config::Config,
     control::{ActionPermit, Controller, Lease},
+    error::Code,
     session::{Display, diagnose, input_current, input_settled, require_hidden},
     transport::Transport,
 };
@@ -46,7 +47,10 @@ fn graphical_identity_needs_independent_proof() {
         let mut state = status();
         state["sessionProof"].as_object_mut().unwrap().remove(path);
         let refused = require_hidden(&state, 502).unwrap_err();
-        assert!(matches!(refused.code, "identity" | "on-console"), "{path}");
+        assert!(
+            matches!(refused.code, Code::Identity | Code::OnConsole),
+            "{path}"
+        );
     }
 
     let mut state = status();
@@ -88,7 +92,7 @@ fn unsafe_actions_and_whole_batches_are_rejected() {
         // bounds is refused as input.
         let refused = actions::validate(&json!([action]), &display()).unwrap_err();
         assert!(
-            matches!(refused.code, "input" | "invalid-json"),
+            matches!(refused.code, Code::Input | Code::InvalidJson),
             "{action}: {}",
             refused.code
         );
@@ -351,7 +355,7 @@ fn library_construction_cannot_target_the_caller() {
 
     assert_eq!(
         Client::new(config).err().map(|error| error.code),
-        Some("identity")
+        Some(Code::Identity)
     );
     assert!(!dir.path().join("out").exists());
 }

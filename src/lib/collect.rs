@@ -13,7 +13,7 @@ use crate::{
         FileIdentity, READ, READ_PATH_MAX, READ_RANGE_MAX, READ_SIZE_MAX, SessionPin,
     },
     digest::file_sha256,
-    error::{Error, Result},
+    error::{Code, Error, Result},
     files::write_private,
     host_session::{Key, now_ms},
     name::{lower_hex, name_type, random_hex},
@@ -205,15 +205,18 @@ impl Failure {
 pub async fn collect(client: &Client, files: &[String], max_size: u64) -> Result<Value> {
     let started = Instant::now();
     if files.is_empty() || files.len() > MAX_FILES {
-        return Err(Error::new("usage", "Give 1 to 16 files to collect"));
+        return Err(Error::new(Code::Usage, "Give 1 to 16 files to collect"));
     }
     if !(1..=READ_SIZE_MAX).contains(&max_size) {
-        return Err(Error::new("usage", "Give a size such as 200M, at most 1G"));
+        return Err(Error::new(
+            Code::Usage,
+            "Give a size such as 200M, at most 1G",
+        ));
     }
     let person = crate::config::home().ok();
     for source in files {
         if let Some(refused) = given(source, person.as_deref()) {
-            return Err(Error::new("collect", refused.error).with("reason", refused.reason));
+            return Err(Error::new(Code::Collect, refused.error).with("reason", refused.reason));
         }
     }
 
@@ -555,7 +558,7 @@ async fn read_part(
                 buffer.clear();
                 append_event(&event, &mut buffer, READ_RANGE_MAX as usize).map_err(|error| {
                     Error::new(
-                        "protocol",
+                        Code::Protocol,
                         match error {
                             OutputError::Malformed => "A part of the file came back malformed",
                             OutputError::Oversized => "A part of the file came back too large",
@@ -565,14 +568,14 @@ async fn read_part(
                 received += buffer.len() as u64;
                 if received > READ_RANGE_MAX {
                     return Err(Error::new(
-                        "protocol",
+                        Code::Protocol,
                         "A part of the file came back too large",
                     ));
                 }
                 hasher.update(&buffer);
                 if let Err(error) = partial.write_all(&buffer) {
                     written = Err(error);
-                    return Err(Error::new("io", "The copy could not be written"));
+                    return Err(Error::new(Code::Io, "The copy could not be written"));
                 }
                 Ok(())
             })
@@ -583,8 +586,8 @@ async fn read_part(
         return Err(fail(ReadRefusal::Space));
     }
     let reply = reply.map_err(|error| match error.code {
-        "session-changed" => fail(ReadRefusal::SessionChanged),
-        "on-console" => fail(ReadRefusal::OnConsole),
+        Code::SessionChanged => fail(ReadRefusal::SessionChanged),
+        Code::OnConsole => fail(ReadRefusal::OnConsole),
         _ => fail(ReadRefusal::Unreadable),
     })?;
     if reply["ok"] != true {
@@ -629,7 +632,7 @@ fn private_folders(root: &Path, levels: &[&str]) -> Result<PathBuf> {
         });
         if !private {
             return Err(Error::new(
-                "state",
+                Code::State,
                 format!(
                     "{} is a link, or not a private folder of this account, so nothing was collected",
                     folder.display()

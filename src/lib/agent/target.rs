@@ -3,7 +3,7 @@
 use super::windows::verified_window_list;
 use crate::{
     client::{Client, Verified},
-    error::{Error, Result},
+    error::{Code, Error, Result},
     native::windows::{MENU_LAYER, Window},
     text::same_text,
 };
@@ -60,11 +60,11 @@ pub(super) fn one_pid(name: &str, pids: &[i64]) -> Result<i64> {
     match pids {
         [pid] => Ok(*pid),
         [] => Err(Error::new(
-            "elements",
+            Code::Elements,
             format!("No window of {name} is on screen"),
         )),
         _ => Err(Error::new(
-            "elements",
+            Code::Elements,
             format!("Several {name} processes have windows ({pids:?}); pass --pid"),
         )),
     }
@@ -106,7 +106,7 @@ pub(super) async fn target_pid_among(
                 .any(|app| app["pid"] == *pid);
             if !running {
                 return Err(Error::new(
-                    "elements",
+                    Code::Elements,
                     format!(
                         "No app in the helper has the process ID {pid}; run atlas apps to see them"
                     ),
@@ -139,7 +139,7 @@ pub(super) async fn target_pid_among(
     }
 
     Err(Error::new(
-        "elements",
+        Code::Elements,
         if named.is_empty() {
             format!("{name} is not running: run atlas open --app {name}")
         } else {

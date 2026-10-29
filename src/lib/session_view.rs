@@ -7,6 +7,7 @@ use crate::{
     activity_log::{Op, Row},
     control::{Cause, Note},
     environment::Phase,
+    error::Code,
     helper_info::Capture,
     host_session::{
         Host, Key,
@@ -500,7 +501,7 @@ pub(crate) fn sessions_shown<'a>(shown: impl IntoIterator<Item = &'a Shown>) -> 
 /// step whose command never said how it ended. Rows flag only the first
 /// as `uncertain`; a session needing the person names either.
 fn unknown(row: &Row) -> bool {
-    row.coded("uncertain") || row.under_way()
+    row.coded(Code::Uncertain) || row.under_way()
 }
 
 /// Whether `row` only looked at the helper, which takes no control: a

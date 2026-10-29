@@ -3,7 +3,7 @@
 use super::{SHARED_BIN, helper_search_path, variable_name as variable};
 use crate::{
     client::{Client, RUN_TIMEOUT},
-    error::{Error, Result},
+    error::{Code, Error, Result},
     session::require_hidden,
     transport::{OutputError, run_output},
 };
@@ -75,7 +75,7 @@ impl Probe {
         let reply = client.inspect_within(argv, RUN_TIMEOUT).await?;
         if reply["exitCode"] != 0 || reply["timedOut"] == true || !reply["signal"].is_null() {
             return Err(Error::new(
-                "environment",
+                Code::Environment,
                 "Helper discovery did not complete",
             ));
         }
@@ -83,7 +83,7 @@ impl Probe {
         let output = run_output(&reply, 16384).map_err(|error| match error {
             OutputError::Malformed => invalid(),
             OutputError::Oversized => {
-                Error::new("environment", "Discovery output exceeded its limit")
+                Error::new(Code::Environment, "Discovery output exceeded its limit")
             }
         })?;
 
@@ -94,7 +94,7 @@ impl Probe {
             .collect::<Vec<_>>();
         if lines.len() != args.len() {
             return Err(Error::new(
-                "environment",
+                Code::Environment,
                 "Incomplete discovery probe response",
             ));
         }
@@ -110,7 +110,7 @@ const CORE_SERVICES: &str = "/System/Library/CoreServices";
 
 fn invalid() -> Error {
     Error::new(
-        "environment",
+        Code::Environment,
         "The helper's discovery answer could not be read; run atlas doctor",
     )
 }
@@ -123,7 +123,7 @@ fn selection(
     environment: &[String],
     references: &[impl AsRef<Path>],
 ) -> Result<()> {
-    let refuse = |message: String| Err(Error::new("environment", message));
+    let refuse = |message: String| Err(Error::new(Code::Environment, message));
 
     if tools.len() + apps.len() + environment.len() + references.len() == 0 {
         return refuse("Select at least one tool, app, variable or reference path".into());
@@ -219,7 +219,7 @@ impl Access {
     fn from_flags(flags: &str) -> Result<Self> {
         if !flags.starts_with('-') || flags.bytes().skip(1).any(|c| !b"fdrwx".contains(&c)) {
             return Err(Error::new(
-                "environment",
+                Code::Environment,
                 "Invalid discovery probe response",
             ));
         }
@@ -261,7 +261,12 @@ pub async fn discover(
 
     let status = client.status().await;
     let session = require_hidden(&status, client.config.helper_uid)?;
-    let home_unknown = || Error::new("identity", "The helper home is unknown; run atlas doctor");
+    let home_unknown = || {
+        Error::new(
+            Code::Identity,
+            "The helper home is unknown; run atlas doctor",
+        )
+    };
     let helper_home = PathBuf::from(status["user"]["home"].as_str().ok_or_else(home_unknown)?);
     if !helper_home.is_absolute() {
         return Err(home_unknown());
@@ -381,7 +386,7 @@ pub async fn discover(
 
     if client.identity().await?.epoch != session.epoch {
         return Err(Error::new(
-            "identity",
+            Code::Identity,
             "Helper changed during discovery; repeat the inspection",
         ));
     }

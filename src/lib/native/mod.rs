@@ -1,6 +1,6 @@
 //! macOS boundary executed *inside* the helper login: the read-only session
 //! identity probe, plus the input service and its event engine.
-use crate::error::{Error, Result};
+use crate::error::{Code, Error, Result};
 use serde_json::Value;
 
 /// How long the input service's grant of control lasts unless its holder
@@ -27,16 +27,16 @@ pub fn session_info() -> Result<Value> {
 
     if status != 0 {
         return Err(Error::new(
-            "identity",
+            Code::Identity,
             format!("SessionGetInfo failed: {status}"),
         ));
     }
 
-    let record =
-        cf::session().ok_or_else(|| Error::new("identity", "No graphical session dictionary"))?;
+    let record = cf::session()
+        .ok_or_else(|| Error::new(Code::Identity, "No graphical session dictionary"))?;
     let on_console = cf::boolean(&record, "kCGSSessionOnConsoleKey")
         .or_else(|| cf::boolean(&record, "kCGSessionOnConsoleKey"))
-        .ok_or_else(|| Error::new("identity", "Missing console-session state"))?;
+        .ok_or_else(|| Error::new(Code::Identity, "Missing console-session state"))?;
     let display_id = CGMainDisplayID();
     let bounds = CGDisplayBounds(display_id);
 
@@ -55,7 +55,10 @@ pub fn session_info() -> Result<Value> {
 
 #[cfg(not(target_os = "macos"))]
 pub fn session_info() -> Result<Value> {
-    Err(Error::new("platform", "Session identity requires macOS"))
+    Err(Error::new(
+        Code::Platform,
+        "Session identity requires macOS",
+    ))
 }
 
 /// Whether this process may use Accessibility (macOS has let the person

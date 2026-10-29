@@ -4,7 +4,7 @@ use std::{os::unix::process::CommandExt, process::Command};
 
 /// The code of the refusal when no environment profile is installed:
 /// callers fall back to the helper's PATH on it.
-pub const NO_PROFILE: &str = "no-environment";
+pub const NO_PROFILE: Code = Code::NoEnvironment;
 
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]

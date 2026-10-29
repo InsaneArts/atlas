@@ -71,7 +71,7 @@ pub(super) async fn ask(
     let malformed = "The helper's list of its copies was malformed";
     let answer = one_off::send(client, helper, None, Request::Transactions { all, ids }).await?;
     let answer = one_off::read(answer, "transactions", malformed)?;
-    serde_json::from_value(answer).map_err(|_| Error::new("protocol", malformed))
+    serde_json::from_value(answer).map_err(|_| Error::new(Code::Protocol, malformed))
 }
 
 /// A plan folder beside the shared command, as `list` reports it.

@@ -3,7 +3,7 @@
 //! command line, so Atlas edits the one entry it owns in the app's own
 //! settings file, keeping every other setting and a copy of the file as it
 //! was; the app reads it when it next starts.
-use crate::error::{Error, Result};
+use crate::error::{Code, Error, Result};
 use serde_json::{Map, Value, json};
 use std::{
     fs,
@@ -56,7 +56,7 @@ fn parse(text: Option<&str>) -> Result<Map<String, Value>> {
     match serde_json::from_str::<Value>(text) {
         Ok(Value::Object(settings)) => Ok(settings),
         _ => Err(Error::new(
-            "agents",
+            Code::Agents,
             "The Claude app's settings file is not valid JSON; fix it or move it aside, then try again",
         )),
     }
@@ -71,7 +71,7 @@ fn changed(settings: &mut Map<String, Value>, atlas: Option<&Path>) -> Result<bo
         .or_insert_with(|| Value::Object(Map::new()));
     let Some(servers) = servers.as_object_mut() else {
         return Err(Error::new(
-            "agents",
+            Code::Agents,
             "The Claude app's mcpServers setting is not an object; fix it, then try again",
         ));
     };
@@ -83,7 +83,7 @@ fn changed(settings: &mut Map<String, Value>, atlas: Option<&Path>) -> Result<bo
             return Ok(false);
         }
         return Err(Error::new(
-            "agents",
+            Code::Agents,
             "The Claude app already has an MCP server named atlas that is not Atlas's; remove it \
              in the app's settings, then try again",
         ));
@@ -141,7 +141,7 @@ fn read_settings(named: &Path) -> Result<(PathBuf, Option<String>)> {
     let path = match fs::symlink_metadata(named) {
         Ok(_) => fs::canonicalize(named).map_err(|error| {
             Error::new(
-                "agents",
+                Code::Agents,
                 format!("Could not resolve {}: {error}", named.display()),
             )
         })?,
@@ -190,7 +190,7 @@ fn write_settings(
             let (current, text) = read_settings(&settings_in(home))?;
             if current != path || text.as_deref() != before {
                 return Err(Error::new(
-                    "agents",
+                    Code::Agents,
                     "The Claude app's settings changed while connecting; try again",
                 ));
             }
@@ -226,7 +226,7 @@ pub fn status() -> Value {
 /// Connect the app (`connect`) or disconnect it: its row in the results.
 pub fn change(connect: bool) -> Value {
     let outcome = home()
-        .ok_or_else(|| Error::new("agents", "HOME is not set"))
+        .ok_or_else(|| Error::new(Code::Agents, "HOME is not set"))
         .and_then(|home| {
             let atlas = if connect { Some(executable()?) } else { None };
             change_in(&home, atlas.as_deref(), &std::env::temp_dir())

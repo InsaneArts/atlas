@@ -329,7 +329,7 @@ fn bundle_name(name: &str) -> bool {
 
 /// Refuse an install before anything changes, as the person reads it.
 fn refused(message: impl Into<String>) -> Error {
-    Error::new("input", message)
+    Error::new(Code::Input, message)
 }
 
 /// `name` as a file name, which every recorded name is.

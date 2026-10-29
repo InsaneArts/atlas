@@ -16,7 +16,7 @@ use atlas::{
     config::Config,
     doing::Doing,
     environment,
-    error::{Error, Result},
+    error::{Code, Error, Result},
     host_session::{self, HostSession, store::Kind},
     menubar,
     task::{self, Task},
@@ -48,7 +48,7 @@ pub(super) fn screenshot_size(given: Option<u32>) -> Size {
 fn changed(picks: &AgentPicks, change: Change) -> Result<Value> {
     // Connecting an app that isn't here would only leave its settings behind.
     if picks.app && change == Change::Connect && !atlas::claude_app::installed() {
-        return Err(Error::new("agents", "The Claude app isn't installed"));
+        return Err(Error::new(Code::Agents, "The Claude app isn't installed"));
     }
     if picks.app {
         atlas::agents::change_these(
@@ -107,14 +107,14 @@ fn elements_info(pid: i32) -> Result<Value> {
 #[cfg(not(target_os = "macos"))]
 fn elements_info(_: i32) -> Result<Value> {
     Err(Error::new(
-        "platform",
+        Code::Platform,
         "Accessibility elements require macOS",
     ))
 }
 
 #[cfg(not(target_os = "macos"))]
 fn windows_info(_: bool) -> Result<Value> {
-    Err(Error::new("platform", "Window listing requires macOS"))
+    Err(Error::new(Code::Platform, "Window listing requires macOS"))
 }
 
 #[cfg(target_os = "macos")]
@@ -125,7 +125,10 @@ async fn input_service(uid: u32, controller_uid: u32, socket: PathBuf) -> Result
 
 #[cfg(not(target_os = "macos"))]
 async fn input_service(_: u32, _: u32, _: PathBuf) -> Result<Value> {
-    Err(Error::new("platform", "The input service requires macOS"))
+    Err(Error::new(
+        Code::Platform,
+        "The input service requires macOS",
+    ))
 }
 
 /// Who runs this command: what the person does from the app is recorded as
@@ -368,7 +371,7 @@ async fn carry_out(
         } => {
             let manifest = manifest.ok_or_else(|| {
                 Error::new(
-                    "usage",
+                    Code::Usage,
                     "atlas environment needs a profile file, or a command such as discover or run.",
                 )
             })?;
@@ -448,7 +451,7 @@ async fn carry_out(
             let client = client()?;
             let target = target
                 .target()
-                .ok_or_else(|| Error::new("usage", "Select the app with --app or --pid"))?;
+                .ok_or_else(|| Error::new(Code::Usage, "Select the app with --app or --pid"))?;
             let filter = agent::ElementFilter { role, name };
             agent::elements(&client, &target, &filter, max, full).await
         }
@@ -489,7 +492,7 @@ async fn carry_out(
         } => {
             if dx == 0 && dy == 0 {
                 return Err(Error::new(
-                    "usage",
+                    Code::Usage,
                     "Give lines to scroll with --dy (down) or --dx (right), negative for up or left",
                 ));
             }
@@ -624,7 +627,7 @@ async fn click(
             .await
         }
         _ => Err(Error::new(
-            "usage",
+            Code::Usage,
             "Give X Y, or --app/--pid with --name/--role",
         )),
     }
@@ -640,7 +643,7 @@ fn text_to_type(text: Option<String>, stdin: bool) -> Result<String> {
             let mut text = String::new();
             read_at_most(std::io::stdin(), LIMIT).read_to_string(&mut text)?;
             if text.len() as u64 > LIMIT {
-                return Err(Error::new("input", "Text from stdin exceeds 1 MiB"));
+                return Err(Error::new(Code::Input, "Text from stdin exceeds 1 MiB"));
             }
             Ok(text)
         }
@@ -806,13 +809,18 @@ async fn logout(client: &Client, force: bool, yes: bool) -> Result<Value> {
 /// 32 KiB.
 fn actions_batch(actions: String) -> Result<Vec<u8>> {
     const LIMIT: u64 = 32 * 1024;
-    let too_long = || Error::new("input", "Input exceeds 32 KiB; use short observed batches");
+    let too_long = || {
+        Error::new(
+            Code::Input,
+            "Input exceeds 32 KiB; use short observed batches",
+        )
+    };
 
     let bytes = match actions.strip_prefix('@') {
         Some(path) => {
             let mut bytes = Vec::new();
             let file = std::fs::File::open(path)
-                .map_err(|error| Error::new("io", format!("Could not read {path}: {error}")))?;
+                .map_err(|error| Error::new(Code::Io, format!("Could not read {path}: {error}")))?;
             read_at_most(file, LIMIT).read_to_end(&mut bytes)?;
             bytes
         }
@@ -856,7 +864,10 @@ fn switch(
                 .find(|candidate| candidate.name == name)
                 .cloned()
                 .ok_or_else(|| {
-                    Error::new("switch", format!("No account named {name} to switch to"))
+                    Error::new(
+                        Code::Switch,
+                        format!("No account named {name} to switch to"),
+                    )
                 })?,
         ),
         None if lock => None,
@@ -892,7 +903,7 @@ fn as_yourself(command: &str) -> Result<()> {
 fn refuse_root(command: &str, root: bool) -> Result<()> {
     if root {
         return Err(Error::new(
-            "usage",
+            Code::Usage,
             format!("Run atlas {command} as yourself, not with sudo."),
         ));
     }

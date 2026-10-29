@@ -3,7 +3,7 @@
 //! tail. A row keeps only what [`crate::doing::Doing`] names and fixed
 //! codes: never typed text, argv, coordinates, window titles, output or
 //! image payloads.
-use crate::error::{Error, Result};
+use crate::error::{Code, Error, Result};
 use fs2::FileExt;
 use serde::{Deserialize, Deserializer, Serialize, de::DeserializeOwned};
 use serde_json::Value;
@@ -96,6 +96,54 @@ impl From<Op> for String {
     }
 }
 
+/// Why a row's request failed: one of Atlas's error codes or, for a
+/// command run in the helper, that it ran too long (`timeout`) or ended
+/// with a failure (`exit`). A word this build does not know is kept as it
+/// was written.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum Failure {
+    Code(Code),
+    Timeout,
+    Exit,
+    Later(String),
+}
+
+impl Failure {
+    /// The failure a row's word names.
+    pub fn parse(word: &str) -> Self {
+        match word {
+            "timeout" => Self::Timeout,
+            "exit" => Self::Exit,
+            word => Code::parse(word).map_or_else(|| Self::Later(word.to_owned()), Self::Code),
+        }
+    }
+
+    /// The word a row keeps for it.
+    pub fn as_str(&self) -> &str {
+        match self {
+            Self::Code(code) => code.as_str(),
+            Self::Timeout => "timeout",
+            Self::Exit => "exit",
+            Self::Later(word) => word,
+        }
+    }
+}
+
+impl Serialize for Failure {
+    fn serialize<S: serde::Serializer>(
+        &self,
+        serializer: S,
+    ) -> std::result::Result<S::Ok, S::Error> {
+        serializer.serialize_str(self.as_str())
+    }
+}
+
+impl<'de> Deserialize<'de> for Failure {
+    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> std::result::Result<Self, D::Error> {
+        String::deserialize(deserializer).map(|word| Self::parse(&word))
+    }
+}
+
 /// Which step of a request a row stands for.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Step {
@@ -133,7 +181,7 @@ pub struct Row {
         deserialize_with = "lenient",
         skip_serializing_if = "Option::is_none"
     )]
-    pub code: Option<String>,
+    pub code: Option<Failure>,
     /// Why another app in front refused it, as the input service's word.
     #[serde(
         default,
@@ -259,8 +307,8 @@ impl Row {
     }
 
     /// Whether it failed with `code`.
-    pub fn coded(&self, code: &str) -> bool {
-        self.code.as_deref() == Some(code)
+    pub fn coded(&self, code: Code) -> bool {
+        self.code == Some(Failure::Code(code))
     }
 
     /// Who asked, as the row says, an agent unless it says otherwise.
@@ -308,7 +356,10 @@ pub(crate) fn append(directory: &Path, row: &Row) -> Result<()> {
         .custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK)
         .open(directory.join(LOCK))?;
     if !lock.metadata()?.is_file() {
-        return Err(Error::new("state", "The activity lock is not a plain file"));
+        return Err(Error::new(
+            Code::State,
+            "The activity lock is not a plain file",
+        ));
     }
     FileExt::lock_exclusive(&lock)?;
 
@@ -324,12 +375,16 @@ pub(crate) fn append(directory: &Path, row: &Row) -> Result<()> {
         .custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK)
         .open(path)?;
     if !file.metadata()?.is_file() {
-        return Err(Error::new("state", "The activity log is not a plain file"));
+        return Err(Error::new(
+            Code::State,
+            "The activity log is not a plain file",
+        ));
     }
 
     // Through a value, so its keys are written in the order the log has
     // always kept them.
-    let line = serde_json::to_value(row).map_err(|error| Error::new("state", error.to_string()))?;
+    let line =
+        serde_json::to_value(row).map_err(|error| Error::new(Code::State, error.to_string()))?;
     writeln!(file, "{line}")?;
     Ok(())
 }

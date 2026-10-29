@@ -1,7 +1,7 @@
 //! Atlas's settings: which account is the helper and where its sockets, the
 //! shared command and the screenshots live, read from a small TOML file
 //! whose relative paths resolve against the file itself.
-use crate::error::{Error, Result};
+use crate::error::{Code, Error, Result};
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
 use std::{
     fs,
@@ -66,12 +66,16 @@ fn default_output() -> PathBuf {
 /// Parse user-authored TOML. Unknown keys are rejected by the target type and
 /// errors name the file and the offending line.
 pub fn parse_toml<T: DeserializeOwned>(bytes: &[u8], origin: &Path) -> Result<T> {
-    let text = std::str::from_utf8(bytes)
-        .map_err(|_| Error::new("config", format!("{} is not UTF-8 text", origin.display())))?;
+    let text = std::str::from_utf8(bytes).map_err(|_| {
+        Error::new(
+            Code::Config,
+            format!("{} is not UTF-8 text", origin.display()),
+        )
+    })?;
 
     toml::from_str(text).map_err(|error| {
         Error::new(
-            "config",
+            Code::Config,
             format!("{}: {}", origin.display(), error.to_string().trim_end()),
         )
     })
@@ -89,7 +93,7 @@ impl Config {
                 missing(path)
             } else {
                 Error::new(
-                    "config-invalid",
+                    Code::ConfigInvalid,
                     format!(
                         "Atlas could not read its settings in {}: {error}. Repair or remove that \
                          file, then run atlas init.",
@@ -103,7 +107,7 @@ impl Config {
         // would refuse to replace it, so say which file and why.
         Self::read(&path).map_err(|error| {
             Error::new(
-                "config-invalid",
+                Code::ConfigInvalid,
                 format!(
                     "Atlas could not read its settings in {}: {}",
                     crate::ui::text::tilde(&path),
@@ -119,7 +123,7 @@ impl Config {
         let legacy = path.with_extension("json");
         if path.extension().is_some_and(|ext| ext == "toml") && legacy.exists() {
             return Err(Error::new(
-                "config",
+                Code::Config,
                 format!(
                     "Both {} and the legacy {} exist. JSON configuration is no longer read; \
                      confirm the TOML matches, stop processes started with the JSON file, \
@@ -136,7 +140,7 @@ impl Config {
             .read_to_end(&mut bytes)?;
 
         if bytes.len() as u64 > LIMIT {
-            return Err(Error::new("config", "Configuration exceeds 16 KiB"));
+            return Err(Error::new(Code::Config, "Configuration exceeds 16 KiB"));
         }
 
         Self::parse(&bytes, path)
@@ -150,7 +154,7 @@ impl Config {
 
         let parent = path
             .parent()
-            .ok_or_else(|| Error::new("config", "Configuration has no parent directory"))?;
+            .ok_or_else(|| Error::new(Code::Config, "Configuration has no parent directory"))?;
 
         for (value, whole) in [
             (&mut config.socket_path, true),
@@ -162,7 +166,7 @@ impl Config {
         ] {
             if value.as_os_str().is_empty() || value.to_string_lossy().contains('\0') {
                 return Err(Error::new(
-                    "config",
+                    Code::Config,
                     "Paths must be nonempty and contain no NUL",
                 ));
             }
@@ -187,7 +191,7 @@ impl Config {
 
     /// The configuration as the TOML a user would save.
     pub fn to_toml(&self) -> Result<String> {
-        toml::to_string(self).map_err(|error| Error::new("config", error.to_string()))
+        toml::to_string(self).map_err(|error| Error::new(Code::Config, error.to_string()))
     }
 }
 
@@ -204,7 +208,7 @@ fn missing(path: &Path) -> Error {
     };
 
     Error::new(
-        "config",
+        Code::Config,
         format!(
             "Atlas is not set up yet (no {}). Run atlas init.{hint}",
             crate::ui::text::tilde(path)
@@ -225,7 +229,7 @@ pub fn home() -> Result<PathBuf> {
 
     account
         .or_else(|| std::env::var_os("HOME").map(PathBuf::from))
-        .ok_or_else(|| Error::new("config", "HOME is unavailable"))
+        .ok_or_else(|| Error::new(Code::Config, "HOME is unavailable"))
 }
 
 /// Write a fresh file beside `path` (created with `mode`, never through a
@@ -239,7 +243,7 @@ pub(crate) fn write_beside(
 ) -> Result<()> {
     let (Some(parent), Some(name)) = (path.parent(), path.file_name()) else {
         return Err(Error::new(
-            "config",
+            Code::Config,
             format!("{} is not a file path", path.display()),
         ));
     };
@@ -302,10 +306,10 @@ pub(crate) fn save_private(path: &Path, bytes: &[u8]) -> Result<()> {
 pub fn resolve_parent(path: &Path) -> Result<PathBuf> {
     let parent = path
         .parent()
-        .ok_or_else(|| Error::new("config", "Cannot resolve path"))?;
+        .ok_or_else(|| Error::new(Code::Config, "Cannot resolve path"))?;
     let name = path
         .file_name()
-        .ok_or_else(|| Error::new("config", "Cannot resolve path name"))?;
+        .ok_or_else(|| Error::new(Code::Config, "Cannot resolve path name"))?;
 
     Ok(resolve_path(parent)?.join(name))
 }
@@ -363,7 +367,7 @@ mod tests {
         let failed = write_beside(
             &path,
             0o600,
-            |_| Err(Error::new("io", "no")),
+            |_| Err(Error::new(Code::Io, "no")),
             |_| unreachable!("nothing is placed after a failed write"),
         );
         assert!(failed.is_err());

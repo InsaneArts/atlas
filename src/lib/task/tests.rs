@@ -168,8 +168,8 @@ fn claims_from_two_commands_at_once_both_survive() {
                 let until = std::time::Instant::now() + std::time::Duration::from_secs(30);
                 loop {
                     match claims.claim(owned, State::Intent) {
-                        Err(error) if error.code == "busy" && std::time::Instant::now() < until => {
-                        }
+                        Err(error)
+                            if error.code == Code::Busy && std::time::Instant::now() < until => {}
                         claimed => break claimed.unwrap(),
                     }
                 }

@@ -284,7 +284,7 @@ async fn a_job_is_stopped_only_as_its_tasks_record_says() {
     let error = stop_held(&client, &id(), &found.expected, Duration::from_secs(5))
         .await
         .unwrap_err();
-    assert_eq!((error.code, error.uncertain), ("job", false));
+    assert_eq!((error.code, error.uncertain), (Code::Job, false));
     assert_eq!(error.details["reason"], "identity");
     assert_eq!(heard.lock().unwrap()[0]["expect"]["pid"], 4312);
     assert!(

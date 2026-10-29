@@ -284,7 +284,7 @@ pub fn usage(error: clap::Error) -> ExitCode {
                     "ok": false,
                     "code": "usage",
                     "error": message,
-                    "next": ui::hints::next("usage", None),
+                    "next": ui::hints::next(atlas::error::Code::Usage, None),
                 })
             );
         }

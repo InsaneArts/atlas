@@ -19,7 +19,7 @@ use crate::{
     client::Client,
     config::{self, Config},
     control::{Controller, Ownership},
-    error::{Error, Result},
+    error::{Code, Error, Result},
     init,
     setup::{
         self,
@@ -51,7 +51,7 @@ pub const WINDOW_MARKER: &str = "onboarding-window";
 const APPROVAL: Duration = Duration::from_secs(10 * 60);
 
 fn problem(message: impl Into<String>) -> Error {
-    Error::new("onboarding", message)
+    Error::new(Code::Onboarding, message)
 }
 
 /// An account (the controller) asking another one to be its helper.
@@ -428,7 +428,7 @@ fn candidates() -> Result<Vec<Value>> {
 fn settings(config_path: &Path) -> Result<Option<Config>> {
     match Config::load(config_path) {
         Ok(settings) => Ok(Some(settings)),
-        Err(error) if error.code == "config" => Ok(None),
+        Err(error) if error.code == Code::Config => Ok(None),
         Err(error) => Err(error),
     }
 }
@@ -1712,7 +1712,7 @@ mod tests {
                 || panic!("setup cannot dispatch while teardown owns the helper"),
                 || true,
             );
-            assert!(matches!(blocked, Err(error) if error.code == "busy"));
+            assert!(matches!(blocked, Err(error) if error.code == Code::Busy));
             drop(competing_teardown);
             let directory = tempfile::tempdir().unwrap();
             let controller = Controller::at(7001, directory.path());
@@ -1764,7 +1764,7 @@ mod tests {
                 },
                 || true,
             );
-            assert!(matches!(result, Err(error) if error.code == "busy"));
+            assert!(matches!(result, Err(error) if error.code == Code::Busy));
             drop(other);
         }
         let result = setup_batch(
@@ -2131,7 +2131,7 @@ mod tests {
             |_| unreachable!("root is not asked"),
             |_| true,
         );
-        assert!(matches!(busy, Err(Held::State(error)) if error.code == "busy"));
+        assert!(matches!(busy, Err(Held::State(error)) if error.code == Code::Busy));
         drop(other);
 
         // Held throughout, and recorded before root is asked.
@@ -2200,7 +2200,7 @@ mod tests {
             |_| unreachable!("root is not asked"),
             || true,
         );
-        assert!(matches!(busy, Err(Held::State(error)) if error.code == "busy"));
+        assert!(matches!(busy, Err(Held::State(error)) if error.code == Code::Busy));
         drop(other);
 
         // Held while root runs and while the login is looked at.
@@ -2220,7 +2220,7 @@ mod tests {
                     },
                 );
                 match result {
-                    Err(Held::State(error)) if error.code == "busy" => {
+                    Err(Held::State(error)) if error.code == Code::Busy => {
                         std::thread::sleep(Duration::from_millis(20));
                         None
                     }

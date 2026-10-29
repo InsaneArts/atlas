@@ -3,7 +3,7 @@
 //! coordinates on the display, known keys and modifiers, and a total that
 //! finishes within two seconds.
 use crate::{
-    error::{Error, Result},
+    error::{Code, Error, Result},
     session::Display,
 };
 use serde::{Deserialize, Serialize};
@@ -165,7 +165,7 @@ impl Expect {
             .find(|key| !["pid", "window", "field"].contains(&key.as_str()))
         {
             return Err(Error::new(
-                "input",
+                Code::Input,
                 format!("\"expect\" has a member this build does not check: {unknown}"),
             ));
         }
@@ -214,16 +214,16 @@ impl Expect {
 }
 
 fn not_a_process() -> Error {
-    Error::new("input", "\"expect\" must name a process ID")
+    Error::new(Code::Input, "\"expect\" must name a process ID")
 }
 
 fn not_a_window() -> Error {
-    Error::new("input", "\"window\" must be a window number")
+    Error::new(Code::Input, "\"window\" must be a window number")
 }
 
 fn not_a_field() -> Error {
     Error::new(
-        "input",
+        Code::Input,
         format!("\"field\" must be a name of 1 to {FIELD_MAX} characters"),
     )
 }
@@ -426,7 +426,7 @@ pub fn validate(value: &Value, display: &Display) -> Result<()> {
 pub(crate) fn parse(value: &Value, display: &Display) -> Result<Vec<Action>> {
     let actions = Vec::<Action>::deserialize(value)?;
     if actions.is_empty() || actions.len() > 32 {
-        return Err(Error::new("input", "Send between 1 and 32 actions"));
+        return Err(Error::new(Code::Input, "Send between 1 and 32 actions"));
     }
 
     let point = |x: f64, y: f64| {
@@ -510,7 +510,7 @@ pub(crate) fn parse(value: &Value, display: &Display) -> Result<Vec<Action>> {
 
         if let Some(problem) = problem {
             return Err(Error::new(
-                "input",
+                Code::Input,
                 format!(
                     "Action {} was refused and nothing was sent: {problem}",
                     index + 1
@@ -522,7 +522,7 @@ pub(crate) fn parse(value: &Value, display: &Display) -> Result<Vec<Action>> {
 
         if cost > BATCH_MS {
             return Err(Error::new(
-                "input",
+                Code::Input,
                 "The batch would take longer than two seconds; send it in parts",
             ));
         }

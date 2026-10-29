@@ -308,7 +308,7 @@ pub(in crate::environment) fn print(
 pub(super) fn refusal(unprinted: Unprinted) -> crate::error::Error {
     match unprinted {
         Unprinted::TooLarge | Unprinted::TooSlow => crate::error::Error::new(
-            "input",
+            crate::error::Code::Input,
             "That app is too large for Atlas to check it later, so it was not installed",
         ),
         Unprinted::Unreadable(said) => problem(said),

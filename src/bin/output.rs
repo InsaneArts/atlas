@@ -1,6 +1,6 @@
 //! Result presentation, output streams and process result classification.
 use atlas::{
-    error::{Error, Holder},
+    error::{Code, Error, Holder},
     ui::{
         Format, hints,
         render::{self, View},
@@ -75,7 +75,7 @@ fn advise(value: &mut Value) {
 
     let next = hints::focus_advice(value).unwrap_or_else(|| {
         let holder = value["holder"].as_str().and_then(Holder::parse);
-        hints::step(code, holder, value["uncertain"] == true).to_owned()
+        hints::step(Code::parse(code), holder, value["uncertain"] == true).to_owned()
     });
     value["next"] = json!(next);
 }
@@ -102,7 +102,7 @@ mod tests {
 
     #[test]
     fn every_failure_for_programs_says_what_to_do_next() {
-        for code in atlas::error::CODES {
+        for code in Code::ALL {
             let error = Error::new(code, "It failed");
             assert_eq!(
                 failure(&error, true)["next"],
@@ -111,16 +111,16 @@ mod tests {
             );
         }
 
-        let uncertain = Error::new("transport", "No reply").uncertain();
+        let uncertain = Error::new(Code::Transport, "No reply").uncertain();
         assert_eq!(failure(&uncertain, true)["next"], hints::UNCERTAIN);
 
-        let held = Error::new("busy", "Wait").held_by(Holder::Person);
+        let held = Error::new(Code::Busy, "Wait").held_by(Holder::Person);
         assert_eq!(
             failure(&held, true)["next"],
-            hints::next("busy", Some(Holder::Person))
+            hints::next(Code::Busy, Some(Holder::Person))
         );
 
-        let waited = Error::new("busy", "Kept")
+        let waited = Error::new(Code::Busy, "Kept")
             .held_by(Holder::Agent)
             .with("waited", 30)
             .with("next", hints::WAITED);
@@ -130,7 +130,7 @@ mod tests {
             "a wait already made is kept"
         );
 
-        let yours = Error::new("uncertain", "Unknown")
+        let yours = Error::new(Code::Uncertain, "Unknown")
             .with("yours", true)
             .with("next", hints::UNKNOWN_OWN);
         assert_eq!(
@@ -139,7 +139,7 @@ mod tests {
             "an unknown action of this session's own keeps its step"
         );
 
-        let said = Error::new("elements", "Incomplete").with("next", "Try again.");
+        let said = Error::new(Code::Elements, "Incomplete").with("next", "Try again.");
         assert_eq!(
             failure(&said, true)["next"],
             "Try again.",
@@ -148,7 +148,7 @@ mod tests {
 
         let mut result = json!({"ok": false, "code": "wait-failed", "uncertain": false});
         advise(&mut result);
-        assert_eq!(result["next"], hints::next("wait-failed", None));
+        assert_eq!(result["next"], hints::next(Code::WaitFailed, None));
 
         let mut typed = json!({"ok": false, "code": "busy", "holder": "agent", "uncertain": true});
         advise(&mut typed);
@@ -159,27 +159,27 @@ mod tests {
         for (mut waiting, code, holder) in [
             (
                 json!({"ok": false, "code": "stopped", "uncertain": true}),
-                "stopped",
+                Code::Stopped,
                 None,
             ),
             (
                 json!({"ok": false, "code": "cancelled", "uncertain": true}),
-                "cancelled",
+                Code::Cancelled,
                 None,
             ),
             (
                 json!({"ok": false, "code": "busy", "holder": "person", "uncertain": true}),
-                "busy",
+                Code::Busy,
                 Some(Holder::Person),
             ),
         ] {
             advise(&mut waiting);
             assert_eq!(waiting["next"], hints::next(code, holder), "{code}");
         }
-        let stopped = Error::new("stopped", "Stopped").uncertain();
+        let stopped = Error::new(Code::Stopped, "Stopped").uncertain();
         assert_eq!(
             failure(&stopped, true)["next"],
-            hints::next("stopped", None)
+            hints::next(Code::Stopped, None)
         );
 
         for mut untouched in [
@@ -263,7 +263,7 @@ mod tests {
             );
         }
 
-        let error = Error::new("focus-changed", "Calculator has keyboard focus")
+        let error = Error::new(Code::FocusChanged, "Calculator has keyboard focus")
             .with("reason", "unreadable");
         assert_eq!(
             failure(&error, true)["next"],
@@ -273,7 +273,7 @@ mod tests {
 
     #[test]
     fn a_failure_another_atlas_process_reads_has_no_next_step() {
-        let error = Error::new("transport", "No reply");
+        let error = Error::new(Code::Transport, "No reply");
         assert!(failure(&error, false).get("next").is_none());
         assert_eq!(failure(&error, false), json!(error));
     }

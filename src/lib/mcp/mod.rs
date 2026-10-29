@@ -12,7 +12,7 @@
 //! as its own window's does, so one controller at a time holds it.
 use crate::{
     client::{Actor, Client},
-    error::{Error, Result},
+    error::{Code, Error, Result},
     helper_info::{
         FRAME_LIMIT, ICONS, Icons, capture_time, captures, frame, open_apps, read_capture,
         thumbnail,
@@ -250,7 +250,7 @@ pub async fn serve(
         }
         if !registry.is_empty() {
             return Err(Error::new(
-                "menubar",
+                Code::Menubar,
                 "A view's cleanup is unconfirmed; Atlas retains pending native work for recovery",
             ));
         }
@@ -329,7 +329,7 @@ async fn post(url: &str, route: &'static str, body: Value) -> Result<Value> {
     let url = url.to_owned();
     tokio::task::spawn_blocking(move || crate::viewer::post_local(&url, route, &body))
         .await
-        .map_err(|_| Error::new("menubar", "Atlas's menu bar didn't answer"))?
+        .map_err(|_| Error::new(Code::Menubar, "Atlas's menu bar didn't answer"))?
 }
 
 /// A JSON-RPC result for request `id`.
@@ -482,7 +482,7 @@ impl Server {
         let output = self.client.output_dir()?.to_path_buf();
         let (status, _) = crate::watch::read(&self.client, &output, self.port)
             .await
-            .ok_or_else(|| Error::new("menubar", "Atlas's menu bar is busy; try again"))?;
+            .ok_or_else(|| Error::new(Code::Menubar, "Atlas's menu bar is busy; try again"))?;
         // The records and notes are read under their locks, off the runtime.
         let client = self.client.clone();
         let (recent, unrecorded) = tokio::task::spawn_blocking(move || {
@@ -491,7 +491,7 @@ impl Server {
             (recent, unrecorded)
         })
         .await
-        .map_err(|_| Error::new("state", "Atlas could not read its sessions"))?;
+        .map_err(|_| Error::new(Code::State, "Atlas could not read its sessions"))?;
         let named = names(recent.iter().map(|seen| &seen.record));
         let own = own_session(
             self.host_session.as_ref(),
@@ -612,14 +612,14 @@ impl Server {
             return Ok(url);
         }
         if !start {
-            return Err(Error::new("menubar", "Atlas's menu bar isn't running"));
+            return Err(Error::new(Code::Menubar, "Atlas's menu bar isn't running"));
         }
 
         let (_, record) = crate::menubar::launch(&self.config, self.port, &output).await?;
         record["url"]
             .as_str()
             .map(str::to_owned)
-            .ok_or_else(|| Error::new("menubar", "The menu bar's record names no viewer"))
+            .ok_or_else(|| Error::new(Code::Menubar, "The menu bar's record names no viewer"))
     }
 
     /// A key the viewer at `url` keeps a frame under now: the last one seen
@@ -637,7 +637,7 @@ impl Server {
             crate::viewer::fetch_frame(&address, FRAME_DEADLINE, FRAME_LIMIT)
         })
         .await
-        .map_err(|_| Error::new("menubar", "Atlas's menu bar didn't answer"))??;
+        .map_err(|_| Error::new(Code::Menubar, "Atlas's menu bar didn't answer"))??;
         *self.shared.lock().await = Some(Seen {
             key: frame.key.clone(),
             at: Instant::now(),
@@ -662,7 +662,7 @@ impl Server {
             crate::viewer::fetch_frame(&address, FRAME_DEADLINE, FRAME_LIMIT)
         })
         .await
-        .map_err(|_| Error::new("menubar", "Atlas's menu bar didn't answer"))??;
+        .map_err(|_| Error::new(Code::Menubar, "Atlas's menu bar didn't answer"))??;
         *self.shared.lock().await = Some(Seen {
             key: frame.key.clone(),
             at: Instant::now(),
@@ -684,7 +684,7 @@ impl Server {
             let reply = post(&url, "control/acquire", json!({"frame": frame.key})).await?;
             let lease = reply["lease"]
                 .as_str()
-                .ok_or_else(|| Error::new("menubar", "The menu bar gave no control"))?;
+                .ok_or_else(|| Error::new(Code::Menubar, "The menu bar gave no control"))?;
             let taken = Held {
                 url,
                 lease: lease.to_owned(),
@@ -708,7 +708,7 @@ impl Server {
         let mut picture = self
             .frame_of(frame.png)
             .await
-            .ok_or_else(|| Error::new("capture", "The helper's screen couldn't be prepared"))?;
+            .ok_or_else(|| Error::new(Code::Capture, "The helper's screen couldn't be prepared"))?;
         picture["key"] = json!(frame.key);
         result["_meta"] = json!({ FRAME_META: picture });
         Ok(result)
@@ -746,7 +746,7 @@ impl Server {
             // (and still kept alive by the view) when the release failed.
             match post(&held.url, "control/release", json!({"lease": held.lease})).await {
                 Ok(_) => self.forget(&held).await,
-                Err(error) if error.code == "lease-lost" => self.forget(&held).await,
+                Err(error) if error.code == Code::LeaseLost => self.forget(&held).await,
                 Err(error) => return Err(error),
             }
         }
@@ -763,7 +763,10 @@ impl Server {
             .as_str()
             .filter(|key| !key.is_empty())
             .ok_or_else(|| {
-                Error::new("stale-frame", "Wait for a fresh frame before sending input")
+                Error::new(
+                    Code::StaleFrame,
+                    "Wait for a fresh frame before sending input",
+                )
             })?;
         let body = json!({"lease": held.lease, "frame": key, "actions": actions});
         let sent = post(&held.url, "input", body).await;
@@ -785,7 +788,7 @@ impl Server {
             release(&lapsed).await;
         }
         held.clone()
-            .ok_or_else(|| Error::new("lease-lost", "Take control first"))
+            .ok_or_else(|| Error::new(Code::LeaseLost, "Take control first"))
     }
 
     /// Whether the person has control from here now.
@@ -813,7 +816,11 @@ impl Server {
                 }
             }
             Err(error)
-                if same && !matches!(error.code, "busy" | "input" | "invalid-json" | "menubar") =>
+                if same
+                    && !matches!(
+                        error.code,
+                        Code::Busy | Code::Input | Code::InvalidJson | Code::Menubar
+                    ) =>
             {
                 if let Some(ended) = held.take() {
                     release(&ended).await;
@@ -920,7 +927,7 @@ impl Server {
     /// One screenshot an agent took, as a thumbnail or `full`.
     async fn screenshot(&self, name: &str, full: bool) -> Result<Value> {
         if capture_time(name).is_none() {
-            return Err(Error::new("bad-request", "No screenshot has that name"));
+            return Err(Error::new(Code::BadRequest, "No screenshot has that name"));
         }
 
         let output = self.client.output_dir()?.to_path_buf();
@@ -930,7 +937,7 @@ impl Server {
             if full { frame(&png) } else { thumbnail(&png) }
         })
         .await
-        .map_err(|_| Error::new("capture", "The screenshot could not be read"))??;
+        .map_err(|_| Error::new(Code::Capture, "The screenshot could not be read"))??;
 
         Ok(json!({
             "content": [{"type": "text", "text": "A screenshot from the helper."}],
@@ -948,11 +955,11 @@ impl Server {
             let account = crate::switch::accounts(Some(helper))?
                 .into_iter()
                 .find(|account| account.helper)
-                .ok_or_else(|| Error::new("switch", "The helper's account wasn't found"))?;
+                .ok_or_else(|| Error::new(Code::Switch, "The helper's account wasn't found"))?;
             crate::switch::to(&account)
         })
         .await
-        .map_err(|_| Error::new("switch", "The screen didn't lock"))??;
+        .map_err(|_| Error::new(Code::Switch, "The screen didn't lock"))??;
 
         Ok(json!({
             "content": [{"type": "text", "text": "The screen is locked. Choose the helper there."}],
@@ -966,7 +973,7 @@ impl Server {
         let reply = self.person().logout(false).await?;
         if reply["ok"] != true {
             return Err(Error::new(
-                "logout",
+                Code::Logout,
                 reply["error"]
                     .as_str()
                     .unwrap_or("The helper didn't log out")
@@ -1384,7 +1391,7 @@ fn sentence(text: &str) -> String {
 /// takes at once. The helper's own checks (points on its display, typing
 /// within its time) come when it is sent.
 fn checked(actions: &Value) -> Result<&Value> {
-    let refused = |why: &str| Error::new("input", why.to_owned());
+    let refused = |why: &str| Error::new(Code::Input, why.to_owned());
     let list = actions
         .as_array()
         .filter(|list| (1..=ACTIONS).contains(&list.len()))

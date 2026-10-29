@@ -5,7 +5,7 @@
 use crate::{
     client::Client,
     config::{self, Config},
-    error::{Error, Result},
+    error::{Code, Error, Result},
     setup::{
         self,
         configuration::{proposed, replace_config, write_config},
@@ -31,7 +31,7 @@ use std::{
 const PATIENCE: Duration = Duration::from_secs(30 * 60);
 
 fn problem(message: impl Into<String>) -> Error {
-    Error::new("init", message)
+    Error::new(Code::Init, message)
 }
 
 /// A command that must succeed and talks to the person itself (sudo and
@@ -811,7 +811,7 @@ fn offer_lock(name: &str, uid: u32) -> Result<()> {
                     &format!("click Switch User and choose {name}"),
                 );
             }
-            Err(error) if error.code == "not-ready" => return Err(error),
+            Err(error) if error.code == Code::NotReady => return Err(error),
             Err(error) => skipped("Screen not locked", &error.error),
         }
     } else {

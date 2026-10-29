@@ -1,6 +1,6 @@
 //! Discovery and bounded HTTP access to the local menu bar viewer.
 use super::{MENUBAR_RECORD, SERVICE, unanswered};
-use crate::error::{Error, Result};
+use crate::error::{Code, Error, Result};
 use serde_json::Value;
 use std::{path::Path, time::Duration};
 
@@ -303,8 +303,8 @@ pub(crate) fn post_local(url: &str, route: &str, body: &Value) -> Result<Value> 
         // Atlas knows.
         let code = reply["code"]
             .as_str()
-            .and_then(crate::error::code)
-            .unwrap_or("menubar");
+            .and_then(crate::error::Code::parse)
+            .unwrap_or(Code::Menubar);
         let error = Error::new(
             code,
             reply["error"]

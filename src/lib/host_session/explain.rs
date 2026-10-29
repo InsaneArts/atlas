@@ -75,7 +75,7 @@ pub fn reply(
 ) -> Result<Value> {
     let refusal = match &result {
         Err(error) => Refusal::of(
-            error.code,
+            error.code.as_str(),
             error.holder,
             error.uncertain,
             error.details.get("reason").and_then(Value::as_str),

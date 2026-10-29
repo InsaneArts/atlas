@@ -444,7 +444,7 @@ fn keep_what_was_left(record: &mut Record, kind: Kind, reply: &Value, now: u64) 
 /// was another's, agents were stopped, or an earlier outcome is unknown.
 fn refused(result: &Result<Value>) -> bool {
     let (code, uncertain) = match result {
-        Err(error) => (error.code, error.uncertain),
+        Err(error) => (error.code.as_str(), error.uncertain),
         Ok(value) if value["ok"] == false => (
             value["code"].as_str().unwrap_or_default(),
             value["uncertain"] == true,

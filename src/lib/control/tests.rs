@@ -270,20 +270,20 @@ fn a_reused_executor_pid_is_not_alive_on_a_different_boot_or_start_time() {
     assert!(
         executor_running_with(
             &file,
-            || Err(Error::new("state", "unreadable boot")),
-            |_| Err(Error::new("state", "unreadable process")),
+            || Err(Error::new(Code::State, "unreadable boot")),
+            |_| Err(Error::new(Code::State, "unreadable process")),
         ),
         "unreadable observations do not release a live executor"
     );
     assert!(executor_running_with(
         &file,
-        || Err(Error::new("state", "unreadable boot")),
+        || Err(Error::new(Code::State, "unreadable boot")),
         |_| Ok([0, 0]),
     ));
     assert!(executor_running_with(
         &file,
         || Ok("different boot".into()),
-        |_| Err(Error::new("state", "unreadable process")),
+        |_| Err(Error::new(Code::State, "unreadable process")),
     ));
 }
 
@@ -339,8 +339,8 @@ fn an_exited_executor_releases_its_claim_when_its_identity_is_unavailable() {
         .unwrap();
     assert!(!executor_running_with(
         &file,
-        || Err(Error::new("state", "unreadable boot")),
-        |_| Err(Error::new("state", "process no longer exists")),
+        || Err(Error::new(Code::State, "unreadable boot")),
+        |_| Err(Error::new(Code::State, "process no longer exists")),
     ));
 }
 

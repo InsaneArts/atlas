@@ -7,7 +7,7 @@
 use super::Account;
 use crate::{
     config::{self, save_private},
-    error::Result,
+    error::{Code, Result},
 };
 use serde::{Deserialize, Serialize};
 use std::{
@@ -112,7 +112,7 @@ pub fn standing(on_file: &OnFile, now: Option<&Identity>) -> Standing {
 pub fn remember(account: &Account, chosen: bool) -> Result<Identity> {
     let identity = current(account).ok_or_else(|| {
         crate::error::Error::new(
-            "setup",
+            Code::Setup,
             format!("macOS could not say which account {} is", account.name),
         )
     })?;
@@ -130,7 +130,7 @@ pub fn remember_as(account: &Account, expected: &Identity, chosen: bool) -> Resu
         || account.name != expected.name
     {
         return Err(crate::error::Error::new(
-            "setup",
+            Code::Setup,
             "The chosen helper account changed; choose it again",
         ));
     }
@@ -144,7 +144,7 @@ fn remember_in(home: &Path, identity: &Identity, chosen: bool) -> Result<()> {
             Standing::Unrecorded(_) => {}
             Standing::Replaced | Standing::Unknown => {
                 return Err(crate::error::Error::new(
-                    "setup",
+                    Code::Setup,
                     format!(
                         "The account with user ID {} is not the helper Atlas set up. Choose the \
                          helper again.",

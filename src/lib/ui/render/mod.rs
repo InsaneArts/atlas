@@ -9,7 +9,7 @@ mod manage;
 mod observe;
 
 use super::{hints, style, text};
-use crate::error::Error;
+use crate::error::{Code, Error};
 use serde_json::Value;
 
 /// Which command produced a result, with what the result alone cannot say.
@@ -189,7 +189,7 @@ fn failed(value: &Value) -> Option<Rendered> {
 
 /// An error as a person reads it.
 pub fn error(error: &Error) -> String {
-    if error.code == "cancelled" {
+    if error.code == Code::Cancelled {
         return format!("{} {}", style::unknown(), error.error);
     }
 
@@ -274,7 +274,7 @@ fn point(at: &Value) -> Option<(f64, f64)> {
 /// `✗ what went wrong` and, when the message does not already say, `→ what
 /// to do`. Messages can carry text from the helper, so each line is made
 /// safe to print.
-pub fn card(message: &str, code: Option<&str>, uncertain: bool) -> String {
+pub fn card(message: &str, code: Option<Code>, uncertain: bool) -> String {
     let fix = if uncertain {
         Some(hints::UNCERTAIN)
     } else if message.to_lowercase().contains("run atlas ") {
@@ -294,7 +294,7 @@ pub(super) fn advised_card(message: &str, result: &Value) -> String {
         Some(advice) => card_with(message, Some(&advice)),
         None => card(
             message,
-            result["code"].as_str(),
+            result["code"].as_str().and_then(Code::parse),
             result["uncertain"] == true,
         ),
     }

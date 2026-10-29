@@ -1,7 +1,7 @@
 //! What the helper's status proves about its session: the display and the
 //! processes an action is tied to (its [`Epoch`]), whether the helper is the
 //! hidden graphical login it must be, and the doctor report built from it.
-use crate::error::{Error, Result};
+use crate::error::{Code, Error, Result};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use std::time::Duration;
@@ -87,7 +87,7 @@ impl InputEpoch {
     pub fn from_proof(proof: &Value, process_id: u32) -> Result<Self> {
         let invalid = || {
             Error::new(
-                "identity",
+                Code::Identity,
                 "A hidden graphical session with valid geometry is required",
             )
         };
@@ -138,7 +138,7 @@ pub fn validate_uid(uid: u32) -> Result<()> {
 pub(crate) fn validate_target_uid(uid: u32, controller_uid: u32) -> Result<()> {
     if uid < FIRST_USER_UID || uid == controller_uid {
         return Err(Error::new(
-            "identity",
+            Code::Identity,
             "Target must be a distinct helper account with UID >= 501",
         ));
     }
@@ -154,7 +154,7 @@ pub fn require_hidden(value: &Value, uid: u32) -> Result<Session> {
         // A shell that may not reach the helper says so: it is not down.
         if value["code"] == "blocked" {
             return Err(Error::new(
-                "blocked",
+                Code::Blocked,
                 value["error"]
                     .as_str()
                     .unwrap_or("This shell may not connect to the helper"),
@@ -165,7 +165,7 @@ pub fn require_hidden(value: &Value, uid: u32) -> Result<Session> {
         // silent: the caller may try again.
         if value["code"] == "busy" {
             return Err(Error::new(
-                "busy",
+                Code::Busy,
                 value["error"]
                     .as_str()
                     .unwrap_or("The helper is serving too many requests; try again"),
@@ -175,7 +175,7 @@ pub fn require_hidden(value: &Value, uid: u32) -> Result<Session> {
         // A socket served by the wrong account stays an identity violation.
         if value["code"] == "identity" {
             return Err(Error::new(
-                "identity",
+                Code::Identity,
                 value["error"]
                     .as_str()
                     .unwrap_or("The helper socket belongs to another account"),
@@ -183,7 +183,7 @@ pub fn require_hidden(value: &Value, uid: u32) -> Result<Session> {
         }
 
         return Err(Error::new(
-            "transport",
+            Code::Transport,
             "The helper is not answering. Run atlas doctor.",
         ));
     }
@@ -193,14 +193,14 @@ pub fn require_hidden(value: &Value, uid: u32) -> Result<Session> {
         .is_some_and(|other| other != u64::from(uid))
     {
         return Err(Error::new(
-            "identity",
+            Code::Identity,
             "A different account answered than the configured helper. Run atlas doctor.",
         ));
     }
 
     if value["session"]["onConsole"] == true || value["sessionProof"]["onConsole"] == true {
         return Err(Error::new(
-            "on-console",
+            Code::OnConsole,
             "The helper is on screen right now. Atlas works only while it is in the \
              background: switch back to your own account.",
         ));
@@ -208,7 +208,7 @@ pub fn require_hidden(value: &Value, uid: u32) -> Result<Session> {
 
     let invalid = || {
         Error::new(
-            "identity",
+            Code::Identity,
             "The helper's session could not be verified. Run atlas doctor.",
         )
     };
@@ -1126,6 +1126,7 @@ mod tests {
         parse_processes, record_with, require_hidden, running_for, silent, stale_in,
         validate_target_uid,
     };
+    use crate::error::Code;
     use serde_json::json;
     use std::time::Duration;
 
@@ -1247,7 +1248,10 @@ mod tests {
         let error = require_hidden(&status, uid.max(501)).unwrap_err();
         assert_eq!(
             (error.code, error.error.as_str()),
-            ("busy", "The helper is serving too many requests; try again")
+            (
+                Code::Busy,
+                "The helper is serving too many requests; try again"
+            )
         );
     }
 
@@ -1260,7 +1264,7 @@ mod tests {
         let error = require_hidden(&status, uid.max(501)).unwrap_err();
         assert_eq!(
             (error.code, error.error.as_str()),
-            ("blocked", "This shell may not connect")
+            (Code::Blocked, "This shell may not connect")
         );
 
         let report = diagnose(status, uid.max(501));
@@ -1499,7 +1503,7 @@ mod tests {
         let record = record_with(503, false, found, |_| panic!("searched every directory"));
         assert!(record.exists());
 
-        let failed = Err(crate::error::Error::new("setup", "The lookup failed"));
+        let failed = Err(crate::error::Error::new(Code::Setup, "The lookup failed"));
         let record = record_with(503, false, failed, |_| panic!("searched every directory"));
         assert!(
             record.exists(),

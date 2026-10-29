@@ -12,6 +12,7 @@
 //! session is checked again before the file is opened and between parts,
 //! so nothing is read once the helper has come on screen.
 use super::protocol::{FileIdentity, READ_RANGE_MAX, ReadRefusal, ReadRequest, failure};
+use crate::error::Code;
 use base64::{Engine, engine::general_purpose::STANDARD};
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
@@ -473,7 +474,7 @@ fn digest(file: &File, size: u64, guard: &dyn Fn() -> Result<(), Value>) -> Resu
 
 /// The refusal for `reason`: nothing in the helper changed.
 fn refusal(reason: ReadRefusal) -> Value {
-    let mut reply = failure("collect", reason.said());
+    let mut reply = failure(Code::Collect, reason.said());
     reply["reason"] = json!(reason);
     reply
 }

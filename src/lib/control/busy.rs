@@ -2,7 +2,7 @@
 //! person through a viewer, another Atlas command, or a command an agent
 //! started with `run`), and how long it waited first.
 use super::Purpose;
-use crate::error::{Error, Holder};
+use crate::error::{Code, Error, Holder};
 use std::time::Duration;
 
 /// A wait in whole seconds, rounded to the nearest, as a reply says how
@@ -15,7 +15,7 @@ pub(crate) fn seconds(waited: Duration) -> u64 {
 /// Busy because the person has control through a viewer: never waited for.
 /// `waited` is how long a controller given a wait had waited by then.
 pub(super) fn busy_person(waited: Option<Duration>) -> Error {
-    let error = Error::new("busy", crate::error::PERSON_HAS_CONTROL).held_by(Holder::Person);
+    let error = Error::new(Code::Busy, crate::error::PERSON_HAS_CONTROL).held_by(Holder::Person);
     match waited {
         Some(waited) => error.with("waited", seconds(waited)),
         None => error,
@@ -36,7 +36,7 @@ pub(super) fn busy_agent(waited: Option<Duration>, wait: Duration) -> Error {
             .to_owned(),
     };
 
-    let error = Error::new("busy", message).held_by(Holder::Agent);
+    let error = Error::new(Code::Busy, message).held_by(Holder::Agent);
     match waited {
         Some(waited) => error
             .with("waited", seconds(waited))
@@ -49,7 +49,7 @@ pub(super) fn busy_agent(waited: Option<Duration>, wait: Duration) -> Error {
 /// still run: held by an agent, so nobody is told to recover them, and
 /// marked as a running command for programs to tell from a held lock.
 pub(super) fn busy_running(message: impl Into<String>) -> Error {
-    Error::new("busy", message)
+    Error::new(Code::Busy, message)
         .held_by(Holder::Agent)
         .with("running", "command")
         .with("next", crate::ui::hints::COMMAND_RUNNING)

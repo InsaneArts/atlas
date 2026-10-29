@@ -36,7 +36,7 @@ use marker::{Unsettled, pending};
 
 use crate::{
     config::home,
-    error::{Error, Result},
+    error::{Code, Error, Result},
     files::{open_lock, probe_write},
     host_session::{HostSession, Key, Label},
     interrupt::{Hold, Interrupt},
@@ -380,7 +380,7 @@ impl Controller {
         let lock = self.take_lock()?;
         let unknown = match self.require_known_beside(Beside::Nothing) {
             Ok(()) => false,
-            Err(error) if error.code == "uncertain" => true,
+            Err(error) if error.code == Code::Uncertain => true,
             Err(error) => return Err(error),
         };
         Ok((self.owning(lock), unknown))
@@ -530,7 +530,7 @@ impl Controller {
                 Err(busy_command(Purpose::Change(Beside::Nothing)))
             }
             (Unsettled::Unknown, _) => Err(Error::new(
-                "uncertain",
+                Code::Uncertain,
                 "The last action's outcome is unknown; Atlas waits until it is recovered.",
             )),
         }
@@ -554,7 +554,7 @@ impl Controller {
             .any(|generation| self.in_progress(generation))
         {
             return Err(Error::new(
-                "busy",
+                Code::Busy,
                 "An Atlas executor is still carrying out an action. Wait for it to end before recovering.",
             ));
         }
@@ -573,7 +573,7 @@ fn real_directory(directory: &Path) -> Result<()> {
         || metadata.uid() != nix::unistd::getuid().as_raw()
     {
         return Err(Error::new(
-            "state",
+            Code::State,
             format!(
                 "{} is a link or not a folder of this account. Remove it, then try again.",
                 directory.display()

@@ -8,7 +8,7 @@ use super::{
     record::{Owned, Record, State, VERSION},
 };
 use crate::{
-    error::{Error, Result},
+    error::{Code, Error, Result},
     files::Durability,
     host_session::{Key, store::Store as Sessions},
     record_folder::{LISTED, RecordFolder, Records},
@@ -96,7 +96,7 @@ impl Store {
             Read::Missing => (Record::new(task, now), true),
             Read::Kept => {
                 return Err(Error::new(
-                    "state",
+                    Code::State,
                     "This task's record cannot be read by this version of Atlas, so it was left as it is",
                 ));
             }

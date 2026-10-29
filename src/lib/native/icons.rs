@@ -1,13 +1,13 @@
 //! App icons for agent apps to show beside the helper's apps, read on the
 //! person's side from the app bundles the helper runs.
-use crate::error::{Error, Result};
+use crate::error::{Code, Error, Result};
 use objc2_app_kit::NSWorkspace;
 use objc2_foundation::NSString;
 use std::path::Path;
 
 /// The icon of the app bundle at `bundle` as a `size`×`size` PNG.
 pub fn png(bundle: &Path, size: usize) -> Result<Vec<u8>> {
-    let missing = || Error::new("apps", "The app's icon could not be read");
+    let missing = || Error::new(Code::Apps, "The app's icon could not be read");
     // Finder's generic icon stands in for a bundle that is not there; no
     // icon is better than a wrong one.
     if !bundle.join("Contents").is_dir() {

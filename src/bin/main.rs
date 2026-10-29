@@ -9,7 +9,7 @@ mod update;
 use atlas::{
     client::Client,
     config::Config,
-    error::Error,
+    error::{Code, Error},
     interrupt::{Interrupt, Stopped},
     menubar,
     ui::{self, Format, render, style},
@@ -288,7 +288,7 @@ fn report_stop(format: Format, stopped: &Stopped, advised: bool) {
 /// A helper that did not answer because it is logged out says so, in place
 /// of "not answering": an agent cannot fix that, but the person can.
 fn or_logged_out(error: Error, config: &std::path::Path) -> Error {
-    if error.code != "transport" || error.uncertain {
+    if error.code != Code::Transport || error.uncertain {
         return error;
     }
 
@@ -298,7 +298,7 @@ fn or_logged_out(error: Error, config: &std::path::Path) -> Error {
 
     match atlas::session::absence(config.helper_uid) {
         Some(atlas::session::Absence::LoggedOut(_)) => Error::new(
-            "logged-out",
+            Code::LoggedOut,
             "The helper is logged out (after a restart or a log-out)",
         ),
         _ => error,

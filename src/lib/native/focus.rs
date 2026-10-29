@@ -10,7 +10,7 @@ use super::{
 };
 use crate::{
     actions::{Action, Expect},
-    error::{Error, Result},
+    error::{Code, Error, Result},
     select::{ElementFilter, shown_name},
 };
 use serde::Serialize;
@@ -241,7 +241,7 @@ impl Live {
         let left = self.deadline.saturating_duration_since(Instant::now());
         if left.is_zero() {
             return Err(Error::new(
-                "native",
+                Code::Native,
                 "The time to check which app is in front ran out",
             ));
         }
@@ -705,7 +705,7 @@ fn unread_by(error: Error) -> Error {
 
 /// A `focus-changed` refusal for `reason`, naming what was `found`.
 fn refused(reason: Reason, message: String, found: Option<Found>) -> Error {
-    let error = Error::new("focus-changed", message).with("reason", reason);
+    let error = Error::new(Code::FocusChanged, message).with("reason", reason);
     match found {
         Some(found) => error.with("found", found),
         None => error,

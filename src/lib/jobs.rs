@@ -13,7 +13,7 @@ use crate::{
         JobView, Logged, Progress, SessionPin, Showing, Shown, StopCameTo, StopReason, Stopped,
         job_name,
     },
-    error::{Error, Result},
+    error::{Code, Error, Result},
     host_session::{Key, now_ms},
     task::{
         record::{JobEntry, Lenient, Noted},
@@ -51,16 +51,19 @@ pub async fn start(
 ) -> Result<Value> {
     if argv.is_empty() || argv[0].is_empty() || argv.iter().any(|a| a.contains('\0')) {
         return Err(Error::new(
-            "input",
+            Code::Input,
             "Provide a command and arguments after job start --",
         ));
     }
     if lifetime < Duration::from_secs(1) || lifetime > JOB_LIFETIME_MAX {
-        return Err(Error::new("usage", "A job may run for 1 second to a day"));
+        return Err(Error::new(
+            Code::Usage,
+            "A job may run for 1 second to a day",
+        ));
     }
     if name.as_deref().is_some_and(|name| !job_name(name)) {
         return Err(Error::new(
-            "usage",
+            Code::Usage,
             "Give a name of 1 to 64 characters, none of them a control character",
         ));
     }
@@ -68,7 +71,7 @@ pub async fn start(
     // The helper ends every job while agents are stopped, the person's
     // own included, so none is started then.
     if client.stop_marked() {
-        return Err(Error::new("stopped", crate::error::STOPPED));
+        return Err(Error::stopped());
     }
     let ownership = client.controller.acquire_beside_commands()?;
     let verified = client.verify_offering(JOBS, OLDER).await?;
@@ -240,7 +243,7 @@ async fn expected_for(client: &Client, id: &JobId, task: Option<&Key>) -> Result
                 checked: Checked::Task,
             }),
             None => Err(Error::new(
-                "job",
+                Code::Job,
                 "That task's record does not list this job; atlas job list --all shows whose it is",
             )
             .with("reason", JobRefusal::Unknown)
@@ -262,7 +265,7 @@ async fn expected_for(client: &Client, id: &JobId, task: Option<&Key>) -> Result
         Some(theirs) if Some(&theirs) != mine.as_ref() => Err(other_task(id, &theirs, "stop")),
         theirs => {
             let expected = shown.job().and_then(JobView::expected).ok_or_else(|| {
-                Error::new("job", "The job has not finished starting")
+                Error::new(Code::Job, "The job has not finished starting")
                     .with("reason", JobRefusal::Unknown)
                     .with("id", id)
             })?;
@@ -310,7 +313,7 @@ pub(crate) async fn stop_for_cleanup(client: &Client, task: &Key, id: &JobId) ->
 /// task `theirs`, naming the key to pass.
 fn other_task(id: &JobId, theirs: &Key, command: &str) -> Error {
     Error::new(
-        "job",
+        Code::Job,
         format!(
             "This job belongs to another task. Use it only to clean up after that task's \
              session was lost: atlas job {command} {id} --task {theirs}"
@@ -538,20 +541,24 @@ pub async fn log(client: &Client, id: &JobId, bytes: usize, task: Option<&Key>) 
                 return Err(other_task(id, &theirs, "log"));
             }
         }
-        Err(error) if error.code == "daemon" || error.details.contains_key("reason") => {
+        Err(error) if error.code == Code::Daemon || error.details.contains_key("reason") => {
             return Err(error);
         }
         Err(_) => {}
     }
     let request = json!({"op": "job", "action": "log", "id": id, "bytes": bytes});
-    let reply = client.transport.call(&request).await.map_err(certain)?;
+    let reply = client
+        .transport
+        .call(&request)
+        .await
+        .map_err(Error::certain)?;
     if reply["code"] == "bad-request" {
-        return Err(Error::new("daemon", OLDER));
+        return Err(Error::new(Code::Daemon, OLDER));
     }
     if reply["ok"] != true {
         return Err(refused(&reply));
     }
-    let malformed = || Error::new("protocol", "The job's log came back malformed");
+    let malformed = || Error::new(Code::Protocol, "The job's log came back malformed");
     let Ok(JobReply::Log(logged)) = JobReply::deserialize(&reply) else {
         return Err(malformed());
     };
@@ -642,7 +649,7 @@ pub(crate) async fn stop_every(client: &Client, reason: StopReason) -> Everyone 
         Ok(reply) if reply["ok"] == true => reply,
         // A daemon from before jobs, or none running, keeps none.
         Ok(reply) if reply["code"] == "bad-request" => return none,
-        Err(error) if error.code == "io" && !client.transport.path.exists() => return none,
+        Err(error) if error.code == Code::Io && !client.transport.path.exists() => return none,
         Ok(reply) => {
             return Everyone {
                 error: Some(refused(&reply).error),
@@ -689,9 +696,9 @@ pub(crate) async fn show(client: &Client, id: &JobId) -> Result<Shown> {
         .transport
         .call(&json!({"op": "job", "action": "show", "id": id}))
         .await
-        .map_err(certain)?;
+        .map_err(Error::certain)?;
     if reply["code"] == "bad-request" {
-        return Err(Error::new("daemon", OLDER));
+        return Err(Error::new(Code::Daemon, OLDER));
     }
     if reply["ok"] != true {
         return Err(refused(&reply));
@@ -713,7 +720,7 @@ pub(crate) async fn of_session(
     let jobs = match shown_all(client).await {
         Ok(jobs) => jobs,
         // A daemon from before jobs keeps none.
-        Err(error) if error.code == "daemon" && error.error == OLDER => Vec::new(),
+        Err(error) if error.code == Code::Daemon && error.error == OLDER => Vec::new(),
         Err(error) => return Err(error),
     };
     Ok(jobs
@@ -739,7 +746,7 @@ async fn shown_all(client: &Client) -> Result<Vec<Shown>> {
     let reply = daemon
         .call(&json!({"op": "job", "action": "show"}))
         .await
-        .map_err(certain)?;
+        .map_err(Error::certain)?;
     if reply["ok"] == true {
         return Ok(match JobReply::deserialize(&reply) {
             Ok(JobReply::Show(Showing::Every { jobs })) => jobs,
@@ -747,7 +754,7 @@ async fn shown_all(client: &Client) -> Result<Vec<Shown>> {
         });
     }
     if reply["code"] == "bad-request" {
-        return Err(Error::new("daemon", OLDER));
+        return Err(Error::new(Code::Daemon, OLDER));
     }
     Err(refused(&reply))
 }
@@ -770,7 +777,11 @@ fn entry(job: &JobView) -> Option<JobEntry> {
 /// A job reply the helper sent without the job it was about: what it did
 /// is not known.
 fn unconfirmed() -> Error {
-    Error::new("protocol", "Helper did not confirm operation completion").uncertain()
+    Error::new(
+        Code::Protocol,
+        "Helper did not confirm operation completion",
+    )
+    .uncertain()
 }
 
 /// Note `entry` in the record of the task `owner` names, else of this
@@ -795,7 +806,7 @@ fn note(client: &Client, owner: Option<&Key>, entry: JobEntry) -> Result<Noted> 
         noted = record.noted_job(entry);
         match noted {
             Noted::Full => Err(Error::new(
-                "state",
+                Code::State,
                 "This task's record is full of jobs that have not ended",
             )),
             Noted::Yes | Noted::Disagrees => Ok(()),
@@ -828,14 +839,6 @@ fn refused(reply: &Value) -> Error {
         }
     }
     error
-}
-
-/// `error` from something that only read: nothing in the helper changed.
-fn certain(error: Error) -> Error {
-    Error {
-        uncertain: false,
-        ..error
-    }
 }
 
 #[cfg(test)]

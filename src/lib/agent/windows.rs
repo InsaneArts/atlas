@@ -3,7 +3,7 @@
 //! none is left.
 use crate::{
     client::{Client, Verified},
-    error::{Error, Result},
+    error::{Code, Error, Result},
     native::windows::{Shown, Window},
     text::same_text,
 };
@@ -95,7 +95,7 @@ pub(super) fn windows_probe(client: &Client, dock: DockRead) -> Vec<String> {
 /// What the window probe's `reply` shows.
 fn shown(reply: &Value) -> Result<Shown> {
     crate::native::windows::from_probe(reply)
-        .ok_or_else(|| Error::new("windows", "The helper window list is unavailable"))
+        .ok_or_else(|| Error::new(Code::Windows, "The helper window list is unavailable"))
 }
 
 pub async fn list(client: &Client, filter: &WindowFilter) -> Result<Value> {
@@ -119,13 +119,13 @@ pub async fn wait(
     timeout: Duration,
 ) -> Result<Value> {
     if filter.app.is_none() && filter.title.is_none() {
-        return Err(Error::new("usage", "Wait for --app, --title, or both"));
+        return Err(Error::new(Code::Usage, "Wait for --app, --title, or both"));
     }
 
     let started = Instant::now();
     let deadline = started
         .checked_add(timeout)
-        .ok_or_else(|| Error::new("usage", "That --timeout is too long to wait"))?;
+        .ok_or_else(|| Error::new(Code::Usage, "That --timeout is too long to wait"))?;
 
     loop {
         // Each observation gets what is left of the deadline (at least half
@@ -161,7 +161,7 @@ pub async fn wait(
             };
 
             return Ok(json!(
-                Error::new("wait-failed", error).with("timedOut", true)
+                Error::new(Code::WaitFailed, error).with("timedOut", true)
             ));
         }
 

@@ -9,7 +9,7 @@ use super::{
 };
 use crate::{
     actions::{self, Action, Expect},
-    error::{Error, Holder, Result},
+    error::{Code, Error, Holder, Result},
     session::{Display, InputEpoch},
 };
 use serde::Deserialize;
@@ -132,7 +132,7 @@ impl Service {
         self.epoch
             .read()
             .map(|value| value.clone())
-            .map_err(|_| Error::new("native", "Input identity failed"))
+            .map_err(|_| Error::new(Code::Native, "Input identity failed"))
     }
 
     fn check(&self) -> Result<()> {
@@ -140,7 +140,7 @@ impl Service {
             || !Engine::trusted()
         {
             return Err(Error::new(
-                "identity",
+                Code::Identity,
                 "The input session or permission changed; release control",
             ));
         }
@@ -192,14 +192,14 @@ impl Service {
             // socket never honours a request meant for its predecessor.
             if request["pid"].as_u64() != Some(std::process::id().into()) {
                 return Err(Error::new(
-                    "identity",
+                    Code::Identity,
                     "Shutdown names a different input service process",
                 ));
             }
 
             if self.gate.active()? {
                 return Err(Error::new(
-                    "busy",
+                    Code::Busy,
                     "The input service has an active controller",
                 ));
             }
@@ -210,14 +210,14 @@ impl Service {
             let mut engine = self.engine.lock().await;
             if self.gate.active()? {
                 return Err(Error::new(
-                    "busy",
+                    Code::Busy,
                     "The input service has an active controller",
                 ));
             }
 
             if let Err(error) = engine.release() {
                 return Err(Error::new(
-                    "uncertain",
+                    Code::Uncertain,
                     format!("Held input could not be released: {}", error.error),
                 )
                 .uncertain());
@@ -252,7 +252,7 @@ impl Service {
             // restart: agents stay stopped until it can be removed.
             if !on && kept.is_err() {
                 return Err(Error::new(
-                    "native",
+                    Code::Native,
                     "Agents could not be resumed: the helper could not clear the stop",
                 ));
             }
@@ -273,7 +273,7 @@ impl Service {
             let current = InputEpoch::from_proof(&session_info()?, std::process::id())?;
             if expected != current || !Engine::trusted() {
                 return Err(Error::new(
-                    "identity",
+                    Code::Identity,
                     "Recovery requires the current hidden session and permission",
                 ));
             }
@@ -288,7 +288,8 @@ impl Service {
             *self
                 .epoch
                 .write()
-                .map_err(|_| Error::new("native", "Input identity failed"))? = engine.epoch.clone();
+                .map_err(|_| Error::new(Code::Native, "Input identity failed"))? =
+                engine.epoch.clone();
 
             rebound?;
             return Ok(json!({ "ok": true, "released": true }));
@@ -305,7 +306,7 @@ impl Service {
         let epoch = self.epoch()?;
         if expected != epoch {
             return Err(Error::new(
-                "session-changed",
+                Code::SessionChanged,
                 "Input coordinates belong to a different session or display",
             ));
         }
@@ -317,7 +318,7 @@ impl Service {
                 // An agent finding the person in control is told to wait.
                 let agent = request["person"] != true;
                 let error = Error::new(
-                    "busy",
+                    Code::Busy,
                     if agent && holder == Holder::Person {
                         crate::error::PERSON_HAS_CONTROL
                     } else {
@@ -340,7 +341,7 @@ impl Service {
         }
 
         if operation != Operation::Input {
-            return Err(Error::new("input", "Unknown native operation"));
+            return Err(Error::new(Code::Input, "Unknown native operation"));
         }
 
         let grant = self.gate.grant(owner)?;
@@ -506,7 +507,7 @@ fn failed(engine: &mut impl Perform, error: Error, performed: usize, before: u64
 
     // A viewer's cancel is the person's doing, watching what landed; a stop
     // (the helper hidden) or any other break mid-action leaves that unknown.
-    let unknown = partial && error.code != "cancelled";
+    let unknown = partial && error.code != Code::Cancelled;
     reply["uncertain"] = json!(cleanup.is_err() || unknown || error.uncertain);
 
     if let Err(error) = cleanup {
@@ -536,7 +537,7 @@ pub async fn serve(uid: u32, controller_uid: u32, socket: PathBuf) -> Result<()>
 
     if controller_uid == 0 {
         return Err(Error::new(
-            "identity",
+            Code::Identity,
             "The input service must run in a distinct helper account",
         ));
     }
@@ -638,7 +639,7 @@ pub async fn serve(uid: u32, controller_uid: u32, socket: PathBuf) -> Result<()>
                     // Nothing was dispatched: say so, rather than hang up in
                     // a way the controller must treat as uncertain.
                     super::endpoint::turn_away(stream, &json!(Error::new(
-                        "busy",
+                        Code::Busy,
                         "The input service is serving too many connections; try again",
                     )));
                     continue;
@@ -718,7 +719,7 @@ async fn reply(stream: &mut UnixStream, result: Result<Value>) -> Result<()> {
 
     tokio::time::timeout(Duration::from_secs(1), stream.write_all(&bytes))
         .await
-        .map_err(|_| Error::new("transport", "Native reply timed out"))??;
+        .map_err(|_| Error::new(Code::Transport, "Native reply timed out"))??;
 
     Ok(())
 }
@@ -729,6 +730,7 @@ mod tests {
         Action, CAPABILITIES, Duration, Error, Expect, Gate, MAX_REQUEST, Need, Perform, Result,
         admitted, read_request, run,
     };
+    use crate::error::Code;
     use serde_json::{Value, json};
     use std::sync::{Arc, Weak};
     use tokio::{io::AsyncWriteExt, net::UnixStream, sync::Mutex};
@@ -790,9 +792,11 @@ mod tests {
             let index = self.logged("check");
             self.log.push(format!("check {index}"));
             if self.script.get(index) == Some(&Step::Refuse) {
-                return Err(Error::new("focus-changed", "Calculator has keyboard focus")
-                    .with("reason", "app")
-                    .with("found", json!({"app": "Calculator", "pid": 812})));
+                return Err(
+                    Error::new(Code::FocusChanged, "Calculator has keyboard focus")
+                        .with("reason", "app")
+                        .with("found", json!({"app": "Calculator", "pid": 812})),
+                );
             }
             Ok(())
         }
@@ -803,7 +807,7 @@ mod tests {
             self.log.push(format!("post {index}"));
             self.posted += 1;
             match self.script.get(index) {
-                Some(Step::Break) => Err(Error::new("identity", "The session changed")),
+                Some(Step::Break) => Err(Error::new(Code::Identity, "The session changed")),
                 _ => Ok(()),
             }
         }

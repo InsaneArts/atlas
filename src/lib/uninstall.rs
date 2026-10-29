@@ -7,7 +7,7 @@ use crate::{
     client::Client,
     config::{self, Config},
     control::{Controller, Ownership},
-    error::{Error, Result},
+    error::{Code, Error, Result},
     onboarding::as_root::{self, Target, Via},
     setup::{
         self,
@@ -26,7 +26,7 @@ use std::{
 };
 
 fn problem(message: impl Into<String>) -> Error {
-    Error::new("uninstall", message)
+    Error::new(Code::Uninstall, message)
 }
 
 /// Remove `path` only if it is a link to the app's executable (or the app's
@@ -673,7 +673,7 @@ fn survey(config_path: &Path) -> Result<Found> {
     // Settings that exist but do not load name no helper, so its job stays.
     let (client, unloaded) = match Config::load(config_path) {
         Ok(config) => (Some(Client::new(config)?), None),
-        Err(error) if error.code == "config-invalid" => (None, Some(error.error)),
+        Err(error) if error.code == Code::ConfigInvalid => (None, Some(error.error)),
         Err(_) => (None, None),
     };
 
@@ -928,7 +928,7 @@ async fn log_out_helper(
         let came = match way {
             Way::Ask | Way::Force => match client.logout_held(ownership, way == Way::Force).await {
                 Ok(reply) if reply["loggedOut"] == true => Came::Gone,
-                Err(error) if error.code == "logout-held" => Came::Held,
+                Err(error) if error.code == Code::LogoutHeld => Came::Held,
                 _ => Came::Stayed,
             },
             Way::Root => {
@@ -990,7 +990,7 @@ fn unrecorded_message(name: &str) -> String {
 /// Uninstall's refusal when the helper stays logged in.
 fn still_logged_in() -> Error {
     Error::new(
-        "logout",
+        Code::Logout,
         "The helper is still logged in, so Atlas stopped before removing anything. Log it out \
          (atlas logout), then run atlas uninstall again.",
     )
@@ -2284,11 +2284,14 @@ mod tests {
         }
         for outcome in [
             Err(crate::error::Error::new(
-                "input",
+                Code::Input,
                 "Unknown native operation",
             )),
-            Err(crate::error::Error::new("io", "No such file or directory")),
-            Err(crate::error::Error::new("uncertain", "Shutdown reply lost").uncertain()),
+            Err(crate::error::Error::new(
+                Code::Io,
+                "No such file or directory",
+            )),
+            Err(crate::error::Error::new(Code::Uncertain, "Shutdown reply lost").uncertain()),
         ] {
             let dir = tempfile::tempdir().unwrap();
             let uncertain = outcome.as_ref().is_err_and(|error| error.uncertain);
@@ -2324,7 +2327,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let mut script = Script::new(dir.path(), &[false, false]);
         script.shutdown = Some(Err(crate::error::Error::new(
-            "input",
+            Code::Input,
             "Unknown native operation",
         )));
         assert_eq!(

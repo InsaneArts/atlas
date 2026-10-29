@@ -5,7 +5,7 @@ use super::expect::Expected;
 use crate::{
     actions::Button,
     client::{Check, Client},
-    error::{Error, Holder, Result},
+    error::{Code, Error, Holder, Result},
     interrupt::Interrupt,
 };
 use serde_json::{Value, json};
@@ -79,14 +79,14 @@ pub(super) fn type_batches(text: &str) -> Result<Vec<String>> {
         .any(|grapheme| grapheme.chars().count() > crate::actions::TEXT_MAX)
     {
         return Err(Error::new(
-            "input",
+            Code::Input,
             "A single character cluster is too long to type",
         ));
     }
 
     let batches = split_text(text, TYPE_BATCH);
     if batches.is_empty() {
-        return Err(Error::new("input", "Provide text to type"));
+        return Err(Error::new(Code::Input, "Provide text to type"));
     }
 
     Ok(batches)
@@ -183,8 +183,8 @@ impl Unconfirmed {
     pub(super) fn from_reply(reply: &Value) -> Self {
         let code = reply["code"]
             .as_str()
-            .and_then(crate::error::code)
-            .unwrap_or("input");
+            .and_then(crate::error::Code::parse)
+            .unwrap_or(Code::Input);
         let message = reply["error"]
             .as_str()
             .unwrap_or("The helper did not confirm the text");
@@ -254,7 +254,7 @@ pub(super) fn stopped_typing(
 pub fn keys(keys: &[String]) -> Result<Value> {
     if let Some(unknown) = keys.iter().find(|key| !crate::actions::valid_key(key)) {
         return Err(Error::new(
-            "usage",
+            Code::Usage,
             format!(
                 "{unknown} is not a key Atlas knows. Use a letter, digit or symbol, a name such \
                  as return, tab, escape, space, backspace, up or f5, with modifiers like cmd+s \

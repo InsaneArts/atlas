@@ -4,6 +4,7 @@
 //! types, so a field or reason is named once.
 use super::{SessionPin, failure};
 use crate::{
+    error::Code,
     host_session::Key,
     name::{lower_hex, name_type, random_hex},
     process::Start,
@@ -426,7 +427,10 @@ impl JobReply {
                 reply.insert("op".into(), Value::from("job"));
                 Value::Object(reply)
             }
-            _ => failure("job", "The helper could not write its reply about its jobs"),
+            _ => failure(
+                Code::Job,
+                "The helper could not write its reply about its jobs",
+            ),
         }
     }
 }
@@ -551,7 +555,7 @@ impl JobFailure {
     /// The refusal as it goes on the wire, in the shape every Atlas
     /// failure has.
     pub fn into_value(self) -> Value {
-        let mut reply = failure("job", "");
+        let mut reply = failure(Code::Job, "");
         if let (Ok(Value::Object(fields)), Some(reply)) =
             (serde_json::to_value(self), reply.as_object_mut())
         {

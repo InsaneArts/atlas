@@ -90,7 +90,7 @@ impl Look for Seen {
         self.focus_reads += 1;
         match &self.focused {
             Some(Ok(pid)) => Ok(*pid),
-            _ => Err(Error::new("native", "unreadable")),
+            _ => Err(Error::new(Code::Native, "unreadable")),
         }
     }
 
@@ -102,14 +102,14 @@ impl Look for Seen {
         }
         self.keyboard
             .clone()
-            .ok_or_else(|| Error::new("native", "unreadable"))
+            .ok_or_else(|| Error::new(Code::Native, "unreadable"))
     }
 
     fn windows(&mut self) -> Result<&[Window]> {
         self.window_reads += 1;
         self.windows
             .as_deref()
-            .ok_or_else(|| Error::new("windows", "unreadable"))
+            .ok_or_else(|| Error::new(Code::Windows, "unreadable"))
     }
 
     fn dock(&mut self) -> Dock {

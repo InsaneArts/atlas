@@ -5,7 +5,7 @@
 use crate::{
     client::Client,
     control::Ownership,
-    error::{Error, Result},
+    error::{Code, Error, Result},
     handoff, task,
     transport::{accepted, run_output},
 };
@@ -32,7 +32,7 @@ pub(super) async fn open_in(
 ) -> Result<Value> {
     if app.is_none() && targets.is_empty() {
         return Err(Error::new(
-            "usage",
+            Code::Usage,
             "Name an app with --app, a file or URL, or both",
         ));
     }
@@ -102,7 +102,7 @@ fn open_argv(environment: &[String]) -> Result<Vec<String>> {
             .is_none_or(|(name, _)| name.is_empty())
         {
             return Err(Error::new(
-                "usage",
+                Code::Usage,
                 format!("--env takes NAME=VALUE, not {variable}"),
             ));
         }
@@ -168,7 +168,7 @@ async fn launch(
 fn not_opened(reply: &Value, copied: &[crate::handoff::Copied]) -> Error {
     let mut error = if reply["timedOut"] == true {
         Error::new(
-            "wait-failed",
+            Code::WaitFailed,
             "macOS did not finish opening that in time; it may still be launching: \
              run atlas wait --app NAME, or look with atlas apps",
         )
@@ -177,7 +177,7 @@ fn not_opened(reply: &Value, copied: &[crate::handoff::Copied]) -> Error {
         let output = run_output(reply, 4096).unwrap_or_default();
         let said = String::from_utf8_lossy(&output).trim().to_owned();
         Error::new(
-            "spawn-failed",
+            Code::SpawnFailed,
             if said.is_empty() {
                 "macOS could not open that in the helper".to_owned()
             } else {

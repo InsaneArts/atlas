@@ -9,7 +9,7 @@ use crate::{
         DRAG_STEPS, FUNCTION, OPTION, PointerPhase, SCROLL_SETTLE, SHIFT, TYPE_GAP, modifier_flags,
         parse_key,
     },
-    error::{Error, Result},
+    error::{Code, Error, Result},
     native::{accessibility_trusted, session_info},
     session::InputEpoch,
 };
@@ -37,7 +37,7 @@ const TAP: CGEventTapLocation = CGEventTapLocation::SessionEventTap;
 const POST_ACCESS_TTL: Duration = Duration::from_millis(250);
 
 fn created(event: Option<CFRetained<CGEvent>>) -> Result<CFRetained<CGEvent>> {
-    event.ok_or_else(|| Error::new("native", "Could not create a native event"))
+    event.ok_or_else(|| Error::new(Code::Native, "Could not create a native event"))
 }
 
 /// The modifier keys a finished gesture releases, each with its flag:
@@ -109,7 +109,7 @@ impl Engine {
     pub fn new(uid: u32) -> Result<Self> {
         let source = CGEventSource::new(CGEventSourceStateID::Private)
             .map(Source)
-            .ok_or_else(|| Error::new("native", "Could not create the event source"))?;
+            .ok_or_else(|| Error::new(Code::Native, "Could not create the event source"))?;
         let mut engine = Self {
             epoch: InputEpoch::from_proof(&session_info()?, std::process::id())?,
             grant: None,
@@ -129,7 +129,7 @@ impl Engine {
 
         if engine.epoch.uid != uid {
             return Err(Error::new(
-                "identity",
+                Code::Identity,
                 "Input service UID differs from its configuration",
             ));
         }
@@ -147,14 +147,14 @@ impl Engine {
         let current = InputEpoch::from_proof(&session_info()?, std::process::id())?;
         if current != self.epoch {
             return Err(Error::new(
-                "identity",
+                Code::Identity,
                 "Native input requires the configured hidden graphical session",
             ));
         }
 
         if !Self::trusted() {
             return Err(Error::new(
-                "permission",
+                Code::Permission,
                 "The input process does not have Accessibility permission",
             ));
         }
@@ -168,7 +168,7 @@ impl Engine {
             if !objc2_core_graphics::CGPreflightPostEventAccess() {
                 self.post_access = None;
                 return Err(Error::new(
-                    "permission",
+                    Code::Permission,
                     "The input process may not post events (Accessibility)",
                 ));
             }
@@ -202,7 +202,10 @@ impl Engine {
         if current.uid != self.epoch.uid
             || current.security_session_id != self.epoch.security_session_id
         {
-            return Err(Error::new("identity", "Input recovery cannot cross logins"));
+            return Err(Error::new(
+                Code::Identity,
+                "Input recovery cannot cross logins",
+            ));
         }
 
         self.epoch = current;
@@ -339,7 +342,10 @@ impl Engine {
         match phase {
             PointerPhase::Down => {
                 if self.held.is_some() {
-                    return Err(Error::new("input", "Release the held mouse button first"));
+                    return Err(Error::new(
+                        Code::Input,
+                        "Release the held mouse button first",
+                    ));
                 }
 
                 self.mouse(CGEventType::MouseMoved, point, button, count, flags)?;
@@ -398,10 +404,10 @@ impl Engine {
             PointerPhase::Up => {
                 let held = self
                     .held
-                    .ok_or_else(|| Error::new("input", "No mouse button is held"))?;
+                    .ok_or_else(|| Error::new(Code::Input, "No mouse button is held"))?;
                 if held != button {
                     return Err(Error::new(
-                        "input",
+                        Code::Input,
                         "Mouse button does not match the active gesture",
                     ));
                 }
@@ -622,7 +628,7 @@ impl Engine {
             }
             Action::Key { key } => {
                 let (code, flags) =
-                    parse_key(&key).ok_or_else(|| Error::new("input", "Unsupported key"))?;
+                    parse_key(&key).ok_or_else(|| Error::new(Code::Input, "Unsupported key"))?;
                 self.key(code, flags, None)?;
             }
             Action::Wait { ms } => self.delay(Duration::from_millis(ms.into())).await?,
@@ -704,7 +710,7 @@ mod tests {
 
         let failed = release_each(&mut held, |code, rest| {
             if code == 56 {
-                return Err(Error::new("native", "Could not post"));
+                return Err(Error::new(Code::Native, "Could not post"));
             }
 
             posted.push((code, rest));

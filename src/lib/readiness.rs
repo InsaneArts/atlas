@@ -11,7 +11,7 @@
 use crate::{
     client::Client,
     environment::{discovery::discover, run as environment_run},
-    error::{Error, Result},
+    error::{Code, Error, Result},
     transport::run_output,
 };
 use serde_json::{Value, json};
@@ -83,7 +83,7 @@ async fn probe(client: &Client, home: &str, name: &str) -> Result<(Value, &'stat
         // is matched only for that.
         Err(error)
             if error.code == crate::environment::NO_PROFILE
-                || (error.code == "environment"
+                || (error.code == Code::Environment
                     && error.error.contains("No helper environment profile")) =>
         {
             let argv = vec![
@@ -219,7 +219,7 @@ fn usable_bundle(item: &Value) -> Option<&str> {
 pub async fn readiness(client: &Client, tools: &[String], apps: &[String]) -> Result<Value> {
     if tools.is_empty() && apps.is_empty() {
         return Err(Error::new(
-            "usage",
+            Code::Usage,
             "Select tools with --tool and apps with --app",
         ));
     }
@@ -228,7 +228,7 @@ pub async fn readiness(client: &Client, tools: &[String], apps: &[String]) -> Re
     let home = client.status().await["user"]["home"]
         .as_str()
         .map(str::to_owned)
-        .ok_or_else(|| Error::new("identity", "The helper home is unknown"))?;
+        .ok_or_else(|| Error::new(Code::Identity, "The helper home is unknown"))?;
     let mut reports = Vec::new();
 
     for item in found["selections"].as_array().into_iter().flatten() {

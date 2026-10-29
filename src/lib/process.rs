@@ -6,7 +6,7 @@
 //! account's process and a process that has exited but is not yet reaped,
 //! with its exact start time. `proc_pidinfo` refuses both; [`own`] keeps
 //! its rule, for what describes only this account's live processes.
-use crate::error::{Error, Result};
+use crate::error::{Code, Error, Result};
 use serde::{Deserialize, Serialize};
 use std::ffi::CStr;
 
@@ -316,7 +316,7 @@ fn boot_named(name: &CStr) -> Result<String> {
         .ok()
         .and_then(|boot| boot.to_str().ok())
         .map(str::to_owned)
-        .ok_or_else(|| Error::new("state", "Invalid boot session UUID"))
+        .ok_or_else(|| Error::new(Code::State, "Invalid boot session UUID"))
 }
 
 /// The exact start time of any account's process, an unreaped one
@@ -324,7 +324,7 @@ fn boot_named(name: &CStr) -> Result<String> {
 pub fn start(pid: i32) -> Result<Start> {
     info(pid)?
         .map(|info| info.instance.start)
-        .ok_or_else(|| Error::new("state", "The process's start time is unavailable"))
+        .ok_or_else(|| Error::new(Code::State, "The process's start time is unavailable"))
 }
 
 /// `pid` now, whoever's it is; None when no such process exists.
@@ -352,7 +352,7 @@ pub fn group(pgid: i32) -> Result<Vec<Info>> {
 /// Every process whose effective user ID is `uid`.
 pub fn of_user(uid: u32) -> Result<Vec<Info>> {
     let id = libc::c_int::try_from(uid)
-        .map_err(|_| Error::new("state", "The account's user ID is out of range"))?;
+        .map_err(|_| Error::new(Code::State, "The account's user ID is out of range"))?;
     Ok(
         listed(&mut [libc::CTL_KERN, libc::KERN_PROC, libc::KERN_PROC_UID, id])?
             .into_iter()
@@ -376,7 +376,7 @@ pub fn session(pid: i32) -> Option<i32> {
 )]
 fn listed(name: &mut [libc::c_int]) -> Result<Vec<Info>> {
     let length = libc::c_uint::try_from(name.len())
-        .map_err(|_| Error::new("state", "A process query is malformed"))?;
+        .map_err(|_| Error::new(Code::State, "A process query is malformed"))?;
     // The list can grow between asking its size and reading it: room for a
     // few more is asked for, and a list that still outgrew it is read again.
     for _ in 0..4 {
@@ -422,7 +422,7 @@ fn listed(name: &mut [libc::c_int]) -> Result<Vec<Info>> {
             return Err(error.into());
         }
         if size > buffer.len() || !size.is_multiple_of(KINFO_PROC) {
-            return Err(Error::new("state", "The process list is malformed"));
+            return Err(Error::new(Code::State, "The process list is malformed"));
         }
         // A record that does not decode is an error, never a process left
         // out: a missing process could read as one that ended.
@@ -430,12 +430,12 @@ fn listed(name: &mut [libc::c_int]) -> Result<Vec<Info>> {
             .chunks_exact(KINFO_PROC)
             .map(|record| {
                 parse(record)
-                    .ok_or_else(|| Error::new("state", "A process record could not be decoded"))
+                    .ok_or_else(|| Error::new(Code::State, "A process record could not be decoded"))
             })
             .collect();
     }
     Err(Error::new(
-        "state",
+        Code::State,
         "The process list kept changing while it was read",
     ))
 }

@@ -8,7 +8,7 @@
 use crate::{
     client::Client,
     environment,
-    error::{Error, Result},
+    error::{Code, Error, Result},
     files::Token,
     handoff::{self, Running, Target},
     task::{Claims, Owned, State, store::Store as Tasks},
@@ -25,7 +25,7 @@ pub async fn install(client: &Client, path: &Path) -> Result<Value> {
     let (bundle, name) = bundle(path)?;
     let task = client.task.clone().ok_or_else(|| {
         Error::new(
-            "usage",
+            Code::Usage,
             "Atlas installs an app only for a task, so atlas cleanup can remove it. Set \
              ATLAS_SESSION=NAME before the task's first command, then install again.",
         )
@@ -35,7 +35,7 @@ pub async fn install(client: &Client, path: &Path) -> Result<Value> {
     let claims = Claims::in_store(Tasks::at(output), task.clone());
     if let Some(earlier) = earlier_install(&Tasks::at(output), task.key(), &app) {
         return Err(Error::new(
-            "input",
+            Code::Input,
             format!(
                 "This task already installed {app} (installId {earlier}). Clean it up with \
                  atlas cleanup --apply before installing it again."
@@ -95,7 +95,7 @@ pub async fn install(client: &Client, path: &Path) -> Result<Value> {
 fn bundle(path: &Path) -> Result<(PathBuf, String)> {
     let usage = || {
         Error::new(
-            "usage",
+            Code::Usage,
             "Give the path of an app bundle on this Mac, such as ./build/Probe.app",
         )
     };
@@ -190,7 +190,7 @@ mod tests {
         let bundle = bundle_in(directory.path(), "Probe.app");
 
         let error = install(&client, &bundle).await.unwrap_err();
-        assert_eq!((error.code, error.uncertain), ("usage", false));
+        assert_eq!((error.code, error.uncertain), (Code::Usage, false));
         assert!(error.error.contains("ATLAS_SESSION"), "{error}");
     }
 
@@ -367,7 +367,7 @@ mod tests {
             })
             .await
             .unwrap_err();
-        assert_eq!((error.code, error.uncertain), ("busy", false));
+        assert_eq!((error.code, error.uncertain), (Code::Busy, false));
         let output = client.output_dir().unwrap();
         assert!(Tasks::at(output).load(task.key()).is_none());
     }

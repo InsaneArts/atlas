@@ -809,7 +809,7 @@ fn shipped_manifest_and_profile_examples_parse_as_toml() {
 
     let json = br#"{"files": []}"#;
     let refused = crate::config::parse_toml::<Manifest>(json, &manifest);
-    assert!(refused.is_err_and(|error| error.code == "config"));
+    assert!(refused.is_err_and(|error| error.code == Code::Config));
 }
 
 #[test]

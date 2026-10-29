@@ -4,7 +4,7 @@
 //! [`ActionPermit`] marks one input under way.
 use super::{Controller, Ownership};
 use crate::{
-    error::{Error, Result},
+    error::{Code, Error, Result},
     files::token,
 };
 use std::{
@@ -80,7 +80,7 @@ impl Lease {
         self.expire();
 
         if self.descriptor.is_some() {
-            return Err(Error::new("busy", "Another viewer has control"));
+            return Err(Error::new(Code::Busy, "Another viewer has control"));
         }
 
         self.descriptor = Some(controller.acquire_for_person()?);
@@ -107,7 +107,7 @@ impl Lease {
         });
         if !matches {
             return Err(Error::new(
-                "lease-lost",
+                Code::LeaseLost,
                 "Control was released or expired. Take control again.",
             ));
         }
@@ -157,7 +157,7 @@ impl Lease {
 
         if requested.is_some() && requested != current.map(String::as_str) {
             return Err(Error::new(
-                "lease-lost",
+                Code::LeaseLost,
                 "This token cannot release another controller",
             ));
         }
@@ -209,7 +209,10 @@ impl ActionPermit {
             state.require(token)?;
 
             if state.inflight {
-                return Err(Error::new("busy", "Wait for the current input to finish"));
+                return Err(Error::new(
+                    Code::Busy,
+                    "Wait for the current input to finish",
+                ));
             }
 
             state.inflight = true;

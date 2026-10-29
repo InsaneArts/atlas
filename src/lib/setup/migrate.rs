@@ -17,7 +17,7 @@ use crate::{
     client::{Client, timestamp},
     config::{Config, home, save_private},
     control::Ownership,
-    error::{Error, Result},
+    error::{Code, Error, Result},
     session::{input_current, require_hidden},
     transport::run_output,
 };
@@ -83,7 +83,7 @@ enum Endpoint {
 }
 
 fn problem(message: impl Into<String>) -> Error {
-    Error::new("setup", message)
+    Error::new(Code::Setup, message)
 }
 
 fn log_path(uid: u32) -> Result<PathBuf> {
@@ -460,7 +460,7 @@ impl Migration {
             .any(|generation| !self.log.pending.contains(&generation));
         if foreign {
             return Err(Error::new(
-                "uncertain",
+                Code::Uncertain,
                 "Another action's outcome is unknown. Observe the desktop, run atlas \
                  restart, then run setup again.",
             )

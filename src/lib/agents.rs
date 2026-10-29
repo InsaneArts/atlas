@@ -5,7 +5,7 @@
 use crate::{
     client::Client,
     config::Config,
-    error::{Error, Result},
+    error::{Code, Error, Result},
     host_session::{Asker, HostSession, Recovery, brief},
 };
 use serde_json::{Value, json};
@@ -40,7 +40,7 @@ const ASK: Duration = Duration::from_secs(10);
 const CHANGE: Duration = Duration::from_secs(120);
 
 fn problem(message: impl Into<String>) -> Error {
-    Error::new("agents", message)
+    Error::new(Code::Agents, message)
 }
 
 /// The agents Atlas can connect, and their command-line tools.
@@ -231,7 +231,7 @@ impl Agent {
                 Presence::Installed(String::from_utf8_lossy(&output.stdout).trim().to_owned())
             }
             // Installed, but it did not answer in time.
-            Err(error) if error.code == "agents" => Presence::Silent(error.error),
+            Err(error) if error.code == Code::Agents => Presence::Silent(error.error),
             _ => Presence::Missing,
         }
     }
@@ -288,7 +288,7 @@ impl Agent {
 
         let output = match exec(self, list, ASK) {
             Ok(output) => output,
-            Err(error) if error.code == "agents" => return Err(error.error),
+            Err(error) if error.code == Code::Agents => return Err(error.error),
             Err(_) => return Ok(None),
         };
 
@@ -333,7 +333,7 @@ impl Agent {
 
         match exec(self, &["plugin", "marketplace", "list", "--json"], ASK) {
             Ok(output) => Ok(self.source_in(&output.stdout).or(recorded)),
-            Err(error) if error.code == "agents" => Err(error.error),
+            Err(error) if error.code == Code::Agents => Err(error.error),
             Err(_) => Ok(recorded),
         }
     }

@@ -9,7 +9,7 @@
 //! A client that goes away, or a daemon that stops, ends the command. Any
 //! failure once the command has started is uncertain: it may have done some
 //! of its work.
-use crate::daemon::protocol::failure;
+use crate::{daemon::protocol::failure, error::Code};
 use base64::{Engine, engine::general_purpose::STANDARD};
 use nix::{
     sys::signal::{Signal, killpg},
@@ -122,7 +122,7 @@ pub(super) fn unresolved(name: &str, home: Option<&Path>) -> Value {
         "no such program"
     };
 
-    failure("spawn-failed", format!("{name}: {reason}"))
+    failure(Code::SpawnFailed, format!("{name}: {reason}"))
 }
 
 /// The helper's home, where a command starts, when it is a folder.
@@ -177,7 +177,7 @@ fn ended(
 }
 
 /// A failure after the command started: it may have done some of its work.
-fn interrupted(code: &str, error: impl Into<String>) -> Value {
+fn interrupted(code: Code, error: impl Into<String>) -> Value {
     let mut reply = failure(code, error);
     reply["uncertain"] = json!(true);
     reply
@@ -359,7 +359,7 @@ async fn run_at(
 ) -> Value {
     // The protocol never passes an empty argv; refuse one rather than panic.
     let Some(name) = argv.first() else {
-        return failure("spawn-failed", "No command to run");
+        return failure(Code::SpawnFailed, "No command to run");
     };
 
     let path = search_path(home.as_deref());
@@ -369,7 +369,7 @@ async fn run_at(
 
     let (reader, writer) = match std::io::pipe() {
         Ok(pair) => pair,
-        Err(error) => return failure("spawn-failed", error.to_string()),
+        Err(error) => return failure(Code::SpawnFailed, error.to_string()),
     };
 
     let spawned = (|| {
@@ -397,14 +397,14 @@ async fn run_at(
     })();
     let mut child = match spawned {
         Ok(child) => child,
-        Err(error) => return failure("spawn-failed", format!("{}: {error}", argv[0])),
+        Err(error) => return failure(Code::SpawnFailed, format!("{}: {error}", argv[0])),
     };
 
     let started = Instant::now();
 
     let Some(group) = child.id().and_then(|pid| i32::try_from(pid).ok()) else {
         return interrupted(
-            "spawn-failed",
+            Code::SpawnFailed,
             "The command exited before it could be observed",
         );
     };
@@ -418,7 +418,7 @@ async fn run_at(
         Err(error) => {
             signal_group(group, Signal::SIGKILL);
             let _ = child.wait().await;
-            return interrupted("spawn-failed", error.to_string());
+            return interrupted(Code::SpawnFailed, error.to_string());
         }
     };
 
@@ -507,11 +507,11 @@ async fn run_at(
 
     match cancelled {
         Some(Cancel::Stopping) => {
-            return interrupted("restart", "The helper stopped while the command ran");
+            return interrupted(Code::Restart, "The helper stopped while the command ran");
         }
         Some(Cancel::OnConsole) => {
             return interrupted(
-                "on-console",
+                Code::OnConsole,
                 "The helper came on screen, so the command was stopped",
             );
         }
@@ -519,12 +519,15 @@ async fn run_at(
     }
 
     if abandoned || output.finish(&events).await.is_err() {
-        return interrupted("transport", "The client went away");
+        return interrupted(Code::Transport, "The client went away");
     }
 
     match status {
         Some(Ok(status)) => ended(status, timed_out, started, output.truncated, unfinished),
-        _ => interrupted("wait-failed", "The command's exit status could not be read"),
+        _ => interrupted(
+            Code::WaitFailed,
+            "The command's exit status could not be read",
+        ),
     }
 }
 
@@ -761,7 +764,7 @@ mod tests {
         let reply = run(&argv, Duration::from_secs(60), sender, cancel).await;
         assert_eq!(
             reply,
-            interrupted("restart", "The helper stopped while the command ran")
+            interrupted(Code::Restart, "The helper stopped while the command ran")
         );
         assert_eq!(reply["uncertain"], true);
     }
@@ -834,13 +837,13 @@ mod tests {
         assert!(events.is_empty());
         assert_eq!(
             reply,
-            failure("spawn-failed", "/nonexistent/binary: no such program")
+            failure(Code::SpawnFailed, "/nonexistent/binary: no such program")
         );
 
         let (_, folder) = execute(&["/tmp"], 3000).await;
         assert_eq!(
             folder,
-            failure("spawn-failed", "/tmp: is a folder, not a program")
+            failure(Code::SpawnFailed, "/tmp: is a folder, not a program")
         );
 
         let plain = tempfile::NamedTempFile::new().unwrap();
@@ -849,7 +852,7 @@ mod tests {
         assert_eq!(
             not_executable,
             failure(
-                "spawn-failed",
+                Code::SpawnFailed,
                 format!("{plain_path}: is not executable (chmod +x it)")
             )
         );
@@ -859,7 +862,7 @@ mod tests {
 
         let (events, reply) = execute(&[], 3000).await;
         assert!(events.is_empty());
-        assert_eq!(reply, failure("spawn-failed", "No command to run"));
+        assert_eq!(reply, failure(Code::SpawnFailed, "No command to run"));
 
         let (events, reply) =
             execute(&["/bin/sh", "-c", "head -c 17000000 /dev/zero"], 20000).await;
@@ -922,19 +925,22 @@ mod tests {
         let (_, folder) = execute(&["./bin"]).await;
         assert_eq!(
             folder,
-            failure("spawn-failed", "./bin: is a folder, not a program")
+            failure(Code::SpawnFailed, "./bin: is a folder, not a program")
         );
 
         let (_, plain) = execute(&["./notes"]).await;
         assert_eq!(
             plain,
-            failure("spawn-failed", "./notes: is not executable (chmod +x it)")
+            failure(
+                Code::SpawnFailed,
+                "./notes: is not executable (chmod +x it)"
+            )
         );
 
         let (_, missing) = execute(&["./missing"]).await;
         assert_eq!(
             missing,
-            failure("spawn-failed", "./missing: no such program")
+            failure(Code::SpawnFailed, "./missing: no such program")
         );
     }
 

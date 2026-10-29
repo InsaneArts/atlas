@@ -1,7 +1,7 @@
 //! Views of looking after Atlas itself: agents, switching, updates,
 //! removal and the menu bar's login item.
 use super::{Rendered, card, style, text};
-use crate::ui::table;
+use crate::{error::Code, ui::table};
 use serde_json::Value;
 
 fn agent_name(id: &str) -> &str {
@@ -113,7 +113,7 @@ pub fn agents_change(value: &Value) -> Rendered {
         } else {
             err.push(card(
                 &format!("{name}: {}", agent["error"].as_str().unwrap_or("failed")),
-                Some("agents"),
+                Some(Code::Agents),
                 false,
             ));
         }

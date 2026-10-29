@@ -2,7 +2,7 @@ use super::*;
 use crate::{
     control::Note,
     doing::Doing,
-    error::Error,
+    error::{Code, Error},
     host_session::{
         Host, Instance, ancestry,
         store::{Kind, note},
@@ -50,7 +50,7 @@ fn holder(client: &Client, session: &HostSession, process: Instance) {
 }
 
 fn busy() -> Result<Value> {
-    Err(Error::new("busy", "Another Atlas command kept control.").held_by(Holder::Agent))
+    Err(Error::new(Code::Busy, "Another Atlas command kept control.").held_by(Holder::Agent))
 }
 
 #[test]
@@ -122,7 +122,8 @@ fn busy_from_the_person_never_names_a_session() {
     let client = client(directory.path());
     holder(&client, &session(Host::Codex, "right"), another_process());
 
-    let person = Err(Error::new("busy", crate::error::PERSON_HAS_CONTROL).held_by(Holder::Person));
+    let person =
+        Err(Error::new(Code::Busy, crate::error::PERSON_HAS_CONTROL).held_by(Holder::Person));
     let error = reply(person, || Some(client.clone()), None).unwrap_err();
     assert!(error.details.is_empty());
 }
@@ -249,7 +250,7 @@ fn abandoned(client: &Client, session: Option<&HostSession>) {
 
 fn uncertain() -> Result<Value> {
     Err(Error::new(
-        "uncertain",
+        Code::Uncertain,
         "The last action's outcome is unknown; Atlas waits until it is recovered.",
     ))
 }
@@ -472,13 +473,13 @@ fn a_reply_whose_own_action_was_uncertain_is_left_as_it_is() {
     abandoned(&client, Some(&claude));
 
     let own = Err(Error::new(
-        "uncertain",
+        Code::Uncertain,
         "Input finished but native release was not confirmed",
     )
     .uncertain());
     let error = reply(own, || Some(client.clone()), Some(&claude)).unwrap_err();
     assert!(error.details.is_empty());
-    let transport = Err(Error::new("transport", "The helper did not answer").uncertain());
+    let transport = Err(Error::new(Code::Transport, "The helper did not answer").uncertain());
     assert!(
         reply(transport, || Some(client.clone()), Some(&claude))
             .unwrap_err()
@@ -498,6 +499,6 @@ fn nothing_but_refusals_is_changed() {
     assert_eq!(reply(Ok(answered.clone()), client, None).unwrap(), answered);
     assert!(!asked.get(), "no client is made for a reply that worked");
 
-    let other = Err(Error::new("input", "Check the action"));
+    let other = Err(Error::new(Code::Input, "Check the action"));
     assert!(reply(other, || None, None).unwrap_err().details.is_empty());
 }

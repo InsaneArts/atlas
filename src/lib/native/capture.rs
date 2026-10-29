@@ -8,7 +8,7 @@
     unsafe_code,
     reason = "FFI: the bitmap context and ImageIO encoding have no safe binding"
 )]
-use crate::error::{Error, Result};
+use crate::error::{Code, Error, Result};
 use objc2_core_foundation::{
     CFData, CFDictionary, CFMutableData, CFNumber, CFRetained, CFString, CGPoint, CGRect, CGSize,
 };
@@ -99,7 +99,7 @@ fn bitmap(width: usize, height: usize) -> Option<CFRetained<CGContext>> {
 
 /// Draw `image` into a new `width`×`height` sRGB bitmap.
 fn scaled(image: &CGImage, width: usize, height: usize) -> Result<CFRetained<CGImage>> {
-    let failed = || Error::new("capture", "The screenshot could not be scaled");
+    let failed = || Error::new(Code::Capture, "The screenshot could not be scaled");
     let context = bitmap(width, height).ok_or_else(failed)?;
 
     CGContext::set_interpolation_quality(Some(&context), CGInterpolationQuality::High);
@@ -121,7 +121,7 @@ fn encoded(
     kind: &'static str,
     properties: Option<&CFDictionary>,
 ) -> Result<Vec<u8>> {
-    let failed = || Error::new("capture", "The screenshot could not be encoded");
+    let failed = || Error::new(Code::Capture, "The screenshot could not be encoded");
     let data = CFMutableData::new(None, 0).ok_or_else(failed)?;
     let kind = CFString::from_static_str(kind);
     // SAFETY: a live mutable data and type identifier, room for one image,
@@ -144,7 +144,7 @@ fn encoded(
 /// pixels on its longest side: small enough to send to an agent app many
 /// times a minute. Its size comes with it.
 pub fn jpeg(png: &[u8], limit: u32, quality: f64) -> Result<(Vec<u8>, u32, u32)> {
-    let failed = || Error::new("capture", "The screenshot could not be read");
+    let failed = || Error::new(Code::Capture, "The screenshot could not be read");
     let data = CFData::from_bytes(png);
     // SAFETY: live data holding the image, and no options dictionary.
     let source = unsafe { CGImageSource::with_data(&data, None) }.ok_or_else(failed)?;
@@ -166,7 +166,7 @@ pub fn jpeg(png: &[u8], limit: u32, quality: f64) -> Result<(Vec<u8>, u32, u32)>
     let bytes = encoded(&image, "public.jpeg", Some(properties.as_opaque()))?;
 
     let size =
-        |side: usize| u32::try_from(side).map_err(|_| Error::new("capture", "Image too large"));
+        |side: usize| u32::try_from(side).map_err(|_| Error::new(Code::Capture, "Image too large"));
     Ok((bytes, size(target_width)?, size(target_height)?))
 }
 
@@ -174,7 +174,7 @@ pub fn jpeg(png: &[u8], limit: u32, quality: f64) -> Result<(Vec<u8>, u32, u32)>
 /// several sizes (the TIFF AppKit gives): drawn from the smallest of them at
 /// least `size` across, else from the largest.
 pub fn icon_png(image: &[u8], size: usize) -> Result<Vec<u8>> {
-    let failed = || Error::new("capture", "The icon could not be read");
+    let failed = || Error::new(Code::Capture, "The icon could not be read");
     let data = CFData::from_bytes(image);
     // SAFETY: live data holding the image, and no options dictionary.
     let source = unsafe { CGImageSource::with_data(&data, None) }.ok_or_else(failed)?;
@@ -239,12 +239,12 @@ fn banded(width: usize, height: usize, rows: usize) -> CFRetained<CGImage> {
 pub fn main_display(display: u32, area: Option<CGRect>, limit: Option<u32>) -> Result<Shot> {
     if !permitted() {
         return Err(Error::new(
-            "permission",
+            Code::Permission,
             "Screen Recording is not allowed for Atlas in the helper account",
         ));
     }
 
-    let failed = || Error::new("capture", "The display could not be captured");
+    let failed = || Error::new(Code::Capture, "The display could not be captured");
     let bounds = CGDisplayBounds(display);
     // Deprecated for ScreenCaptureKit, but still a synchronous, consent-gated
     // capture of exactly this display on current macOS (qualified live).
@@ -286,7 +286,7 @@ pub fn main_display(display: u32, area: Option<CGRect>, limit: Option<u32>) -> R
     };
 
     let size =
-        |side: usize| u32::try_from(side).map_err(|_| Error::new("capture", "Image too large"));
+        |side: usize| u32::try_from(side).map_err(|_| Error::new(Code::Capture, "Image too large"));
 
     Ok(Shot {
         png: png(&image)?,

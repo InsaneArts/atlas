@@ -6,7 +6,7 @@
 //! dictionary, and its login-window call does nothing from a command-line
 //! process, so the screen lock (confirmed by the window server) is used.
 use crate::{
-    error::{Error, Result},
+    error::{Code, Error, Result},
     session::Blocker,
 };
 use serde::Serialize;
@@ -28,7 +28,7 @@ pub struct Account {
 fn parse_accounts(listing: &str) -> Result<Vec<(String, u32)>> {
     let mut accounts = Vec::new();
     for line in listing.lines() {
-        let unreadable = || Error::new("switch", "Could not read an account's user ID");
+        let unreadable = || Error::new(Code::Switch, "Could not read an account's user ID");
         let mut columns = line.split_whitespace();
         let name = columns.next().ok_or_else(unreadable)?;
         let uid = columns
@@ -58,7 +58,7 @@ pub fn accounts(helper: Option<u32>) -> Result<Vec<Account>> {
     // A failed listing is an error, never "no other accounts".
     if !output.status.success() {
         return Err(Error::new(
-            "switch",
+            Code::Switch,
             format!(
                 "macOS could not list the accounts: {}",
                 String::from_utf8_lossy(&output.stderr).trim()
@@ -69,7 +69,7 @@ pub fn accounts(helper: Option<u32>) -> Result<Vec<Account>> {
     let me = nix::unistd::getuid().as_raw();
     listed(
         std::str::from_utf8(&output.stdout)
-            .map_err(|_| Error::new("switch", "Could not read the accounts"))?,
+            .map_err(|_| Error::new(Code::Switch, "Could not read the accounts"))?,
         me,
         helper,
         crate::setup::real_name,
@@ -114,7 +114,7 @@ fn login_symbol(symbol: &std::ffi::CStr) -> Result<extern "C" fn() -> i32> {
     const FRAMEWORK: &std::ffi::CStr =
         c"/System/Library/PrivateFrameworks/login.framework/Versions/A/login";
 
-    let unavailable = || Error::new("switch", "This macOS cannot lock the screen from here");
+    let unavailable = || Error::new(Code::Switch, "This macOS cannot lock the screen from here");
 
     // SAFETY: a NUL-terminated path; the handle stays open for the process.
     let handle = unsafe { libc::dlopen(FRAMEWORK.as_ptr(), libc::RTLD_LAZY) };
@@ -166,7 +166,7 @@ pub fn lock_screen() -> Result<Value> {
 
     if !locked_within(5) {
         return Err(Error::new(
-            "switch",
+            Code::Switch,
             "The screen could not be locked from here; lock it from the Apple menu",
         ));
     }
@@ -198,7 +198,7 @@ pub struct Target {
 
 /// The refusal for a switch that must wait, after "Atlas can't switch yet:".
 fn not_ready(why: &str) -> Error {
-    Error::new("not-ready", format!("Atlas can't switch yet: {why}"))
+    Error::new(Code::NotReady, format!("Atlas can't switch yet: {why}"))
 }
 
 /// Whether the switch to `target` may go ahead, given what would make a

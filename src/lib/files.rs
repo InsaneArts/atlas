@@ -2,7 +2,7 @@
 //! when it is a plain file (and this account's, where that matters), and
 //! named by random tokens no person chose.
 use crate::{
-    error::{Error, Result},
+    error::{Code, Error, Result},
     name::{lower_hex, name_type, random_hex},
 };
 use std::{
@@ -219,7 +219,7 @@ fn own_private(file: &File, path: &Path) -> Result<()> {
     let metadata = file.metadata()?;
     if !metadata.is_file() || metadata.uid() != nix::unistd::getuid().as_raw() {
         return Err(Error::new(
-            "state",
+            Code::State,
             format!("{} is not a plain file of this account", path.display()),
         ));
     }

@@ -4,7 +4,7 @@ use super::{
 use crate::{
     actions::{Button, Expect},
     app_selection::{Closing, Process},
-    error::{Error, Holder, Result},
+    error::{Code, Error, Holder, Result},
     interrupt::Interrupt,
     native::{
         ax::{Element, Frame, Stop},
@@ -955,14 +955,14 @@ fn a_stopped_type_counts_the_parts_the_helper_performed() {
     assert_eq!(report["reason"], "field");
     assert_eq!(report["found"], left["found"]);
 
-    let lost = Error::new("transport", "Native reply timed out").uncertain();
+    let lost = Error::new(Code::Transport, "Native reply timed out").uncertain();
     let report = stopped_typing(64, 2, 1, &parts, lost.into());
     assert_eq!(report["typed"], 64, "no part of a failed batch counts");
     assert_eq!(report["code"], "transport");
     assert_eq!(report["uncertain"], true);
     assert!(report.get("reason").is_none() && report.get("found").is_none());
 
-    let busy = Error::new("busy", "held").held_by(Holder::Agent);
+    let busy = Error::new(Code::Busy, "held").held_by(Holder::Agent);
     assert_eq!(
         stopped_typing(0, 1, 0, &parts, busy.into())["holder"],
         "agent"
@@ -2165,7 +2165,7 @@ async fn a_close_whose_first_list_is_refused_quits_nothing_and_keeps_every_copy(
         .await
         .unwrap_err();
 
-    assert_eq!((error.code, error.uncertain), ("busy", false));
+    assert_eq!((error.code, error.uncertain), (Code::Busy, false));
     assert!(!signalled, "nothing is quit without a list");
     assert!(copies.iter().all(|copy| copy.exists()));
 }
@@ -2197,7 +2197,7 @@ async fn a_close_whose_list_fails_after_the_signal_keeps_the_copies_and_says_wha
         .await
         .unwrap_err();
 
-    assert_eq!((error.code, error.uncertain), ("apps", false));
+    assert_eq!((error.code, error.uncertain), (Code::Apps, false));
     assert_eq!(error.details["signalled"], json!(["TextEdit"]));
     assert!(
         error.error.contains("Their copies were kept"),
@@ -2211,7 +2211,7 @@ async fn a_close_whose_list_fails_after_the_signal_keeps_the_copies_and_says_wha
 fn an_unconfirmed_quit_always_says_what_it_asked_in_plain_words() {
     let said = |names: &[&str]| {
         let names: Vec<String> = names.iter().map(|name| (*name).to_owned()).collect();
-        unconfirmed(Error::new("apps", "Refused"), &names)
+        unconfirmed(Error::new(Code::Apps, "Refused"), &names)
     };
 
     let named = said(&["TextEdit"]);
@@ -2245,7 +2245,7 @@ async fn a_malformed_list_never_reads_as_not_running() {
         .await
         .unwrap_err();
 
-    assert_eq!((error.code, error.uncertain), ("protocol", false));
+    assert_eq!((error.code, error.uncertain), (Code::Protocol, false));
     assert!(copies.iter().all(|copy| copy.exists()));
 }
 
@@ -2388,7 +2388,7 @@ async fn an_open_whose_list_is_refused_copies_prunes_and_launches_nothing() {
         .await
         .unwrap_err();
 
-    assert_eq!((error.code, error.uncertain), ("busy", false));
+    assert_eq!((error.code, error.uncertain), (Code::Busy, false));
     assert!(
         ran.is_empty(),
         "nothing was checked, copied or launched: {ran:?}"

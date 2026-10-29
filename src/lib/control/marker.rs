@@ -12,7 +12,7 @@ use super::{
     remove_claim,
 };
 use crate::{
-    error::{Error, Result},
+    error::{Code, Error, Result},
     files::{open_lock, token},
     host_session::Key,
 };
@@ -209,12 +209,12 @@ impl Controller {
         let hold = self.interrupt.claim();
         let live = self
             .live(generation)
-            .ok_or_else(|| Error::new("state", "Pending generations are hexadecimal tokens"))?;
+            .ok_or_else(|| Error::new(Code::State, "Pending generations are hexadecimal tokens"))?;
 
         self.make_directory()?;
         let file = open_lock(&live)?;
         FileExt::try_lock_exclusive(&file)
-            .map_err(|_| Error::new("busy", "That generation is already being carried out"))?;
+            .map_err(|_| Error::new(Code::Busy, "That generation is already being carried out"))?;
 
         let claim = Pending {
             generation: generation.to_owned(),
@@ -229,7 +229,7 @@ impl Controller {
         let _lock = self.lock_marker()?;
         if !claim.names_own_file() {
             return Err(Error::new(
-                "busy",
+                Code::Busy,
                 "That generation's claim changed while it was taken",
             ));
         }
@@ -379,7 +379,10 @@ pub(super) const REPLACING: &str = ".replacing";
 /// time may replace a file, as the marker lock keeps them.
 pub(super) fn replace_private(path: &Path, bytes: &[u8]) -> Result<()> {
     let (Some(directory), Some(name)) = (path.parent(), path.file_name()) else {
-        return Err(Error::new("state", "A record needs a folder and a name"));
+        return Err(Error::new(
+            Code::State,
+            "A record needs a folder and a name",
+        ));
     };
     let temporary = directory.join(format!(
         ".{}.{}{REPLACING}",
@@ -398,7 +401,7 @@ pub(super) fn replace_private(path: &Path, bytes: &[u8]) -> Result<()> {
     #[cfg(test)]
     if super::faults::replacing_stops(&name.to_string_lossy()) {
         // As a writer killed here would, it leaves the replacement unnamed.
-        return Err(Error::new("state", "interrupted before the rename"));
+        return Err(Error::new(Code::State, "interrupted before the rename"));
     }
     let replaced = written
         .and_then(|()| fs::rename(&temporary, path))

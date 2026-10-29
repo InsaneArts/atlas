@@ -4,7 +4,7 @@
 //! bar's viewer service both read through here, so each shows the same
 //! things under the same rules.
 use crate::{
-    error::{Error, Result},
+    error::{Code, Error, Result},
     files::open_plain,
     name::name_type,
 };
@@ -79,7 +79,10 @@ pub fn frame(png: &[u8]) -> Result<Value> {
 
     let (bytes, width, height) = encoded;
     if base64_length(bytes.len()) > FRAME_BUDGET {
-        return Err(Error::new("capture", "The screen is too detailed to send"));
+        return Err(Error::new(
+            Code::Capture,
+            "The screen is too detailed to send",
+        ));
     }
 
     let id = crate::name::hex(&Sha256::digest(&bytes)[..8]);
@@ -113,7 +116,7 @@ pub fn open_apps(apps: &Value, windows: &Value) -> Result<Vec<Value>> {
     // Reserve the added field names and null defaults per entry before
     // copying anything. Each source entry can contribute to the output once.
     let count = apps.as_array().map_or(0, Vec::len) + windows.as_array().map_or(0, Vec::len);
-    let too_large = || Error::new("apps", "The app list is too large to read");
+    let too_large = || Error::new(Code::Apps, "The app list is too large to read");
     let overhead = count
         .checked_mul(128)
         .filter(|bytes| *bytes <= FRAME_LIMIT)
@@ -128,9 +131,9 @@ pub fn open_apps(apps: &Value, windows: &Value) -> Result<Vec<Value>> {
             app["pid"]
                 .as_u64()
                 .filter(|pid| *pid > 0)
-                .ok_or_else(|| Error::new("apps", "The app list has an invalid process ID"))?,
+                .ok_or_else(|| Error::new(Code::Apps, "The app list has an invalid process ID"))?,
         ) {
-            return Err(Error::new("apps", "The app list repeats a process ID"));
+            return Err(Error::new(Code::Apps, "The app list repeats a process ID"));
         }
     }
     let windows = windows.as_array().map(Vec::as_slice).unwrap_or_default();
@@ -256,7 +259,7 @@ pub fn captures(output: &Path, limit: usize) -> Vec<(u128, String)> {
 pub fn read_capture(output: &Path, name: &str) -> Result<Vec<u8>> {
     use std::io::Read;
 
-    let unknown = || Error::new("bad-request", "No screenshot has that name");
+    let unknown = || Error::new(Code::BadRequest, "No screenshot has that name");
     if capture_time(name).is_none() {
         return Err(unknown());
     }
@@ -265,7 +268,10 @@ pub fn read_capture(output: &Path, name: &str) -> Result<Vec<u8>> {
     let mut png = Vec::new();
     file.take(FRAME_LIMIT as u64 + 1).read_to_end(&mut png)?;
     if png.len() > FRAME_LIMIT {
-        return Err(Error::new("capture", "The screenshot is too large to read"));
+        return Err(Error::new(
+            Code::Capture,
+            "The screenshot is too large to read",
+        ));
     }
 
     Ok(png)
@@ -329,7 +335,7 @@ pub fn jpeg(png: &[u8], (limit, quality): (u32, f64)) -> Result<(Vec<u8>, u32, u
 
 #[cfg(not(target_os = "macos"))]
 pub fn jpeg(_png: &[u8], _: (u32, f64)) -> Result<(Vec<u8>, u32, u32)> {
-    Err(Error::new("platform", "Atlas runs on macOS only"))
+    Err(Error::new(Code::Platform, "Atlas runs on macOS only"))
 }
 
 #[cfg(test)]

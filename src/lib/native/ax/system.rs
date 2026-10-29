@@ -2,7 +2,7 @@
 //! application with keyboard focus, and where the Dock takes clicks.
 use super::{batch::Source, ffi, scan::Scan};
 use crate::{
-    error::{Error, Result},
+    error::{Code, Error, Result},
     native::windows::{self, Dock},
 };
 use objc2_application_services::{AXError, AXUIElement};
@@ -14,7 +14,7 @@ use std::time::{Duration, Instant};
 /// `timeout`. This sets the calling process's messaging timeout, which the
 /// input service uses for nothing else.
 pub fn focused_pid(timeout: Duration) -> Result<Option<i64>> {
-    let unreadable = || Error::new("native", "The focused app could not be read");
+    let unreadable = || Error::new(Code::Native, "The focused app could not be read");
 
     let system = ffi::system_wide().ok_or_else(unreadable)?;
     // The system-wide element sets this process's global messaging timeout,

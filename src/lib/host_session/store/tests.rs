@@ -1,5 +1,5 @@
 use super::*;
-use crate::error::Error;
+use crate::error::{Code, Error};
 use crate::{
     doing::Doing,
     host_session::{Host, HostSession, Instance},
@@ -104,9 +104,9 @@ fn a_refused_command_is_seen_but_not_counted() {
     let click = Doing::new("click");
 
     for refusal in [
-        Error::new("busy", "Another command has control"),
-        Error::new("stopped", crate::error::STOPPED),
-        Error::new("uncertain", "An earlier outcome is unknown"),
+        Error::new(Code::Busy, "Another command has control"),
+        Error::stopped(),
+        Error::new(Code::Uncertain, "An earlier outcome is unknown"),
     ] {
         note(&client, &session, Kind::Other, Some(&click), &Err(refusal)).unwrap();
     }
@@ -115,7 +115,7 @@ fn a_refused_command_is_seen_but_not_counted() {
     let record = store(&client).read(session.key()).unwrap();
     assert!(record.counts.is_empty(), "{:?}", record.counts);
 
-    let maybe = Error::new("transport", "No reply").uncertain();
+    let maybe = Error::new(Code::Transport, "No reply").uncertain();
     note(&client, &session, Kind::Other, Some(&click), &Err(maybe)).unwrap();
     let failed = json!({"ok": false, "code": "focus-changed", "uncertain": false});
     note(&client, &session, Kind::Other, Some(&click), &Ok(failed)).unwrap();

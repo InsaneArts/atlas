@@ -11,7 +11,7 @@ use crate::{
     client::{Client, Frame},
     config::Config,
     control::{ActionPermit, Lease, SharedLease},
-    error::{Error, Result},
+    error::{Code, Error, Result},
     files, helper_info,
     host_session::{
         Key,
@@ -90,7 +90,7 @@ struct Capture {
 }
 
 /// A capture's outcome as each request waiting on it reads it.
-type Captured = std::result::Result<(String, Arc<Frame>), (&'static str, String)>;
+type Captured = std::result::Result<(String, Arc<Frame>), (Code, String)>;
 
 /// Empties the capture slot when the capture that filled it ends, however
 /// it ends.
@@ -276,9 +276,9 @@ impl Viewer {
     fn send(&self, line: Line) -> Result<()> {
         unpoisoned(&self.app)
             .as_ref()
-            .ok_or_else(|| Error::new("menubar", "No menu bar is attached to this viewer"))?
+            .ok_or_else(|| Error::new(Code::Menubar, "No menu bar is attached to this viewer"))?
             .send(line)
-            .map_err(|_| Error::new("menubar", "The menu bar is not running"))
+            .map_err(|_| Error::new(Code::Menubar, "The menu bar is not running"))
     }
 
     /// A current frame of the helper. One capture runs at a time and every
@@ -363,7 +363,7 @@ impl Viewer {
         let frame = Arc::new(client.frame(Some(FRAME_WIDTH)).await?);
         if frame.at.elapsed() >= FRAME_LIFETIME {
             return Err(Error::new(
-                "stale-frame",
+                Code::StaleFrame,
                 "Capture became stale while checking its session",
             ));
         }
@@ -392,7 +392,7 @@ impl Viewer {
             .filter(|frame| frame.at.elapsed() < FRAME_LIFETIME)
             .ok_or_else(|| {
                 Error::new(
-                    "stale-frame",
+                    Code::StaleFrame,
                     "Wait for a fresh frame before taking control",
                 )
             })
@@ -464,7 +464,7 @@ impl Viewer {
             // Settings that moved to another helper meanwhile refuse it.
             if !Arc::ptr_eq(client, &self.client()) {
                 return Err(Error::new(
-                    "session-changed",
+                    Code::SessionChanged,
                     "Wait for a fresh frame from the current helper",
                 ));
             }
@@ -727,7 +727,7 @@ impl Viewer {
         let refused = || {
             json_response(
                 404,
-                json!(Error::new("bad-request", "No screenshot has that name")),
+                json!(Error::new(Code::BadRequest, "No screenshot has that name")),
             )
         };
 
@@ -765,11 +765,14 @@ impl Viewer {
 
         match read {
             Ok(Ok((bytes, mime))) => response(200, mime, Body::from(bytes), &[]),
-            Ok(Err(error)) if error.code == "bad-request" => json_response(404, json!(error)),
+            Ok(Err(error)) if error.code == Code::BadRequest => json_response(404, json!(error)),
             Ok(Err(error)) => json_response(500, json!(error)),
             Err(_) => json_response(
                 500,
-                json!(Error::new("capture", "The screenshot could not be read")),
+                json!(Error::new(
+                    Code::Capture,
+                    "The screenshot could not be read"
+                )),
             ),
         }
     }
@@ -824,7 +827,7 @@ impl Viewer {
         self.follow_settings().await;
 
         if self.lease.lock().await.active() {
-            return Err(Error::new("busy", "Release control before recovering"));
+            return Err(Error::new(Code::Busy, "Release control before recovering"));
         }
 
         let client = self.client();
@@ -859,7 +862,7 @@ impl Viewer {
     async fn clean_up(self: &Arc<Self>, body: &Value) -> Result<Value> {
         self.follow_settings().await;
         if self.lease.lock().await.active() {
-            return Err(Error::new("busy", "Release control before cleaning up"));
+            return Err(Error::new(Code::Busy, "Release control before cleaning up"));
         }
         let session = cleanup_session(body["session"].as_str())?;
         crate::cleanup::for_person(&self.client(), &session, true).await
@@ -895,14 +898,14 @@ impl Viewer {
             let current = client.identity().await?;
             if current.epoch != frame.epoch {
                 return Err(Error::new(
-                    "session-changed",
+                    Code::SessionChanged,
                     "Wait for a fresh frame from the current helper",
                 ));
             }
 
             if !current.input {
                 return Err(Error::new(
-                    "permission",
+                    Code::Permission,
                     "Accessibility permission is unavailable",
                 ));
             }
@@ -913,7 +916,7 @@ impl Viewer {
 
         if self.lease_epoch.lock().await.as_ref() != Some(&frame.epoch) {
             return Err(Error::new(
-                "session-changed",
+                Code::SessionChanged,
                 "The controlled session changed",
             ));
         }
@@ -960,7 +963,7 @@ async fn release_native(client: &Client, owner: &str, unknown_acquire: bool) -> 
     let result = client.native_control("release", owner).await;
 
     let nothing_held =
-        |error: &Error| !unknown_acquire && error.code == "lease-lost" && !error.uncertain;
+        |error: &Error| !unknown_acquire && error.code == Code::LeaseLost && !error.uncertain;
 
     match (pending, result) {
         (Ok(generation), Ok(_)) => client.controller.clear_if(&generation),
@@ -969,7 +972,7 @@ async fn release_native(client: &Client, owner: &str, unknown_acquire: bool) -> 
         }
         (Err(error), _) => Err(error),
         (_, Err(error)) => Err(Error::new(
-            "uncertain",
+            Code::Uncertain,
             format!(
                 "Control stopped accepting input, but native cleanup was not confirmed: {error}"
             ),
@@ -993,7 +996,7 @@ fn same_helper(one: &Config, other: &Config) -> bool {
 fn cleanup_session(given: Option<&str>) -> Result<crate::host_session::Key> {
     given
         .and_then(crate::host_session::Key::parse)
-        .ok_or_else(|| Error::new("input", "Name a session by its key"))
+        .ok_or_else(|| Error::new(Code::Input, "Name a session by its key"))
 }
 
 /// Bind the viewer for `client` on `port` (0 picks a free one). With
@@ -1010,7 +1013,7 @@ pub async fn bind(
         .await
         .map_err(|error| match error.kind() {
             std::io::ErrorKind::AddrInUse => Error::new(
-                "port-in-use",
+                Code::PortInUse,
                 format!("Port {port} is in use by another program."),
             ),
             _ => error.into(),
@@ -1173,7 +1176,7 @@ pub async fn serve(client: Client, port: u16, program: crate::menubar::Program) 
 
     let (listener, viewer) = match bind(client, port, Some(&program.config)).await {
         Ok(bound) => bound,
-        Err(error) if error.code == "port-in-use" => {
+        Err(error) if error.code == Code::PortInUse => {
             let output = output.clone();
             return blocking(move || already_running(&output, port, error)).await;
         }
@@ -1308,7 +1311,7 @@ fn unpoisoned<T>(mutex: &std::sync::Mutex<T>) -> std::sync::MutexGuard<'_, T> {
 
 /// The local viewer could not be reached, or its reply not read.
 fn unanswered() -> Error {
-    Error::new("menubar", "The menu bar's viewer did not answer")
+    Error::new(Code::Menubar, "The menu bar's viewer did not answer")
 }
 
 /// Run `work`, which waits on the local viewer's socket (for seconds at
@@ -1349,7 +1352,7 @@ pub async fn open_viewer(config: &Path, port: u16, output: &Path) -> Result<()> 
     let url = record["url"]
         .as_str()
         .map(str::to_owned)
-        .ok_or_else(|| Error::new("menubar", "The menu bar's record names no viewer"))?;
+        .ok_or_else(|| Error::new(Code::Menubar, "The menu bar's record names no viewer"))?;
     blocking(move || post_local(&url, "app/viewer", &json!({}))).await?;
     Ok(())
 }
@@ -1501,7 +1504,7 @@ async fn respond(viewer: Arc<Viewer>, request: Request) -> Response {
         if route == "cleanup.json" {
             return match viewer.cleanup_preview(request.uri().query()).await {
                 Ok(preview) => json_response(200, preview),
-                Err(error) if error.code == "input" => json_response(400, json!(error)),
+                Err(error) if error.code == Code::Input => json_response(400, json!(error)),
                 Err(error) => json_response(503, json!(error)),
             };
         }
@@ -1653,14 +1656,16 @@ async fn respond(viewer: Arc<Viewer>, request: Request) -> Response {
             json_response(if result["ok"] == true { 200 } else { 409 }, result)
         }
         Err(error) => {
-            if !matches!(error.code, "busy" | "lease-lost" | "invalid-json" | "input")
-                && let Some(owner) = body["lease"].as_str()
+            if !matches!(
+                error.code,
+                Code::Busy | Code::LeaseLost | Code::InvalidJson | Code::Input
+            ) && let Some(owner) = body["lease"].as_str()
             {
                 let _ = viewer.release(Some(owner)).await;
             }
 
             json_response(
-                if matches!(error.code, "invalid-json" | "input") {
+                if matches!(error.code, Code::InvalidJson | Code::Input) {
                     400
                 } else {
                     409
@@ -2333,7 +2338,7 @@ mod tests {
             let error = outcome.err().unwrap();
             assert_eq!(
                 (error.code, error.error.as_str()),
-                ("transport", "The helper did not answer in time")
+                (Code::Transport, "The helper did not answer in time")
             );
         }
 
@@ -2367,7 +2372,7 @@ mod tests {
         let shared = ask();
         tokio::time::sleep(Duration::from_millis(50)).await;
         current
-            .send(Some(Err(("capture", "the shared picture".into()))))
+            .send(Some(Err((Code::Capture, "the shared picture".into()))))
             .unwrap();
         *viewer.capture.lock().unwrap() = None;
         assert_eq!(
@@ -2382,7 +2387,7 @@ mod tests {
         assert!(!fresh.is_finished(), "it waits out the running capture");
 
         *viewer.capture.lock().unwrap() = None;
-        old.send(Some(Err(("capture", "an old picture".into()))))
+        old.send(Some(Err((Code::Capture, "an old picture".into()))))
             .unwrap();
         assert_ne!(
             fresh.await.unwrap().err().unwrap().error,

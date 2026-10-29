@@ -2,10 +2,10 @@
 //! menu bar: a mode, a one-sentence reason, recent agent activity and the
 //! capability facts a person needs at a glance.
 use crate::{
-    activity_log::{self, Op, Row},
+    activity_log::{self, Failure, Op, Row},
     client::Client,
     control::Controller,
-    error::Error,
+    error::{Code, Error},
     host_session::{
         Key,
         names::{name_of, names_with},
@@ -39,7 +39,7 @@ const SESSION_ROWS: usize = 64;
 
 /// A read of the helper that took longer than a status waits.
 pub(crate) fn late() -> Error {
-    Error::new("transport", "The helper did not answer in time")
+    Error::new(Code::Transport, "The helper did not answer in time")
 }
 
 /// How long one look at the logins is reused by every status read in this
@@ -720,38 +720,44 @@ fn reason(row: &Row) -> Option<&'static str> {
         return None;
     }
     let focus = row.reason.as_deref();
-    Some(match row.code.as_deref()? {
-        "busy" => "Something else had the mouse and keyboard",
-        "stopped" => "Agents were stopped",
-        "elements" => "Nothing on screen matched",
-        "windows" => "The window wasn't there",
-        "no-window" => "The app had no window on screen",
-        "input" => "The mouse and keyboard weren't ready",
-        "capture" => "The screen couldn't be read",
-        "permission" => match row.operation {
+    Some(match row.code.as_ref()? {
+        Failure::Code(Code::Busy) => "Something else had the mouse and keyboard",
+        Failure::Code(Code::Stopped) => "Agents were stopped",
+        Failure::Code(Code::Elements) => "Nothing on screen matched",
+        Failure::Code(Code::Windows) => "The window wasn't there",
+        Failure::Code(Code::NoWindow) => "The app had no window on screen",
+        Failure::Code(Code::Input) => "The mouse and keyboard weren't ready",
+        Failure::Code(Code::Capture) => "The screen couldn't be read",
+        Failure::Code(Code::Permission) => match row.operation {
             Some(Op::Screenshot) => "The helper can't record the screen",
             Some(Op::Input) => "The helper can't use the mouse and keyboard",
             _ => "The helper doesn't have permission",
         },
-        "session-changed" => "The helper's screen changed meanwhile",
-        "focus-changed" if focus == Some("unreadable") => {
+        Failure::Code(Code::SessionChanged) => "The helper's screen changed meanwhile",
+        Failure::Code(Code::FocusChanged) if focus == Some("unreadable") => {
             "Atlas couldn't tell which app was in front"
         }
-        "focus-changed" if focus == Some("window") => "Another window was in front",
-        "focus-changed" if focus == Some("sheet") => "A sheet was open over the window",
-        "focus-changed" if focus == Some("field") => "Another field had focus",
-        "focus-changed" if focus == Some("disabled") => "That field is disabled",
-        "focus-changed" => "Another app was in front",
-        "lease-lost" => "Control ended before it finished",
-        "cancelled" => "It was cancelled",
-        "uncertain" => "It may not have finished",
-        "timeout" => "It took too long",
-        "job" => "A background job was refused",
-        "collect" => "A file could not be collected",
-        "exit" => "The command failed",
-        "transport" | "identity" | "native" | "daemon" | "on-console" => {
-            "Atlas couldn't reach the helper"
+        Failure::Code(Code::FocusChanged) if focus == Some("window") => {
+            "Another window was in front"
         }
+        Failure::Code(Code::FocusChanged) if focus == Some("sheet") => {
+            "A sheet was open over the window"
+        }
+        Failure::Code(Code::FocusChanged) if focus == Some("field") => "Another field had focus",
+        Failure::Code(Code::FocusChanged) if focus == Some("disabled") => "That field is disabled",
+        Failure::Code(Code::FocusChanged) => "Another app was in front",
+        Failure::Code(Code::LeaseLost) => "Control ended before it finished",
+        Failure::Code(Code::Cancelled) => "It was cancelled",
+        Failure::Code(Code::Uncertain) => "It may not have finished",
+        Failure::Timeout => "It took too long",
+        Failure::Code(Code::Job) => "A background job was refused",
+        Failure::Code(Code::Collect) => "A file could not be collected",
+        Failure::Exit => "The command failed",
+        Failure::Code(Code::Transport)
+        | Failure::Code(Code::Identity)
+        | Failure::Code(Code::Native)
+        | Failure::Code(Code::Daemon)
+        | Failure::Code(Code::OnConsole) => "Atlas couldn't reach the helper",
         _ => return None,
     })
 }
@@ -803,9 +809,9 @@ pub fn shown(row: &Row, now: u128) -> Shown {
         label: row.label.clone(),
         session: row.session.clone(),
         capture: row.capture.clone(),
-        nothing_sent: row.coded("focus-changed"),
+        nothing_sent: row.coded(Code::FocusChanged),
         partial: row.partial == Some(true),
-        uncertain: row.coded("uncertain"),
+        uncertain: row.coded(Code::Uncertain),
         says: crate::doing::says(row),
         reason: reason(row).map(str::to_owned),
         actor: row.actor().to_owned(),

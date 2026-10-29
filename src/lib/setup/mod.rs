@@ -15,7 +15,7 @@ use crate::{
     client::Client,
     config::Config,
     digest::file_sha256,
-    error::{Error, Result},
+    error::{Code, Error, Result},
     session::{require_hidden, validate_target_uid},
     transport::run_output,
 };
@@ -112,8 +112,8 @@ fn lookup(key: Lookup) -> Result<Option<Account>> {
 
 /// Resolve an account through directory services by short name.
 pub fn account_named(name: &str) -> Result<Option<Account>> {
-    let name =
-        CString::new(name).map_err(|_| Error::new("setup", "Account names cannot contain NUL"))?;
+    let name = CString::new(name)
+        .map_err(|_| Error::new(Code::Setup, "Account names cannot contain NUL"))?;
     lookup(Lookup::Name(name))
 }
 
@@ -234,7 +234,7 @@ fn run_as_helper(
 ) -> Result<(bool, Value)> {
     if expected.uid != helper.uid || expected.name != helper.name {
         return Err(Error::new(
-            "setup",
+            Code::Setup,
             "The helper is not the account Atlas chose",
         ));
     }
@@ -273,7 +273,7 @@ fn run_as_helper(
         .stderr(std::process::Stdio::piped());
     let output = crate::onboarding::as_root::tracked_output(&mut command).map_err(|refusal| {
         Error::new(
-            "setup",
+            Code::Setup,
             format!("The setup executor did not finish: {refusal:?}"),
         )
         .uncertain()
@@ -669,18 +669,18 @@ fn preview_account(helper: Option<&str>, config: Option<&Config>) -> Result<Acco
     match (helper, config) {
         (Some(name), _) => account_named(name)?.ok_or_else(|| {
             Error::new(
-                "setup",
+                Code::Setup,
                 format!("No account named {name} exists on this Mac"),
             )
         }),
         (None, Some(config)) => account_with_uid(config.helper_uid)?.ok_or_else(|| {
             Error::new(
-                "setup",
+                Code::Setup,
                 format!("Configured helper UID {} has no account", config.helper_uid),
             )
         }),
         (None, None) => Err(Error::new(
-            "usage",
+            Code::Usage,
             "No usable configuration; name the helper account with --helper NAME",
         )),
     }

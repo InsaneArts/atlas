@@ -5,7 +5,7 @@ use crate::{
     app_selection::{Closing, Process, atlas_bundle, selected},
     client::Client,
     control::Ownership,
-    error::{Error, Result},
+    error::{Code, Error, Result},
     handoff,
     host_session::HostSession,
     task,
@@ -90,7 +90,7 @@ async fn quit(
     match quit_until(client, ownership, processes, left, limit).await? {
         Quitting::Gone(quit) => Ok(quit),
         Quitting::TimedOut { still } => Err(Error::new(
-            "wait-failed",
+            Code::WaitFailed,
             format!(
                 "{} did not quit within {} seconds",
                 still.join(", "),
@@ -131,7 +131,7 @@ pub(crate) async fn quit_until(
     let reply = accepted(client.run_owned(ownership, argv).await?)?;
     if reply["timedOut"] == true || reply["exitCode"] != 0 {
         return Err(Error::new(
-            "wait-failed",
+            Code::WaitFailed,
             "The helper did not finish quitting the apps; run atlas apps to see what is open",
         ));
     }
@@ -203,7 +203,7 @@ pub(super) async fn close_in(
         && app.contains('/')
     {
         return Err(Error::new(
-            "usage",
+            Code::Usage,
             "close takes the app's name as atlas apps lists it, not a path",
         ));
     }
@@ -218,7 +218,7 @@ pub(super) async fn close_in(
         && processes.iter().any(|process| process.protected)
     {
         return Err(Error::new(
-            "input",
+            Code::Input,
             format!("Atlas does not close {app}: it is part of macOS or of Atlas"),
         ));
     }

@@ -3,7 +3,7 @@
 //! Developer ID requirement and notarization — swapping by rename so a
 //! running helper daemon never sees a half-written executable.
 use crate::{
-    error::{Error, Result},
+    error::{Code, Error, Result},
     setup,
 };
 use serde_json::{Value, json};
@@ -57,7 +57,7 @@ impl Source {
 }
 
 fn problem(message: impl Into<String>) -> Error {
-    Error::new("update", message)
+    Error::new(Code::Update, message)
 }
 
 /// The Atlas.app this executable belongs to.

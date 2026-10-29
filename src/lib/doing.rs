@@ -2,7 +2,7 @@
 //! surface says it: a verb, the app it acted in and the control it named.
 //! Typed text, argv, coordinates, output, file names and window titles are
 //! never kept.
-use crate::activity_log::Row;
+use crate::{activity_log::Row, error::Code};
 
 /// The most characters an app name or element label keeps.
 const NAME_LIMIT: usize = 40;
@@ -354,7 +354,7 @@ pub fn says(row: &Row) -> String {
 
     if ok {
         done
-    } else if row.coded("focus-changed") {
+    } else if row.coded(Code::FocusChanged) {
         not_sent(row, &failed)
     } else {
         failed

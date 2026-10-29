@@ -7,7 +7,7 @@ use crate::{
         protocol::{self, Crop, JobRequest, MAX_REQUEST, ReadRequest, Region, Request, failure},
         read, run,
     },
-    error::{Error, Result},
+    error::{Code, Error, Result},
     native::{apps, capture, endpoint, windows},
     session::{InputEpoch, validate_target_uid},
 };
@@ -115,7 +115,7 @@ fn require_graphical_session(uid: u32, manager: &str) -> Result<()> {
     let proof = crate::native::session_info()?;
     let refused = |why: &str| {
         Error::new(
-            "identity",
+            Code::Identity,
             format!("The helper daemon must run in the helper's graphical login: {why}"),
         )
     };
@@ -146,7 +146,7 @@ pub async fn serve(uid: u32, controller_uid: u32, socket: PathBuf) -> Result<()>
 
     if nix::unistd::getuid().as_raw() != uid {
         return Err(Error::new(
-            "identity",
+            Code::Identity,
             "The helper daemon must run as the configured helper account",
         ));
     }
@@ -222,13 +222,13 @@ pub async fn serve(uid: u32, controller_uid: u32, socket: PathBuf) -> Result<()>
             // permission, say): exit unsuccessfully so launchd starts it
             // again. Uninstalling unloads the job first, so it stays down.
             _ = interrupt.recv() => {
-                break Err(Error::new("restart", "Interrupted; launchd starts it again"));
+                break Err(Error::new(Code::Restart, "Interrupted; launchd starts it again"));
             }
             _ = terminate.recv() => {
-                break Err(Error::new("restart", "Stopped; launchd starts it again"));
+                break Err(Error::new(Code::Restart, "Stopped; launchd starts it again"));
             }
             () = daemon.restarting.notified() => {
-                break Err(Error::new("restart", "Restarting at the controller's request"));
+                break Err(Error::new(Code::Restart, "Restarting at the controller's request"));
             }
             Some(_) = tasks.join_next(), if !tasks.is_empty() => {}
             accepted = listener.accept() => {
@@ -248,7 +248,7 @@ pub async fn serve(uid: u32, controller_uid: u32, socket: PathBuf) -> Result<()>
                     // Nothing ran: say so, rather than hang up in a way a
                     // client must treat as uncertain.
                     endpoint::turn_away(stream, &failure(
-                        "busy",
+                        Code::Busy,
                         "The helper is serving too many requests; try again",
                     ));
                     continue;
@@ -310,7 +310,7 @@ pub fn serve_blocking(uid: u32, controller_uid: u32, socket: PathBuf) -> Result<
 
     worker
         .join()
-        .map_err(|_| Error::new("daemon", "The helper daemon stopped unexpectedly"))?
+        .map_err(|_| Error::new(Code::Daemon, "The helper daemon stopped unexpectedly"))?
 }
 
 /// Write one reply line, bounded in time.
@@ -323,7 +323,7 @@ async fn write<W: AsyncWrite + Unpin>(stream: &mut W, reply: &Value) -> Result<(
         stream.flush().await
     })
     .await
-    .map_err(|_| Error::new("transport", "The client stopped reading"))??;
+    .map_err(|_| Error::new(Code::Transport, "The client stopped reading"))??;
 
     Ok(())
 }
@@ -350,7 +350,7 @@ fn allowed(request: &Request, on_console: bool) -> Option<Value> {
 
     (acts && on_console).then(|| {
         failure(
-            "on-console",
+            Code::OnConsole,
             "The helper is on the screen; switch back to your own account first",
         )
     })
@@ -376,7 +376,7 @@ fn pinned_elsewhere(request: &Request, session: fn() -> Result<Value>) -> Option
     match here {
         Ok(here) if here == pin => None,
         Ok(_) => Some(failure(
-            "session-changed",
+            Code::SessionChanged,
             "The helper changed since Atlas checked it; look again",
         )),
         Err(error) => Some(refused(error)),
@@ -396,7 +396,7 @@ async fn ask_to_log_out() -> Value {
 
     let unanswered = |why: &str| {
         let mut reply = failure(
-            "logout",
+            Code::Logout,
             format!("macOS did not answer the log-out request ({why})"),
         );
         reply["uncertain"] = json!(true);
@@ -412,9 +412,9 @@ async fn ask_to_log_out() -> Value {
                 "osascript refused the log-out: {}",
                 String::from_utf8_lossy(&output.stderr).trim()
             );
-            failure("logout", "macOS refused to log the helper out")
+            failure(Code::Logout, "macOS refused to log the helper out")
         }
-        Ok(Err(_)) => failure("logout", "The log-out request could not start"),
+        Ok(Err(_)) => failure(Code::Logout, "The log-out request could not start"),
         Err(_) => unanswered("it may be asking in the helper"),
     }
 }
@@ -527,7 +527,7 @@ async fn screenshot(
                 .map_err(refused)?;
             if current != epoch {
                 return Err(failure(
-                    "session-changed",
+                    Code::SessionChanged,
                     "Session changed during capture; observe again",
                 ));
             }
@@ -550,17 +550,17 @@ async fn screenshot(
             None => (None, None),
             Some(Crop::Region(asked)) => {
                 let area = crop::clamp(asked, &display).ok_or_else(|| {
-                    failure("bad-request", "\"region\" lies outside the display")
+                    failure(Code::BadRequest, "\"region\" lies outside the display")
                 })?;
                 (Some(area), None)
             }
             Some(Crop::App { pid }) => {
                 let on_screen = windows
                     .as_ref()
-                    .map_err(|_| failure("windows", "The window list is unavailable"))?;
+                    .map_err(|_| failure(Code::Windows, "The window list is unavailable"))?;
                 let found = crop::app(on_screen, pid, &display, &dock(on_screen)).ok_or_else(|| {
                     failure(
-                        "no-window",
+                        Code::NoWindow,
                         format!(
                             "Process {pid} has no window on screen; open one, or take a full screenshot"
                         ),
@@ -602,7 +602,7 @@ async fn screenshot(
             reply
         }
         Ok(Err(refusal)) => refusal,
-        Err(_) => failure("capture", "The capture failed"),
+        Err(_) => failure(Code::Capture, "The capture failed"),
     }
 }
 
@@ -622,7 +622,7 @@ async fn handle(stream: UnixStream, daemon: Arc<Daemon>, controller: bool) -> Re
             Ok(request)
         } else {
             Err(failure(
-                "permission",
+                Code::Permission,
                 "Only the account Atlas works for may ask the helper that",
             ))
         }
@@ -649,7 +649,7 @@ async fn handle(stream: UnixStream, daemon: Arc<Daemon>, controller: bool) -> Re
         }
         Ok(Request::Apps { .. }) => match tokio::task::spawn_blocking(apps::running).await {
             Ok(apps) => json!({"ok": true, "apps": apps}),
-            Err(_) => failure("apps", "Running applications could not be listed"),
+            Err(_) => failure(Code::Apps, "Running applications could not be listed"),
         },
         Ok(Request::Screenshot {
             max_dimension,
@@ -683,7 +683,7 @@ async fn handle(stream: UnixStream, daemon: Arc<Daemon>, controller: bool) -> Re
             let reply = run::run(&argv, timeout, events, cancel).await;
             let mut writer = delivery
                 .await
-                .map_err(|_| Error::new("transport", "The event writer failed"))??;
+                .map_err(|_| Error::new(Code::Transport, "The event writer failed"))??;
 
             return write(&mut writer, &reply).await;
         }
@@ -702,7 +702,7 @@ async fn handle(stream: UnixStream, daemon: Arc<Daemon>, controller: bool) -> Re
         Ok(Request::Job(request)) => match &daemon.jobs {
             Some(jobs) => jobs.serve(request).await,
             None => failure(
-                "daemon",
+                Code::Daemon,
                 "This helper daemon cannot keep background jobs; run atlas restart",
             ),
         },
@@ -745,7 +745,7 @@ async fn serve_read(
             Ok(())
         } else {
             Err(failure(
-                "session-changed",
+                Code::SessionChanged,
                 "The helper changed since Atlas checked it; look again",
             ))
         }
@@ -756,7 +756,10 @@ async fn serve_read(
     let reply = tokio::task::spawn_blocking(move || {
         guard()?;
         let Some(places) = read::Places::here() else {
-            return Ok(failure("collect", "The helper's home could not be found"));
+            return Ok(failure(
+                Code::Collect,
+                "The helper's home could not be found",
+            ));
         };
         Ok(read::read(&request, &places, uid, &guard, &mut |event| {
             events.blocking_send(event).is_ok()
@@ -764,12 +767,12 @@ async fn serve_read(
     })
     .await
     .map_or_else(
-        |_| failure("collect", "The file could not be read"),
+        |_| failure(Code::Collect, "The file could not be read"),
         |reply: std::result::Result<Value, Value>| reply.unwrap_or_else(|refusal| refusal),
     );
     let (mut writer, cut) = delivery
         .await
-        .map_err(|_| Error::new("transport", "The event writer failed"))??;
+        .map_err(|_| Error::new(Code::Transport, "The event writer failed"))??;
     write(&mut writer, &cut.unwrap_or(reply)).await
 }
 
@@ -1109,7 +1112,7 @@ mod tests {
             assert_eq!(
                 reply,
                 vec![failure(
-                    "session-changed",
+                    Code::SessionChanged,
                     "Session changed during capture; observe again"
                 )]
             );
@@ -1305,7 +1308,7 @@ mod tests {
     async fn an_app_without_a_window_on_screen_is_refused_without_capturing() {
         static AREAS: Areas = std::sync::Mutex::new(Vec::new());
         let capture: Capture = |_, area, _| recorded(&AREAS, area);
-        let unavailable = || Err(Error::new("windows", "The window list is unavailable"));
+        let unavailable = || Err(Error::new(Code::Windows, "The window list is unavailable"));
 
         let reply = exchange(
             with_windows(capture, fake_windows),
@@ -1315,7 +1318,7 @@ mod tests {
         assert_eq!(
             reply,
             vec![failure(
-                "no-window",
+                Code::NoWindow,
                 "Process 4242 has no window on screen; open one, or take a full screenshot"
             )]
         );
@@ -1362,7 +1365,7 @@ mod tests {
         assert_eq!(
             reply,
             vec![failure(
-                "bad-request",
+                Code::BadRequest,
                 "\"region\" lies outside the display"
             )]
         );
@@ -1697,7 +1700,7 @@ mod tests {
                 Ok(())
             } else {
                 Err(failure(
-                    "session-changed",
+                    Code::SessionChanged,
                     "The helper changed since Atlas checked it; look again",
                 ))
             }

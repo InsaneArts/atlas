@@ -8,7 +8,7 @@ use super::{
 };
 use crate::{
     client::Client,
-    error::{Error, Result},
+    error::{Code, Error, Result},
     host_session::{
         Key, now_ms,
         record::{ACTIVE_FOR, Record as SessionRecord},
@@ -45,7 +45,7 @@ impl Scope {
         let own = client.host_session.as_ref().map(|host| host.key());
         let session = session.or(own).cloned().ok_or_else(|| {
             Error::new(
-                "usage",
+                Code::Usage,
                 "Atlas cannot tell which session this is, so it has nothing to clean up. Set \
                  ATLAS_SESSION=NAME before the task's first command, or pass --session KEY \
                  (atlas activity --all lists sessions).",
@@ -113,7 +113,7 @@ impl Loaded {
         let tasks = Tasks::at(output).of_session(&scope.session);
         let nothing = || {
             Error::new(
-                "input",
+                Code::Input,
                 "No session or task with that key is recorded here; atlas activity --all lists them",
             )
         };
@@ -330,7 +330,7 @@ pub(crate) fn may_adopt(record: Option<&SessionRecord>, tasks: &[TaskRecord]) ->
         minutes => format!("{minutes} minutes ago"),
     };
     Err(Error::new(
-        "input",
+        Code::Input,
         format!("That session acted {ago} and may still be working; ask the person."),
     ))
 }

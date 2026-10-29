@@ -9,7 +9,7 @@ use super::{
     scan::Scan,
 };
 use crate::{
-    error::{Error, Result},
+    error::{Code, Error, Result},
     native::{
         self,
         windows::{self, MENU_LAYER},
@@ -56,7 +56,7 @@ pub fn elements(pid: i32, limits: Limits) -> Result<Snapshot> {
         ffi::set_timeout(&system, Duration::from_secs(1));
     }
     let app = ffi::application(pid)
-        .ok_or_else(|| Error::new("elements", "No accessibility element for that process"))?;
+        .ok_or_else(|| Error::new(Code::Elements, "No accessibility element for that process"))?;
 
     let mut scan = Scan::new(Instant::now() + limits.time);
     let windows = scan.children(&app, "AXWindows", limits.count);
@@ -353,18 +353,18 @@ pub(super) fn sheet_window(
 pub(super) fn unreachable(error: Option<AXError>, trusted: bool, exists: bool) -> Error {
     if !trusted || error == Some(AXError::APIDisabled) {
         return Error::new(
-            "permission",
+            Code::Permission,
             "The app's accessibility tree is unavailable; check Accessibility for the helper",
         );
     }
 
     if !exists || error == Some(AXError::InvalidUIElement) {
-        return Error::new("elements", "No app is running with that process ID");
+        return Error::new(Code::Elements, "No app is running with that process ID");
     }
 
     if error == Some(AXError::CannotComplete) {
         return Error::new(
-            "elements",
+            Code::Elements,
             "The app is not responding to Accessibility (it may be busy, or not an app with \
              windows); try again",
         );
@@ -372,12 +372,12 @@ pub(super) fn unreachable(error: Option<AXError>, trusted: bool, exists: bool) -
 
     match error {
         Some(error) => Error::new(
-            "elements",
+            Code::Elements,
             format!(
                 "The app's accessibility tree could not be read (error {})",
                 error.0
             ),
         ),
-        None => Error::new("elements", "The app shows no accessibility tree"),
+        None => Error::new(Code::Elements, "The app shows no accessibility tree"),
     }
 }

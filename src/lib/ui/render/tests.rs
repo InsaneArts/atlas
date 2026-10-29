@@ -110,16 +110,16 @@ fn a_doctor_that_is_not_ready_lists_checks_and_fixes() {
 fn errors_say_what_happened_and_what_to_do() {
     console::set_colors_enabled(false);
 
-    let plain = Error::new("on-console", "The helper is on screen right now");
+    let plain = Error::new(Code::OnConsole, "The helper is on screen right now");
     assert_eq!(
         error(&plain),
         "✗ The helper is on screen right now\n  → Switch back to your own account. Atlas works while the helper is in the background."
     );
 
-    let says = Error::new("config", "No configuration; run atlas init");
+    let says = Error::new(Code::Config, "No configuration; run atlas init");
     assert_eq!(error(&says), "✗ No configuration; run atlas init");
 
-    let unsure = Error::new("transport", "The helper stopped answering").uncertain();
+    let unsure = Error::new(Code::Transport, "The helper stopped answering").uncertain();
     assert!(error(&unsure).contains("don't repeat it"));
 }
 
@@ -458,7 +458,7 @@ fn a_scan_that_stopped_early_says_why() {
 
 #[test]
 fn a_refused_name_lists_what_it_may_have_meant() {
-    let refused = Error::new("elements", "No visible element matches.").with(
+    let refused = Error::new(Code::Elements, "No visible element matches.").with(
         "candidates",
         json!([{"role": "AXMenuBarItem", "name": "Format", "at": [356, 11]},
                {"role": "AXButton", "name": "Form\u{1b}[31m", "at": [10, 20]}]),
@@ -641,13 +641,13 @@ fn a_fix_is_left_out_only_when_the_message_says_what_to_run() {
     console::set_colors_enabled(false);
 
     // Naming the helper account (often "atlas") is not a fix.
-    let named = Error::new("switch", "No account named atlas to switch to");
+    let named = Error::new(Code::Switch, "No account named atlas to switch to");
     assert!(error(&named).contains("→ Use the Apple menu"));
 
-    let says = Error::new("init", "Run atlas init again.");
+    let says = Error::new(Code::Init, "Run atlas init again.");
     assert_eq!(error(&says), "✗ Run atlas init again.");
 
-    let stopped = Error::new("cancelled", "Stopped.");
+    let stopped = Error::new(Code::Cancelled, "Stopped.");
     assert_eq!(error(&stopped), "– Stopped.");
 }
 
@@ -958,7 +958,7 @@ fn the_last_login_reads_one_step_a_line() {
 #[test]
 fn a_refusal_names_the_session_it_is_about_in_words() {
     console::set_colors_enabled_stderr(false);
-    let held = Error::new("busy", "Another Atlas command kept control.")
+    let held = Error::new(Code::Busy, "Another Atlas command kept control.")
         .held_by(crate::error::Holder::Agent)
         .with(
             "heldBy",
@@ -968,8 +968,8 @@ fn a_refusal_names_the_session_it_is_about_in_words() {
     assert!(said.contains("Held by Codex · right."), "{said}");
     assert!(!said.contains("c71d0e5a9b28"));
 
-    let left =
-        Error::new("uncertain", "Unknown").with("causedBy", json!(["Claude Code · left", "Pi"]));
+    let left = Error::new(Code::Uncertain, "Unknown")
+        .with("causedBy", json!(["Claude Code · left", "Pi"]));
     assert!(error(&left).contains("Left by Claude Code · left and Pi."));
 
     let shown = show(
@@ -982,7 +982,7 @@ fn a_refusal_names_the_session_it_is_about_in_words() {
         "{}",
         shown.err
     );
-    assert!(!error(&Error::new("busy", "Wait")).contains("by"));
+    assert!(!error(&Error::new(Code::Busy, "Wait")).contains("by"));
 }
 
 /// A person reading a focus refusal is told what JSON tells an agent: what
@@ -999,7 +999,7 @@ fn a_focus_refusal_card_advises_by_what_was_in_the_way_and_what_was_sent() {
     assert!(left.err.contains("send only the rest"), "{}", left.err);
 
     let sheet = error(
-        &Error::new("focus-changed", "A sheet is open over window 4120").with("reason", "sheet"),
+        &Error::new(Code::FocusChanged, "A sheet is open over window 4120").with("reason", "sheet"),
     );
     assert!(sheet.contains("deal with the sheet"), "{sheet}");
     assert!(!sheet.contains("Bring the app to the front"), "{sheet}");
