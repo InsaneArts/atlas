@@ -32,7 +32,7 @@ const READ_LIMIT: u64 = 4 * 1024 * 1024;
 /// Personal input belongs to another run after two minutes without it,
 /// or on another UTC day.
 const INPUT_GAP_MS: u64 = 120_000;
-const DAY_MS: u64 = 86_400_000;
+pub(crate) const DAY_MS: u64 = 86_400_000;
 
 /// What a request asked of the helper, as its `op` names it. One this
 /// build does not know is kept as it was written.

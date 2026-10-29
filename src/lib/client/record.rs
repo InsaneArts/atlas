@@ -87,12 +87,18 @@ impl PersonInput {
 
     /// Gather `row`, one input that worked, for `directory`'s log: written
     /// once its span ends, with the earlier gathered row first when that
-    /// span has ended or it is for another log.
+    /// span has ended, it is on another UTC day or it is for another log.
     fn gather(&self, directory: &Path, row: Row) -> Result<()> {
         let mut gathering = self.lock();
         if let Some((into, gathered, deadline)) = gathering.row.as_mut()
             && into == directory
             && Instant::now() < *deadline
+            && gathered
+                .at_ms()
+                .zip(row.at_ms())
+                .is_some_and(|(earlier, later)| {
+                    earlier / activity_log::DAY_MS == later / activity_log::DAY_MS
+                })
         {
             gathered.action_count =
                 Some(gathered.action_count.unwrap_or(0) + row.action_count.unwrap_or(0));
@@ -433,5 +439,45 @@ impl Client {
         }
 
         activity_log::append(directory, &row)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[tokio::test(start_paused = true)]
+    async fn input_on_either_side_of_midnight_is_buffered_in_separate_rows() {
+        let directory = tempfile::tempdir().unwrap();
+        let input = PersonInput::default();
+        let midnight = activity_log::DAY_MS;
+        let times = [midnight - 2, midnight - 1, midnight, midnight + 1];
+        for at in times {
+            let row = Row::parse(&json!({
+                "at": (u128::from(at) * 1_000_000).to_string(),
+                "operation": "input", "actor": "viewer", "ok": true,
+                "actionCount": 1, "elapsedMs": 2.5
+            }))
+            .unwrap();
+            input.gather(directory.path(), row).unwrap();
+        }
+
+        let read = || {
+            std::fs::read_to_string(directory.path().join(activity_log::FILE))
+                .unwrap()
+                .lines()
+                .map(|line| Row::parse(&serde_json::from_str(line).unwrap()).unwrap())
+                .map(|row| (row.at_ms(), row.action_count, row.elapsed_ms))
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(read(), [(Some(midnight - 1), Some(2), Some(5.0))]);
+        input.flush().unwrap();
+        assert_eq!(
+            read(),
+            [
+                (Some(midnight - 1), Some(2), Some(5.0)),
+                (Some(midnight + 1), Some(2), Some(5.0))
+            ]
+        );
     }
 }
