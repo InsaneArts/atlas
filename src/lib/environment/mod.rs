@@ -30,7 +30,7 @@ use fs2::FileExt;
 pub(crate) use installs::HELD_DAYS;
 pub use list::list;
 use model::*;
-pub(crate) use one_off::{install_app, installs, remove_app};
+pub(crate) use one_off::{install_app, install_states, remove_app};
 pub(crate) use reply::{InstallState, KeptReason, Outcome, Removal, RunningFrom, SideEffect};
 pub use runner::NO_PROFILE;
 use serde::{Deserialize, Serialize};

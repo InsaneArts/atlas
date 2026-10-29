@@ -25,7 +25,7 @@ pub mod handoff;
 pub mod helper_info;
 pub mod host_session;
 pub mod init;
-pub mod installs;
+pub mod install_app;
 pub mod interrupt;
 pub mod jobs;
 mod last_capture;

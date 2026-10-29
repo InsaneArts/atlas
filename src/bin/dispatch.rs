@@ -542,7 +542,7 @@ async fn carry_out(
             targets,
             environment,
         } => agent::open(&client()?, app.as_deref(), &targets, &environment).await,
-        Command::InstallApp { path } => atlas::installs::install(&client()?, &path).await,
+        Command::InstallApp { path } => atlas::install_app::install(&client()?, &path).await,
         Command::Cleanup {
             apply,
             session,

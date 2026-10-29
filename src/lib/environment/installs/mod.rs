@@ -895,7 +895,7 @@ fn removal(id: &str, outcome: &Outcome, record: Option<&Install>, home: &Path) -
 /// fits in [`READ_PRINTS`], else it is unknown. A process running from a
 /// translocated copy macOS cannot trace to it is said apart, as one that
 /// may be its own.
-pub(super) fn installs(
+pub(super) fn states(
     home: &Path,
     ids: &[String],
     guard: &impl Fn() -> Result<()>,

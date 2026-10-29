@@ -48,7 +48,7 @@ pub fn worker(path: &Path, apply: bool) -> Result<Value> {
             installs::remove(&home, &id, &guard, &installs::Looks::system())
         }
         Request::Installs { ids } => {
-            installs::installs(&home, &ids, &guard, &installs::Looks::system())
+            installs::states(&home, &ids, &guard, &installs::Looks::system())
         }
     }
 }

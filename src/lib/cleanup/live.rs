@@ -78,7 +78,7 @@ impl Hands for Live<'_> {
     }
 
     async fn installs(&self, ids: &[Token]) -> Result<Vec<InstallState>> {
-        environment::installs(self.client, ids).await
+        environment::install_states(self.client, ids).await
     }
 
     async fn quit(
@@ -113,7 +113,7 @@ impl Hands for Live<'_> {
         // Processes that are not apps, such as helpers running from an
         // install, are seen only by the helper's own process list.
         loop {
-            let answer = environment::installs(self.client, installs).await?;
+            let answer = environment::install_states(self.client, installs).await?;
             let still = still_in_installs(&answer);
             if still == 0 {
                 return Ok(Quitted::Gone);

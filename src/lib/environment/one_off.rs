@@ -81,7 +81,7 @@ pub(crate) async fn remove_app(
 /// How each of `ids` stands, read without control: each asked once, in as
 /// many reads as the worker's limit needs, their answers in one list. An
 /// answer this build cannot read is left out, as one never given.
-pub(crate) async fn installs(client: &Client, ids: &[Token]) -> Result<Vec<InstallState>> {
+pub(crate) async fn install_states(client: &Client, ids: &[Token]) -> Result<Vec<InstallState>> {
     let mut unique: Vec<String> = Vec::new();
     for id in ids {
         if !unique.iter().any(|known| known == id.as_str()) {
@@ -129,7 +129,7 @@ mod tests {
         let twice: Vec<Token> = ids.iter().chain(ids.iter().take(10)).cloned().collect();
 
         let answer = helper
-            .serve(installs(&client, &twice), |request| {
+            .serve(install_states(&client, &twice), |request| {
                 let packet: Value =
                     serde_json::from_slice(&fs::read(request["argv"][2].as_str()?).ok()?).ok()?;
                 let batch = packet["request"]["ids"].as_array()?.clone();

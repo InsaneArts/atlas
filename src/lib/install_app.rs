@@ -150,7 +150,7 @@ pub(crate) async fn installed_path(client: &Client, app: &str) -> Option<String>
     let task = client.task.as_ref()?;
     let tasks = Tasks::at(client.output_dir().ok()?);
     let id = install_named(&tasks, task.key(), app, |state| state == State::Made)?;
-    let answer = environment::installs(client, std::slice::from_ref(&id))
+    let answer = environment::install_states(client, std::slice::from_ref(&id))
         .await
         .ok()?;
     let found = answer

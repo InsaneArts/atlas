@@ -729,7 +729,7 @@ fn a_record_atlas_cannot_read_is_kept_untouched_and_never_acted_on() {
     );
     assert_eq!(fs::read(&path).unwrap(), unreadable);
     assert!(homes.destination("Probe.app/Contents/MacOS/Probe").exists());
-    let listed = installs(
+    let listed = states(
         &homes.home,
         std::slice::from_ref(&id),
         &|| Ok(()),
@@ -754,7 +754,7 @@ fn a_bundle_a_process_runs_from_is_not_taken() {
     assert!(executable.exists());
     assert_eq!(homes.record(&id).phase, InstallPhase::Installed);
 
-    let listed = installs(
+    let listed = states(
         &homes.home,
         std::slice::from_ref(&id),
         &|| Ok(()),
@@ -792,7 +792,7 @@ fn a_translocated_process_keeps_the_install_and_is_never_signalled() {
     ] {
         let reply = remove(&homes.home, &id, &|| Ok(()), &looks).unwrap();
         assert_eq!(reply["outcome"], "inUse");
-        let listed = installs(&homes.home, std::slice::from_ref(&id), &|| Ok(()), &looks).unwrap();
+        let listed = states(&homes.home, std::slice::from_ref(&id), &|| Ok(()), &looks).unwrap();
         assert_eq!(
             listed["installs"][0]["processes"],
             json!([]),
@@ -924,7 +924,7 @@ fn an_install_read_says_where_it_is_only_while_its_own_folder_is_there() {
     let running = format!("{}/Contents/MacOS/Probe", destination.display());
     let processes = move || Ok(vec![(812, running.clone())]);
     let read = || {
-        installs(
+        states(
             &homes.home,
             std::slice::from_ref(&id),
             &|| Ok(()),
@@ -982,7 +982,7 @@ fn the_install_replies_keep_their_wire_shape() {
         bundle_id: &ours,
     };
     let missing = crate::files::token();
-    let read = installs(
+    let read = states(
         &homes.home,
         &[id.clone(), missing.clone()],
         &|| Ok(()),
@@ -998,7 +998,7 @@ fn the_install_replies_keep_their_wire_shape() {
     fs::create_dir_all(preferences.parent().unwrap()).unwrap();
     fs::write(&preferences, "written by the app").unwrap();
     said.push(shape(&homes.remove(&id), &homes, &id, None));
-    let read = installs(&homes.home, std::slice::from_ref(&id), &|| Ok(()), &seen).unwrap();
+    let read = states(&homes.home, std::slice::from_ref(&id), &|| Ok(()), &seen).unwrap();
     said.push(shape(&read, &homes, &id, None));
     said.push(shape(&homes.remove(&missing), &homes, &missing, None));
 
@@ -1038,7 +1038,7 @@ fn the_install_replies_keep_their_wire_shape() {
     let path = homes.store().folder(&id).join("record.json");
     fs::write(&path, b"{\"version\": 2}").unwrap();
     said.push(shape(&homes.remove(&id), &homes, &id, None));
-    let read = installs(&homes.home, std::slice::from_ref(&id), &|| Ok(()), &seen).unwrap();
+    let read = states(&homes.home, std::slice::from_ref(&id), &|| Ok(()), &seen).unwrap();
     said.push(shape(&read, &homes, &id, None));
 
     let homes = Homes::new();

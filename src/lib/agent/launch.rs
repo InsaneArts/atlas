@@ -152,7 +152,7 @@ async fn launch(
     if let (Some(app), Some(at)) = (app.filter(|app| !app.contains('/')), named_at)
         && reply["exitCode"] != 0
         && unknown_app(&reply)
-        && let Some(path) = crate::installs::installed_path(client, app).await
+        && let Some(path) = crate::install_app::installed_path(client, app).await
     {
         argv[at] = path;
         reply = accepted(client.run_owned(ownership, argv).await?)?;
