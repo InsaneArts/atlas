@@ -7,6 +7,8 @@ public struct ActivityRun: Equatable, Sendable, Identifiable {
   public var entry: ActivityLog.Entry
   /// When the run started: its earliest row's start, when known.
   public var startedAt: Date?
+  /// When the run's newest row started, when known: its start for a row on its own.
+  public var endedAt: Date?
   /// How many rows the run holds; 1 for a row on its own.
   public var count: Int
   /// The capture a screenshot row took, by its file name, when the screenshots list it.
@@ -22,9 +24,11 @@ public struct ActivityRun: Equatable, Sendable, Identifiable {
   ///   - startedAt: When the run started.
   ///   - count: How many rows it holds.
   ///   - shot: The capture a screenshot row took, by its file name.
-  init(entry: ActivityLog.Entry, startedAt: Date?, count: Int = 1, shot: String? = nil) {
+  ///   - endedAt: When its newest row started; its start when nil, as for a row on its own.
+  init(entry: ActivityLog.Entry, startedAt: Date?, count: Int = 1, shot: String? = nil, endedAt: Date? = nil) {
     self.entry = entry
     self.startedAt = startedAt
+    self.endedAt = endedAt ?? startedAt
     self.count = count
     self.shot = shot
   }

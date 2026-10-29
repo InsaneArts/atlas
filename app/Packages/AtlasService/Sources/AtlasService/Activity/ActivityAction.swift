@@ -1,11 +1,13 @@
-/// What kind of thing a row did in the helper, read from what the service says it did and its operation, so
-/// the viewer can mark each line with its kind. The service's words lead with the verb Atlas wrote for the
-/// row ("clicked Save in TextEdit", "couldn't scroll", "opening TextEdit…"), so the verb decides; a row that
-/// says nothing Atlas knows reads by its operation.
+/// What kind of thing a row did in the helper, read from the verb Atlas wrote for it, so the viewer can mark each
+/// line with its kind. A row from a build that sent no verb reads by its words, which lead with that verb ("clicked
+/// Save in TextEdit", "couldn't scroll", "opening TextEdit…"); a row that says nothing Atlas knows reads by its
+/// operation.
 public enum ActivityAction: Equatable, Sendable {
   /// A click, a drag or the pointer moved, and mouse-and-keyboard input with no finer verb.
   case pointer
-  /// Text typed or keys pressed.
+  /// Text typed.
+  case typing
+  /// Keys pressed.
   case keys
   /// A scroll.
   case scroll
@@ -25,8 +27,20 @@ public enum ActivityAction: Equatable, Sendable {
     switch entry.operation {
     case "screenshot": self = .screenshot
     case "acquire", "release": self = .control
-    default: self = Self.said(entry.says) ?? Self.operation(entry.operation)
+    default:
+      self =
+        Self.verb(entry.verb)
+        ?? Self.said(entry.says)
+        ?? Self.operation(entry.operation)
     }
+  }
+
+  /// The kind the verb Atlas wrote for a row names.
+  ///
+  /// - Parameter verb: The row's verb, such as `click` or `job-start`.
+  /// - Returns: The kind, or nil for no verb or one this app does not know.
+  static func verb(_ verb: String?) -> ActivityAction? {
+    verb.flatMap { written[$0] }
   }
 
   /// The kind the service's words name by their verb, after any "couldn't", "didn't" or "stopped".
@@ -56,13 +70,21 @@ public enum ActivityAction: Equatable, Sendable {
   /// was cut short.
   private static let leads = ["couldn't ", "didn't ", "stopped "]
 
+  /// The verbs Atlas writes for rows (`src/lib/doing.rs`), by their kind.
+  private static let written: [String: ActivityAction] = [
+    "click": .pointer, "double-click": .pointer, "right-click": .pointer, "drag": .pointer, "move": .pointer,
+    "type": .typing, "key": .keys, "scroll": .scroll, "screenshot": .screenshot, "open": .window,
+    "open-link": .window, "close": .window, "install": .window, "cleanup": .window, "run": .command,
+    "job-start": .command, "job-stop": .command, "collect": .command,
+  ]
+
   /// The verbs the service's words lead with (`src/lib/doing.rs`), done, failed and under way, by their kind.
   private static let verbs: [String: ActivityAction] = [
     "clicked": .pointer, "click": .pointer, "double-clicked": .pointer, "double-click": .pointer,
     "right-clicked": .pointer, "right-click": .pointer, "dragged": .pointer, "drag": .pointer,
-    "moved": .pointer, "move": .pointer, "clicking": .pointer, "dragging": .pointer, "typed": .keys, "type": .keys,
-    "typing": .keys, "pressed": .keys, "press": .keys, "pressing": .keys, "scrolled": .scroll, "scroll": .scroll,
-    "scrolling": .scroll, "opened": .window, "open": .window, "opening": .window,
+    "moved": .pointer, "move": .pointer, "clicking": .pointer, "dragging": .pointer, "typed": .typing,
+    "type": .typing, "typing": .typing, "pressed": .keys, "press": .keys, "pressing": .keys, "scrolled": .scroll,
+    "scroll": .scroll, "scrolling": .scroll, "opened": .window, "open": .window, "opening": .window,
     "closed": .window, "close": .window, "closing": .window, "installed": .window, "install": .window,
     "installing": .window, "cleaned": .window, "clean": .window, "cleaning": .window, "took": .screenshot,
     "take": .screenshot,

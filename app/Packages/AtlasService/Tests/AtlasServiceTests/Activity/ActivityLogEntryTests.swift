@@ -38,4 +38,42 @@ struct ActivityLogEntryTests {
     let terminal = entries.filter { scope.admits($0) }
     #expect(terminal.map(\.id) == ["1", "2"])
   }
+
+  @Test("an activity row's verb, app, label, bundle and keys read as the service writes them")
+  func namesWhatItDid() throws {
+    let body = Data(
+      #"""
+      {"activity": [{"id": "1", "verb": "key", "app": "TextEdit", "label": "⇧⌘Z Page Up",
+      "bundleId": "com.apple.TextEdit", "keys": [["⇧", "⌘", "Z"], ["Page Up"]]}]}
+      """#.utf8
+    )
+    let entry = try #require(try ViewerClient.activity(body, response: reply(200)).entries.first)
+    #expect(entry.verb == "key")
+    #expect(entry.app == "TextEdit")
+    #expect(entry.label == "⇧⌘Z Page Up")
+    #expect(entry.bundleId == "com.apple.TextEdit")
+    #expect(entry.keys == [["⇧", "⌘", "Z"], ["Page Up"]])
+  }
+
+  @Test("an activity row's verb, app, label, bundle and keys of the wrong type or missing read as none")
+  func namesReadLeniently() throws {
+    let body = Data(
+      #"""
+      {"activity": [
+        {"id": "1", "verb": 3, "app": "", "label": ["Save"], "bundleId": null, "keys": "⌘S"},
+        {"id": "2", "keys": [["⌘", 7]]},
+        {"id": "3"}
+      ]}
+      """#.utf8
+    )
+    let entries = try ViewerClient.activity(body, response: reply(200)).entries
+    #expect(entries.count == 3)
+    for entry in entries {
+      #expect(entry.verb == nil)
+      #expect(entry.app == nil)
+      #expect(entry.label == nil)
+      #expect(entry.bundleId == nil)
+      #expect(entry.keys.isEmpty)
+    }
+  }
 }

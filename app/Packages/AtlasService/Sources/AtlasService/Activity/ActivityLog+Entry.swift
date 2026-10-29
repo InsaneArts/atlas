@@ -6,7 +6,7 @@ extension ActivityLog {
     /// Names the row; never reused for another. A running command's row is replaced by one with a new id.
     public var id: String
     /// What was done, in the service's words, such as "typed in TextEdit"; nil when it gives none.
-    var says: String?
+    public var says: String?
     /// How it went.
     public var outcome: Outcome
     /// Who did it.
@@ -26,6 +26,16 @@ extension ActivityLog {
     public var session: String?
     /// The capture a screenshot row took, by Atlas's own file name, when the service says.
     public var capture: String?
+    /// The verb Atlas wrote for the row, such as `click`, `type` or `key`, when the service says.
+    public var verb: String?
+    /// The name of the app it acted in, when the service says.
+    public var app: String?
+    /// The control it named, such as a button's title, or the keys it pressed, such as `⌘S`, when the service says.
+    public var label: String?
+    /// The bundle identifier of the app it acted in, such as `com.apple.TextEdit`, when the service says.
+    public var bundleId: String?
+    /// A key press's chords as keycaps, such as `[["⌘", "S"]]`; none for any other row.
+    public var keys: [[String]]
 
     /// The key of the host session an agent's row came from: Terminal's empty key for one no host named.
     public var sessionKey: String { session ?? "" }
@@ -48,6 +58,11 @@ extension ActivityLog {
     ///   - count: How many input actions it carried.
     ///   - session: The key of the host session it came from.
     ///   - capture: The capture a screenshot row took, by its file name.
+    ///   - verb: The verb Atlas wrote for the row.
+    ///   - app: The name of the app it acted in.
+    ///   - label: The control it named, or the keys it pressed.
+    ///   - bundleId: The bundle identifier of the app it acted in.
+    ///   - keys: A key press's chords as keycaps.
     public init(
       id: String,
       says: String? = nil,
@@ -59,7 +74,12 @@ extension ActivityLog {
       operation: String = "input",
       count: Int? = nil,
       session: String? = nil,
-      capture: String? = nil
+      capture: String? = nil,
+      verb: String? = nil,
+      app: String? = nil,
+      label: String? = nil,
+      bundleId: String? = nil,
+      keys: [[String]] = []
     ) {
       self.id = id
       self.says = says
@@ -72,12 +92,19 @@ extension ActivityLog {
       self.count = count
       self.session = session
       self.capture = capture
+      self.verb = verb
+      self.app = app
+      self.label = label
+      self.bundleId = bundleId
+      self.keys = keys
     }
 
     /// The fields of one `activity` row this app reads.
     enum CodingKeys: String, CodingKey {
       /// Each field by the name the service writes.
       case id, says, ok, started, actor, ageSeconds, startedAt, reason, operation, count, session, capture, nothingSent
+      /// The fields that name what it did and where.
+      case verb, app, label, bundleId, keys
     }
 
     /// Decodes a row, keeping a safe default for anything missing or of the wrong type: a row that says nothing
@@ -103,6 +130,11 @@ extension ActivityLog {
       // An empty key is Terminal's, as a missing one is, so both read as none.
       session = container.lenientText(.session)
       capture = container.lenientText(.capture)
+      verb = container.lenientText(.verb)
+      app = container.lenientText(.app)
+      label = container.lenientText(.label)
+      bundleId = container.lenientText(.bundleId)
+      keys = (try? container.decodeIfPresent([[String]].self, forKey: .keys)) ?? []
     }
   }
 }

@@ -230,7 +230,7 @@ extension ViewerPresenter {
     if entry.actor == .you, action != .control { return .person }
     switch action {
     case .pointer: return .pointer
-    case .keys: return .keys
+    case .typing, .keys: return .keys
     case .scroll: return .scroll
     case .screenshot: return .screenshot
     case .window: return .window

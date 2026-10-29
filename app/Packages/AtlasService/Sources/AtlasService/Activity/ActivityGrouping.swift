@@ -190,17 +190,39 @@ public struct ActivityGrouping: Sendable {
   /// - Parameter captures: The screenshots the service lists, for the screenshot rows.
   /// - Returns: The lines, newest first.
   func runs(captures: [Screenshot]) -> [(period: ActivityPeriod, run: ActivityRun)] {
+    runs(captures: captures, first: .now) { period(of: $0) }
+      .map { (period: $0.part, run: $0.run) }
+  }
+
+  /// Every line of the log in its own order, each with the part of time it falls in: a row with no time stays with
+  /// the row before it, and a row that repeats the line just above it in the same part joins it.
+  ///
+  /// - Parameters:
+  ///   - captures: The screenshots the service lists, for the screenshot rows.
+  ///   - first: The part a row with no time falls in before any row has one.
+  ///   - part: The part a start falls in, such as its stretch of time or its day.
+  /// - Returns: The lines, newest first.
+  func runs<Part: Equatable>(
+    captures: [Screenshot],
+    first: Part,
+    part: (Date) -> Part
+  ) -> [(part: Part, run: ActivityRun)] {
     let shots = shots(in: captures)
-    var runs: [(period: ActivityPeriod, run: ActivityRun)] = []
-    var period = ActivityPeriod.now
+    var runs: [(part: Part, run: ActivityRun)] = []
+    var current = first
     for entry in log.entries {
       let started = start(of: entry)
-      if let started { period = self.period(of: started) }
+      if let started { current = part(started) }
       let run = ActivityRun(entry: entry, startedAt: started, shot: shots[entry.id])
-      if let last = runs.last, last.period == period, Self.repeats(last.run, run) {
-        runs[runs.count - 1].run = ActivityRun(entry: entry, startedAt: started, count: last.run.count + 1)
+      if let last = runs.last, last.part == current, Self.repeats(last.run, run) {
+        runs[runs.count - 1].run = ActivityRun(
+          entry: entry,
+          startedAt: started,
+          count: last.run.count + 1,
+          endedAt: last.run.endedAt
+        )
       } else {
-        runs.append((period, run))
+        runs.append((current, run))
       }
     }
     return runs

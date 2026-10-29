@@ -90,7 +90,7 @@ struct ActivityGroupingSessionTests {
     let log = try JSONDecoder()
       .decode(ActivityLog.self, from: data)
     #expect(log.entries.map(\.outcome) == [.notSent, .failed])
-    #expect(ActivityAction(log.entries[0]) == .keys)
+    #expect(ActivityAction(log.entries[0]) == .typing)
     let rules = ActivityGrouping(
       log: log,
       readAt: ActivityGroupingTests.readAt,

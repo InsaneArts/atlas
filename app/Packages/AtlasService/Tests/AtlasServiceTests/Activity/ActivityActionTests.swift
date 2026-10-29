@@ -12,7 +12,8 @@ struct ActivityActionTests {
       ("right-clicked in Finder", .pointer),
       ("dragged in Opie", .pointer),
       ("moved the pointer", .pointer),
-      ("typed in TextEdit", .keys),
+      ("typed in TextEdit", .typing),
+      ("stopped typing in Notes", .typing),
       ("couldn't press ⌘S in TextEdit", .keys),
       ("scrolled in Opie", .scroll),
       ("opened Opie", .window),
@@ -52,5 +53,32 @@ struct ActivityActionTests {
     #expect(entry("used the mouse and keyboard", "input") == .pointer)
     #expect(entry("recovered the helper", "restart") == .command)
     #expect(entry(nil, "action") == .command)
+  }
+
+  @Test(
+    "a row's kind comes from its verb before its words",
+    arguments: [
+      ("click", ActivityAction.pointer),
+      ("right-click", .pointer),
+      ("type", .typing),
+      ("key", .keys),
+      ("scroll", .scroll),
+      ("open-link", .window),
+      ("install", .window),
+      ("job-start", .command),
+      ("collect", .command),
+    ]
+  )
+  func kindFromVerbField(verb: String, kind: ActivityAction) {
+    let entry = ActivityLog.Entry(id: "1", says: "scrolled in Opie", operation: "input", verb: verb)
+    #expect(ActivityAction(entry) == kind)
+  }
+
+  @Test("a verb this app does not know reads by the row's words, and a screenshot by its operation")
+  func unknownVerbReadsByWords() {
+    let later = ActivityLog.Entry(id: "1", says: "pressed ⌘S", operation: "input", verb: "someday")
+    #expect(ActivityAction(later) == .keys)
+    let shot = ActivityLog.Entry(id: "2", says: "took a screenshot", operation: "screenshot", verb: "click")
+    #expect(ActivityAction(shot) == .screenshot)
   }
 }

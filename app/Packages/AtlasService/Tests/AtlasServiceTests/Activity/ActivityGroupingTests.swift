@@ -127,12 +127,12 @@ struct ActivityGroupingTests {
         ActivityFilter.all,
         "clicked"
       ),
-      // The person's clicks, with an agent's scroll between them.
+      // The same typing twice, with a scroll between them.
       (
         [
-          row("2", 5, actor: .you), row("1", 6, says: "scrolled in Opie"), row("0", 7, actor: .you),
+          row("2", 5, says: "typed in Opie"), row("1", 6, says: "scrolled in Opie"), row("0", 7, says: "typed in Opie"),
         ],
-        .you,
+        .typing,
         ""
       ),
       // The same failure twice, with an action that worked between them.
