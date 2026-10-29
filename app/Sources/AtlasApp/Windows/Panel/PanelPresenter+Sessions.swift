@@ -9,7 +9,7 @@ extension PanelPresenter {
   /// - Parameters:
   ///   - reading: The status, read.
   ///   - mode: The helper's mode.
-  ///   - now: The time now.
+  ///   - now: The time the snapshot was taken, which an ended session's age counts to.
   /// - Returns: The rows.
   static func sessions(_ reading: StatusReading, mode: Mode, now: Date) -> [PanelSessionEntry] {
     guard reading.showsSessions, !hidesRecent(mode) else { return [] }

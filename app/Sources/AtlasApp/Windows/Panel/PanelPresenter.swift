@@ -9,16 +9,14 @@ enum PanelPresenter {
   /// The panel as it should look now. While sessions show they take Recent's place, and the line under the heading
   /// names who has the helper or whose action may not have finished; a notice still wins over both.
   ///
-  /// - Parameters:
-  ///   - snapshot: What the controller holds.
-  ///   - now: The time now, which only an ended session's age reads; the panel lists live ones.
+  /// - Parameter snapshot: What the controller holds.
   /// - Returns: Everything the panel draws.
-  static func state(_ snapshot: PanelSnapshot, now: Date = .now) -> PanelState {
+  static func state(_ snapshot: PanelSnapshot) -> PanelState {
     let mode = mode(snapshot)
     let reading = StatusReading(snapshot.status)
     var status = mode.panelSummary(reading, paused: snapshot.session.paused, reconnecting: snapshot.reconnecting)
     if let line = sessionLine(reading, mode: mode) { status.line = line }
-    let sessions = sessions(reading, mode: mode, now: now)
+    let sessions = sessions(reading, mode: mode, now: snapshot.date)
     return PanelState(
       status: status,
       notice: snapshot.session.notice,

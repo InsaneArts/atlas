@@ -2,6 +2,7 @@ import AtlasCommands
 import AtlasService
 import AtlasStatus
 import AtlasUI
+import Foundation
 import Observation
 
 /// The menu bar panel's one observed object: it holds the latest status, the helper's screen and what the panel is
@@ -51,6 +52,8 @@ final class PanelController {
   @ObservationIgnored let links: PanelLinks
   /// The clock the pauses between readings run on; a cancelled pause ends at once.
   @ObservationIgnored let clock: any Clock<Duration>
+  /// The time now, which the snapshot carries.
+  @ObservationIgnored let wallClock: @MainActor () -> Date
   /// The readings under way.
   @ObservationIgnored var polling: [Task<Void, Never>] = []
   /// Whether the panel is open, so the picture is read.
@@ -79,6 +82,7 @@ final class PanelController {
     loginItem = dependencies.loginItem
     links = dependencies.links
     clock = dependencies.clock
+    wallClock = dependencies.wallClock
     opensAtLogin = dependencies.loginItem.state
   }
 
@@ -94,7 +98,8 @@ final class PanelController {
       holdingControl: links.holdingControl(),
       running: actions.running,
       agentRequests: actions.agentRequests,
-      opensAtLogin: opensAtLogin
+      opensAtLogin: opensAtLogin,
+      date: wallClock()
     )
   }
 

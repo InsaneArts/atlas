@@ -1,5 +1,6 @@
 import AtlasService
 import AtlasUI
+import Foundation
 
 /// What the panel's controller holds, as one plain value for ``PanelPresenter``.
 struct PanelSnapshot {
@@ -23,4 +24,6 @@ struct PanelSnapshot {
   var agentRequests = 0
   /// Where Open at Login stands; nil when unknown, as in a render.
   var opensAtLogin: OpenAtLogin.State?
+  /// The time it was taken, which a session's age counts to.
+  var date = Date()
 }
