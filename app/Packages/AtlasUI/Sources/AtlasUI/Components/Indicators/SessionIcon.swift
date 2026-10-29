@@ -2,11 +2,9 @@ import SwiftUI
 
 /// A host session's icon at a side from ``IconSize``: its app's logo clipped to small corners with a hairline ring, so
 /// a dark logo such as Cursor's keeps its edge on dark glass, an agent's or Terminal's mark scaled to the side, or a
-/// symbol tile. One view for the panel's rows, the main window's group headers, its chip and Details, the captions and
-/// the sessions menu's items. VoiceOver hides it; the name beside it is read.
+/// symbol tile. One view for the panel's rows, the main window's sidebar, group headers, chip and Details, and the
+/// captions. VoiceOver hides it; the name beside it is read.
 public struct SessionIcon: View {
-  /// 16: a menu item's image, as AppKit's menu items draw theirs.
-  public static let menuSide = IconSize.s
   /// 0.42: a tile's glyph against its side, as a symbol tile's 11-point characters sit on its 26.
   private static let glyphShare: CGFloat = 0.42
   /// 0.25: the most a corner takes of the side.
