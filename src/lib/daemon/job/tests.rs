@@ -464,7 +464,7 @@ fn an_identity_refusal_followed_by_a_stop_never_signals() {
     let table = Table::with(vec![moved, process(4313, later(1), 9999, 4312)]);
     let (_folder, jobs) = jobs_with(&record(), &table);
     for _ in 0..3 {
-        jobs.watch_once(true, false);
+        jobs.watch_once(Some(How::Person));
     }
     assert_eq!(shown(&jobs)["refused"], "identity");
     let refused = jobs.stop(
@@ -474,7 +474,7 @@ fn an_identity_refusal_followed_by_a_stop_never_signals() {
     );
     assert!(refused.get("signalled").is_none(), "{refused}");
     for _ in 0..3 {
-        jobs.watch_once(true, false);
+        jobs.watch_once(Some(How::Person));
     }
     assert!(table.signals().is_empty(), "{:?}", table.signals());
 }
@@ -489,7 +489,7 @@ fn an_adopted_group_without_its_leader_is_reported_never_signalled() {
     assert_eq!(job["how"], "leader-gone");
     assert_eq!(job["left"][0]["pid"], 4313);
     jobs.stop_all(StopReason::Person);
-    jobs.watch_once(true, true);
+    jobs.watch_once(Some(How::OnConsole));
     assert!(table.signals().is_empty());
 }
 
@@ -501,7 +501,7 @@ fn a_record_whose_group_is_not_its_leaders_is_refused_on_load() {
     let (_folder, jobs) = jobs_with(&corrupt, &table);
     assert_eq!(shown(&jobs)["state"], "unknown");
     jobs.stop_all(StopReason::Person);
-    jobs.watch_once(true, false);
+    jobs.watch_once(Some(How::Person));
     assert!(table.signals().is_empty());
 }
 
@@ -512,15 +512,15 @@ fn a_failed_process_query_ends_nothing_and_is_tried_again() {
     due.ends_at = 0;
     let (_folder, jobs) = jobs_with(&due, &table);
     table.failing.store(true, Ordering::SeqCst);
-    jobs.watch_once(false, false);
-    jobs.watch_once(false, false);
+    jobs.watch_once(None);
+    jobs.watch_once(None);
     let job = shown(&jobs);
     assert_eq!(job["state"], "stopping", "{job}");
     assert_eq!(job["refused"], "unobserved");
     assert!(table.signals().is_empty());
 
     table.failing.store(false, Ordering::SeqCst);
-    jobs.watch_once(false, false);
+    jobs.watch_once(None);
     assert_eq!(table.signals(), [(4312, Signal::SIGTERM)]);
 }
 
@@ -549,7 +549,7 @@ fn a_stop_is_sent_even_when_its_record_cannot_be_written() {
     let (folder, jobs) = jobs_with(&record(), &table);
     let records = folder.path().join("jobs");
     std::fs::set_permissions(&records, std::fs::Permissions::from_mode(0o500)).unwrap();
-    jobs.watch_once(true, false);
+    jobs.watch_once(Some(How::Person));
     let job = shown(&jobs);
     std::fs::set_permissions(&records, std::fs::Permissions::from_mode(0o700)).unwrap();
     assert_eq!(table.signals(), [(4312, Signal::SIGTERM)]);
@@ -576,7 +576,7 @@ fn the_log_of_an_ended_job_whose_processes_still_write_is_kept_in_bounds() {
     let (folder, jobs) = jobs_with(&ended, &table);
     let log = folder.path().join(format!("jobs/{ID}.log"));
     std::fs::write(&log, vec![b'x'; 2 << 20]).unwrap();
-    jobs.watch_once(false, false);
+    jobs.watch_once(None);
     assert_eq!(std::fs::metadata(&log).unwrap().len(), 0);
     assert_eq!(shown(&jobs)["logResets"], 1);
 }
@@ -587,7 +587,7 @@ fn every_job_is_counted_from_the_records() {
     let (_folder, jobs) = jobs_with(&record(), &table);
     assert_eq!(jobs.running(), 1);
     table.processes.lock().unwrap().clear();
-    jobs.watch_once(false, false);
+    jobs.watch_once(None);
     assert_eq!(jobs.running(), 0);
     assert_eq!(shown(&jobs)["how"], "exited");
 }
@@ -644,7 +644,7 @@ fn a_leader_replaced_while_its_group_is_listed_is_never_signalled() {
     );
     assert!(reply.get("signalled").is_none(), "{reply}");
     for _ in 0..3 {
-        jobs.watch_once(true, false);
+        jobs.watch_once(Some(How::Person));
     }
     assert!(table.signals().is_empty(), "{:?}", table.signals());
 }
@@ -655,7 +655,7 @@ fn a_record_that_cannot_be_read_is_counted_unresolved_and_named_by_a_stop_of_eve
     let (folder, jobs) = jobs_with(&record(), &table);
     let other = JobId::parse("0123456789ab").unwrap();
     std::fs::write(folder.path().join(format!("jobs/{other}.json")), b"{").unwrap();
-    jobs.watch_once(false, false);
+    jobs.watch_once(None);
     assert_eq!(
         json!(jobs.census()),
         json!({"running": 1, "launching": 0, "unresolved": 1})
@@ -735,8 +735,8 @@ fn the_replies_keep_their_wire_shape() {
     due.ends_at = 0;
     let (_f, jobs) = jobs_with(&due, &table);
     table.failing.store(true, Ordering::SeqCst);
-    jobs.watch_once(false, false);
-    jobs.watch_once(false, false);
+    jobs.watch_once(None);
+    jobs.watch_once(None);
     out.push(("show-refused", jobs.show(Some(&id))));
     out.push(("stop-all-unobserved", jobs.stop_all(StopReason::OnConsole)));
     let t2 = Table::with(vec![leader()]);

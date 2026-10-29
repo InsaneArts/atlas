@@ -517,8 +517,7 @@ impl Jobs {
                 &mut state,
                 &mut record,
                 processes.as_deref(),
-                false,
-                false,
+                None,
                 now_ms(),
             );
         }
@@ -775,14 +774,7 @@ impl Jobs {
                     error: UNREADABLE.to_owned(),
                 })),
                 Found::Record(mut record) => {
-                    self.look(
-                        &mut state,
-                        &mut record,
-                        processes.as_deref(),
-                        false,
-                        false,
-                        now,
-                    );
+                    self.look(&mut state, &mut record, processes.as_deref(), None, now);
                     views.push(Shown::Job(Box::new(record.view())));
                 }
             }

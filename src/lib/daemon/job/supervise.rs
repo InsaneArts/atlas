@@ -42,11 +42,11 @@ pub(super) const GRACE_MS: u64 = 5_000;
 
 impl Jobs {
     /// Look at every job once: end what has ended, stop what ran past its
-    /// time, everything once the person has stopped agents (`stopped`) or
-    /// the helper is on screen (`on_console`), carry stops on, keep logs
-    /// within their limit, and prune old records now and then. What a job
-    /// is, is read from its record each time, never from a count.
-    pub fn watch_once(&self, stopped: bool, on_console: bool) {
+    /// time, everything when `forced` says why every job must stop (the
+    /// person stopped agents, or the helper is on screen), carry stops on,
+    /// keep logs within their limit, and prune old records now and then.
+    /// What a job is, is read from its record each time, never from a count.
+    pub fn watch_once(&self, forced: Option<How>) {
         let mut state = self.state();
         let now = now_ms();
         let records = state.store.records();
@@ -58,14 +58,7 @@ impl Jobs {
             if record.state == JobState::Launched && !state.launching.contains(&record.id) {
                 self.found_launched(&mut state, &mut record, processes.as_deref());
             }
-            self.look(
-                &mut state,
-                &mut record,
-                processes.as_deref(),
-                stopped,
-                on_console,
-                now,
-            );
+            self.look(&mut state, &mut record, processes.as_deref(), forced, now);
             if state.store.bound_log(&record.id, self.log_limit) {
                 record.log_resets = record.log_resets.saturating_add(1);
                 state.store.put(&record);
@@ -111,28 +104,20 @@ impl Jobs {
         state.unresolved = unresolved;
     }
 
-    /// Look at one job: stop a running one when it must stop, note its
-    /// descendants, end it once nothing of it is left, and carry a stop on.
+    /// Look at one job: stop a running one when it must stop (as `forced`
+    /// says, or past its time), note its descendants, end it once nothing
+    /// of it is left, and carry a stop on.
     pub(super) fn look(
         &self,
         state: &mut State,
         record: &mut Record,
         processes: Option<&[Info]>,
-        stopped: bool,
-        on_console: bool,
+        forced: Option<How>,
         now: u64,
     ) {
         match record.state {
             JobState::Running => {
-                let why = if on_console {
-                    Some(How::OnConsole)
-                } else if stopped {
-                    Some(How::Person)
-                } else if now >= record.ends_at {
-                    Some(How::Timeout)
-                } else {
-                    None
-                };
+                let why = forced.or((now >= record.ends_at).then_some(How::Timeout));
                 if let Some(why) = why {
                     return self.begin_stop(state, record, why, GRACE_MS, processes, now);
                 }
@@ -460,7 +445,12 @@ pub async fn supervise(jobs: Arc<Jobs>, stop_marker: PathBuf, on_console: fn() -
         let watched = jobs.clone();
         let marker = stop_marker.clone();
         let _ = tokio::task::spawn_blocking(move || {
-            watched.watch_once(marker.exists(), on_console());
+            let stopped = marker.exists();
+            watched.watch_once(if on_console() {
+                Some(How::OnConsole)
+            } else {
+                stopped.then_some(How::Person)
+            });
         })
         .await;
     }
