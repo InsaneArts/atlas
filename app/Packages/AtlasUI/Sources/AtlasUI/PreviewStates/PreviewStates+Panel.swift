@@ -21,6 +21,9 @@
         PreviewState(name: "Sessions waiting", value: panelSessionsWaiting),
         PreviewState(name: "Sessions need you", value: panelSessionsNeedsYou),
         PreviewState(name: "Sessions, more than three", value: panelSessionsMore),
+        PreviewState(name: "Stopped, jobs left", value: panelStoppedJobsLeft),
+        PreviewState(name: "You have control, a command runs", value: panelControlCommandRuns),
+        PreviewState(name: "Needs you, a command runs", value: panelNeedsYouCommandRuns),
       ]
     }
 

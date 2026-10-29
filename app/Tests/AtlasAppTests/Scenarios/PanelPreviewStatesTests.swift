@@ -39,6 +39,14 @@
       paused.session.paused = true
       var refused = try snapshot("agent", state: "working")
       refused.session.notice = "The agent could not be stopped. Try again."
+      var jobsLeft = try snapshot("stopped", state: "stopped")
+      jobsLeft.session.notice = HelperWords.stopped(
+        StopOutcome(warnings: [], refused: [StopOutcome.Job(id: "7c2e91a04b3f")], unresolved: [StopOutcome.Job(id: "")])
+      )
+      var controlCommand = try snapshot("controlling", state: "control", holdingControl: true)
+      controlCommand.status.overview.commands = 1
+      var needsYouCommand = try snapshot("recovering", state: "needsYou")
+      needsYouCommand.status.overview.commands = 1
       let presented: [String: PanelSnapshot] = [
         "Idle": try snapshot("observing", state: "idle"),
         "Working": try snapshot("agent", state: "working"),
@@ -51,6 +59,9 @@
         "In use elsewhere": try snapshot("controlling", state: "control"),
         "Paused": paused,
         "Stop refused": refused,
+        "Stopped, jobs left": jobsLeft,
+        "You have control, a command runs": controlCommand,
+        "Needs you, a command runs": needsYouCommand,
         "Sessions": try SessionReplies.snapshot([SessionReplies.claudeActing, SessionReplies.cursorIdle]),
         "Sessions waiting": try SessionReplies.snapshot([
           SessionReplies.claudeActing, SessionReplies.codexWaiting(), SessionReplies.cursorIdle,

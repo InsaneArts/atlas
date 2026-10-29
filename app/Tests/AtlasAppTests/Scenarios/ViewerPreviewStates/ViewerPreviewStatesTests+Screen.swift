@@ -22,6 +22,21 @@
         "You have control": shown(try reported("controlling", state: "control")) { $0.lease = "lease" },
         "Needs you": shown(try reported("recovering", state: "needsYou")),
         "Stopped": shown(try reported("stopped", state: "stopped")),
+        "Stopped, jobs left": shown(try reported("stopped", state: "stopped")) {
+          $0.session.notice = HelperWords.stopped(
+            StopOutcome(
+              warnings: [],
+              refused: [StopOutcome.Job(id: "7c2e91a04b3f")],
+              unknown: [StopOutcome.Job(id: "")]
+            )
+          )
+        },
+        "You have control, a command runs": shown(
+          try reported("controlling", state: "control", overviewFields: ["commands": 1])
+        ) { $0.lease = "lease" },
+        "You have control, a job may run": shown(
+          try reported("controlling", state: "control", overviewFields: ["jobs": ["running": 1]])
+        ) { $0.lease = "lease" },
         "In use elsewhere": shown(try reported("controlling", state: "control")),
         "Paused": shown(idle) { $0.session.paused = true },
         "Details": shown(idle) {

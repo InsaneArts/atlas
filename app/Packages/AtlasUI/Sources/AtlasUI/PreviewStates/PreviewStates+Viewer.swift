@@ -50,6 +50,14 @@
         PreviewState(name: "Clean up", value: viewerCleanUp),
         PreviewState(name: "Session cleaned up", value: viewerSessionCleanedUp),
         PreviewState(name: "Focus changed", value: viewerFocusChanged),
+        PreviewState(name: "Stopped, jobs left", value: viewerStoppedJobsLeft),
+        PreviewState(name: "You have control, a command runs", value: viewerControlCommandRuns),
+        PreviewState(name: "You have control, a job may run", value: viewerControlJobRuns),
+        PreviewState(name: "Activity, one session, nothing yet", value: viewerActivityOneSessionEmpty),
+        PreviewState(name: "Screenshots, one session", value: viewerShotsOneSession),
+        PreviewState(name: "Screenshots, one session, none yet", value: viewerShotsOneSessionEmpty),
+        PreviewState(name: "Session cleaning up", value: viewerSessionCleaningUp),
+        PreviewState(name: "Session ended", value: viewerSessionEnded),
       ]
     }
 

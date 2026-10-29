@@ -49,6 +49,14 @@
         sample("37-focus-changed", PreviewStates.viewerFocusChanged),
         sample("38-clean-up", PreviewStates.viewerCleanUp),
         sample("39-session-cleaned-up", PreviewStates.viewerSessionCleanedUp),
+        sample("40-stopped-jobs-left", PreviewStates.viewerStoppedJobsLeft),
+        sample("41-control-command-runs", PreviewStates.viewerControlCommandRuns),
+        sample("42-control-job-runs", PreviewStates.viewerControlJobRuns),
+        sample("43-activity-one-session-empty", PreviewStates.viewerActivityOneSessionEmpty),
+        sample("44-screenshots-one-session", PreviewStates.viewerShotsOneSession),
+        sample("45-screenshots-one-session-empty", PreviewStates.viewerShotsOneSessionEmpty),
+        sample("46-session-cleaning-up", PreviewStates.viewerSessionCleaningUp),
+        sample("47-session-ended", PreviewStates.viewerSessionEnded),
       ]
     }
 

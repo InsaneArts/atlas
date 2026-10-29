@@ -77,6 +77,30 @@
           snapshot.panes.sessions.list = HostSessionList(sessions: [record])
           snapshot.session.cleanup.receipts[Self.claudeKey] = Self.cleanupApplied
         },
+        "Activity, one session, nothing yet": shown(working) { snapshot in
+          Self.onSessionsActivity(ActivityLog(), &snapshot)
+          snapshot.session.chosenSession = .one(Self.claudeKey)
+        },
+        "Screenshots, one session": shown(working) { snapshot in
+          Self.onSessionsActivity(Self.sessionsLog, &snapshot)
+          Self.onShots(&snapshot)
+          snapshot.session.chosenSession = .one(Self.claudeKey)
+          snapshot.panes.sessions.list = HostSessionList(sessions: [Self.claudeRecord])
+        },
+        "Screenshots, one session, none yet": shown(working) { snapshot in
+          Self.onSessionsActivity(Self.sessionsLog, &snapshot)
+          Self.onShots(&snapshot)
+          snapshot.session.chosenSession = .one(Self.claudeKey)
+        },
+        "Session cleaning up": shown(working) { snapshot in
+          detail(&snapshot)
+          snapshot.session.cleanup.running = Self.claudeKey
+        },
+        "Session ended": shown(working) { snapshot in
+          detail(&snapshot)
+          snapshot.session.chosenSession = .one("c0ffee5e5510")
+          snapshot.panes.sessions.list = HostSessionList(sessions: [Self.piRecord])
+        },
         "Focus changed": shown(idle) { snapshot in
           Self.onTab(.activity, at: Self.activityReadAt, &snapshot)
           snapshot.panes.activity.log = Self.focusLog
@@ -268,6 +292,17 @@
       ),
       ActivityLog.Entry(id: "f1", says: "opened Notes", ageSeconds: 12, operation: "open"),
     ])
+
+    /// Pi · notes-sync's record: it started at 09:40 and ended 20 minutes before Activity was read.
+    static let piRecord = HostSessionRecord(
+      key: "c0ffee5e5510",
+      name: "Pi · notes-sync",
+      host: .pi,
+      folder: "notes-sync",
+      startedAt: Date(timeIntervalSince1970: 1_792_662_000),
+      endedAt: activityReadAt.addingTimeInterval(-20 * 60),
+      state: .ended
+    )
 
     /// Claude Code's session as `sessions.json` lists it: started at 09:12, seen two seconds ago, with Opie opened
     /// from a copy, Notes opened, a plan applied at 10:02, and six screenshots.
