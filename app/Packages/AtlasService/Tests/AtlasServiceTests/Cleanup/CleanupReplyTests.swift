@@ -69,7 +69,7 @@ struct CleanupReplyTests {
     )
     #expect(applied.state == .incomplete && applied.error == "Cleanup is not finished: 1 step failed.")
     #expect(applied.steps.map(\.state) == [.failed, .kept, .done, .unknown])
-    #expect(applied.steps.map(\.reason) == ["in-use", "changed", nil, nil])
+    #expect(applied.steps.map(\.reason) == [.inUse, .changed, nil, nil])
     #expect(applied.steps.map(\.retry) == [true, false, false, false])
     #expect(applied.steps.map(\.alreadyGone) == [false, false, true, false])
     #expect(!applied.isUnderWay, "no step is under way once the apply replied")
@@ -96,7 +96,7 @@ struct CleanupReplyTests {
       ]
     )
     #expect(applied.steps.map(\.alreadyGone) == [false, true, true, false, false])
-    #expect(applied.steps.map(\.reason) == [nil, nil, nil, "other-volume", nil])
+    #expect(applied.steps.map(\.reason) == [nil, nil, nil, .otherVolume, nil])
     #expect(applied.steps.map(\.state) == [.done, .done, .done, .kept, .done], "a path of the wrong type is left out")
   }
 
@@ -142,7 +142,7 @@ struct CleanupReplyTests {
     #expect(body == ["session": "3f9a1c07b2e4"])
   }
 
-  @Test("a check of collected files and a job's stop decode with what each left")
+  @Test("a check of collected files and a job's stop decode with what each left, counting every odd entry")
   func aCheckOfCollectedFilesAndAJobsStopDecodeWithWhatEachLeft() throws {
     let applied = try decoded(
       """
@@ -153,36 +153,68 @@ struct CleanupReplyTests {
           "notKept": [{"source": "/Users/atlas/atlas-work/report.pdf", "inHome": "atlas-work/report.pdf"},
                       {"source": "/private/tmp/out.png"}, {"inHome": "no source"}]},
          {"n": 2, "do": "stop-job", "id": "7c2e91a04b3f", "name": "web", "state": "done",
-          "left": [{"pid": 4377, "name": "sleep"}, {"pid": "x"}]},
+          "left": [{"pid": 4377, "name": "sleep"}, {"pid": "x"}, "not a process"]},
          {"n": 3, "do": "stop-job", "id": "8d3f02b15c4e", "name": "worker", "state": "failed",
           "reason": "still-stopping", "retry": true},
-         {"n": 4, "do": "undo-plan", "state": "blocked", "reason": "output-not-kept"}
+         {"n": 4, "do": "undo-plan", "state": "blocked", "reason": "output-not-kept"},
+         {"n": 5, "do": "remove-copy", "state": "failed", "reason": "a-reason-from-later", "notKept": "none"}
        ]}
       """
     )
-    #expect(applied.steps.map(\.kind) == [.checkOutputs, .stopJob, .stopJob, .undoPlan])
-    let check = applied.steps[0]
-    #expect(check.receipts == ["1761650000123-a1b2c3"], "an entry that is not a receipt is dropped")
-    #expect(
-      check.notKept == [
-        CleanupFile(source: "/Users/atlas/atlas-work/report.pdf", inHome: "atlas-work/report.pdf"),
-        CleanupFile(source: "/private/tmp/out.png"),
-      ]
-    )
+    #expect(applied.steps.map(\.kind) == [.checkOutputs, .stopJob, .stopJob, .undoPlan, .removeCopy])
+    #expect(applied.steps[0].notKept == 3, "a file not kept counts, whatever its entry holds")
     #expect(applied.steps[1].job == "7c2e91a04b3f")
     #expect(applied.steps[1].name == "web")
-    #expect(applied.steps[1].left == [CleanupProcess(pid: 4377, name: "sleep")])
-    #expect(applied.steps[2].reason == "still-stopping" && applied.steps[2].retry)
-    #expect(applied.steps[3].left.isEmpty && applied.steps[3].notKept.isEmpty)
-
-    let preview = try decoded(
-      """
-      {"ok": true, "preview": true, "steps": [
-         {"n": 1, "do": "check-outputs", "receipts": ["1761650000123-a1b2c3"], "intact": false},
-         {"n": 2, "do": "stop-job", "id": "7c2e91a04b3f", "name": "web", "jobState": "running"}]}
-      """
+    #expect(
+      applied.steps[1].left == [CleanupProcess(name: "sleep"), CleanupProcess(name: "")],
+      "a process with no name still counts, and an entry that is not one is dropped"
     )
-    #expect(preview.steps[0].intact == false)
-    #expect(preview.steps[1].jobState == "running")
+    #expect(applied.steps[2].reason == .stillStopping && applied.steps[2].retry)
+    #expect(applied.steps[3].left.isEmpty && applied.steps[3].notKept == 0)
+    #expect(applied.steps[4].reason == .unknown && applied.steps[4].notKept == 0)
+  }
+
+  @Test("an apply's ending reads how it went, and a held-back one says why")
+  func anApplysEndingReadsHowItWent() {
+    #expect(CleanupReply(ok: true, state: .complete).ending == .nothingToCleanUp)
+    let quit = CleanupStep(number: 1, kind: .quit, state: .done)
+    #expect(CleanupReply(ok: true, state: .complete, steps: [quit]).ending == .cleanedUp)
+    #expect(CleanupReply(ok: false, state: .incomplete, steps: [quit]).ending == .unfinished)
+    #expect(CleanupReply(state: .uncertain, steps: [quit]).ending == .uncertain)
+    let held = [
+      CleanupStep(number: 1, kind: .stopJob, state: .blocked, reason: .daemon),
+      CleanupStep(number: 2, kind: .removeCopy, state: .blocked, reason: .outputNotKept),
+    ]
+    #expect(CleanupReply(state: .blocked, steps: held).ending == .blocked(.outputNotKept))
+    #expect(CleanupReply(state: .blocked, steps: [held[0]]).ending == .blocked(.daemon))
+    let stopped = CleanupStep(number: 1, kind: .removeCopy, state: .blocked, reason: .stopped)
+    #expect(CleanupReply(state: .blocked, steps: [stopped]).ending == .blocked(.stopped))
+  }
+
+  @Test("a cleanup whose reply never came ends by what its steps show once read again")
+  func anUnansweredCleanupEndsByItsSteps() {
+    #expect(CleanupReply(preview: true).unansweredEnding == .cleanedUp)
+    let notRun = CleanupReply(preview: true, steps: [CleanupStep(number: 1, kind: .quit)])
+    #expect(notRun.unansweredEnding == nil && !notRun.hasRun)
+    let started = CleanupReply(preview: true, steps: [CleanupStep(number: 1, kind: .quit, state: .started)])
+    #expect(started.unansweredEnding == .uncertain && started.hasRun)
+    let failed = CleanupReply(preview: true, steps: [CleanupStep(number: 1, kind: .quit, state: .failed)])
+    #expect(failed.unansweredEnding == .unfinished)
+    let blocked = CleanupStep(number: 1, kind: .stopJob, state: .blocked, reason: .daemon)
+    #expect(CleanupReply(preview: true, steps: [blocked]).unansweredEnding == .blocked(.daemon))
+  }
+
+  @Test("the steps still to do leave out those done or kept")
+  func theOpenStepsLeaveOutThoseDoneOrKept() {
+    let preview = CleanupReply(
+      preview: true,
+      steps: [
+        CleanupStep(number: 1, kind: .quit, state: .done),
+        CleanupStep(number: 2, kind: .removeInstall, state: .kept),
+        CleanupStep(number: 3, kind: .removeCopy, state: .failed),
+        CleanupStep(number: 4, kind: .undoPlan),
+      ]
+    )
+    #expect(preview.openSteps.map(\.number) == [3, 4])
   }
 }

@@ -31,11 +31,7 @@ public struct HostSessionList: Decodable, Equatable, Sendable {
   /// - Throws: `DecodingError` only when the body is not an object.
   public init(from decoder: any Decoder) throws {
     let container = try decoder.container(keyedBy: CodingKeys.self)
-    sessions =
-      (try? container.decodeIfPresent([Lenient<HostSessionRecord>].self, forKey: .sessions))?
-      .compactMap(\.value) ?? []
-    live =
-      (try? container.decodeIfPresent([Lenient<ViewerStatus.HostSession>].self, forKey: .live))?
-      .compactMap(\.value) ?? []
+    sessions = container.lenientList(HostSessionRecord.self, forKey: .sessions)
+    live = container.lenientList(ViewerStatus.HostSession.self, forKey: .live)
   }
 }

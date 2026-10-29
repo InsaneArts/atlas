@@ -49,8 +49,7 @@ public struct Screenshot: Decodable, Equatable, Sendable, Identifiable {
   public init(from decoder: any Decoder) throws {
     let container = try decoder.container(keyedBy: CodingKeys.self)
     name = (try? container.decodeIfPresent(String.self, forKey: .name)) ?? ""
-    let milliseconds = try? container.decodeIfPresent(Double.self, forKey: .takenAt)
-    takenAt = milliseconds.map { Date(timeIntervalSince1970: $0 / 1000) }
+    takenAt = container.lenientDate(milliseconds: .takenAt)
     width = try? container.decodeIfPresent(Int.self, forKey: .width)
     height = try? container.decodeIfPresent(Int.self, forKey: .height)
     // An empty key is Terminal's, as a missing one is, so both read as none.

@@ -3,15 +3,15 @@ extension StopOutcome {
   public struct Job: Decodable, Equatable, Sendable {
     /// The job's ID; empty when the service gave none.
     public var id = ""
-    /// Why nothing was sent to it, such as `identity`; nil when the service gave no reason.
-    public var reason: String?
+    /// Why nothing was sent to it, such as ``CleanupStep/Reason/identity``; nil when the service gave no reason.
+    public var reason: CleanupStep.Reason?
 
     /// Creates a job.
     ///
     /// - Parameters:
     ///   - id: The job's ID.
     ///   - reason: Why nothing was sent to it.
-    public init(id: String, reason: String? = nil) {
+    public init(id: String, reason: CleanupStep.Reason? = nil) {
       self.id = id
       self.reason = reason
     }
@@ -29,7 +29,7 @@ extension StopOutcome {
     public init(from decoder: any Decoder) throws {
       let container = try decoder.container(keyedBy: CodingKeys.self)
       id = (try? container.decodeIfPresent(String.self, forKey: .id)) ?? ""
-      reason = try? container.decodeIfPresent(String.self, forKey: .reason)
+      reason = CleanupStep.Reason(word: container.lenientText(.reason))
     }
   }
 }

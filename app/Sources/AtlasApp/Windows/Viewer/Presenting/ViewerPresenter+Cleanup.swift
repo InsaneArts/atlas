@@ -14,11 +14,9 @@ extension ViewerPresenter {
   static func cleanup(_ record: HostSessionRecord, _ snapshot: ViewerSnapshot) -> SessionCleanup? {
     let session = snapshot.session
     let receipt = session.cleanupReceipts[record.key]
-    let unfinished = record.cleanup.map { $0 != .complete } == true
-    let left = !record.copies.isEmpty || !record.plans.isEmpty || !record.installs.isEmpty || unfinished
     let running = session.cleaningUp == record.key || session.cleanupUnanswered?.session == record.key
     // Terminal's session has no key a cleanup can name.
-    guard !record.key.isEmpty, left || receipt != nil || running else { return nil }
+    guard !record.key.isEmpty, record.leftWork || receipt != nil || running else { return nil }
     let stage: SessionCleanup.Stage =
       if session.cleaningUp != nil || session.cleanupUnanswered != nil {
         .working
@@ -37,7 +35,7 @@ extension ViewerPresenter {
   /// - Parameter preview: What cleaning up takes.
   /// - Returns: The lines, in the order the steps run; none when there are no steps.
   static func cleanupSteps(_ preview: CleanupReply) -> [String] {
-    let open = preview.steps.filter { $0.state != .done && $0.state != .kept }
+    let open = preview.openSteps
     guard !open.isEmpty else { return preview.isEmpty ? [] : [ViewerWords.finishLastCleanup] }
     let kinds = { (kind: CleanupStepKind) in open.filter { $0.kind == kind } }
     var lines: [String] = []
@@ -82,11 +80,11 @@ extension ViewerPresenter {
     reply.steps.flatMap { step in
       var facts = [Fact(name: cleanupStepName(step), value: cleanupOutcome(step))]
       if !step.left.isEmpty {
-        let names = step.left.map(\.name)
+        let names = step.left.map { $0.name.isEmpty ? ViewerWords.unnamedProcess : $0.name }
         facts.append(Fact(name: ViewerWords.stillRunning, value: ViewerWords.leftRunning(names)))
       }
-      if !step.notKept.isEmpty {
-        facts.append(Fact(name: ViewerWords.notKept, value: ViewerWords.notKeptFiles(step.notKept.count)))
+      if step.notKept > 0 {
+        facts.append(Fact(name: ViewerWords.notKept, value: ViewerWords.notKeptFiles(step.notKept)))
       }
       return facts
     }
@@ -127,44 +125,39 @@ extension ViewerPresenter {
     }
   }
 
-  /// The notice once a cleanup ran: cleaned up, nothing left to clean up, or that it did not finish: not knowing
-  /// whether its last step finished and stopping with agents stopped each read on their own.
+  /// The notice once a cleanup ran, by how it ended (``CleanupReply/ending``).
   ///
   /// - Parameter reply: The apply's reply.
   /// - Returns: The notice.
   static func cleanupNotice(_ reply: CleanupReply) -> String {
-    switch reply.state {
-    case .uncertain: return ViewerWords.cleanupUncertain
-    case .blocked: return blockedNotice(reply.steps)
-    case .complete, .incomplete, .unknown, nil: break
-    }
-    guard reply.ok, reply.state == nil || reply.state == .complete else { return ViewerWords.cleanupUnfinished }
-    return reply.isEmpty ? ViewerWords.nothingToCleanUp : ViewerWords.cleanedUp
+    endingNotice(reply.ending)
   }
 
-  /// The notice once a cleanup whose reply never came ended, from what `cleanup.json` lists then: steps a run left
-  /// read as an apply's do, and with nothing left it cleaned up.
+  /// The notice once a cleanup whose reply never came ended, by how what `cleanup.json` lists then says it ended
+  /// (``CleanupReply/unansweredEnding``).
   ///
   /// - Parameter preview: What cleaning up takes now.
   /// - Returns: The notice; nil when no step has run, as nothing is known of how it went.
   static func unansweredCleanupNotice(_ preview: CleanupReply) -> String? {
-    guard !preview.isEmpty else { return ViewerWords.cleanedUp }
-    let states = preview.steps.compactMap(\.state)
-    guard !states.isEmpty else { return nil }
-    if states.contains(where: { $0 == .started || $0 == .uncertain }) { return ViewerWords.cleanupUncertain }
-    return states.contains(.blocked) ? blockedNotice(preview.steps) : ViewerWords.cleanupUnfinished
+    preview.unansweredEnding
+      .map(endingNotice)
   }
 
-  /// Why a cleanup that did not run every step was held back, by what its blocked steps say: a collected copy that is
-  /// no longer kept, a helper that could not be reached to stop a job, or agents stopped.
+  /// A cleanup's ending in words: cleaned up, nothing left, that it did not finish, that whether its last step
+  /// finished is not known, or why it was held back: a collected copy that is no longer kept, a helper that could not
+  /// be reached to stop a job, or agents stopped.
   ///
-  /// - Parameter steps: The cleanup's steps.
+  /// - Parameter ending: How it ended.
   /// - Returns: The notice.
-  static func blockedNotice(_ steps: [CleanupStep]) -> String {
-    let reasons = steps.filter { $0.state == .blocked }
-      .map(\.reason)
-    if reasons.contains("output-not-kept") { return ViewerWords.cleanupOutputsNotKept }
-    if reasons.contains("daemon") { return ViewerWords.cleanupJobsUnreached }
-    return ViewerWords.cleanupBlocked
+  static func endingNotice(_ ending: CleanupEnding) -> String {
+    switch ending {
+    case .cleanedUp: ViewerWords.cleanedUp
+    case .nothingToCleanUp: ViewerWords.nothingToCleanUp
+    case .unfinished: ViewerWords.cleanupUnfinished
+    case .uncertain: ViewerWords.cleanupUncertain
+    case .blocked(.outputNotKept): ViewerWords.cleanupOutputsNotKept
+    case .blocked(.daemon): ViewerWords.cleanupJobsUnreached
+    case .blocked: ViewerWords.cleanupBlocked
+    }
   }
 }

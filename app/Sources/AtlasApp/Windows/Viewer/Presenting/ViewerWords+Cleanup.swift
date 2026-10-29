@@ -1,3 +1,5 @@
+import AtlasService
+
 /// Cleaning up a session's work: the button, the alert that asks first with a line for each thing it does, what each
 /// step did once it ran, and the notice after. Every word comes from a step's kind, app names, state and reason, never
 /// from a path.
@@ -147,6 +149,8 @@ extension ViewerWords {
 
   /// The receipt's name for the processes that left a stopped job and still run.
   static let stillRunning = "Still running"
+  /// A process that left a stopped job whose name the service does not give.
+  static let unnamedProcess = "a process"
 
   /// The processes that left a stopped job and still run, which Atlas did not stop.
   ///
@@ -183,9 +187,9 @@ extension ViewerWords {
 
   /// A step left as it is on purpose.
   ///
-  /// - Parameter reason: Why, as the service's word; nil for none.
+  /// - Parameter reason: Why; nil for none.
   /// - Returns: "Kept: changed since it was installed", or "Kept".
-  static func stepKept(_ reason: String?) -> String {
+  static func stepKept(_ reason: CleanupStep.Reason?) -> String {
     guard let said = stepReason(reason) else { return "Kept" }
     return "Kept: \(said)"
   }
@@ -193,10 +197,10 @@ extension ViewerWords {
   /// A step that did not work.
   ///
   /// - Parameters:
-  ///   - reason: Why, as the service's word; nil for none.
+  ///   - reason: Why; nil for none.
   ///   - retry: Whether cleaning up again may get it done.
   /// - Returns: "Couldn't: still in use. Try again.", "Couldn't: still in use" or "Couldn't".
-  static func stepFailed(_ reason: String?, retry: Bool) -> String {
+  static func stepFailed(_ reason: CleanupStep.Reason?, retry: Bool) -> String {
     var said = "Couldn't"
     if let why = stepReason(reason) {
       said = "Couldn't: \(why)"
@@ -206,40 +210,40 @@ extension ViewerWords {
 
   /// A step that did not run, and why.
   ///
-  /// - Parameter reason: Why, as the service's word; nil for none.
+  /// - Parameter reason: Why; nil for none.
   /// - Returns: "Didn't run: agents are stopped", or "Didn't run".
-  static func stepBlocked(_ reason: String?) -> String {
+  static func stepBlocked(_ reason: CleanupStep.Reason?) -> String {
     guard let why = stepReason(reason) else { return stepNotRun }
     return "\(stepNotRun): \(why)"
   }
 
-  /// Why a step was kept, failed or did not run, in words; nil for a word this app does not know, which is never
-  /// shown as it is.
+  /// Why a step was kept, failed or did not run, in words; nil for none, for a reason this app does not know, which is
+  /// never shown as it is, and for an unknown outcome, which the step's own value already says.
   ///
-  /// - Parameter reason: The service's word, such as `changed` or `in-use`.
+  /// - Parameter reason: Why, such as ``CleanupStep/Reason/changed``.
   /// - Returns: "changed since it was installed", or nil.
-  static func stepReason(_ reason: String?) -> String? {
+  static func stepReason(_ reason: CleanupStep.Reason?) -> String? {
     switch reason {
-    case "changed": "changed since it was installed"
-    case "replaced": "something else is there now"
-    case "another-session": "another session made it"
-    case "label-unreadable": "Atlas can't tell whose it is"
-    case "kept-targets": "the helper changed some of its files since"
-    case "timeout": "it didn't quit in time"
-    case "in-use": "still in use"
-    case "io": "the file system refused"
-    case "helper": "the helper couldn't do it"
-    case "needs-step": "a step before it isn't done"
-    case "stopped": "agents are stopped"
-    case "other-volume": "it could not be moved aside without copying"
-    case "unreadable": "Atlas couldn't read its record of it"
-    case "output-not-kept": "a collected copy is missing or changed"
-    case "still-stopping": "the job is still stopping"
-    case "identity": "the job is no longer the process Atlas started"
-    case "other-account": "part of the job runs as another account"
-    case "daemon": "Atlas couldn't reach the helper"
-    case "leader-gone": "the job's first process is gone"
-    default: nil
+    case .changed: "changed since it was installed"
+    case .replaced: "something else is there now"
+    case .anotherSession: "another session made it"
+    case .labelUnreadable: "Atlas can't tell whose it is"
+    case .keptTargets: "the helper changed some of its files since"
+    case .timeout: "it didn't quit in time"
+    case .inUse: "still in use"
+    case .io: "the file system refused"
+    case .helper: "the helper couldn't do it"
+    case .needsStep: "a step before it isn't done"
+    case .stopped: "agents are stopped"
+    case .otherVolume: "it could not be moved aside without copying"
+    case .unreadable: "Atlas couldn't read its record of it"
+    case .outputNotKept: "a collected copy is missing or changed"
+    case .stillStopping: "the job is still stopping"
+    case .identity: "the job is no longer the process Atlas started"
+    case .otherAccount: "part of the job runs as another account"
+    case .daemon: "Atlas couldn't reach the helper"
+    case .leaderGone: "the job's first process is gone"
+    case .uncertain, .unknown, nil: nil
     }
   }
 

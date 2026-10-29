@@ -21,8 +21,9 @@ extension ViewerStatus {
     /// Whether it was refused before anything was sent, as when another app was in front: nothing to recover, and
     /// not a problem.
     public var nothingSent: Bool
-    /// Whether its outcome is unknown until the person recovers.
-    public var uncertain: Bool
+
+    /// How it went: worked, failed, or not sent, as an Activity row reads it.
+    public var outcome: ActivityLog.Outcome { ActivityLog.Outcome(started: false, ok: ok, nothingSent: nothingSent) }
 
     /// The key of the host session an agent's operation came from: Terminal's empty key for one no host named.
     public var sessionKey: String { session ?? "" }
@@ -39,7 +40,6 @@ extension ViewerStatus {
     ///   - says: What it did in the service's words.
     ///   - session: The key of the host session it came from.
     ///   - nothingSent: Whether it was refused before anything was sent.
-    ///   - uncertain: Whether its outcome is unknown.
     public init(
       id: String? = nil,
       operation: String,
@@ -49,8 +49,7 @@ extension ViewerStatus {
       ageSeconds: Double? = nil,
       says: String? = nil,
       session: String? = nil,
-      nothingSent: Bool = false,
-      uncertain: Bool = false
+      nothingSent: Bool = false
     ) {
       self.id = id
       self.operation = operation
@@ -61,13 +60,12 @@ extension ViewerStatus {
       self.says = says
       self.session = session
       self.nothingSent = nothingSent
-      self.uncertain = uncertain
     }
 
-    /// The fields of one `activity` row.
+    /// The fields of one `activity` row this app reads.
     enum CodingKeys: String, CodingKey {
       /// Each field by the name the service writes.
-      case id, operation, ok, actionCount, actor, ageSeconds, says, session, nothingSent, uncertain
+      case id, operation, ok, actionCount, actor, ageSeconds, says, session, nothingSent
     }
 
     /// Decodes an operation; one that names nothing reads as an agent's failed "action".
@@ -90,8 +88,7 @@ extension ViewerStatus {
       // An empty key is Terminal's, as a missing one is, so both read as none.
       session = (try? container.decodeIfPresent(String.self, forKey: .session))
         .flatMap { $0?.isEmpty == false ? $0 : nil }
-      nothingSent = (try? container.decodeIfPresent(Bool.self, forKey: .nothingSent)) == true
-      uncertain = (try? container.decodeIfPresent(Bool.self, forKey: .uncertain)) == true
+      nothingSent = container.lenientFlag(.nothingSent)
     }
   }
 }

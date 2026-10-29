@@ -26,8 +26,6 @@ extension ActivityLog {
     public var session: String?
     /// The capture a screenshot row took, by Atlas's own file name, when the service says.
     public var capture: String?
-    /// Whether a refusal before it was done had already sent part of its text, as typing cut short.
-    public var partial: Bool
 
     /// The key of the host session an agent's row came from: Terminal's empty key for one no host named.
     public var sessionKey: String { session ?? "" }
@@ -50,7 +48,6 @@ extension ActivityLog {
     ///   - count: How many input actions it carried.
     ///   - session: The key of the host session it came from.
     ///   - capture: The capture a screenshot row took, by its file name.
-    ///   - partial: Whether a refusal had already sent part of its text.
     public init(
       id: String,
       says: String? = nil,
@@ -62,8 +59,7 @@ extension ActivityLog {
       operation: String = "input",
       count: Int? = nil,
       session: String? = nil,
-      capture: String? = nil,
-      partial: Bool = false
+      capture: String? = nil
     ) {
       self.id = id
       self.says = says
@@ -76,14 +72,12 @@ extension ActivityLog {
       self.count = count
       self.session = session
       self.capture = capture
-      self.partial = partial
     }
 
-    /// The fields of one `activity` row.
+    /// The fields of one `activity` row this app reads.
     enum CodingKeys: String, CodingKey {
       /// Each field by the name the service writes.
-      case id, says, ok, started, actor, ageSeconds, startedAt, reason, operation, count, session, capture, nothingSent,
-        partial
+      case id, says, ok, started, actor, ageSeconds, startedAt, reason, operation, count, session, capture, nothingSent
     }
 
     /// Decodes a row, keeping a safe default for anything missing or of the wrong type: a row that says nothing
@@ -93,25 +87,22 @@ extension ActivityLog {
     /// - Throws: `DecodingError` only when the row is not an object.
     public init(from decoder: any Decoder) throws {
       let container = try decoder.container(keyedBy: CodingKeys.self)
-      let text = { (key: CodingKeys) in
-        (try? container.decodeIfPresent(String.self, forKey: key))
-          .flatMap { $0.isEmpty ? nil : $0 }
-      }
-      let flag = { (key: CodingKeys) in (try? container.decodeIfPresent(Bool.self, forKey: key)) == true }
-      id = text(.id) ?? ""
-      says = text(.says)
-      outcome = Outcome(started: flag(.started), ok: flag(.ok), nothingSent: flag(.nothingSent))
-      actor = Actor(word: text(.actor))
+      id = container.lenientText(.id) ?? ""
+      says = container.lenientText(.says)
+      outcome = Outcome(
+        started: container.lenientFlag(.started),
+        ok: container.lenientFlag(.ok),
+        nothingSent: container.lenientFlag(.nothingSent)
+      )
+      actor = Actor(word: container.lenientText(.actor))
       ageSeconds = try? container.decodeIfPresent(Double.self, forKey: .ageSeconds)
-      let milliseconds = try? container.decodeIfPresent(Double.self, forKey: .startedAt)
-      startedAt = milliseconds.map { Date(timeIntervalSince1970: $0 / 1000) }
-      reason = text(.reason)
-      operation = text(.operation) ?? "action"
+      startedAt = container.lenientDate(milliseconds: .startedAt)
+      reason = container.lenientText(.reason)
+      operation = container.lenientText(.operation) ?? "action"
       count = try? container.decodeIfPresent(Int.self, forKey: .count)
       // An empty key is Terminal's, as a missing one is, so both read as none.
-      session = text(.session)
-      capture = text(.capture)
-      partial = flag(.partial)
+      session = container.lenientText(.session)
+      capture = container.lenientText(.capture)
     }
   }
 }

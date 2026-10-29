@@ -11,8 +11,8 @@ public struct CleanupStep: Decodable, Equatable, Sendable {
   public var app: String?
   /// How far it got; nil for a step that has not run.
   public var state: CleanupStepState?
-  /// Why it was kept, failed or did not run, as the service's word, such as `changed` or `in-use`; nil for none.
-  public var reason: String?
+  /// Why it was kept, failed or did not run; nil for none.
+  public var reason: Reason?
   /// Whether running the cleanup again may get it done.
   public var retry: Bool
   /// Whether what it takes away was gone before it ran.
@@ -28,17 +28,10 @@ public struct CleanupStep: Decodable, Equatable, Sendable {
   public var job: String?
   /// The name of that job, as the agent gave it or its program's name; nil for every other kind.
   public var name: String?
-  /// How that job stands in the helper, as a preview reads it, such as `running`; nil once the step ran.
-  public var jobState: String?
-  /// The collections a check-outputs step checks, by receipt; none for every other kind.
-  public var receipts: [String]
-  /// Whether every copy those collections kept is still as it was collected, as a preview reads it; nil once the step
-  /// ran, or for every other kind.
-  public var intact: Bool?
   /// The processes that left the stopped job's group and still ran, which Atlas never stopped.
   public var left: [CleanupProcess]
-  /// The files whose collected copies are missing or changed, which cleanup keeps.
-  public var notKept: [CleanupFile]
+  /// How many files' collected copies are missing or changed, which cleanup keeps.
+  public var notKept: Int
 
   /// Creates a step.
   ///
@@ -56,14 +49,14 @@ public struct CleanupStep: Decodable, Equatable, Sendable {
   ///   - job: The id of the job a stop-job step stops; none by default.
   ///   - name: That job's name; none by default.
   ///   - left: The processes that left the job's group and still ran; none by default.
-  ///   - notKept: The files whose collected copies are missing or changed; none by default.
+  ///   - notKept: How many files' collected copies are missing or changed; none by default.
   public init(
     number: Int,
     kind: CleanupStepKind,
     apps: [String] = [],
     app: String? = nil,
     state: CleanupStepState? = nil,
-    reason: String? = nil,
+    reason: Reason? = nil,
     retry: Bool = false,
     alreadyGone: Bool = false,
     held: String? = nil,
@@ -71,7 +64,7 @@ public struct CleanupStep: Decodable, Equatable, Sendable {
     job: String? = nil,
     name: String? = nil,
     left: [CleanupProcess] = [],
-    notKept: [CleanupFile] = []
+    notKept: Int = 0
   ) {
     self.number = number
     self.kind = kind
@@ -85,9 +78,6 @@ public struct CleanupStep: Decodable, Equatable, Sendable {
     self.unchanged = unchanged
     self.job = job
     self.name = name
-    self.jobState = nil
-    self.receipts = []
-    self.intact = nil
     self.left = left
     self.notKept = notKept
   }
@@ -99,56 +89,32 @@ public struct CleanupStep: Decodable, Equatable, Sendable {
     /// What it does, which the service writes as `do`.
     case kind = "do"
     /// Each other field by the name the service writes.
-    case apps, app, state, reason, retry, alreadyGone, held, unchanged, name, jobState, receipts, intact, left, notKept
+    case apps, app, state, reason, retry, alreadyGone, held, unchanged, name, left, notKept
     /// The job a stop-job step stops, which the service writes as `id`.
     case job = "id"
   }
 
-  /// Decodes a step, keeping the default of anything missing or of the wrong type; a kind this app does not know
-  /// reads as ``CleanupStepKind/unknown``, and each app a quit step names decodes on its own.
+  /// Decodes a step, keeping the default of anything missing or of the wrong type; a kind or reason this app does not
+  /// know reads as unknown, and each app a quit step names, and each process, decodes on its own. Every file not kept
+  /// counts, however odd its entry.
   ///
   /// - Parameter decoder: The decoder reading one `steps` entry.
   /// - Throws: `DecodingError` only when the entry is not an object.
   public init(from decoder: any Decoder) throws {
-    /// One app a quit step names: its name, beside a process id this app does not read.
-    struct Quit: Decodable {
-      /// The app's name.
-      let app: String?
-    }
     let container = try decoder.container(keyedBy: CodingKeys.self)
-    let text = { (key: CodingKeys) in
-      (try? container.decodeIfPresent(String.self, forKey: key))
-        .flatMap { $0.isEmpty ? nil : $0 }
-    }
-    let flag = { (key: CodingKeys) in
-      try? container.decodeIfPresent(Bool.self, forKey: key)
-    }
-    number = max(0, (try? container.decodeIfPresent(Int.self, forKey: .number)) ?? 0)
-    kind = CleanupStepKind(word: text(.kind))
-    apps =
-      (try? container.decodeIfPresent([Lenient<Quit>].self, forKey: .apps))?
-      .compactMap { $0.value?.app }
-      .filter { !$0.isEmpty } ?? []
-    app = text(.app)
-    state = CleanupStepState(word: text(.state))
-    reason = text(.reason)
-    retry = flag(.retry) == true
-    alreadyGone = flag(.alreadyGone) == true
-    held = text(.held)
-    unchanged = flag(.unchanged)
-    job = text(.job)
-    name = text(.name)
-    jobState = text(.jobState)
-    receipts =
-      (try? container.decodeIfPresent([Lenient<String>].self, forKey: .receipts))?
-      .compactMap(\.value) ?? []
-    intact = flag(.intact)
-    // Each process and file decodes on its own, so one odd entry is dropped and the rest are kept.
-    left =
-      (try? container.decodeIfPresent([Lenient<CleanupProcess>].self, forKey: .left))?
-      .compactMap(\.value) ?? []
-    notKept =
-      (try? container.decodeIfPresent([Lenient<CleanupFile>].self, forKey: .notKept))?
-      .compactMap(\.value) ?? []
+    number = container.lenientCount(.number)
+    kind = CleanupStepKind(word: container.lenientText(.kind))
+    apps = container.lenientAppNames(.apps)
+    app = container.lenientText(.app)
+    state = CleanupStepState(word: container.lenientText(.state))
+    reason = Reason(word: container.lenientText(.reason))
+    retry = container.lenientFlag(.retry)
+    alreadyGone = container.lenientFlag(.alreadyGone)
+    held = container.lenientText(.held)
+    unchanged = container.lenientBool(.unchanged)
+    job = container.lenientText(.job)
+    name = container.lenientText(.name)
+    left = container.lenientList(CleanupProcess.self, forKey: .left)
+    notKept = container.lenientList(LenientEntry.self, forKey: .notKept).count
   }
 }

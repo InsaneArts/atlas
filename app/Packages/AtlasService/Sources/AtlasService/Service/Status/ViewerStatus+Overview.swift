@@ -63,6 +63,15 @@ extension ViewerStatus {
     /// agents are not stopped already, the person's own control included.
     static let jobsStop: Set<HelperMode> = [.observing, .agent, .recovering, .blocked, .controlling]
 
+    /// Whether Stop Agent is offered to the person, holding control or not: while they hold it no agent acts, so only
+    /// a background job that may still run keeps Stop, as control ends no job; otherwise ``offersStop``.
+    ///
+    /// - Parameter holdingControl: Whether the person holds control.
+    /// - Returns: Whether Stop is offered.
+    public func offersStop(holdingControl: Bool) -> Bool {
+      holdingControl ? jobs.mayRun : offersStop
+    }
+
     /// Whether Resume Agent is offered: the person stopped agents.
     public var offersResume: Bool { mode == .stopped }
 
@@ -115,13 +124,11 @@ extension ViewerStatus {
       pending = max(0, (try? container.decodeIfPresent(Int.self, forKey: .pending)) ?? 0)
       inFlight = max(0, (try? container.decodeIfPresent(Int.self, forKey: .inFlight)) ?? 0)
       commands = max(0, (try? container.decodeIfPresent(Int.self, forKey: .commands)) ?? 0)
-      activity = (try? container.decodeIfPresent([Activity].self, forKey: .activity)) ?? []
+      // Each row and session decodes on its own, so one odd entry is dropped and the rest are kept.
+      activity = container.lenientList(Activity.self, forKey: .activity)
       sessionsShown = (try? container.decodeIfPresent(Bool.self, forKey: .sessionsShown)) == true
       holder = try? container.decodeIfPresent(String.self, forKey: .holder)
-      // Each session decodes on its own, so one odd entry is dropped and the rest are kept.
-      hostSessions =
-        (try? container.decodeIfPresent([Lenient<HostSession>].self, forKey: .hostSessions))?
-        .compactMap(\.value) ?? []
+      hostSessions = container.lenientList(HostSession.self, forKey: .hostSessions)
       moreSessions = max(0, (try? container.decodeIfPresent(Int.self, forKey: .moreSessions)) ?? 0)
       jobs = (try? container.decodeIfPresent(Jobs.self, forKey: .jobs)) ?? Jobs()
     }

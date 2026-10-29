@@ -22,7 +22,7 @@ public struct ActivityItem: Equatable, Sendable, Identifiable {
   public var ok: Bool { row.ok }
   /// Whether it failed: it did not work, and was not refused before anything was sent, as when another app was in
   /// front, which is no problem.
-  public var failed: Bool { !row.ok && !row.nothingSent }
+  public var failed: Bool { row.outcome == .failed }
   /// Seconds ago, when known.
   public var age: Double? { row.ageSeconds }
   /// The key of the host session it came from; nil for the person's own and for commands no host named.

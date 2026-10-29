@@ -32,7 +32,7 @@ struct StopOutcomeTests {
     ])
     #expect(stopped.held)
     #expect(stopped.warnings == ["Atlas could not stop 2 background jobs"])
-    #expect(stopped.refused == [StopOutcome.Job(id: "7c2e91a04b3f", reason: "identity")])
+    #expect(stopped.refused == [StopOutcome.Job(id: "7c2e91a04b3f", reason: .identity)])
     #expect(stopped.unknown.map(\.id) == ["aaaaaaaaaaaa"])
     #expect(stopped.unresolved.map(\.id) == ["bbbbbbbbbbbb"])
     #expect(stopped.jobsLeft == 3)
@@ -48,5 +48,17 @@ struct StopOutcomeTests {
     #expect(odd.unresolved.count == 2, "a job with no readable ID is still a job left")
     #expect(odd.refused.isEmpty)
     #expect(!odd.isComplete)
+  }
+
+  @Test("a job that is not an object, or a warning that is not a string, drops nothing else")
+  func aJobThatIsNotAnObjectStillCounts() throws {
+    let odd = try outcome([
+      "ok": true,
+      "warnings": ["Atlas could not reach the helper", 7],
+      "jobs": ["refused": ["7c2e91a04b3f", ["id": "aaaaaaaaaaaa", "reason": "leader-gone"]]],
+    ])
+    #expect(odd.warnings == ["Atlas could not reach the helper"])
+    #expect(odd.refused == [StopOutcome.Job(id: ""), StopOutcome.Job(id: "aaaaaaaaaaaa", reason: .leaderGone)])
+    #expect(odd.jobsLeft == 2)
   }
 }

@@ -80,10 +80,10 @@ struct HostSessionDecodingTests {
     #expect(!reading.overview.sessionsShown)
     #expect(reading.overview.holder == nil && reading.overview.moreSessions == 0)
     let row = try #require(reading.overview.activity.first)
-    #expect(row.session == nil && !row.nothingSent && !row.uncertain)
+    #expect(row.session == nil && !row.nothingSent)
   }
 
-  @Test("a row names its session, and whether it sent nothing or its outcome is unknown")
+  @Test("a row names its session, and whether it sent nothing")
   func aRowNamesItsSession() throws {
     let reading = try status([
       "overview": [
@@ -95,6 +95,12 @@ struct HostSessionDecodingTests {
     ])
     #expect(reading.overview.activity.map(\.session) == ["3f9a1c07b2e4", nil])
     #expect(reading.overview.activity.map(\.nothingSent) == [true, false])
-    #expect(reading.overview.activity.map(\.uncertain) == [false, true])
+    #expect(reading.overview.activity.map(\.outcome) == [.notSent, .failed])
+  }
+
+  @Test("one odd activity row is dropped and the rest are kept")
+  func oneOddActivityRowIsDropped() throws {
+    let reading = try status(["overview": ["activity": [["operation": "input", "ok": true], "not a row", 7]]])
+    #expect(reading.overview.activity.map(\.operation) == ["input"])
   }
 }

@@ -76,8 +76,7 @@ enum PanelRenderSessions: String, CaseIterable, Sendable {
           operation: "input",
           ok: false,
           ageSeconds: 60,
-          says: "clicked Show Center in Opie",
-          uncertain: true
+          says: "clicked Show Center in Opie"
         ),
       uncertainRow: acting ? nil : "c1",
       uncertainVerb: acting ? nil : "click"

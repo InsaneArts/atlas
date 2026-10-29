@@ -26,13 +26,14 @@ public struct ActivityLog: Decodable, Equatable, Sendable {
     case sessions
   }
 
-  /// Decodes a log; rows that are missing or of the wrong type read as none, as do sessions.
+  /// Decodes a log; rows that are missing or of the wrong type read as none, as do sessions, and each row and session
+  /// decodes on its own, so one odd one is dropped and the rest are kept.
   ///
   /// - Parameter decoder: The decoder reading `activity.json`.
   /// - Throws: `DecodingError` only when the reply is not an object.
   public init(from decoder: any Decoder) throws {
     let container = try decoder.container(keyedBy: CodingKeys.self)
-    entries = (try? container.decodeIfPresent([Entry].self, forKey: .entries)) ?? []
+    entries = container.lenientList(Entry.self, forKey: .entries)
     sessions = HostSessionSummary.map(
       try? container.decodeIfPresent([String: Lenient<HostSessionSummary>].self, forKey: .sessions)
     )

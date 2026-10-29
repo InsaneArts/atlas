@@ -83,8 +83,7 @@ extension ViewerController {
     guard session.cleanupUnanswered == unanswered, ended || waitedOut else { return }
     session.cleanupUnanswered = nil
     guard let preview else { return }
-    let ran = preview.steps.contains { $0.state != nil }
-    session.cleanupReceipts[unanswered.session] = ran ? preview : nil
+    session.cleanupReceipts[unanswered.session] = preview.hasRun ? preview : nil
     if let notice = ViewerPresenter.unansweredCleanupNotice(preview) { say(notice) }
   }
 }

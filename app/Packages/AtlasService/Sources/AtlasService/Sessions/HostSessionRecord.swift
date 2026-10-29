@@ -39,6 +39,15 @@ public struct HostSessionRecord: Decodable, Equatable, Sendable, Identifiable {
   /// The session's identity: its key.
   public var id: String { key }
 
+  /// Whether the list says it ended: its state, or the time it ended.
+  public var isEnded: Bool { state == .ended || endedAt != nil }
+
+  /// Whether it left something to clean up: a copy, a plan, an installed app, or a cleanup that did not finish.
+  public var leftWork: Bool {
+    let unfinished = cleanup.map { $0 != .complete } == true
+    return !copies.isEmpty || !plans.isEmpty || !installs.isEmpty || unfinished
+  }
+
   /// Creates a record.
   ///
   /// - Parameters:
@@ -108,47 +117,30 @@ public struct HostSessionRecord: Decodable, Equatable, Sendable, Identifiable {
   /// - Throws: `DecodingError` when the entry is not an object or names no key or no name, which drops it.
   public init(from decoder: any Decoder) throws {
     let container = try decoder.container(keyedBy: CodingKeys.self)
-    let text = { (key: CodingKeys) in
-      (try? container.decodeIfPresent(String.self, forKey: key))
-        .flatMap { $0.isEmpty ? nil : $0 }
-    }
-    let time = { (key: CodingKeys) in
-      (try? container.decodeIfPresent(Double.self, forKey: key))
-        .flatMap { $0.isFinite ? Date(timeIntervalSince1970: $0 / 1000) : nil }
-    }
     // The Terminal session's key is empty, so only a missing key drops the entry.
-    guard let key = try? container.decodeIfPresent(String.self, forKey: .key), let name = text(.name) else {
+    guard let key = try? container.decodeIfPresent(String.self, forKey: .key), let name = container.lenientText(.name)
+    else {
       throw DecodingError.dataCorrupted(
         DecodingError.Context(codingPath: decoder.codingPath, debugDescription: "A session names no key or name")
       )
     }
     self.key = key
     self.name = name
-    host = SessionHost(word: text(.host))
-    hostLabel = text(.hostLabel) ?? ""
-    folder = text(.folder)
-    startedAt = time(.startedAt)
-    lastSeenAt = time(.lastSeenAt)
-    endedAt = time(.endedAt)
-    state = HostSessionState(word: text(.state))
-    actions = max(0, (try? container.decodeIfPresent(Int.self, forKey: .actions)) ?? 0)
-    apps =
-      (try? container.decodeIfPresent([Lenient<HostSessionApp>].self, forKey: .apps))?
-      .compactMap(\.value) ?? []
-    copies =
-      (try? container.decodeIfPresent([Lenient<HostSessionCopy>].self, forKey: .copies))?
-      .compactMap(\.value) ?? []
-    plans =
-      (try? container.decodeIfPresent([Lenient<HostSessionPlan>].self, forKey: .plans))?
-      .compactMap(\.value) ?? []
-    installs =
-      (try? container.decodeIfPresent([Lenient<String>].self, forKey: .installs))?
-      .compactMap(\.value)
-      .filter { !$0.isEmpty } ?? []
-    cleanup = CleanupState(word: text(.cleanup))
-    screenshots =
-      (try? container.decodeIfPresent([Lenient<String>].self, forKey: .screenshots))?
-      .compactMap(\.value)
-      .filter { !$0.isEmpty } ?? []
+    host = SessionHost(word: container.lenientText(.host))
+    hostLabel = container.lenientText(.hostLabel) ?? ""
+    folder = container.lenientText(.folder)
+    startedAt = container.lenientDate(milliseconds: .startedAt)
+    lastSeenAt = container.lenientDate(milliseconds: .lastSeenAt)
+    endedAt = container.lenientDate(milliseconds: .endedAt)
+    state = HostSessionState(word: container.lenientText(.state))
+    actions = container.lenientCount(.actions)
+    apps = container.lenientList(HostSessionApp.self, forKey: .apps)
+    copies = container.lenientList(HostSessionCopy.self, forKey: .copies)
+    plans = container.lenientList(HostSessionPlan.self, forKey: .plans)
+    installs = container.lenientList(String.self, forKey: .installs)
+      .filter { !$0.isEmpty }
+    cleanup = CleanupState(word: container.lenientText(.cleanup))
+    screenshots = container.lenientList(String.self, forKey: .screenshots)
+      .filter { !$0.isEmpty }
   }
 }

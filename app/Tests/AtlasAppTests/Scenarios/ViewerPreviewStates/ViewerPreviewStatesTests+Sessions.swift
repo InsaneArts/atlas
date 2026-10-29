@@ -106,8 +106,8 @@
       steps: [
         CleanupStep(number: 1, kind: .quit, apps: ["Opie"], state: .done),
         CleanupStep(number: 2, kind: .undoPlan, state: .done),
-        CleanupStep(number: 3, kind: .removeInstall, app: "Probe", state: .kept, reason: "changed"),
-        CleanupStep(number: 4, kind: .removeCopy, app: "Opie", state: .failed, reason: "in-use", retry: true),
+        CleanupStep(number: 3, kind: .removeInstall, app: "Probe", state: .kept, reason: .changed),
+        CleanupStep(number: 4, kind: .removeCopy, app: "Opie", state: .failed, reason: .inUse, retry: true),
       ]
     )
 

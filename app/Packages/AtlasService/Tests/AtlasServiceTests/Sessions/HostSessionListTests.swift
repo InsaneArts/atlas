@@ -78,4 +78,18 @@ struct HostSessionListTests {
     #expect(codex.state == .waiting && codex.waitingFor == .helper && codex.waitingSeconds == 4)
     #expect(codex.startedAt == Date(timeIntervalSince1970: 1_793_163_000))
   }
+
+  @Test("a session ended by its state or its time, and left work by what it made or an unfinished cleanup")
+  func aSessionEndedAndLeftWork() {
+    let quiet = HostSessionRecord(key: "a1", name: "Pi · notes", host: .pi)
+    #expect(!quiet.isEnded && !quiet.leftWork)
+    #expect(HostSessionRecord(key: "a1", name: "Pi · notes", host: .pi, state: .ended).isEnded)
+    #expect(HostSessionRecord(key: "a1", name: "Pi · notes", host: .pi, endedAt: .distantPast).isEnded)
+    #expect(
+      HostSessionRecord(key: "a1", name: "Pi · notes", host: .pi, copies: [HostSessionCopy(app: "Opie")]).leftWork
+    )
+    #expect(HostSessionRecord(key: "a1", name: "Pi · notes", host: .pi, installs: ["Probe"]).leftWork)
+    #expect(HostSessionRecord(key: "a1", name: "Pi · notes", host: .pi, cleanup: .incomplete).leftWork)
+    #expect(!HostSessionRecord(key: "a1", name: "Pi · notes", host: .pi, cleanup: .complete).leftWork)
+  }
 }

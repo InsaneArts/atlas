@@ -97,10 +97,10 @@ extension ViewerPresenter {
     let reading = snapshot.reading.statusReading
     let named = reading.session(key)
     let listed = named?.isLive == true ? named : nil
-    let state = listed?.state ?? (isEnded(record) ? .ended : .idle)
+    let state = listed?.state ?? (record.isEnded ? .ended : .idle)
     let words =
       listed.map { ViewerWords.sessionSubtitle($0, line: reading.line(of: $0), now: snapshot.date) }
-      ?? (isEnded(record)
+      ?? (record.isEnded
         ? ViewerWords.endedSubtitle(record, now: snapshot.date)
         : ViewerWords.idle(record.lastSeenAt.map { snapshot.date.timeIntervalSince($0) }))
     let shots = record.screenshots

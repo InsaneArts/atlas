@@ -134,7 +134,7 @@ struct ViewerPresenterCleanupTests {
     )
     let blocked = CleanupReply(
       state: .blocked,
-      steps: [CleanupStep(number: 1, kind: .removeCopy, state: .blocked, reason: "stopped")]
+      steps: [CleanupStep(number: 1, kind: .removeCopy, state: .blocked, reason: .stopped)]
     )
     #expect(
       ViewerPresenter.cleanupNotice(blocked)
@@ -163,14 +163,14 @@ struct ViewerPresenterCleanupTests {
       state: .incomplete,
       steps: [
         CleanupStep(number: 1, kind: .quit, apps: ["Probe"], state: .done),
-        CleanupStep(number: 2, kind: .removeInstall, app: "Probe", state: .kept, reason: "changed"),
-        CleanupStep(number: 3, kind: .removeCopy, app: "Probe", state: .failed, reason: "in-use", retry: true),
-        CleanupStep(number: 4, kind: .removeCopy, state: .failed, reason: "io"),
+        CleanupStep(number: 2, kind: .removeInstall, app: "Probe", state: .kept, reason: .changed),
+        CleanupStep(number: 3, kind: .removeCopy, app: "Probe", state: .failed, reason: .inUse, retry: true),
+        CleanupStep(number: 4, kind: .removeCopy, state: .failed, reason: .io),
         CleanupStep(number: 5, kind: .removeCopy, app: "Notes", state: .done, alreadyGone: true),
         CleanupStep(number: 6, kind: .undoPlan, state: .uncertain),
         CleanupStep(number: 7, kind: .unknown, state: .pending),
-        CleanupStep(number: 8, kind: .removeCopy, app: "Mail", state: .kept, reason: "other-volume"),
-        CleanupStep(number: 9, kind: .removeInstall, app: "Mail", state: .kept, reason: "unreadable"),
+        CleanupStep(number: 8, kind: .removeCopy, app: "Mail", state: .kept, reason: .otherVolume),
+        CleanupStep(number: 9, kind: .removeInstall, app: "Mail", state: .kept, reason: .unreadable),
       ]
     )
     #expect(
@@ -188,7 +188,7 @@ struct ViewerPresenterCleanupTests {
     )
     #expect(ViewerPresenter.cleanupNotice(applied) == "The cleanup didn't finish. Details lists each step.")
     #expect(ViewerPresenter.cleanupNotice(CleanupReply(ok: true, state: .complete)) == ViewerWords.nothingToCleanUp)
-    let unknown = CleanupStep(number: 1, kind: .removeCopy, state: .kept, reason: "a-reason-from-later")
+    let unknown = CleanupStep(number: 1, kind: .removeCopy, state: .kept, reason: .unknown)
     #expect(ViewerPresenter.cleanupOutcome(unknown) == "Kept", "a reason this app does not know is never shown")
     var snapshot = try Self.chosen(Self.record(copies: [HostSessionCopy(app: "Probe")]))
     snapshot.session.cleanupReceipts[Self.key] = applied
@@ -339,7 +339,7 @@ struct ViewerPresenterCleanupTests {
       preview: true,
       steps: [
         CleanupStep(number: 1, kind: .quit, apps: ["Probe"], state: .done),
-        CleanupStep(number: 2, kind: .removeCopy, app: "Probe", state: .failed, reason: "in-use", retry: true),
+        CleanupStep(number: 2, kind: .removeCopy, app: "Probe", state: .failed, reason: .inUse, retry: true),
       ]
     )
     let checks = service.cleanups.count
@@ -403,21 +403,21 @@ struct ViewerPresenterCleanupTests {
           number: 1,
           kind: .checkOutputs,
           state: .failed,
-          reason: "output-not-kept",
+          reason: .outputNotKept,
           retry: true,
-          notKept: [CleanupFile(source: "/Users/atlas/a.pdf"), CleanupFile(source: "/private/tmp/b.png")]
+          notKept: 2
         ),
         CleanupStep(
           number: 2,
           kind: .stopJob,
           state: .done,
           name: "web",
-          left: [CleanupProcess(pid: 4377, name: "sleep")]
+          left: [CleanupProcess(name: "sleep")]
         ),
-        CleanupStep(number: 3, kind: .stopJob, state: .failed, reason: "still-stopping", retry: true, name: "worker"),
-        CleanupStep(number: 4, kind: .stopJob, state: .failed, reason: "identity"),
-        CleanupStep(number: 5, kind: .stopJob, state: .failed, reason: "other-account"),
-        CleanupStep(number: 6, kind: .undoPlan, state: .blocked, reason: "output-not-kept"),
+        CleanupStep(number: 3, kind: .stopJob, state: .failed, reason: .stillStopping, retry: true, name: "worker"),
+        CleanupStep(number: 4, kind: .stopJob, state: .failed, reason: .identity),
+        CleanupStep(number: 5, kind: .stopJob, state: .failed, reason: .otherAccount),
+        CleanupStep(number: 6, kind: .undoPlan, state: .blocked, reason: .outputNotKept),
       ]
     )
     #expect(
@@ -440,10 +440,10 @@ struct ViewerPresenterCleanupTests {
   func aCleanupHeldBackByAnUnreachedHelperSaysSo() {
     let unreached = CleanupReply(
       state: .blocked,
-      steps: [CleanupStep(number: 1, kind: .stopJob, state: .blocked, reason: "daemon")]
+      steps: [CleanupStep(number: 1, kind: .stopJob, state: .blocked, reason: .daemon)]
     )
     #expect(ViewerPresenter.cleanupNotice(unreached) == ViewerWords.cleanupJobsUnreached)
-    #expect(ViewerWords.stepBlocked("daemon") == "Didn't run: Atlas couldn't reach the helper")
+    #expect(ViewerWords.stepBlocked(.daemon) == "Didn't run: Atlas couldn't reach the helper")
     #expect(ViewerPresenter.unansweredCleanupNotice(unreached) == ViewerWords.cleanupJobsUnreached)
   }
 }

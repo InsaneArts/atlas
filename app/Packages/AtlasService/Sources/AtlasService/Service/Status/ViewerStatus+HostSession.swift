@@ -109,20 +109,9 @@ extension ViewerStatus {
     /// - Throws: `DecodingError` when the entry is not an object or names no key or no name, which drops it.
     public init(from decoder: any Decoder) throws {
       let container = try decoder.container(keyedBy: CodingKeys.self)
-      let text = { (key: CodingKeys) in
-        (try? container.decodeIfPresent(String.self, forKey: key))
-          .flatMap { $0.isEmpty ? nil : $0 }
-      }
-      let time = { (key: CodingKeys) in
-        (try? container.decodeIfPresent(Double.self, forKey: key))
-          .flatMap { $0.isFinite ? Date(timeIntervalSince1970: $0 / 1000) : nil }
-      }
-      let seconds = { (key: CodingKeys) in
-        (try? container.decodeIfPresent(Double.self, forKey: key))
-          .flatMap { $0.isFinite && $0 >= 0 ? $0 : nil }
-      }
       // The Terminal session's key is empty, so only a missing key drops the entry.
-      guard let key = try? container.decodeIfPresent(String.self, forKey: .key), let name = text(.name)
+      guard let key = try? container.decodeIfPresent(String.self, forKey: .key),
+        let name = container.lenientText(.name)
       else {
         throw DecodingError.dataCorrupted(
           DecodingError.Context(codingPath: decoder.codingPath, debugDescription: "A session names no key or name")
@@ -130,21 +119,22 @@ extension ViewerStatus {
       }
       self.key = key
       self.name = name
-      host = SessionHost(word: text(.host))
-      hostLabel = text(.hostLabel) ?? ""
-      folder = text(.folder)
-      startedAt = time(.started)
-      lastSeenAt = time(.lastSeen)
-      endedAt = time(.ended)
-      state = HostSessionState(word: text(.state))
-      isLive = (try? container.decodeIfPresent(Bool.self, forKey: .live)) ?? (endedAt == nil && state != .ended)
-      waitingFor = text(.waitingFor)
+      host = SessionHost(word: container.lenientText(.host))
+      hostLabel = container.lenientText(.hostLabel) ?? ""
+      folder = container.lenientText(.folder)
+      startedAt = container.lenientDate(milliseconds: .started)
+      lastSeenAt = container.lenientDate(milliseconds: .lastSeen)
+      endedAt = container.lenientDate(milliseconds: .ended)
+      state = HostSessionState(word: container.lenientText(.state))
+      isLive = container.lenientBool(.live) ?? (endedAt == nil && state != .ended)
+      waitingFor = container.lenientText(.waitingFor)
         .flatMap(HostSessionWait.init(rawValue:))
-      waitingSeconds = seconds(.waitingSeconds)
-      holdsHelper = (try? container.decodeIfPresent(Bool.self, forKey: .holdsHelper)) == true
+      waitingSeconds = (try? container.decodeIfPresent(Double.self, forKey: .waitingSeconds))
+        .flatMap { $0.isFinite && $0 >= 0 ? $0 : nil }
+      holdsHelper = container.lenientFlag(.holdsHelper)
       latest = try? container.decodeIfPresent(Activity.self, forKey: .latest)
-      uncertainRow = text(.uncertainRow)
-      uncertainVerb = text(.uncertainVerb)
+      uncertainRow = container.lenientText(.uncertainRow)
+      uncertainVerb = container.lenientText(.uncertainVerb)
     }
   }
 }

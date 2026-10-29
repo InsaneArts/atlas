@@ -50,6 +50,47 @@ public struct CleanupReply: Decodable, Equatable, Sendable {
   /// Whether a step started and has not ended, as while a cleanup runs, or after one was cut short mid-step.
   public var isUnderWay: Bool { steps.contains { $0.state == .started } }
 
+  /// Whether any step has run, so the reply says how far a cleanup got.
+  public var hasRun: Bool { steps.contains { $0.state != nil } }
+
+  /// The steps still to do: every one but those a cleanup that did not finish before already did, or kept.
+  public var openSteps: [CleanupStep] {
+    steps.filter { $0.state != .done && $0.state != .kept }
+  }
+
+  /// How an apply that replied ended: not knowing whether its last step finished and being held back each read on
+  /// their own; else cleaned up, or nothing to clean up, only when it says it is done.
+  public var ending: CleanupEnding {
+    switch state {
+    case .uncertain: return .uncertain
+    case .blocked: return .blocked(heldBackBy)
+    case .complete, .incomplete, .unknown, nil: break
+    }
+    guard ok, state == nil || state == .complete else { return .unfinished }
+    return isEmpty ? .nothingToCleanUp : .cleanedUp
+  }
+
+  /// How a cleanup whose reply never came ended, read from `cleanup.json` once it shows no step under way: the steps
+  /// a run left read as an apply's do, and with nothing left it cleaned up. Nil when no step has run, as nothing is
+  /// known of how it went.
+  public var unansweredEnding: CleanupEnding? {
+    guard !isEmpty else { return .cleanedUp }
+    let states = steps.compactMap(\.state)
+    guard !states.isEmpty else { return nil }
+    if states.contains(where: { $0 == .started || $0 == .uncertain }) { return .uncertain }
+    return states.contains(.blocked) ? .blocked(heldBackBy) : .unfinished
+  }
+
+  /// Why the steps held back were held back: a collected copy no longer kept wins, then a helper that could not be
+  /// reached, then whatever the first held step gives.
+  private var heldBackBy: CleanupStep.Reason? {
+    let reasons = steps.filter { $0.state == .blocked }
+      .map(\.reason)
+    if reasons.contains(.outputNotKept) { return .outputNotKept }
+    if reasons.contains(.daemon) { return .daemon }
+    return reasons.first ?? nil
+  }
+
   /// The body's fields this app reads.
   enum CodingKeys: String, CodingKey {
     /// Each field by the name the service writes.
@@ -62,28 +103,13 @@ public struct CleanupReply: Decodable, Equatable, Sendable {
   /// - Parameter decoder: The decoder reading the body.
   /// - Throws: `DecodingError` only when the body is not an object.
   public init(from decoder: any Decoder) throws {
-    /// One app the cleanup leaves running: its name, beside why, which this app does not show.
-    struct Left: Decodable {
-      /// The app's name.
-      let app: String?
-    }
     let container = try decoder.container(keyedBy: CodingKeys.self)
-    let flag = { (key: CodingKeys) in
-      (try? container.decodeIfPresent(Bool.self, forKey: key)) == true
-    }
-    ok = flag(.ok)
-    preview = flag(.preview)
-    state = CleanupState(word: try? container.decodeIfPresent(String.self, forKey: .state))
-    steps =
-      (try? container.decodeIfPresent([Lenient<CleanupStep>].self, forKey: .steps))?
-      .compactMap(\.value) ?? []
-    left =
-      (try? container.decodeIfPresent([Lenient<Left>].self, forKey: .left))?
-      .compactMap { $0.value?.app }
-      .filter { !$0.isEmpty } ?? []
-    active = flag(.active)
-    error =
-      (try? container.decodeIfPresent(String.self, forKey: .error))
-      .flatMap { $0.isEmpty ? nil : $0 }
+    ok = container.lenientFlag(.ok)
+    preview = container.lenientFlag(.preview)
+    state = CleanupState(word: container.lenientText(.state))
+    steps = container.lenientList(CleanupStep.self, forKey: .steps)
+    left = container.lenientAppNames(.left)
+    active = container.lenientFlag(.active)
+    error = container.lenientText(.error)
   }
 }

@@ -40,12 +40,12 @@ extension StatusReading {
   private static func entry(_ item: ActivityItem, isNewest: Bool) -> ActivityEntry {
     let first = item.text.prefix(1)
     let line = item.actor == .agent ? first.uppercased() + item.text.dropFirst() : item.line
-    return ActivityEntry(
-      id: item.id,
-      line: line,
-      when: item.when,
-      mark: item.ok ? .quiet : item.row.nothingSent ? .notSent : .failed,
-      isNewest: isNewest
-    )
+    let mark: ActivityMarkKind =
+      switch item.row.outcome {
+      case .running, .worked: .quiet
+      case .notSent: .notSent
+      case .failed: .failed
+      }
+    return ActivityEntry(id: item.id, line: line, when: item.when, mark: mark, isNewest: isNewest)
   }
 }

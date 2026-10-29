@@ -45,17 +45,22 @@ public struct StopOutcome: Decodable, Equatable, Sendable {
     case refused, unknown, unresolved
   }
 
-  /// Decodes a Stop's reply, keeping the default of anything missing or of the wrong type.
+  /// Decodes a Stop's reply, keeping the default of anything missing or of the wrong type. Each warning and job
+  /// decodes on its own: an odd warning is dropped, and an odd job still counts, with an empty ID.
   ///
   /// - Parameter decoder: The decoder reading the reply.
   /// - Throws: `DecodingError` only when it is not an object.
   public init(from decoder: any Decoder) throws {
     let container = try decoder.container(keyedBy: CodingKeys.self)
-    held = (try? container.decodeIfPresent(Bool.self, forKey: .held)) ?? true
-    warnings = (try? container.decodeIfPresent([String].self, forKey: .warnings)) ?? []
+    held = container.lenientBool(.held) ?? true
+    warnings = container.lenientList(String.self, forKey: .warnings)
     guard let jobs = try? container.nestedContainer(keyedBy: JobsKeys.self, forKey: .jobs) else { return }
-    refused = (try? jobs.decodeIfPresent([Job].self, forKey: .refused)) ?? []
-    unknown = (try? jobs.decodeIfPresent([Job].self, forKey: .unknown)) ?? []
-    unresolved = (try? jobs.decodeIfPresent([Job].self, forKey: .unresolved)) ?? []
+    let listed = { (key: JobsKeys) in
+      (try? jobs.decodeIfPresent([Lenient<Job>].self, forKey: key))?
+        .map { $0.value ?? Job(id: "") } ?? []
+    }
+    refused = listed(.refused)
+    unknown = listed(.unknown)
+    unresolved = listed(.unresolved)
   }
 }

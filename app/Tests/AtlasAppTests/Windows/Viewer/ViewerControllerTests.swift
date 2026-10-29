@@ -92,7 +92,7 @@ struct ViewerControllerTests {
     let service = ScriptedService()
     service.stopOutcome = StopOutcome(
       warnings: ["Atlas could not stop 1 background job"],
-      refused: [StopOutcome.Job(id: "7c2e91a04b3f", reason: "identity")]
+      refused: [StopOutcome.Job(id: "7c2e91a04b3f", reason: .identity)]
     )
     let viewer = ViewerController.scripted(service)
     await viewer.setStopped(true)

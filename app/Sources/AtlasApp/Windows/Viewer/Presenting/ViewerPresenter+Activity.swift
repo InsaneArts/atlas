@@ -96,7 +96,7 @@ extension ViewerPresenter {
     let rest = (list?.live ?? [])
       .map(\.key)
     let ended = (list?.sessions ?? [])
-      .filter(isEnded)
+      .filter(\.isEnded)
       .map(\.key)
     var order: [String] = []
     for key in listed + rest + ended where !order.contains(key) { order.append(key) }
@@ -128,7 +128,7 @@ extension ViewerPresenter {
     }
     let named = snapshot.reading.statusReading.session(key) ?? snapshot.panes.sessions.live(key)
     let record = snapshot.panes.sessions.record(key)
-    let ended = named == nil && record.map(isEnded) == true
+    let ended = named == nil && record?.isEnded == true
     let state: HostSessionState? = named?.state ?? (ended ? .ended : key.isEmpty ? .idle : nil)
     let name = sessionName(key, snapshot)
     return ViewerActivitySessionGroup(

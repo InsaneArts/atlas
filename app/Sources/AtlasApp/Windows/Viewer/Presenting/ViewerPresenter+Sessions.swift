@@ -54,7 +54,7 @@ extension ViewerPresenter {
     let live = listed + rest
     let liveKeys = Set(live.map(\.key))
     let ended = (snapshot.panes.sessions.list?.sessions ?? [])
-      .filter { isEnded($0) && !liveKeys.contains($0.key) }
+      .filter { $0.isEnded && !liveKeys.contains($0.key) }
       .prefix(ViewerSessionsMenu.mostEnded)
     let liveItems = live.map { session in
       ViewerSessionsMenuItem(
@@ -76,14 +76,6 @@ extension ViewerPresenter {
         )
       }
     )
-  }
-
-  /// Whether the list says a session ended: its state, or the time it ended.
-  ///
-  /// - Parameter record: The session, as the list has it.
-  /// - Returns: Whether it ended.
-  static func isEnded(_ record: HostSessionRecord) -> Bool {
-    record.state == .ended || record.endedAt != nil
   }
 
   /// A session's name: as the status lists it, else the sessions' list of live and ended ones, else the log's own

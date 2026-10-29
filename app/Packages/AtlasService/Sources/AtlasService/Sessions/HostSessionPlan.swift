@@ -35,8 +35,7 @@ public struct HostSessionPlan: Decodable, Equatable, Sendable {
   public init(from decoder: any Decoder) throws {
     let container = try decoder.container(keyedBy: CodingKeys.self)
     phase = HostSessionPlanPhase(word: try? container.decodeIfPresent(String.self, forKey: .phase))
-    madeAt = (try? container.decodeIfPresent(Double.self, forKey: .madeAt))
-      .flatMap { $0.isFinite ? Date(timeIntervalSince1970: $0 / 1000) : nil }
-    canRollBack = (try? container.decodeIfPresent(Bool.self, forKey: .canRollBack)) == true
+    madeAt = container.lenientDate(milliseconds: .madeAt)
+    canRollBack = container.lenientFlag(.canRollBack)
   }
 }
