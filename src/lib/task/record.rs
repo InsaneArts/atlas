@@ -5,7 +5,12 @@
 //! build.
 use super::{Name, Task};
 use crate::{
+    collect::ReceiptId,
     control::Token,
+    daemon::{
+        job::{How, JobState},
+        protocol::{Expected, JobId},
+    },
     error::{Error, Result},
     host_session::Key,
 };
@@ -19,6 +24,10 @@ pub(crate) const VERSION: u32 = 1;
 pub(crate) const OWNED: usize = 256;
 /// The most cleanups a record keeps note of, unfinished ones aside.
 const CLEANUPS: usize = 16;
+/// The most background jobs a record keeps note of.
+const JOBS: usize = 64;
+/// The most collections a record keeps note of.
+const OUTPUTS: usize = 64;
 
 /// What a task's record says of it.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -44,6 +53,14 @@ pub(crate) struct Record {
     /// someone did.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub adopted_by: Option<Adoption>,
+    /// The background jobs the task started, oldest first: the person's
+    /// side's copy of each one's identity, which a stop must agree with.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub jobs: Vec<JobEntry>,
+    /// The collections of files the task made, oldest first, by their
+    /// receipts; the files' names and paths are kept in the receipts only.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub outputs: Vec<OutputEntry>,
     /// Fields a later build keeps here, as it wrote them.
     #[serde(flatten)]
     pub later: Map<String, Value>,
@@ -62,8 +79,42 @@ impl Record {
             owned: Vec::new(),
             cleanups: Vec::new(),
             adopted_by: None,
+            jobs: Vec::new(),
+            outputs: Vec::new(),
             later: Map::new(),
         }
+    }
+
+    /// Note that the task started `job`, or what became of it: an entry of
+    /// the same ID takes its place. Room is made by forgetting the oldest
+    /// ended job once [`JOBS`] are listed; with none ended, the oldest goes.
+    pub fn noted_job(&mut self, job: JobEntry) {
+        if let Some(known) = self.jobs.iter_mut().find(|known| known.id == job.id) {
+            *known = job;
+            return;
+        }
+        if self.jobs.len() >= JOBS {
+            let place = self
+                .jobs
+                .iter()
+                .position(|known| known.state == JobState::Ended)
+                .unwrap_or(0);
+            self.jobs.remove(place);
+        }
+        self.jobs.push(job);
+    }
+
+    /// The job `id` this task started, when it is listed.
+    pub fn job(&self, id: &JobId) -> Option<&JobEntry> {
+        self.jobs.iter().find(|job| job.id == *id)
+    }
+
+    /// Note a collection the task made, keeping the newest [`OUTPUTS`].
+    pub fn noted_output(&mut self, output: OutputEntry) {
+        if self.outputs.len() >= OUTPUTS {
+            self.outputs.remove(0);
+        }
+        self.outputs.push(output);
     }
 
     /// Note that the task is about to make `owned`, or made it, `now`. A
@@ -136,6 +187,7 @@ impl Record {
     pub fn holds_anything(&self) -> bool {
         !self.later.is_empty()
             || self.unfinished_cleanup().is_some()
+            || self.jobs.iter().any(|job| job.state != JobState::Ended)
             || self.owned.iter().any(|entry| match entry {
                 Entry::Known(claim) => {
                     !claim.later.is_empty()
@@ -328,6 +380,42 @@ pub(crate) struct CleanupNote {
     pub state: CleanupState,
     /// When its receipt last changed, in milliseconds since 1970.
     pub updated: u64,
+}
+
+/// A background job a task started, as the person's side knows it.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct JobEntry {
+    pub id: JobId,
+    pub name: String,
+    /// When it started, in milliseconds since 1970.
+    pub started_at: u64,
+    /// What it is: its boot, leader, start time and group.
+    pub expected: Expected,
+    pub state: JobState,
+    /// How it ended, once it did.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub how: Option<How>,
+    /// When it ended, in milliseconds since 1970.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ended_at: Option<u64>,
+    /// Fields a later build keeps on an entry, as it wrote them.
+    #[serde(flatten)]
+    pub later: Map<String, Value>,
+}
+
+/// One collection of files a task made: its receipt, when, and how many
+/// files and bytes it kept.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct OutputEntry {
+    pub receipt: ReceiptId,
+    pub at: u64,
+    pub files: usize,
+    pub bytes: u64,
+    /// Fields a later build keeps on an entry, as it wrote them.
+    #[serde(flatten)]
+    pub later: Map<String, Value>,
 }
 
 /// Who took over a task's work after its session ended: the adopting

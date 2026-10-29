@@ -781,6 +781,8 @@ pub fn overview(
         "inFlight": pending.in_flight,
         "commands": pending.commands,
         "nativeDialogs": report["capabilities"]["nativeDialogs"]["state"],
+        // Background jobs that may still run, as the helper's daemon says.
+        "jobs": {"running": session["daemon"]["jobs"]["running"].as_u64().unwrap_or(0)},
         "activity": activity.iter().map(|row| shown(row, now)).collect::<Vec<_>>(),
     })
 }
@@ -817,6 +819,8 @@ fn reason(row: &Value) -> Option<&'static str> {
         "cancelled" => "It was cancelled",
         "uncertain" => "It may not have finished",
         "timeout" => "It took too long",
+        "job" => "A background job was refused",
+        "collect" => "A file could not be collected",
         "exit" => "The command failed",
         "transport" | "identity" | "native" | "daemon" | "on-console" => {
             "Atlas couldn't reach the helper"
@@ -2108,5 +2112,23 @@ mod tests {
     fn why_the_helper_is_silent_is_looked_at_again_within_seconds() {
         assert!(ABSENCE.fresh_for <= Duration::from_secs(5));
         assert!(ABSENCE.fresh_for < LOGINS.fresh_for);
+    }
+
+    #[test]
+    fn the_overview_counts_running_jobs() {
+        let mut ready = report(true, true);
+        assert_eq!(
+            overview(&ready, false, unresolved(0), &[], NOW)["jobs"],
+            json!({"running": 0})
+        );
+        ready["session"]["daemon"] = json!({"jobs": {"running": 3}});
+        assert_eq!(
+            overview(&ready, false, unresolved(0), &[], NOW)["jobs"],
+            json!({"running": 3})
+        );
+        let refused = json!({"ok": false, "code": "job", "operation": "job"});
+        assert_eq!(reason(&refused), Some("A background job was refused"));
+        let refused = json!({"ok": false, "code": "collect", "operation": "collect"});
+        assert_eq!(reason(&refused), Some("A file could not be collected"));
     }
 }

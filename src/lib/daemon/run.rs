@@ -73,7 +73,7 @@ const LANG: &str = "en_US.UTF-8";
 /// The PATH a command searches: the helper's, the same places readiness and
 /// `environment run` look in (`.local/bin` and Homebrew among them), or the
 /// daemon's own without a home.
-fn search_path(home: Option<&Path>) -> String {
+pub(super) fn search_path(home: Option<&Path>) -> String {
     home.and_then(|home| std::env::join_paths(crate::environment::helper_search_path(home)).ok())
         .and_then(|path| path.into_string().ok())
         .unwrap_or_else(|| PATH.to_owned())
@@ -81,7 +81,7 @@ fn search_path(home: Option<&Path>) -> String {
 
 /// Where a `program` with a slash is: a relative one starts at `home`, where
 /// the command runs, as it would in a shell there.
-fn locate(program: &str, home: Option<&Path>) -> PathBuf {
+pub(super) fn locate(program: &str, home: Option<&Path>) -> PathBuf {
     match home {
         Some(home) if Path::new(program).is_relative() => home.join(program),
         _ => PathBuf::from(program),
@@ -90,7 +90,7 @@ fn locate(program: &str, home: Option<&Path>) -> PathBuf {
 
 /// The executable for `program`: where [`locate`] puts it when it contains a
 /// slash, else the first match on `PATH`.
-fn resolve(program: &str, path: Option<&str>, home: Option<&Path>) -> Option<PathBuf> {
+pub(super) fn resolve(program: &str, path: Option<&str>, home: Option<&Path>) -> Option<PathBuf> {
     let executable = |candidate: &Path| {
         std::fs::metadata(candidate)
             .is_ok_and(|metadata| metadata.is_file() && metadata.permissions().mode() & 0o111 != 0)
@@ -106,6 +106,38 @@ fn resolve(program: &str, path: Option<&str>, home: Option<&Path>) -> Option<Pat
         .filter(|directory| !directory.is_empty())
         .map(|directory| Path::new(directory).join(program))
         .find(|candidate| executable(candidate))
+}
+
+/// The refusal of a `name` that [`resolve`] found no program for, saying
+/// why: not on PATH, a folder, not executable, or not there.
+pub(super) fn unresolved(name: &str, home: Option<&Path>) -> Value {
+    let located = locate(name, home);
+    let reason = if !name.contains('/') {
+        "command not found on PATH"
+    } else if located.is_dir() {
+        "is a folder, not a program"
+    } else if located.exists() {
+        "is not executable (chmod +x it)"
+    } else {
+        "no such program"
+    };
+
+    failure("spawn-failed", format!("{name}: {reason}"))
+}
+
+/// The helper's home, where a command starts, when it is a folder.
+pub(super) fn home() -> Option<PathBuf> {
+    std::env::var_os("HOME")
+        .map(PathBuf::from)
+        .filter(|home| home.is_dir())
+}
+
+/// The locale a command gets: the daemon's own, or UTF-8 English when it
+/// has none.
+pub(super) fn locale() -> Option<&'static str> {
+    std::env::var_os("LANG")
+        .is_none_or(|lang| lang.is_empty())
+        .then_some(LANG)
 }
 
 /// The conventional name of a macOS signal number, as "SIGTERM".
@@ -314,11 +346,7 @@ pub async fn run(
     cancel: impl Future<Output = Cancel>,
 ) -> Value {
     // The command runs in the helper's home, as a shell there would.
-    let home = std::env::var_os("HOME")
-        .map(PathBuf::from)
-        .filter(|home| home.is_dir());
-
-    run_at(argv, home, timeout, events, cancel).await
+    run_at(argv, home(), timeout, events, cancel).await
 }
 
 /// [`run`] with `home` as the helper's home.
@@ -336,18 +364,7 @@ async fn run_at(
 
     let path = search_path(home.as_deref());
     let Some(program) = resolve(name, Some(&path), home.as_deref()) else {
-        let located = locate(name, home.as_deref());
-        let reason = if !name.contains('/') {
-            "command not found on PATH"
-        } else if located.is_dir() {
-            "is a folder, not a program"
-        } else if located.exists() {
-            "is not executable (chmod +x it)"
-        } else {
-            "no such program"
-        };
-
-        return failure("spawn-failed", format!("{name}: {reason}"));
+        return unresolved(name, home.as_deref());
     };
 
     let (reader, writer) = match std::io::pipe() {
@@ -368,8 +385,8 @@ async fn run_at(
             .process_group(0)
             .kill_on_drop(false);
 
-        if std::env::var_os("LANG").is_none_or(|lang| lang.is_empty()) {
-            command.env("LANG", LANG);
+        if let Some(lang) = locale() {
+            command.env("LANG", lang);
         }
 
         if let Some(home) = &home {

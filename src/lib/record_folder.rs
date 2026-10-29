@@ -37,6 +37,12 @@ impl RecordName for Token {
     }
 }
 
+impl RecordName for crate::daemon::protocol::JobId {
+    fn parse(text: &str) -> Option<Self> {
+        Self::parse(text)
+    }
+}
+
 /// The most entries of a records folder looked at.
 pub(crate) const LISTED: usize = 256;
 /// How often a writer tries the folder's lock while it waits.

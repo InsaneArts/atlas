@@ -237,7 +237,7 @@ fn a_record_a_later_build_wrote_keeps_what_this_one_does_not_know() {
             mount,
             {"kind": "plan", "id": Token::new(), "at": 3, "state": "detached"},
         ],
-        "jobs": [{"id": "j1"}], "outputs": [], "lease": null,
+        "mounts": [{"id": "m1"}], "leases": [], "lease": null,
     });
     fs::create_dir(directory.path().join("tasks")).unwrap();
     fs::write(
@@ -252,8 +252,8 @@ fn a_record_a_later_build_wrote_keeps_what_this_one_does_not_know() {
 
     let rewritten: serde_json::Value =
         serde_json::from_slice(&bytes(directory.path(), &task)).unwrap();
-    assert_eq!(rewritten["jobs"], written["jobs"]);
-    assert_eq!(rewritten["outputs"], json!([]));
+    assert_eq!(rewritten["mounts"], written["mounts"]);
+    assert_eq!(rewritten["leases"], json!([]));
     assert!(rewritten.as_object().unwrap().contains_key("lease"));
     assert_eq!(rewritten["owned"][0]["note"], "later");
     assert_eq!(rewritten["owned"][0]["state"], "gone");
@@ -364,7 +364,7 @@ fn a_record_holding_work_this_build_cannot_read_outlives_its_session() {
             json!({"cleanups": [{"id": Token::new(), "state": "incomplete", "updated": 2}]}),
             json!([finished]),
         ),
-        ("job", json!({"jobs": []}), json!([finished])),
+        ("mount", json!({"mounts": []}), json!([finished])),
         (
             "mount kind",
             json!({}),
@@ -487,4 +487,52 @@ fn a_commands_claims_go_to_its_own_tasks_record_and_nowhere_without_one() {
     let kept = claimed(&Store::at(&output), &named);
     assert_eq!(kept.len(), 2);
     assert_eq!(kept[0], (made, State::Made));
+}
+
+fn job_entry(id: &str, state: crate::daemon::job::JobState) -> record::JobEntry {
+    record::JobEntry {
+        id: crate::daemon::protocol::JobId::parse(id).unwrap(),
+        name: "web".into(),
+        started_at: 1,
+        expected: crate::daemon::protocol::Expected {
+            boot: "B".into(),
+            pid: 4312,
+            start: [1, 2],
+            pgid: 4312,
+        },
+        state,
+        how: None,
+        ended_at: None,
+        later: serde_json::Map::new(),
+    }
+}
+
+#[test]
+fn a_running_job_keeps_its_record_and_collections_do_not() {
+    use crate::daemon::job::JobState;
+
+    let mut record = Record::new(&task("jobs", None), 1);
+    record.noted_output(record::OutputEntry {
+        receipt: crate::collect::ReceiptId::parse("1-a1b2c3").unwrap(),
+        at: 1,
+        files: 1,
+        bytes: 3,
+        later: serde_json::Map::new(),
+    });
+    assert!(!record.holds_anything(), "a collection is on this Mac");
+
+    record.noted_job(job_entry("7c2e91a04b3f", JobState::Running));
+    assert!(record.holds_anything());
+    record.noted_job(job_entry("7c2e91a04b3f", JobState::Ended));
+    assert_eq!(record.jobs.len(), 1, "the same job is noted once");
+    assert!(!record.holds_anything());
+
+    let written = serde_json::to_value(&record).unwrap();
+    assert_eq!(written["jobs"][0]["expected"]["pgid"], 4312);
+    assert_eq!(written["outputs"][0]["receipt"], "1-a1b2c3");
+    let read: Record = serde_json::from_value(written).unwrap();
+    assert_eq!(read, record);
+
+    let empty = serde_json::to_value(Record::new(&task("none", None), 1)).unwrap();
+    assert!(empty.get("jobs").is_none() && empty.get("outputs").is_none());
 }

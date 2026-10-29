@@ -1,0 +1,439 @@
+use super::*;
+use crate::{
+    config::Config,
+    control::Controller,
+    daemon::{
+        protocol::{self, Request},
+        read::{self, Places},
+    },
+    doing::Doing,
+    host_session::{Host, HostSession},
+    task::Task,
+};
+use std::{
+    os::unix::fs::PermissionsExt,
+    sync::{Arc, Mutex},
+    time::SystemTime,
+};
+use tokio::{
+    io::{AsyncBufReadExt, AsyncWriteExt, BufReader},
+    net::UnixListener,
+};
+
+/// The helper's home and the person's output folder, both private.
+struct Place {
+    _dir: tempfile::TempDir,
+    home: PathBuf,
+    client: Client,
+    /// Whether the stand-in gives every digest wrong.
+    lie: Arc<Mutex<bool>>,
+}
+
+impl Place {
+    fn new() -> Self {
+        let dir = tempfile::tempdir().unwrap();
+        let base = fs::canonicalize(dir.path()).unwrap();
+        let home = base.join("helper");
+        fs::create_dir(&home).unwrap();
+        let text = "helper_uid = 60001\nsocket_path = \"c.sock\"\noutput_dir = \"out\"\n\
+                    identity_probe = \"probe\"\ninput_socket = \"i.sock\"\n";
+        let config = Config::parse(text.as_bytes(), &base.join("u.toml")).unwrap();
+        let mut client = Client::new(config).unwrap().doing(Doing::new("collect"));
+        client.controller = Controller::at(60001, &base.join("state"));
+        client.transport.peer_uid = nix::unistd::getuid().as_raw();
+        let host = HostSession::new(Host::Codex, "collect-test").unwrap();
+        client.task = Some(Task::of(host.key(), None).unwrap());
+        client.host_session = Some(host);
+        Self {
+            _dir: dir,
+            home,
+            client,
+            lie: Arc::default(),
+        }
+    }
+
+    /// Serve reads of the helper's home at the client's socket, as the
+    /// daemon does; `asked` counts the requests.
+    fn serve(&self) -> Arc<Mutex<usize>> {
+        let listener = UnixListener::bind(&self.client.config.socket_path).unwrap();
+        let home = self.home.clone();
+        let lie = *self.lie.lock().unwrap();
+        let asked = Arc::new(Mutex::new(0));
+        let counted = asked.clone();
+        tokio::spawn(async move {
+            while let Ok((stream, _)) = listener.accept().await {
+                *counted.lock().unwrap() += 1;
+                let home = home.clone();
+                tokio::spawn(async move {
+                    let (reader, mut writer) = stream.into_split();
+                    let mut line = String::new();
+                    BufReader::new(reader).read_line(&mut line).await.unwrap();
+                    let Ok(Request::Read(request)) = protocol::parse(line.trim_end().as_bytes())
+                    else {
+                        panic!("only reads are asked for: {line}");
+                    };
+                    let mut lines = Vec::new();
+                    let places = Places {
+                        home,
+                        temporary: None,
+                    };
+                    let reply = read::read(
+                        &request,
+                        &places,
+                        nix::unistd::getuid().as_raw(),
+                        &mut |event| {
+                            lines.push(event);
+                            true
+                        },
+                    );
+                    let mut reply = reply;
+                    if lie && reply["sha256"].is_string() {
+                        reply["sha256"] = json!("0".repeat(64));
+                    }
+                    lines.push(reply);
+                    for line in lines {
+                        writer
+                            .write_all(format!("{line}\n").as_bytes())
+                            .await
+                            .unwrap();
+                    }
+                });
+            }
+        });
+        asked
+    }
+
+    /// Write `bytes` at `name` in the helper's home, still for a while.
+    fn file(&self, name: &str, bytes: &[u8]) -> PathBuf {
+        let path = self.home.join(name);
+        if let Some(parent) = path.parent() {
+            fs::create_dir_all(parent).unwrap();
+        }
+        fs::write(&path, bytes).unwrap();
+        File::options()
+            .write(true)
+            .open(&path)
+            .unwrap()
+            .set_modified(SystemTime::now() - Duration::from_secs(60))
+            .unwrap();
+        path
+    }
+
+    async fn collect(&self, files: &[&str], max_size: u64) -> Value {
+        let files: Vec<String> = files.iter().map(|file| (*file).to_owned()).collect();
+        collected(&self.client, None, &files, max_size, Instant::now())
+            .await
+            .unwrap()
+    }
+}
+
+/// Wait until files just written count as still.
+fn settle() {
+    std::thread::sleep(Duration::from_millis(2100));
+}
+
+fn random(bytes: usize) -> Vec<u8> {
+    let mut state = 0x2545_f491_4f6c_dd1d_u64;
+    (0..bytes)
+        .map(|_| {
+            state ^= state << 13;
+            state ^= state >> 7;
+            state ^= state << 17;
+            (state >> 24) as u8
+        })
+        .collect()
+}
+
+fn sha256(bytes: &[u8]) -> String {
+    Sha256::digest(bytes)
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect()
+}
+
+#[tokio::test]
+async fn a_binary_file_comes_back_byte_for_byte() {
+    let place = Place::new();
+    place.serve();
+    let bytes = random(20 * 1024 * 1024 + 123);
+    place.file("atlas-work/blob.bin", &bytes);
+    settle();
+    let reply = place.collect(&["atlas-work/blob.bin"], 64 << 20).await;
+    assert_eq!(reply["ok"], true, "{reply}");
+    let kept = &reply["collected"][0];
+    assert_eq!(kept["size"], bytes.len());
+    assert_eq!(kept["sha256"], sha256(&bytes));
+    let copy = PathBuf::from(kept["path"].as_str().unwrap());
+    assert_eq!(fs::read(&copy).unwrap(), bytes);
+    assert_eq!(
+        kept["source"],
+        json!(place.home.join("atlas-work/blob.bin"))
+    );
+    assert_eq!(kept["inHome"], "atlas-work/blob.bin");
+}
+
+#[tokio::test]
+async fn results_name_paths_sizes_and_digests_never_contents() {
+    let place = Place::new();
+    place.serve();
+    place.file("a.txt", b"secret words");
+    settle();
+    let reply = place.collect(&["a.txt"], 1024).await;
+    assert!(!reply.to_string().contains("secret words"));
+    let mut keys: Vec<_> = reply["collected"][0]
+        .as_object()
+        .unwrap()
+        .keys()
+        .cloned()
+        .collect();
+    keys.sort();
+    assert_eq!(keys, ["inHome", "path", "sha256", "size", "source"]);
+}
+
+#[tokio::test]
+async fn a_copy_is_private_and_never_executable() {
+    let place = Place::new();
+    place.serve();
+    let source = place.file("tool.sh", b"#!/bin/sh\n");
+    fs::set_permissions(&source, fs::Permissions::from_mode(0o755)).unwrap();
+    File::options()
+        .write(true)
+        .open(&source)
+        .unwrap()
+        .set_modified(SystemTime::now() - Duration::from_secs(60))
+        .unwrap();
+    settle();
+    let reply = place.collect(&["tool.sh"], 1024).await;
+    let copy = PathBuf::from(reply["collected"][0]["path"].as_str().unwrap());
+    assert_eq!(fs::metadata(&copy).unwrap().mode() & 0o777, 0o600);
+    for folder in copy.ancestors().skip(1).take(4) {
+        assert_eq!(
+            fs::metadata(folder).unwrap().mode() & 0o777,
+            0o700,
+            "{}",
+            folder.display()
+        );
+    }
+}
+
+#[tokio::test]
+async fn two_files_of_one_name_in_one_call_never_overwrite() {
+    let place = Place::new();
+    place.serve();
+    place.file("a/report.bin", b"first");
+    place.file("b/report.bin", b"second");
+    place.file("c/Report.bin", b"third");
+    settle();
+    let reply = place
+        .collect(&["a/report.bin", "b/report.bin", "c/Report.bin"], 1024)
+        .await;
+    assert_eq!(reply["ok"], false);
+    assert_eq!(reply["collected"].as_array().unwrap().len(), 1);
+    let copy = PathBuf::from(reply["collected"][0]["path"].as_str().unwrap());
+    assert_eq!(fs::read(copy).unwrap(), b"first");
+    assert_eq!(reply["failed"][0]["reason"], "exists");
+    assert_eq!(reply["failed"][1]["reason"], "exists");
+    assert_eq!(reply["error"], "2 of 3 files were not collected");
+}
+
+#[tokio::test]
+async fn a_failed_file_leaves_the_others_collected() {
+    let place = Place::new();
+    place.serve();
+    place.file("kept.bin", b"kept");
+    settle();
+    fs::write(place.home.join("fresh.log"), b"new").unwrap();
+    let reply = place
+        .collect(&["kept.bin", "fresh.log", "gone.bin"], 1024)
+        .await;
+    assert_eq!(reply["collected"].as_array().unwrap().len(), 1);
+    assert_eq!(reply["failed"][0]["reason"], "changing");
+    assert!(
+        reply["failed"][0]["error"]
+            .as_str()
+            .unwrap()
+            .contains("wait until whatever writes it is done")
+    );
+    assert_eq!(reply["failed"][1]["reason"], "missing");
+    assert_eq!(reply["uncertain"], false);
+    let folder = PathBuf::from(reply["collected"][0]["path"].as_str().unwrap());
+    let receipt = folder.parent().unwrap().parent().unwrap();
+    let names: Vec<String> = fs::read_dir(receipt)
+        .unwrap()
+        .map(|entry| entry.unwrap().file_name().to_string_lossy().into_owned())
+        .collect();
+    assert!(
+        names.iter().all(|name| !name.ends_with(".partial")),
+        "{names:?}"
+    );
+}
+
+#[tokio::test]
+async fn a_file_over_its_limit_is_refused_and_keeps_nothing() {
+    let place = Place::new();
+    place.serve();
+    place.file("big.bin", &[1_u8; 5000]);
+    settle();
+    let reply = place.collect(&["big.bin"], 4096).await;
+    assert_eq!(reply["failed"][0]["reason"], "too-large");
+    assert_eq!(reply["receipt"], Value::Null);
+    let collected = place.client.output_dir().unwrap().join(COLLECTED);
+    let left: Vec<_> = walk(&collected);
+    assert!(left.is_empty(), "{left:?}");
+}
+
+/// Every file under `folder`.
+fn walk(folder: &Path) -> Vec<PathBuf> {
+    let mut files = Vec::new();
+    for entry in fs::read_dir(folder).into_iter().flatten().flatten() {
+        let path = entry.path();
+        if path.is_dir() {
+            files.extend(walk(&path));
+        } else {
+            files.push(path);
+        }
+    }
+    files
+}
+
+#[tokio::test]
+async fn a_digest_that_does_not_match_keeps_nothing() {
+    let place = Place::new();
+    *place.lie.lock().unwrap() = true;
+    place.serve();
+    place.file("a.bin", b"abc");
+    settle();
+    let reply = place.collect(&["a.bin"], 1024).await;
+    assert_eq!(reply["failed"][0]["reason"], "changing", "{reply}");
+    assert_eq!(reply["receipt"], Value::Null);
+    let collected = place.client.output_dir().unwrap().join(COLLECTED);
+    assert!(walk(&collected).is_empty(), "no partial and no file");
+}
+
+#[tokio::test]
+async fn a_path_in_your_own_home_is_refused_before_it_is_sent() {
+    let place = Place::new();
+    let asked = place.serve();
+    let home = crate::config::home().unwrap();
+    let mine = home.join("Desktop/x.txt").to_string_lossy().into_owned();
+    for path in [mine.as_str(), "../x", "a/../../b"] {
+        let error = collect(&place.client, &[path.to_owned()], 1024)
+            .await
+            .unwrap_err();
+        assert_eq!(error.code, "collect", "{path}");
+        assert_eq!(error.details["reason"], "outside");
+    }
+    assert!(
+        collect(&place.client, std::slice::from_ref(&mine), 1024)
+            .await
+            .unwrap_err()
+            .error
+            .contains("your shell turns ~ into your own home")
+    );
+    assert_eq!(*asked.lock().unwrap(), 0, "nothing was sent");
+}
+
+#[tokio::test]
+async fn a_linked_receipt_folder_is_refused() {
+    let place = Place::new();
+    place.serve();
+    place.file("a.bin", b"a");
+    settle();
+    let output = place.client.output_dir().unwrap();
+    let elsewhere = output.parent().unwrap().join("elsewhere");
+    fs::create_dir(&elsewhere).unwrap();
+    std::os::unix::fs::symlink(&elsewhere, output.join(COLLECTED)).unwrap();
+    let files = ["a.bin".to_owned()];
+    let error = collected(&place.client, None, &files, 1024, Instant::now())
+        .await
+        .unwrap_err();
+    assert_eq!(error.code, "state");
+    assert!(fs::read_dir(&elsewhere).unwrap().next().is_none());
+}
+
+#[tokio::test]
+async fn every_collection_has_its_own_folder() {
+    let place = Place::new();
+    place.serve();
+    place.file("a.bin", b"a");
+    settle();
+    let first = place.collect(&["a.bin"], 1024).await;
+    let second = place.collect(&["a.bin"], 1024).await;
+    assert_ne!(first["receipt"], second["receipt"]);
+    assert_ne!(
+        first["collected"][0]["path"],
+        second["collected"][0]["path"]
+    );
+    let record = Store::at(place.client.output_dir().unwrap())
+        .load(place.client.task.as_ref().unwrap().key())
+        .unwrap();
+    assert_eq!(record.outputs.len(), 2);
+    assert_eq!(record.outputs[0].files, 1);
+    assert!(
+        !serde_json::to_string(&record).unwrap().contains("a.bin"),
+        "the task's record names no file"
+    );
+}
+
+#[tokio::test]
+async fn a_kept_copy_that_changed_is_not_intact() {
+    let place = Place::new();
+    place.serve();
+    place.file("a.bin", b"aaaa");
+    place.file("b.bin", b"bbbb");
+    place.file("c.bin", b"cccc");
+    settle();
+    let reply = place.collect(&["a.bin", "b.bin", "c.bin"], 1024).await;
+    let receipt = ReceiptId::parse(reply["receipt"].as_str().unwrap()).unwrap();
+    let output = place.client.output_dir().unwrap();
+    let task = place.client.task.as_ref().unwrap().key();
+    assert!(intact(output, Some(task), &receipt).whole());
+
+    let path = |n: usize| PathBuf::from(reply["collected"][n]["path"].as_str().unwrap());
+    fs::write(path(0), b"aaab").unwrap();
+    fs::remove_file(path(1)).unwrap();
+    let found = intact(output, Some(task), &receipt);
+    assert_eq!(found.changed.len(), 1);
+    assert!(found.changed[0].source.ends_with("a.bin"));
+    assert_eq!(found.missing.len(), 1);
+    assert!(found.missing[0].source.ends_with("b.bin"));
+    assert_eq!(found.kept.len(), 1);
+
+    let other = ReceiptId::parse("1-abcdef").unwrap();
+    assert!(intact(output, Some(task), &other).unknown);
+}
+
+#[tokio::test]
+async fn collecting_writes_no_file_names_to_the_activity_log() {
+    let place = Place::new();
+    place.serve();
+    place.file("private-name.bin", b"xyz");
+    settle();
+    place.collect(&["private-name.bin"], 1024).await;
+    let log =
+        fs::read_to_string(place.client.output_dir().unwrap().join("metadata.jsonl")).unwrap();
+    assert!(!log.contains("private-name"), "{log}");
+    let row: Value = serde_json::from_str(log.lines().last().unwrap()).unwrap();
+    assert_eq!(row["operation"], "collect");
+    assert_eq!(row["count"], 1);
+    assert_eq!(row["bytes"], 3);
+    assert_eq!(crate::doing::says(&row), "collected 1 file");
+}
+
+#[test]
+fn receipts_are_exact() {
+    assert!(ReceiptId::parse("1761650000123-a1b2c3").is_some());
+    for text in [
+        "1761650000123-A1B2C3",
+        "x-a1b2c3",
+        "1-a1b2c",
+        "1-a1b2c3d",
+        "-a1b2c3",
+        "1",
+    ] {
+        assert!(ReceiptId::parse(text).is_none(), "{text}");
+    }
+    let made = ReceiptId::new(5);
+    assert!(made.as_str().starts_with("5-"));
+    assert!(ReceiptId::parse(made.as_str()).is_some());
+}

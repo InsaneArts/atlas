@@ -1,7 +1,7 @@
 //! Command execution, activity attribution and helper-change policy.
 use super::{
     cli::{
-        AgentsCommand, ButtonArg, Command, CursorHookEvent, EnvironmentCommand, OnOff,
+        AgentsCommand, ButtonArg, Command, CursorHookEvent, EnvironmentCommand, JobCommand, OnOff,
         OnboardingCommand, WindowState,
     },
     doctor, help,
@@ -119,6 +119,13 @@ fn doing(command: &Command) -> Option<Doing> {
             command: Some(EnvironmentCommand::Run { .. }),
             ..
         } => Doing::new("run"),
+        Command::Job {
+            command: JobCommand::Start { .. },
+        } => Doing::new("job-start"),
+        Command::Job {
+            command: JobCommand::Stop { .. },
+        } => Doing::new("job-stop"),
+        Command::Collect { .. } => Doing::new("collect"),
         _ => return None,
     })
 }
@@ -134,6 +141,7 @@ fn attributed(command: &Command) -> bool {
             | Command::Menubar { .. }
             | Command::Monitor { .. }
             | Command::HelperServe { .. }
+            | Command::JobLaunch { .. }
             | Command::InputService { .. }
             | Command::EnvironmentWorker { .. }
             | Command::SessionInfo
@@ -197,7 +205,11 @@ fn makes(command: &Command) -> bool {
         Command::Open { .. }
         | Command::Run { .. }
         | Command::InstallApp { .. }
-        | Command::Cleanup { .. } => true,
+        | Command::Cleanup { .. }
+        | Command::Collect { .. }
+        | Command::Job {
+            command: JobCommand::Start { .. } | JobCommand::Stop { .. },
+        } => true,
         Command::Environment { command, .. } => matches!(
             command,
             None | Some(
@@ -231,7 +243,8 @@ fn task_of(
 /// the person has stopped agents. Looking, reading and recovery are not.
 fn changes_helper(command: &Command, attributed: bool) -> bool {
     match command {
-        Command::Screenshot { .. } => false,
+        // Collecting only reads in the helper, and works during a Stop.
+        Command::Screenshot { .. } | Command::Collect { .. } => false,
         // Each changes what runs in the helper, or how; a stop that moved
         // with a migrated layout would be lost.
         Command::Input { .. }
@@ -276,6 +289,9 @@ pub(super) fn controls(command: &Command) -> bool {
             | Command::Cleanup { apply: true, .. }
             | Command::InstallApp { .. }
             | Command::Run { .. }
+            | Command::Job {
+                command: JobCommand::Start { .. } | JobCommand::Stop { .. },
+            }
             | Command::Restart
             | Command::StartInput
             | Command::Install
@@ -474,6 +490,9 @@ async fn carry_out(
         Command::ElementsInfo { pid } => elements_info(pid),
         Command::HelperServe { .. } => {
             unreachable!("main serves the helper daemon on its own thread")
+        }
+        Command::JobLaunch { .. } => {
+            unreachable!("main becomes a background job before anything else")
         }
         Command::InputService {
             uid,
@@ -954,6 +973,24 @@ async fn carry_out(
                 &serde_json::from_slice(&bytes)?,
             )
             .await
+        }
+        Command::Job { command } => {
+            let client = client()?;
+            match command {
+                JobCommand::Start {
+                    name,
+                    timeout,
+                    argv,
+                } => atlas::jobs::start(&client, argv, Duration::from_secs(timeout), name).await,
+                JobCommand::List { all } => atlas::jobs::list(&client, all).await,
+                JobCommand::Log { id, bytes } => atlas::jobs::log(&client, &id, bytes).await,
+                JobCommand::Stop { id, grace, task } => {
+                    atlas::jobs::stop(&client, &id, Duration::from_secs(grace), task.as_ref()).await
+                }
+            }
+        }
+        Command::Collect { files, max_size } => {
+            atlas::collect::collect(&client()?, &files, max_size).await
         }
         // Control is held only while the command starts: other agents may
         // act while it runs.
@@ -1577,6 +1614,8 @@ mod tests {
             &["setup", "--rollback"],
             &["environment", "rollback", "plan", "--apply"],
             &["environment", "profile", "profile.toml", "--apply"],
+            &["job", "start", "--", "/bin/sleep", "9"],
+            &["job", "stop", "7c2e91a04b3f"],
         ] {
             assert!(changes(acting), "{acting:?}");
         }
@@ -1595,6 +1634,9 @@ mod tests {
             &["environment", "profile", "profile.toml"],
             &["update", "--check"],
             &["setup"],
+            &["job", "list", "--all"],
+            &["job", "log", "7c2e91a04b3f"],
+            &["collect", "atlas-work/report.pdf"],
         ] {
             assert!(!changes(looking), "{looking:?}");
         }
@@ -1714,6 +1756,8 @@ mod tests {
             &["environment", "run", "--", "ls"],
             &["verify-native"],
             &["logout", "--yes"],
+            &["job", "start", "--", "/bin/sleep", "9"],
+            &["job", "stop", "7c2e91a04b3f"],
         ] {
             assert!(waits(controlling), "{controlling:?}");
         }
@@ -1736,9 +1780,61 @@ mod tests {
             &["setup", "--apply"],
             &["switch"],
             &["logout"],
+            &["job", "list"],
+            &["job", "log", "7c2e91a04b3f"],
+            &["collect", "a.bin"],
         ] {
             assert!(!waits(at_once), "{at_once:?}");
         }
+    }
+
+    #[test]
+    fn job_and_collect_rows_name_no_arguments_or_files() {
+        let fields = |args: &[&str]| {
+            let command = parse(args).unwrap().command.unwrap();
+            let mut fields = serde_json::Map::new();
+            doing(&command).unwrap().fields(&mut fields, true);
+            fields
+        };
+        for (args, verb) in [
+            (
+                &[
+                    "job",
+                    "start",
+                    "--name",
+                    "web",
+                    "--",
+                    "/usr/bin/nc",
+                    "-lk",
+                    "8765",
+                ][..],
+                "job-start",
+            ),
+            (&["job", "stop", "7c2e91a04b3f"], "job-stop"),
+            (&["collect", "atlas-work/secret-report.pdf"], "collect"),
+        ] {
+            let fields = fields(args);
+            assert_eq!(fields["verb"], verb);
+            let text = Value::Object(fields).to_string();
+            for word in ["web", "nc", "8765", "secret-report", "7c2e91a04b3f"] {
+                assert!(!text.contains(word), "{args:?}: {text}");
+            }
+        }
+        let list = parse(&["job", "list"]).unwrap().command.unwrap();
+        assert!(doing(&list).is_none());
+    }
+
+    #[test]
+    fn starting_jobs_and_collecting_are_refused_for_a_task_name_that_is_not_plain() {
+        for args in [
+            &["job", "start", "--", "/bin/sleep", "9"][..],
+            &["collect", "a.bin"],
+        ] {
+            let command = parse(args).unwrap().command.unwrap();
+            assert!(makes(&command), "{args:?}");
+        }
+        let list = parse(&["job", "list"]).unwrap().command.unwrap();
+        assert!(!makes(&list));
     }
 
     #[test]

@@ -320,6 +320,27 @@ pub fn says(row: &Value) -> String {
             "cleaned up the task's work".into(),
             "couldn't clean up the task's work".into(),
         ),
+        Some("job-start") => (
+            "started a background job".into(),
+            "couldn't start a background job".into(),
+        ),
+        Some("job-stop") => (
+            "stopped a background job".into(),
+            "couldn't stop a background job".into(),
+        ),
+        Some("collect") => match row["count"].as_u64() {
+            Some(count) if count > 0 => (
+                format!(
+                    "collected {}",
+                    crate::ui::text::count(count as usize, "file")
+                ),
+                format!(
+                    "collected {}, not all asked for",
+                    crate::ui::text::count(count as usize, "file")
+                ),
+            ),
+            _ => ("collected no files".into(), "couldn't collect files".into()),
+        },
         // Verbs worded as their operation is, and rows that say only that
         // (from older builds, raw commands, or verbs this build lacks).
         verb => {
@@ -369,6 +390,9 @@ fn doing(row: &Value) -> String {
         (Some("install"), Some(app)) => format!("installing {app}…"),
         (Some("install"), None) => "installing an app…".into(),
         (Some("cleanup"), _) => "cleaning up…".into(),
+        (Some("job-start"), _) => "starting a background job…".into(),
+        (Some("job-stop"), _) => "stopping a background job…".into(),
+        (Some("collect"), _) => "collecting files…".into(),
         _ => "running a command…".into(),
     }
 }
@@ -679,6 +703,33 @@ mod tests {
                 "verb": "type", "app": "Notes"})),
             "couldn't type in Notes",
             "other refusals still say what could not be done"
+        );
+    }
+
+    #[test]
+    fn background_jobs_and_collections_are_said_plainly() {
+        let row = |verb: &str, ok: bool| json!({"verb": verb, "ok": ok, "operation": "job"});
+        assert_eq!(says(&row("job-start", true)), "started a background job");
+        assert_eq!(
+            says(&row("job-start", false)),
+            "couldn't start a background job"
+        );
+        assert_eq!(says(&row("job-stop", true)), "stopped a background job");
+        assert_eq!(
+            says(&row("job-stop", false)),
+            "couldn't stop a background job"
+        );
+        assert_eq!(
+            says(&json!({"verb": "collect", "ok": true, "count": 2})),
+            "collected 2 files"
+        );
+        assert_eq!(
+            says(&json!({"verb": "collect", "ok": false, "count": 0})),
+            "couldn't collect files"
+        );
+        assert_eq!(
+            says(&json!({"verb": "collect", "started": true, "ok": null})),
+            "collecting files…"
         );
     }
 }

@@ -26,7 +26,7 @@ pub const GROUPS: &[(&str, &[&str])] = &[
         "Act in the helper",
         &[
             "click", "type", "key", "move", "drag", "scroll", "input", "open", "close", "cleanup",
-            "wait", "run",
+            "wait", "run", "job", "collect",
         ],
     ),
     (
@@ -116,6 +116,22 @@ const EXAMPLES: &[(&str, &[&str])] = &[
         &[
             "atlas run -- /bin/sh -c 'ls \"$HOME/atlas-work\"'",
             "atlas run --timeout 300 -- xcodebuild test-without-building -xctestrun Tests.xctestrun",
+        ],
+    ),
+    (
+        "job",
+        &[
+            "atlas job start --name web -- /usr/bin/python3 -m http.server 8000",
+            "atlas job list",
+            "atlas job log 7c2e91a04b3f",
+            "atlas job stop 7c2e91a04b3f",
+        ],
+    ),
+    (
+        "collect",
+        &[
+            "atlas collect atlas-work/report.pdf",
+            "atlas collect --max-size 200M atlas-work/build.zip",
         ],
     ),
     (

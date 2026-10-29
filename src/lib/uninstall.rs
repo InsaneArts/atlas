@@ -471,6 +471,24 @@ impl Teardown for Live<'_> {
         }
         self.exclusion = Some(settle(client, &mut self.warnings).await?);
 
+        // Background jobs are stopped first, so none outlives Atlas in the
+        // helper. One that could not be stopped is said, never a failure.
+        let jobs =
+            crate::jobs::stop_every(client, crate::daemon::protocol::StopReason::Stopped).await;
+        let mut said = json!({});
+        jobs.say(&mut said);
+        if jobs.asked > 0 {
+            done(
+                "Background jobs",
+                &format!("stopped {}", said["jobsStopped"].as_u64().unwrap_or(0)),
+            );
+        }
+        for warning in said["warnings"].as_array().into_iter().flatten() {
+            if let Some(warning) = warning.as_str() {
+                self.warnings.push(warning.to_owned());
+            }
+        }
+
         Ok(())
     }
 

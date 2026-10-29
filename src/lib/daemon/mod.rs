@@ -1,12 +1,16 @@
 //! Atlas's helper daemon: the process inside the helper login that
 //! macOS grants Screen Recording and Accessibility. It answers protocol v1 —
-//! session facts, screenshots, running apps and commands — on a private
-//! socket, and starts the input service as its child.
+//! session facts, screenshots, running apps, commands, background jobs and
+//! reads of files to collect — on a private socket, and starts the input
+//! service as its child.
 #[cfg(target_os = "macos")]
 pub mod crop;
 #[cfg(target_os = "macos")]
 pub mod facts;
+pub mod job;
 pub mod protocol;
+#[cfg(target_os = "macos")]
+pub mod read;
 pub mod run;
 #[cfg(target_os = "macos")]
 pub mod serve;

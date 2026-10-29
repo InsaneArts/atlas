@@ -76,6 +76,17 @@ fn main() -> ExitCode {
         std::time::Duration::ZERO
     };
 
+    // A background job's first process becomes the job itself, before
+    // anything else of Atlas starts in it.
+    if let Command::JobLaunch {
+        log,
+        argv0,
+        program,
+    } = &command
+    {
+        return launch_job(log, argv0, program);
+    }
+
     // The helper daemon keeps this thread for the Core Foundation run loop.
     if let Command::HelperServe {
         uid,
@@ -197,6 +208,63 @@ fn report_failure(format: Format, error: &Error, advised: bool) {
     let _ = writeln!(std::io::stderr().lock(), "{text}");
 }
 
+/// Become a session and group leader of its own, then replace itself with
+/// the job's program, its output going to `log` and its input nowhere.
+/// Says `setsid` on the status pipe (standard output) first; a failure
+/// after that is written there too, and the pipe closes on a successful
+/// exec because only a close-on-exec copy of it is kept. A group leader
+/// cannot call setsid, which is why the daemon starts this process rather
+/// than the program itself in a group of its own.
+fn launch_job(log: &std::path::Path, argv0: &str, program: &[String]) -> ExitCode {
+    use std::{
+        fs::OpenOptions,
+        os::{
+            fd::AsFd,
+            unix::{fs::OpenOptionsExt, process::CommandExt},
+        },
+        process::Stdio,
+    };
+
+    let Ok(status) = std::io::stdout().as_fd().try_clone_to_owned() else {
+        return ExitCode::from(127);
+    };
+    let mut status = std::fs::File::from(status);
+    let mut say = |line: &str| {
+        let _ = writeln!(status, "{line}");
+    };
+    if let Err(error) = nix::unistd::setsid() {
+        say(&format!("error a session of its own: {error}"));
+        return ExitCode::from(127);
+    }
+    say("setsid");
+
+    let Some((executable, arguments)) = program.split_first() else {
+        say("error no program to run");
+        return ExitCode::from(127);
+    };
+    let opened = OpenOptions::new()
+        .append(true)
+        .custom_flags(libc::O_NOFOLLOW)
+        .open(log);
+    let (output, errors) = match opened.and_then(|log| Ok((log.try_clone()?, log))) {
+        Ok(files) => files,
+        Err(error) => {
+            say(&format!("error the job's log: {error}"));
+            return ExitCode::from(127);
+        }
+    };
+
+    let error = std::process::Command::new(executable)
+        .arg0(argv0)
+        .args(arguments)
+        .stdin(Stdio::null())
+        .stdout(output)
+        .stderr(errors)
+        .exec();
+    say(&format!("error {error}"));
+    ExitCode::from(127)
+}
+
 /// The status a command ends with: the signal's once one stopped it, else
 /// its own.
 fn exit_status(failed: bool, stopped: Option<Signal>) -> ExitCode {
@@ -298,6 +366,7 @@ fn machine_only(command: &Command) -> bool {
             | Command::WindowsInfo { .. }
             | Command::ElementsInfo { .. }
             | Command::HelperServe { .. }
+            | Command::JobLaunch { .. }
             | Command::InputService { .. }
             | Command::SetupHelper { .. }
             | Command::UpdateFinish

@@ -22,6 +22,15 @@ use std::path::Path;
 pub(super) fn described(copies: &Path, entry: &Entry) -> Value {
     let mut value = json!({"n": entry.n});
     match &entry.step {
+        Step::CheckOutputs { outputs } => {
+            value["do"] = json!("check-outputs");
+            value["receipts"] = outputs.iter().map(|output| json!(output.receipt)).collect();
+        }
+        Step::StopJob { job, name, .. } => {
+            value["do"] = json!("stop-job");
+            value["id"] = json!(job);
+            value["name"] = json!(name);
+        }
         Step::Quit { .. } => value["do"] = json!("quit"),
         Step::UndoPlan { plan } => {
             value["do"] = json!("undo-plan");
@@ -66,6 +75,12 @@ pub(super) fn said_state(value: &mut Value, entry: &Entry) {
     }
     if let Some(error) = &came_to.error {
         value["error"] = json!(error);
+    }
+    if !came_to.not_kept.is_empty() {
+        value["notKept"] = json!(came_to.not_kept);
+    }
+    if !came_to.left.is_empty() {
+        value["left"] = json!(came_to.left);
     }
 }
 
@@ -162,8 +177,20 @@ fn unfinished(receipt: &Receipt) -> String {
              finished. Recover first (look, then atlas restart if the action was yours), then \
              run atlas cleanup --apply again."
             .to_owned(),
-        CleanupState::Blocked => "Cleanup stopped: the person stopped agents. Ask them before \
-             running atlas cleanup --apply again."
+        CleanupState::Blocked
+            if receipt.steps.iter().any(|entry| {
+                entry.reason == Some(super::receipt::Reason::OutputNotKept)
+                    && entry.state == StepState::Blocked
+            }) =>
+        {
+            "Cleanup is not finished: a collected copy is missing or changed, so the files it \
+             came from were kept. Collect them again with atlas collect, then run atlas cleanup \
+             --apply again."
+                .to_owned()
+        }
+        CleanupState::Blocked => "Cleanup stopped: the person stopped agents, or the helper \
+             could not be reached to stop a background job. Ask the person before running atlas \
+             cleanup --apply again."
             .to_owned(),
         _ if failed == 0 => "Cleanup is not finished. Run atlas cleanup --apply again, or tell \
              the person."

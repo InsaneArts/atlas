@@ -185,6 +185,25 @@ pub(crate) struct CameTo {
     /// Why it failed, in the helper's words.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub error: Option<String>,
+    /// The files whose collected copies are missing or changed, by where
+    /// they are in the helper: their sources are never removed.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub not_kept: Vec<NotKept>,
+    /// The processes that left a stopped job's group and still ran, which
+    /// were never signalled.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub left: Vec<crate::daemon::job::Left>,
+}
+
+/// A file in the helper whose collected copy is missing or changed.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct NotKept {
+    /// Where it is in the helper.
+    pub source: String,
+    /// Where it is relative to the helper's home, when it is in it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub in_home: Option<String>,
 }
 
 impl CameTo {
@@ -267,6 +286,17 @@ pub(crate) enum Reason {
     NeedsStep,
     /// Blocked: the person stopped agents.
     Stopped,
+    /// Failed: a collected copy is missing or changed. Blocked: the step
+    /// would remove the file that copy came from.
+    OutputNotKept,
+    /// Failed: a job has not ended yet; Atlas keeps stopping it.
+    StillStopping,
+    /// Failed: a job is no longer the process Atlas started.
+    Identity,
+    /// Failed: part of a job runs as another account.
+    OtherAccount,
+    /// Blocked: the helper could not be reached, or cannot keep jobs.
+    Daemon,
 }
 
 impl Reason {
@@ -275,7 +305,13 @@ impl Reason {
     fn retried(self) -> bool {
         matches!(
             self,
-            Self::Timeout | Self::InUse | Self::Io | Self::Helper | Self::NeedsStep
+            Self::Timeout
+                | Self::InUse
+                | Self::Io
+                | Self::Helper
+                | Self::NeedsStep
+                | Self::OutputNotKept
+                | Self::StillStopping
         )
     }
 
@@ -295,6 +331,11 @@ impl Reason {
             Self::Helper => "helper",
             Self::NeedsStep => "needs-step",
             Self::Stopped => "stopped",
+            Self::OutputNotKept => "output-not-kept",
+            Self::StillStopping => "still-stopping",
+            Self::Identity => "identity",
+            Self::OtherAccount => "other-account",
+            Self::Daemon => "daemon",
         }
     }
 }

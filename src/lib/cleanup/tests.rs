@@ -35,6 +35,13 @@ struct Fake {
     slow: bool,
     /// Whether the person stops agents once a plan is undone.
     stop_after_undo: bool,
+    /// How each collection's copies stand, by receipt; one not here is
+    /// whole.
+    intact: RefCell<BTreeMap<String, crate::collect::Intact>>,
+    /// What the helper shows of each job; one not here runs.
+    jobs: RefCell<BTreeMap<String, Value>>,
+    /// What stopping each job answers; one not here ends.
+    job_stops: RefCell<BTreeMap<String, Result<Value>>>,
     stopped: Cell<bool>,
     log: RefCell<Vec<String>>,
 }
@@ -138,6 +145,34 @@ impl Hands for Fake {
             .borrow_mut()
             .remove(plan)
             .unwrap_or(Ok(Undone::RolledBack))
+    }
+
+    fn intact(&self, collection: &plan::Collection) -> crate::collect::Intact {
+        self.log
+            .borrow_mut()
+            .push(format!("check {}", collection.receipt));
+        self.intact
+            .borrow()
+            .get(collection.receipt.as_str())
+            .cloned()
+            .unwrap_or_default()
+    }
+
+    async fn job(&self, id: &crate::daemon::protocol::JobId) -> Result<Value> {
+        Ok(self
+            .jobs
+            .borrow()
+            .get(id.as_str())
+            .cloned()
+            .unwrap_or_else(|| json!({"id": id, "state": "running"})))
+    }
+
+    async fn stop_job(&self, _: &Key, id: &crate::daemon::protocol::JobId) -> Result<Value> {
+        self.log.borrow_mut().push(format!("stop job {id}"));
+        self.job_stops
+            .borrow_mut()
+            .remove(id.as_str())
+            .unwrap_or_else(|| Ok(json!({"ok": true, "id": id, "state": "ended", "left": []})))
     }
 
     fn stopped(&self) -> bool {
@@ -474,7 +509,7 @@ async fn a_removal_that_finished_before_the_crash_counts_as_done_not_as_a_failur
     let scope = own(&key);
     let loaded = place.loaded(&scope);
     let mut receipt = Receipt::new(key.clone(), None, Actor::Agent);
-    merge(&mut receipt.steps, &loaded.undoable());
+    plan::merge(&mut receipt.steps, &loaded.undoable());
     let removal = receipt.steps.len() - 1;
     receipt.steps[removal].set(StepState::Started, None);
     for step in &mut receipt.steps[..removal] {
@@ -1460,4 +1495,284 @@ async fn a_session_that_acts_while_adoption_waits_for_control_is_not_adopted() {
         Receipts::at(output).of_session(&scope.session).is_empty(),
         "nothing recorded"
     );
+}
+
+/// Note in `task`'s record a job it started, still running.
+fn job_started(place: &Place, task: &Task, name: &str) -> crate::daemon::protocol::JobId {
+    use crate::{
+        daemon::{job::JobState, protocol::Expected},
+        task::record::JobEntry,
+    };
+    let id = crate::daemon::protocol::JobId::new();
+    let entry = JobEntry {
+        id: id.clone(),
+        name: name.into(),
+        started_at: 1,
+        expected: Expected {
+            boot: "boot".into(),
+            pid: 4312,
+            start: [1, 2],
+            pgid: 4312,
+        },
+        state: JobState::Running,
+        how: None,
+        ended_at: None,
+        later: serde_json::Map::new(),
+    };
+    Tasks::at(&place.output)
+        .update(task, 1, |record| {
+            record.noted_job(entry);
+            Ok(())
+        })
+        .unwrap();
+    id
+}
+
+/// Note in `task`'s record a collection it made.
+fn collected(place: &Place, task: &Task) -> crate::collect::ReceiptId {
+    let receipt: crate::collect::ReceiptId =
+        serde_json::from_value(json!(format!("{}-a1b2c3", crate::host_session::now_ms()))).unwrap();
+    let entry = crate::task::record::OutputEntry {
+        receipt: receipt.clone(),
+        at: 1,
+        files: 1,
+        bytes: 3,
+        later: serde_json::Map::new(),
+    };
+    Tasks::at(&place.output)
+        .update(task, 1, |record| {
+            record.noted_output(entry);
+            Ok(())
+        })
+        .unwrap();
+    receipt
+}
+
+fn copy_of(source: &str, in_home: &str) -> crate::collect::Kept {
+    crate::collect::Kept {
+        source: source.into(),
+        in_home: Some(in_home.into()),
+        path: PathBuf::from("/nowhere/copy"),
+        size: 3,
+        sha256: "00".into(),
+    }
+}
+
+#[tokio::test]
+async fn outputs_are_checked_first_and_jobs_stop_after_quits_before_plans() {
+    let place = Place::new();
+    let key = session("jobs-order");
+    let task = default_task(&key);
+    let copy = place.copy(Some(&key));
+    place.claim(&task, Owned::Copy { id: copy.clone() });
+    let plan = plan_claimed(&place, &task);
+    let job = job_started(&place, &task, "web");
+    let receipt = collected(&place, &task);
+    let fake = Fake::at(&place.root);
+
+    let reply = place.apply(&fake, &own(&key)).await;
+    assert_eq!(reply["ok"], true, "{reply}");
+    assert_eq!(
+        kinds(&reply),
+        [
+            "check-outputs",
+            "quit",
+            "stop-job",
+            "undo-plan",
+            "remove-copy"
+        ]
+    );
+    assert_eq!(reply["steps"][2]["name"], "web");
+    let log = fake.logged();
+    let at = |what: &str| log.iter().position(|line| line == what).unwrap();
+    assert!(at(&format!("check {receipt}")) < at(&format!("stop job {job}")));
+    assert!(at(&format!("stop job {job}")) < at(&format!("undo {plan}")));
+
+    let receipt = place.receipt(&reply);
+    let stop = receipt
+        .steps
+        .iter()
+        .find(|entry| matches!(entry.step, Step::StopJob { .. }))
+        .unwrap();
+    let undo = receipt
+        .steps
+        .iter()
+        .find(|entry| matches!(entry.step, Step::UndoPlan { .. }))
+        .unwrap();
+    assert!(
+        undo.after.contains(&stop.n),
+        "a plan waits for the job's stop"
+    );
+}
+
+#[tokio::test]
+async fn a_job_that_already_ended_is_done_without_a_second_signal() {
+    let place = Place::new();
+    let key = session("ended-job");
+    let task = default_task(&key);
+    let job = job_started(&place, &task, "worker");
+    let fake = Fake::at(&place.root);
+    fake.jobs.borrow_mut().insert(
+        job.to_string(),
+        json!({"id": job, "state": "ended", "how": "stopped", "left": []}),
+    );
+
+    let reply = place.apply(&fake, &own(&key)).await;
+    assert_eq!(reply["ok"], true, "{reply}");
+    assert_eq!(states(&reply), ["done"]);
+    assert!(
+        !fake
+            .logged()
+            .iter()
+            .any(|line| line.starts_with("stop job")),
+        "nothing was sent again"
+    );
+}
+
+#[tokio::test]
+async fn a_job_step_says_what_left_and_why_it_could_not_stop() {
+    let place = Place::new();
+    let key = session("job-left");
+    let task = default_task(&key);
+    let left = job_started(&place, &task, "server");
+    let stubborn = job_started(&place, &task, "stubborn");
+    let foreign = job_started(&place, &task, "setuid");
+    let fake = Fake::at(&place.root);
+    fake.job_stops.borrow_mut().insert(
+        left.to_string(),
+        Ok(json!({"ok": true, "state": "ended", "left": [{"pid": 77, "name": "sleep"}]})),
+    );
+    fake.job_stops.borrow_mut().insert(
+        stubborn.to_string(),
+        Ok(json!({"ok": false, "state": "stopping", "reason": "still-stopping"})),
+    );
+    fake.job_stops.borrow_mut().insert(
+        foreign.to_string(),
+        Err(Error::new("job", "Part of the job runs as another account")
+            .with("reason", "other-account")),
+    );
+
+    let reply = place.apply(&fake, &own(&key)).await;
+    assert_eq!(reply["ok"], false);
+    assert_eq!(reply["code"], "cleanup");
+    let step = |n: usize| &reply["steps"][n];
+    assert_eq!(step(0)["state"], "done");
+    assert_eq!(step(0)["left"], json!([{"pid": 77, "name": "sleep"}]));
+    assert_eq!(
+        (&step(1)["state"], &step(1)["reason"], &step(1)["retry"]),
+        (&json!("failed"), &json!("still-stopping"), &json!(true))
+    );
+    assert_eq!(
+        (&step(2)["state"], &step(2)["reason"]),
+        (&json!("failed"), &json!("other-account"))
+    );
+    assert!(step(2).get("retry").is_none(), "nothing more is tried");
+}
+
+#[tokio::test]
+async fn a_job_whose_helper_cannot_be_reached_is_blocked_and_a_lost_stop_is_uncertain() {
+    let place = Place::new();
+    let key = session("job-blocked");
+    let task = default_task(&key);
+    let unreachable = job_started(&place, &task, "a");
+    let fake = Fake::at(&place.root);
+    fake.job_stops.borrow_mut().insert(
+        unreachable.to_string(),
+        Err(Error::new("daemon", "The helper is running an older Atlas")),
+    );
+    let reply = place.apply(&fake, &own(&key)).await;
+    assert_eq!(reply["state"], "blocked", "{reply}");
+    assert_eq!(reply["steps"][0]["reason"], "daemon");
+
+    let place = Place::new();
+    let task = default_task(&key);
+    let lost = job_started(&place, &task, "b");
+    let fake = Fake::at(&place.root);
+    fake.job_stops.borrow_mut().insert(
+        lost.to_string(),
+        Err(Error::new("transport", "Helper exceeded the request deadline").uncertain()),
+    );
+    let reply = place.apply(&fake, &own(&key)).await;
+    assert_eq!(reply["state"], "uncertain", "{reply}");
+    assert_eq!(reply["uncertain"], true);
+}
+
+#[tokio::test]
+async fn a_copy_that_is_missing_blocks_removing_its_source_and_nothing_else() {
+    let place = Place::new();
+    let key = session("not-kept");
+    let task = default_task(&key);
+    let touching = plan_claimed(&place, &task);
+    let receipt = collected(&place, &task);
+    let fake = Fake::at(&place.root);
+    // The fake's plans copy .config/probe/settings.toml into the helper.
+    fake.intact.borrow_mut().insert(
+        receipt.to_string(),
+        crate::collect::Intact {
+            missing: vec![copy_of(
+                "/Users/atlas/.config/probe/settings.toml",
+                ".config/probe/settings.toml",
+            )],
+            ..Default::default()
+        },
+    );
+
+    let reply = place.apply(&fake, &own(&key)).await;
+    assert_eq!(reply["ok"], false, "{reply}");
+    assert_eq!(kinds(&reply), ["check-outputs", "undo-plan"]);
+    assert_eq!(reply["steps"][0]["state"], "failed");
+    assert_eq!(reply["steps"][0]["reason"], "output-not-kept");
+    assert_eq!(
+        reply["steps"][0]["notKept"][0]["source"],
+        "/Users/atlas/.config/probe/settings.toml"
+    );
+    assert_eq!(
+        (&reply["steps"][1]["state"], &reply["steps"][1]["reason"]),
+        (&json!("blocked"), &json!("output-not-kept"))
+    );
+    assert!(
+        !fake.logged().contains(&format!("undo {touching}")),
+        "the source was kept"
+    );
+    assert!(reply["error"].as_str().unwrap().contains("atlas collect"));
+
+    // Collected again, the file is kept by its newer copy.
+    let again = collected(&place, &task);
+    fake.intact.borrow_mut().insert(
+        again.to_string(),
+        crate::collect::Intact {
+            kept: vec![copy_of(
+                "/Users/atlas/.config/probe/settings.toml",
+                ".config/probe/settings.toml",
+            )],
+            ..Default::default()
+        },
+    );
+    let reply = place.apply(&fake, &own(&key)).await;
+    assert_eq!(reply["ok"], true, "{reply}");
+    assert!(fake.logged().contains(&format!("undo {touching}")));
+}
+
+#[tokio::test]
+async fn a_copy_of_a_file_no_step_removes_lets_every_step_run() {
+    let place = Place::new();
+    let key = session("elsewhere");
+    let task = default_task(&key);
+    let plan = plan_claimed(&place, &task);
+    let receipt = collected(&place, &task);
+    let fake = Fake::at(&place.root);
+    fake.intact.borrow_mut().insert(
+        receipt.to_string(),
+        crate::collect::Intact {
+            changed: vec![copy_of(
+                "/Users/atlas/atlas-work/report.pdf",
+                "atlas-work/report.pdf",
+            )],
+            ..Default::default()
+        },
+    );
+    let reply = place.apply(&fake, &own(&key)).await;
+    assert_eq!(states(&reply), ["failed", "done"], "{reply}");
+    assert!(fake.logged().contains(&format!("undo {plan}")));
+    assert_eq!(reply["state"], "incomplete");
 }

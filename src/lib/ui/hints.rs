@@ -104,6 +104,10 @@ pub fn next(code: &str, holder: Option<Holder>) -> &'static str {
         ("interrupted", _) => {
             "Atlas was stopped partway, and nothing it did is left unknown. Look at the helper before going on."
         }
+        ("collect", _) => {
+            "Read reason: the file was not copied, and nothing in the helper changed."
+        }
+        ("job", _) => "Run atlas job list to see the job's state; never stop it another way.",
         ("cleanup", _) => {
             "Read steps: run atlas cleanup --apply again for those that may be retried, and tell the person what was kept or keeps failing."
         }
@@ -274,6 +278,8 @@ pub fn fix(code: &str) -> Option<&'static str> {
         }
         "bad-request" | "usage" => "Add --help to the command to see what it accepts.",
         "cleanup" => "Run atlas cleanup --apply again, or see what was kept in its reply.",
+        "collect" => "Check the file in the helper, then collect it again.",
+        "job" => "Check atlas job list.",
         "blocked" => "Run atlas outside the sandbox that blocks it, such as an agent's.",
         "busy" => "Someone else has control, often you in the viewer. Release it there, or wait.",
         "cancelled" | "terminal" => return None,

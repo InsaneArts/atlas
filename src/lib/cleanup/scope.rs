@@ -3,7 +3,7 @@
 //! it, and whether the session may still be working, which keeps an agent
 //! from taking over a neighbour's work.
 use super::{
-    plan::Undoable,
+    plan::{Collection, Job, Others, Undoable},
     receipt::{Receipt, Receipts},
 };
 use crate::{
@@ -100,6 +100,8 @@ pub(crate) struct Loaded {
     pub tasks: Vec<TaskRecord>,
     pub work: Vec<task::Work>,
     pub receipts: Vec<Receipt>,
+    /// The one task in scope; none for every task of the session.
+    pub task: Option<Key>,
 }
 
 impl Loaded {
@@ -135,7 +137,41 @@ impl Loaded {
             tasks,
             work,
             receipts: Receipts::at(output).of_session(&scope.session),
+            task: scope.task.clone(),
         })
+    }
+
+    /// The background jobs the tasks in scope started that may still run,
+    /// and the collections they made.
+    pub fn others(&self) -> Others {
+        let tasks = || {
+            self.tasks
+                .iter()
+                .filter(|record| self.task.as_ref().is_none_or(|task| record.key == *task))
+        };
+        Others {
+            jobs: tasks()
+                .flat_map(|record| {
+                    record
+                        .jobs
+                        .iter()
+                        .filter(|job| job.state != crate::daemon::job::JobState::Ended)
+                        .map(|job| Job {
+                            id: job.id.clone(),
+                            task: record.key.clone(),
+                            name: job.name.clone(),
+                        })
+                })
+                .collect(),
+            outputs: tasks()
+                .flat_map(|record| {
+                    record.outputs.iter().map(|output| Collection {
+                        task: record.key.clone(),
+                        receipt: output.receipt.clone(),
+                    })
+                })
+                .collect(),
+        }
     }
 
     /// What a cleanup undoes: everything in scope that may still be in the

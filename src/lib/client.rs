@@ -220,7 +220,7 @@ impl Verified {
 
     /// What a read carries to be served only in this session; none when the
     /// daemon cannot be told, and the session is verified again instead.
-    fn pin(&self) -> Option<SessionPin> {
+    pub(crate) fn pin(&self) -> Option<SessionPin> {
         self.pinned.then_some(SessionPin {
             security_session_id: self.session.epoch.security_session_id,
             display_id: self.session.epoch.display_id,
@@ -806,6 +806,44 @@ impl Client {
     /// keeps the viewer. Only the person resumes, through a viewer. An input
     /// service too old to stop is refused.
     pub async fn hold(&self, on: bool) -> Result<Value> {
+        let held = self.hold_input(on).await;
+        if !on {
+            return held;
+        }
+
+        // Background jobs end with a Stop too. The helper daemon also sees
+        // the input service's saved stop, so one that is down ends them
+        // itself once it starts; one that cannot be told is said.
+        let mut reply = held?;
+        if let Some(warning) = self.end_jobs_for_stop().await {
+            match reply["warnings"].as_array_mut() {
+                Some(warnings) => warnings.push(json!(warning)),
+                None => reply["warnings"] = json!([warning]),
+            }
+        }
+        Ok(reply)
+    }
+
+    /// Ask the helper daemon to end every background job for the person's
+    /// Stop, within two seconds and never under control, so the person is
+    /// never queued: why it could not be told, when it could not be. A
+    /// daemon that is not running, or that keeps no jobs, has none to end.
+    async fn end_jobs_for_stop(&self) -> Option<&'static str> {
+        let daemon = Transport {
+            path: self.config.socket_path.clone(),
+            timeout: Duration::from_secs(2),
+            peer_uid: self.transport.peer_uid,
+        };
+        let request = json!({"op": "job", "action": "stop-all", "reason": "person"});
+        match daemon.call(&request).await {
+            Ok(reply) if reply["ok"] == true || reply["code"] == "bad-request" => None,
+            Err(error) if error.code == "io" && !self.config.socket_path.exists() => None,
+            _ => Some("Atlas could not reach the helper to end its background jobs"),
+        }
+    }
+
+    /// [`Client::hold`] in the input service and on the person's side.
+    async fn hold_input(&self, on: bool) -> Result<Value> {
         if !on && self.actor != Actor::Viewer {
             return Err(Error::new(
                 "stopped",
@@ -1360,6 +1398,23 @@ impl Client {
         Ok(Verified { session, pinned })
     }
 
+    /// [`Client::verify`], refusing a helper daemon that does not offer
+    /// `capability` with `daemon` and `older`, which says what it cannot do
+    /// and how to bring it up to date. Nothing is sent to an older daemon.
+    pub(crate) async fn verify_offering(
+        &self,
+        capability: &str,
+        older: &'static str,
+    ) -> Result<Verified> {
+        let status = self.status().await;
+        let session = require_hidden(&status, self.config.helper_uid)?;
+        if !has_capability(&status["daemon"], capability) {
+            return Err(Error::new("daemon", older));
+        }
+        let pinned = has_capability(&status["daemon"], SESSION_PIN);
+        Ok(Verified { session, pinned })
+    }
+
     pub async fn start_input(&self) -> Result<Value> {
         let _ownership = self.controller.acquire(false)?;
         self.identity().await?;
@@ -1765,8 +1820,23 @@ impl Client {
     /// [`Client::logout`] under control already held (`_ownership`), for a
     /// caller that keeps it across more than the log-out, such as uninstall.
     pub async fn logout_held(&self, _ownership: &Ownership, force: bool) -> Result<Value> {
-        self.identity().await?;
+        let status = self.status().await;
+        require_hidden(&status, self.config.helper_uid)?;
         let claim = self.controller.quarantine()?;
+
+        // Background jobs are stopped first, so none outlives the login it
+        // ran in unsupervised.
+        let jobs = if has_capability(&status["daemon"], crate::daemon::protocol::JOBS) {
+            Some(crate::jobs::stop_every(self, crate::daemon::protocol::StopReason::Stopped).await)
+        } else {
+            None
+        };
+        let with_jobs = |mut reply: Value| {
+            if let Some(jobs) = &jobs {
+                jobs.say(&mut reply);
+            }
+            reply
+        };
 
         match self
             .mutate(json!({"op": "logout", "force": force}), None, None, None)
@@ -1789,7 +1859,7 @@ impl Client {
 
         if self.desktop_gone(if force { 15 } else { 30 }).await {
             self.controller.clear_if(&claim)?;
-            return Ok(json!({"ok": true, "loggedOut": true}));
+            return Ok(with_jobs(json!({"ok": true, "loggedOut": true})));
         }
 
         if force {
@@ -1864,7 +1934,11 @@ impl Client {
         // starts, once the person has stopped agents; reads and Atlas's own
         // steps (no `doing`) go on.
         let cuttable = request["op"] == "run" && self.actor == Actor::Agent && self.doing.is_some();
-        if cuttable
+        let job_change = request["op"] == "job"
+            && matches!(request["action"].as_str(), Some("start" | "stop"))
+            && self.actor == Actor::Agent
+            && self.doing.is_some();
+        if (cuttable || job_change)
             && (self.config.input_socket.with_extension("stopped").exists()
                 || self.controller.stop_noted())
         {
@@ -2021,6 +2095,13 @@ impl Client {
         Ok(reply)
     }
 
+    /// Send `request`, a change to the helper, as a recorded mutation under
+    /// control the caller holds: it stays pending until its reply proves
+    /// what it did.
+    pub(crate) async fn change(&self, request: Value) -> Result<Value> {
+        self.mutate(request, None, None, None).await
+    }
+
     /// Whether this shell may keep Atlas's own files: the controller lock
     /// and the screenshots. An agent's sandbox may forbid both while the
     /// helper itself is fine.
@@ -2046,7 +2127,8 @@ impl Client {
         self.write_row(request, &json!({"ok": null}), Duration::ZERO, true)
     }
 
-    fn record(&self, request: &Value, reply: &Value, elapsed: Duration) -> Result<()> {
+    /// Write the activity row of a command that ended as `reply` says.
+    pub(crate) fn record(&self, request: &Value, reply: &Value, elapsed: Duration) -> Result<()> {
         self.write_row(request, reply, elapsed, false)
     }
 
@@ -2139,6 +2221,17 @@ impl Client {
             && task.name().is_some()
         {
             fields.insert("task".into(), json!(task.key()));
+        }
+
+        // A collection says how many files and bytes it kept, never which.
+        if request["op"] == "collect"
+            && let Some(fields) = row.as_object_mut()
+        {
+            for field in ["count", "bytes"] {
+                if let Some(number) = reply[field].as_u64() {
+                    fields.insert(field.into(), json!(number));
+                }
+            }
         }
 
         // A screenshot names the file it gave: Atlas's own timestamp name,
@@ -2275,6 +2368,16 @@ pub fn validate_completion(request: &Value, reply: &Value) -> Result<()> {
             reply["performed"].as_u64() == request["actions"].as_array().map(|v| v.len() as u64)
                 && (request["expect"].is_null() || reply["expect"] == request["expect"])
         }
+        Some("job") => match request["action"].as_str() {
+            Some("start") => job_started(request, reply),
+            Some("stop") => {
+                reply["job"]["id"] == request["id"]
+                    && (reply["signalled"] == "SIGTERM"
+                        || reply["alreadyEnded"] == true
+                        || reply["alreadyStopping"] == true)
+            }
+            _ => true,
+        },
         Some("run") => {
             reply["timedOut"].is_boolean()
                 && reply.get("exitCode").is_some()
@@ -2293,6 +2396,29 @@ pub fn validate_completion(request: &Value, reply: &Value) -> Result<()> {
     } else {
         Err(Error::new("protocol", "Helper did not confirm operation completion").uncertain())
     }
+}
+
+/// Whether a job start's `reply` proves the job it started: an ID, a
+/// leader that is a group of its own, an exact start time, the boot it
+/// started in, the helper account the request was for, and a state. Else
+/// a job may run that the person's side knows nothing of.
+fn job_started(request: &Value, reply: &Value) -> bool {
+    let job = &reply["job"];
+    let pid = job["pid"].as_i64();
+    let start = job["start"].as_array().map(|start| {
+        start.len() == 2
+            && start[0].as_u64().is_some_and(|seconds| seconds > 0)
+            && start[1].as_u64().is_some_and(|micros| micros < 1_000_000)
+    });
+    job["id"]
+        .as_str()
+        .is_some_and(|id| crate::daemon::protocol::JobId::parse(id).is_some())
+        && pid.is_some_and(|pid| pid > 1)
+        && job["pgid"].as_i64() == pid
+        && start == Some(true)
+        && job["boot"].as_str().is_some_and(|boot| !boot.is_empty())
+        && job["uid"] == request["uid"]
+        && matches!(job["state"].as_str(), Some("running" | "ended"))
 }
 
 /// The request that runs `argv` in the helper, stopping it after `timeout`:

@@ -5,13 +5,15 @@
 //! kept in the receipt itself. Nothing here lists the copy root or the
 //! helper's stores.
 use super::{
-    plan::{Bundle, Step},
-    receipt::{CameTo, Reason, Receipt, SideEffect, StepState},
-    targets::{installs_of, targets},
+    plan::{Bundle, Collection, Step},
+    receipt::{CameTo, NotKept, Reason, Receipt, SideEffect, StepState},
+    targets::{install_in, installs_of, targets},
 };
 use crate::{
     app_selection::Process,
+    collect::Intact,
     control::Token,
+    daemon::{job::Left, protocol::JobId},
     environment::{PlanState, Undone},
     error::{Error, Result},
     handoff::{self, CopyRemoval, Running},
@@ -54,6 +56,14 @@ pub(crate) trait Hands {
     /// Remove one install, when it is unchanged and nothing runs from it,
     /// under the control the cleanup holds.
     async fn remove_install(&self, install: &Token) -> Result<Value>;
+    /// Whether each copy `collection` kept still has its size and digest.
+    fn intact(&self, collection: &Collection) -> Intact;
+    /// Background job `id` as the helper shows it now, read without
+    /// control.
+    async fn job(&self, id: &JobId) -> Result<Value>;
+    /// Stop job `id` of `task` by its identity, under the control the
+    /// cleanup holds, and wait for it to end: the helper's word on it then.
+    async fn stop_job(&self, task: &Key, id: &JobId) -> Result<Value>;
     /// Whether the person has stopped agents.
     fn stopped(&self) -> bool;
     /// Whether a signal asked this command to stop.
@@ -101,9 +111,16 @@ pub(crate) async fn run(
             continue;
         }
 
+        let step = receipt.steps[place].step.clone();
+        let not_kept = not_kept(receipt);
+        if !not_kept.is_empty() && removes_any(hands, &step, &not_kept).await {
+            receipt.steps[place].set(StepState::Blocked, Some(Reason::OutputNotKept));
+            save(receipt)?;
+            continue;
+        }
+
         receipt.steps[place].set(StepState::Started, None);
         save(receipt)?;
-        let step = receipt.steps[place].step.clone();
         let outcome = act(hands, &step, session).await;
         let entry = &mut receipt.steps[place];
         entry.set(outcome.state, outcome.reason);
@@ -182,8 +199,68 @@ impl Outcome {
     }
 }
 
+/// The files whose collected copies a check of outputs in `receipt` found
+/// missing or changed.
+fn not_kept(receipt: &Receipt) -> Vec<NotKept> {
+    receipt
+        .steps
+        .iter()
+        .filter(|entry| matches!(entry.step, Step::CheckOutputs { .. }))
+        .flat_map(|entry| entry.came_to.not_kept.iter().cloned())
+        .collect()
+}
+
+/// Whether `step` would remove, roll back or uninstall any of `not_kept`:
+/// a plan whose targets hold one, an install whose folder holds one. One
+/// whose reach cannot be read is taken to hold them all, and so is a
+/// source that is not known.
+async fn removes_any(hands: &impl Hands, step: &Step, not_kept: &[NotKept]) -> bool {
+    let unknown = not_kept.iter().any(|file| file.source.is_empty());
+    match step {
+        Step::UndoPlan { plan } => {
+            let Ok(states) = hands.plan_states(std::slice::from_ref(plan)).await else {
+                return true;
+            };
+            unknown
+                || states
+                    .iter()
+                    .flat_map(|state| &state.targets)
+                    .any(|target| {
+                        not_kept.iter().any(|file| {
+                            file.in_home
+                                .as_deref()
+                                .is_some_and(|inside| within(inside, target))
+                        })
+                    })
+        }
+        Step::RemoveInstall { install, .. } => {
+            let Ok(answer) = hands.installs(std::slice::from_ref(install)).await else {
+                return true;
+            };
+            let Some(folder) =
+                install_in(&answer, install).and_then(|found| found["path"].as_str())
+            else {
+                return unknown;
+            };
+            unknown || not_kept.iter().any(|file| within(&file.source, folder))
+        }
+        _ => false,
+    }
+}
+
+/// Whether `path` is `folder` or lies inside it.
+fn within(path: &str, folder: &str) -> bool {
+    let folder = folder.trim_end_matches('/');
+    path == folder
+        || path
+            .strip_prefix(folder)
+            .is_some_and(|rest| rest.starts_with('/'))
+}
+
 async fn act(hands: &impl Hands, step: &Step, session: &Key) -> Outcome {
     match step {
+        Step::CheckOutputs { outputs } => check_outputs(hands, outputs),
+        Step::StopJob { job, task, .. } => stop_job(hands, task, job).await,
         Step::Quit { bundles } => quit(hands, bundles, session).await,
         Step::UndoPlan { plan } => match hands.undo_plan(plan).await {
             Ok(Undone::AlreadyGone) => Outcome::gone(),
@@ -203,6 +280,128 @@ async fn act(hands: &impl Hands, step: &Step, session: &Key) -> Outcome {
         },
         Step::RemoveInstall { install, .. } => remove_install(hands, install).await,
         Step::RemoveCopy { copy } => remove_copy(hands, copy, session).await,
+    }
+}
+
+/// Check that every copy `outputs` kept is still as collected: done when
+/// all are; otherwise failed, saying which files' copies are missing or
+/// changed, so no later step removes those files.
+fn check_outputs(hands: &impl Hands, outputs: &[Collection]) -> Outcome {
+    let found: Vec<Intact> = outputs
+        .iter()
+        .map(|collection| hands.intact(collection))
+        .collect();
+    // A file collected again since is kept by its newer copy.
+    let kept_again = |source: &str| {
+        found
+            .iter()
+            .flat_map(|intact| &intact.kept)
+            .any(|kept| kept.source == source)
+    };
+    let mut not_kept = Vec::new();
+    let mut said = Vec::new();
+    for (collection, intact) in outputs.iter().zip(&found) {
+        if intact.unknown {
+            not_kept.push(NotKept {
+                source: String::new(),
+                in_home: None,
+            });
+            said.push(format!(
+                "the receipt of collection {} is gone",
+                collection.receipt
+            ));
+        }
+        for (file, how) in intact
+            .missing
+            .iter()
+            .map(|file| (file, "is gone"))
+            .chain(intact.changed.iter().map(|file| (file, "changed")))
+            .filter(|(file, _)| !kept_again(&file.source))
+        {
+            not_kept.push(NotKept {
+                source: file.source.clone(),
+                in_home: file.in_home.clone(),
+            });
+            said.push(format!("the copy of {} {how}", file.source));
+        }
+    }
+    if not_kept.is_empty() {
+        return Outcome::done();
+    }
+    Outcome::failed(Reason::OutputNotKept).with(CameTo {
+        not_kept,
+        ..CameTo::failed(&format!(
+            "{}; collect them again, and the files they came from are kept until then",
+            said.join("; ")
+        ))
+    })
+}
+
+/// Stop one job: found ended without a signal when a stop sent before
+/// already ended it, and stopped by its identity otherwise. A job the
+/// helper has no record of is gone.
+async fn stop_job(hands: &impl Hands, task: &Key, id: &JobId) -> Outcome {
+    let shown = match hands.job(id).await {
+        Ok(shown) => shown,
+        Err(error)
+            if error.code == "job"
+                && error
+                    .details
+                    .get("reason")
+                    .is_some_and(|reason| reason == "unknown") =>
+        {
+            return Outcome::gone();
+        }
+        Err(error) => return job_failed(&error),
+    };
+    if shown["state"] == "unknown" {
+        return Outcome::failed(Reason::Identity).with(CameTo::failed(
+            "Atlas cannot tell whether this job's process is running",
+        ));
+    }
+    let ended = if shown["state"] == "ended" {
+        shown
+    } else {
+        match hands.stop_job(task, id).await {
+            Ok(ended) => ended,
+            Err(error) => return job_failed(&error),
+        }
+    };
+    if ended["state"] != "ended" {
+        return Outcome::failed(Reason::StillStopping).with(CameTo::failed(
+            "The job has not ended yet; Atlas keeps stopping it",
+        ));
+    }
+    let left: Vec<Left> = serde_json::from_value(ended["left"].clone()).unwrap_or_default();
+    Outcome::done().with(CameTo {
+        left,
+        ..CameTo::default()
+    })
+}
+
+/// What a job's step came to when the helper refused or could not be
+/// asked: uncertain when its stop may have been sent, blocked by a Stop or
+/// a helper out of reach, failed when its identity no longer matches.
+fn job_failed(error: &Error) -> Outcome {
+    if error.uncertain {
+        return Outcome::erred(error, Reason::Helper);
+    }
+    let reason = error.details.get("reason").and_then(Value::as_str);
+    let (state, reason) = match (error.code, reason) {
+        ("job", Some("identity")) => (StepState::Failed, Reason::Identity),
+        ("job", Some("other-account")) => (StepState::Failed, Reason::OtherAccount),
+        ("job", Some("still-stopping")) => (StepState::Failed, Reason::StillStopping),
+        ("stopped", _) => (StepState::Blocked, Reason::Stopped),
+        ("daemon" | "transport" | "on-console" | "logged-out" | "blocked", _) => {
+            (StepState::Blocked, Reason::Daemon)
+        }
+        _ => (StepState::Failed, Reason::Helper),
+    };
+    Outcome {
+        state,
+        reason: Some(reason),
+        already_gone: false,
+        came_to: CameTo::failed(&error.error),
     }
 }
 

@@ -2,6 +2,7 @@
 //! script, the environment worker, and the copy root, under the control
 //! the cleanup holds.
 use super::{
+    plan::Collection,
     run::{Hands, Quitted},
     targets::{still_in_installs, still_running},
 };
@@ -9,9 +10,12 @@ use crate::{
     agent::{self, Quitting},
     app_selection::Process,
     client::{Actor, Client},
+    collect::{self, Intact},
     control::{Ownership, Token},
+    daemon::protocol::JobId,
     environment::{self, PlanState, Undone},
     error::{Error, Result},
+    host_session::Key,
 };
 use serde_json::Value;
 use std::{
@@ -122,6 +126,25 @@ impl Hands for Live<'_> {
 
     async fn remove_install(&self, install: &Token) -> Result<Value> {
         environment::remove_app(self.client, self.held()?, install).await
+    }
+
+    fn intact(&self, collection: &Collection) -> Intact {
+        match self.client.output_dir() {
+            Ok(output) => collect::intact(output, Some(&collection.task), &collection.receipt),
+            Err(_) => Intact {
+                unknown: true,
+                ..Intact::default()
+            },
+        }
+    }
+
+    async fn job(&self, id: &JobId) -> Result<Value> {
+        crate::jobs::show(self.client, id).await
+    }
+
+    async fn stop_job(&self, task: &Key, id: &JobId) -> Result<Value> {
+        self.held()?;
+        crate::jobs::stop_for_cleanup(self.client, task, id).await
     }
 
     fn stopped(&self) -> bool {

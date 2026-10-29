@@ -611,8 +611,16 @@ pub fn manager_name() -> String {
 }
 
 /// The full `hello` reply.
-pub fn hello(manager: &str) -> Value {
-    json!({
+/// The daemon's hello: who and where the helper is, what it may do, and,
+/// when it keeps background jobs, how many may still run (`jobs`).
+pub fn hello(manager: &str, jobs: Option<usize>) -> Value {
+    use crate::daemon::protocol::{JOBS, READ, SESSION_PIN};
+
+    let mut capabilities = vec![SESSION_PIN, READ];
+    if jobs.is_some() {
+        capabilities.push(JOBS);
+    }
+    let mut hello = json!({
         "ok": true,
         "op": "hello",
         "user": user(),
@@ -624,8 +632,12 @@ pub fn hello(manager: &str) -> Value {
         "session": session(manager),
         "display": display(),
         "daemon": {"protocol": 1, "pid": std::process::id(), "version": env!("CARGO_PKG_VERSION"),
-            "capabilities": [crate::daemon::protocol::SESSION_PIN]},
-    })
+            "capabilities": capabilities},
+    });
+    if let Some(running) = jobs {
+        hello["daemon"]["jobs"] = json!({"running": running});
+    }
+    hello
 }
 
 #[cfg(test)]
@@ -771,7 +783,7 @@ mod tests {
 
     #[test]
     fn hello_describes_this_process_in_its_session() {
-        let reply = hello(&manager_name());
+        let reply = hello(&manager_name(), None);
         assert_eq!(reply["user"]["uid"], nix::unistd::getuid().as_raw());
         assert!(reply["user"]["name"].is_string());
         assert!(

@@ -24,6 +24,7 @@ so never start setup or `atlas init` for it.
 | `cancelled` | The person stopped: at a question (Esc), or an input part way (`partial` says some of it landed). | Earlier steps may have happened; look, then ask the person before trying again. |
 | `capture` | A screenshot could not be taken or encoded. | Retry once; then `atlas doctor`. |
 | `cleanup` | `atlas cleanup --apply` did not finish: some steps `failed`, were `blocked` (a Stop) or are `uncertain`. Kept steps are not failures. | Read `steps`. Run it again for steps with `retry: true`; after `uncertain`, recover as for any uncertain reply first. Tell the person about `kept` and anything that keeps failing. |
+| `collect` | A file was not collected. `reason`: `outside` (not in the helper's home or /tmp), `protected` (a folder macOS guards, all of `~/Library` among them), `symlink`, `not-regular` (a folder, device or pipe), `dataless` (its contents are not on the Mac yet), `owner` (not the helper's), `too-large`, `changing` (written in the last 2 seconds, or while being read), `missing`, `unreadable`, `name`, `exists` (a file of that name was already collected in this call), `space`, `session-changed`. Files under `collected` were kept. | Fix what `reason` names: a path relative to the helper's home, `--max-size`, a pause until the app has finished writing, a `ditto -c -k` archive for a folder. Never retry a `changing` file in a loop. |
 | `config` | Atlas is not set up (no settings file). | Use the setup skill (`atlas init`). |
 | `config-invalid` | The settings file exists but could not be read. | Show `error` to the person; they fix or move the file, then run `atlas init`. |
 | `daemon` | The helper daemon stopped unexpectedly. | Run `atlas restart`. |
@@ -37,6 +38,7 @@ so never start setup or `atlas init` for it.
 | `interrupted` | A signal (your tool's timeout, a closed terminal, Ctrl-C) stopped the command. Steps it finished stand; `type` says in `typed` how much it typed. With `uncertain`, the step under way was cut and may or may not have happened. | Look at the helper before going on. When `uncertain`, it is your own unknown action: take a screenshot, then `atlas restart`. Keep `--wait` plus `--timeout` under your tool's timeout. |
 | `invalid-json` | JSON passed to a command could not be read. | Fix the JSON (for example the `input` actions). |
 | `io` | A file or path could not be read or written. | Read `error`; check the path it names. |
+| `job` | A background job was refused or is still stopping. `reason`: `unknown`, `limit` (16 jobs in the helper, 8 a task), `other-task` (pass `--task` with the key shown, only to clean up after a lost session), `identity` or `other-account` (nothing was signalled), `still-stopping`. | `atlas job list` shows the job's state. After `identity` or `other-account`, tell the person; never kill the process another way. |
 | `lease-lost` | Control ended mid-action: it was released, expired, or the session changed. | Observe, then retry only if the person is not controlling. |
 | `logged-out` | The helper is logged out (after a restart or a log-out). | Stop and ask the person to log in to the helper once, then switch back (`atlas switch` locks the screen for that). Do not run `atlas init` for this. |
 | `logout` | macOS refused or did not answer the log-out request. When `uncertain`, it may still happen. | Tell the person. When uncertain, take a screenshot and run `atlas restart` if the helper is still logged in. |
@@ -55,11 +57,11 @@ so never start setup or `atlas init` for it.
 | `restart` | Recovery did not confirm a new helper, or the helper stopped while `atlas run` ran (uncertain). | After `run`: take a screenshot, run `atlas restart`, and check what the command did before running it again. Otherwise run `atlas doctor`; tell the person if it is not ready. |
 | `session-changed` | The helper session or display changed during an action. | Observe again; the previous plan may no longer apply. |
 | `setup` | Setup was refused or is unfinished. | Show `error`; the person resumes with `atlas setup --apply` or `atlas init`. |
-| `spawn-failed` | The command, or what `open` was asked to open, could not be started in the helper. | Check the program or app path and that it exists in the helper. |
+| `spawn-failed` | The command, or what `open` or `atlas job start` was asked to start, could not be started in the helper. | Check the program or app path and that it exists in the helper. |
 | `stale-frame` | The screenshot is older than the current display. | Take a new screenshot. |
 | `startup` | The input service did not start, or is too old to check `--app`. | Run `atlas start-input`, then `atlas doctor`. |
 | `state` | Local control state is corrupt. | Run `atlas restart`; tell the person if it persists. |
-| `stopped` | The person stopped agents in the helper. | Stop at once and ask the person what to do. Never resume agents yourself; only they can. |
+| `stopped` | The person stopped agents in the helper. The person's Stop also ends your background jobs; `atlas job list` says so. | Stop at once and ask the person what to do. Never resume agents yourself; only they can. |
 | `switch` | The screen could not be locked for switching accounts. | Tell the person; they lock it from the Apple menu (Lock Screen) and switch there. |
 | `terminal` | The command asks the person a question and has no terminal. | Ask the person; pass the flag it names (such as `--yes`) only with their agreement. |
 | `transport` | The helper did not answer, or the connection broke. | If `uncertain`, run `atlas restart`; otherwise retry once. |

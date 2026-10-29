@@ -3,7 +3,7 @@ use atlas::{
     actions::Button,
     agent,
     control::{CONTROL_WAIT, CONTROL_WAIT_MAX},
-    daemon::protocol::Region,
+    daemon::protocol::{JobId, Region},
     host_session::Key,
 };
 use clap::{CommandFactory, Parser, Subcommand, ValueEnum, builder::TypedValueParser};
@@ -579,7 +579,8 @@ pub(super) enum Command {
     /// --timeout seconds (20 unless given, at most 600). Other agents may
     /// act while it runs; recovery, restart and updates answer busy until
     /// it ends. Atlas exits 1 when the command's exit code is not 0 or it
-    /// was stopped, with the reply still ok.
+    /// was stopped, with the reply still ok. For a server or worker that
+    /// must keep running, use atlas job start.
     Run {
         /// Seconds before the command is stopped, 1 to 600.
         #[arg(long, value_name = "SECONDS", default_value_t = atlas::client::RUN_TIMEOUT.as_secs(), value_parser = run_seconds)]
@@ -587,6 +588,41 @@ pub(super) enum Command {
         /// The program and its arguments, after `--`.
         #[arg(last = true, required = true, value_name = "COMMAND")]
         argv: Vec<String>,
+    },
+    /// Keep a server or worker running in the helper, and stop it.
+    ///
+    /// A job starts in the helper's home like run, in a session and process
+    /// group of its own, and keeps running after this command returns, for
+    /// up to --timeout seconds. Atlas also ends it when the person stops
+    /// agents and when the helper comes on screen. Stopping checks that it
+    /// is still the same process, then ends its group and says what is left.
+    Job {
+        #[command(subcommand)]
+        command: JobCommand,
+    },
+    /// Copy files a task made in the helper into a private folder here.
+    ///
+    /// Each FILE is a regular file owned by the helper, in its home (a path
+    /// relative to it) or in /tmp, that has not changed for two seconds.
+    /// The reply gives each copy's path, size and SHA-256. The file in the
+    /// helper is left as it is.
+    Collect {
+        /// Files in the helper, at most 16.
+        #[arg(required = true, value_name = "FILE", num_args = 1..=16)]
+        files: Vec<String>,
+        /// The largest file accepted, such as 200M (64M unless given, at most 1G).
+        #[arg(long, value_name = "SIZE", default_value = "64M", value_parser = file_size)]
+        max_size: u64,
+    },
+    /// The first process of a background job, started by the helper daemon.
+    #[command(hide = true)]
+    JobLaunch {
+        #[arg(long)]
+        log: PathBuf,
+        #[arg(long)]
+        argv0: String,
+        #[arg(last = true, required = true)]
+        program: Vec<String>,
     },
     /// Restart the helper after something went wrong.
     ///
@@ -881,6 +917,113 @@ pub(super) enum EnvironmentCommand {
     },
 }
 
+#[derive(Subcommand)]
+pub(super) enum JobCommand {
+    /// Start a job and print its id.
+    Start {
+        /// A short name to know it by; the program's name unless given.
+        #[arg(long, value_parser = job_name)]
+        name: Option<String>,
+        /// Seconds before Atlas stops it, 1 to 86400.
+        #[arg(long, value_name = "SECONDS", default_value_t = 3600, value_parser = job_seconds)]
+        timeout: u64,
+        /// The program and its arguments, after `--`.
+        #[arg(last = true, required = true, value_name = "COMMAND")]
+        argv: Vec<String>,
+    },
+    /// List this task's jobs; --all lists every job in the helper.
+    List {
+        #[arg(long)]
+        all: bool,
+    },
+    /// Print the end of a job's output.
+    Log {
+        #[arg(value_parser = job_id)]
+        id: JobId,
+        /// Bytes from the end, at most 1048576.
+        #[arg(long, default_value_t = 16384, value_parser = log_bytes)]
+        bytes: usize,
+    },
+    /// Stop a job: TERM, then KILL after --grace seconds.
+    Stop {
+        #[arg(value_parser = job_id)]
+        id: JobId,
+        /// Seconds between TERM and KILL, 1 to 60.
+        #[arg(long, default_value_t = 5, value_parser = grace_seconds)]
+        grace: u64,
+        /// Stop a job of another task, after that task's session was lost.
+        #[arg(long, value_name = "KEY", value_parser = session_key)]
+        task: Option<Key>,
+    },
+}
+
+/// `job start --timeout`: whole seconds a job may run.
+fn job_seconds(value: &str) -> std::result::Result<u64, String> {
+    let most = atlas::daemon::protocol::JOB_LIFETIME_MAX.as_secs();
+    value
+        .parse()
+        .ok()
+        .filter(|seconds| (1..=most).contains(seconds))
+        .ok_or_else(|| format!("Give 1 to {most} seconds."))
+}
+
+/// `job stop --grace`: whole seconds between TERM and KILL.
+fn grace_seconds(value: &str) -> std::result::Result<u64, String> {
+    let most = atlas::daemon::protocol::JOB_GRACE_MAX.as_secs();
+    value
+        .parse()
+        .ok()
+        .filter(|seconds| (1..=most).contains(seconds))
+        .ok_or_else(|| format!("Give 1 to {most} seconds."))
+}
+
+/// `job log --bytes`: how much of the end of a job's output.
+fn log_bytes(value: &str) -> std::result::Result<usize, String> {
+    let most = atlas::daemon::protocol::JOB_LOG_MAX;
+    value
+        .parse()
+        .ok()
+        .filter(|bytes| (1..=most).contains(bytes))
+        .ok_or_else(|| format!("Give 1 to {most} bytes."))
+}
+
+/// A job's ID, as `job start` printed it.
+fn job_id(value: &str) -> std::result::Result<JobId, String> {
+    JobId::parse(value).ok_or_else(|| "Give the job's id, as atlas job start printed it.".into())
+}
+
+/// `job start --name`: a short name to know a job by.
+fn job_name(value: &str) -> std::result::Result<String, String> {
+    atlas::daemon::protocol::job_name(value)
+        .then(|| value.to_owned())
+        .ok_or_else(|| {
+            "Give a name of 1 to 64 characters, none of them a control character.".into()
+        })
+}
+
+/// `collect --max-size`: a whole number of bytes with an optional K, M or
+/// G (binary units), from 1 byte to 1 GiB.
+fn file_size(value: &str) -> std::result::Result<u64, String> {
+    let refused = || "Give a size such as 200M, at most 1G.".to_owned();
+    let (digits, unit) = match value.char_indices().last() {
+        Some((at, unit)) if unit.is_ascii_alphabetic() => (&value[..at], Some(unit)),
+        _ => (value, None),
+    };
+    let scale: u64 = match unit.map(|unit| unit.to_ascii_uppercase()) {
+        None => 1,
+        Some('K') => 1 << 10,
+        Some('M') => 1 << 20,
+        Some('G') => 1 << 30,
+        Some(_) => return Err(refused()),
+    };
+    digits
+        .parse::<u64>()
+        .ok()
+        .and_then(|count| count.checked_mul(scale))
+        .filter(|bytes| (1..=atlas::daemon::protocol::READ_SIZE_MAX).contains(bytes))
+        .ok_or_else(refused)
+}
+
 /// `run --timeout`: whole seconds the helper allows a command.
 fn run_seconds(value: &str) -> std::result::Result<u64, String> {
     value
@@ -1035,6 +1178,70 @@ mod tests {
 
     fn parse(args: &[&str]) -> std::result::Result<Cli, clap::Error> {
         Cli::try_parse_from(std::iter::once("atlas").chain(args.iter().copied()))
+    }
+
+    #[test]
+    fn jobs_take_their_command_after_two_dashes() {
+        let Some(Command::Job {
+            command:
+                JobCommand::Start {
+                    name,
+                    timeout,
+                    argv,
+                },
+        }) = parse(&["job", "start", "--", "/bin/sh", "-c", "echo --name"])
+            .unwrap()
+            .command
+        else {
+            panic!("a job start");
+        };
+        assert_eq!(argv, ["/bin/sh", "-c", "echo --name"]);
+        assert_eq!((name, timeout), (None, 3600));
+        assert!(parse(&["job", "start", "/bin/sleep"]).is_err());
+    }
+
+    #[test]
+    fn job_ids_sizes_and_times_are_checked_when_parsed() {
+        for args in [
+            &["job", "stop", "7c2e91a04b3"][..],
+            &["job", "stop", "7C2E91A04B3F"],
+            &["job", "log", "nope"],
+            &["job", "stop", "7c2e91a04b3f", "--grace", "0"],
+            &["job", "stop", "7c2e91a04b3f", "--grace", "61"],
+            &["job", "stop", "7c2e91a04b3f", "--task", "ABC"],
+            &["job", "log", "7c2e91a04b3f", "--bytes", "1048577"],
+            &["job", "start", "--timeout", "0", "--", "x"],
+            &["job", "start", "--timeout", "86401", "--", "x"],
+            &["job", "start", "--name", "", "--", "x"],
+            &["collect", "--max-size", "2G", "a"],
+            &["collect", "--max-size", "0", "a"],
+            &["collect", "--max-size", "12Q", "a"],
+        ] {
+            assert!(parse(args).is_err(), "{args:?}");
+        }
+        assert_eq!(file_size("200M"), Ok(200 << 20));
+        assert_eq!(file_size("1G"), Ok(1 << 30));
+        assert_eq!(file_size("512k"), Ok(512 << 10));
+        assert_eq!(file_size("17"), Ok(17));
+        assert_eq!(job_seconds("86400"), Ok(86400));
+        assert_eq!(
+            job_id("x").unwrap_err(),
+            "Give the job's id, as atlas job start printed it."
+        );
+    }
+
+    #[test]
+    fn collect_takes_one_to_sixteen_files() {
+        assert!(parse(&["collect"]).is_err());
+        let sixteen: Vec<String> = (0..16).map(|n| format!("f{n}")).collect();
+        let mut args = vec!["collect"];
+        args.extend(sixteen.iter().map(String::as_str));
+        let Some(Command::Collect { files, max_size }) = parse(&args).unwrap().command else {
+            panic!("a collection");
+        };
+        assert_eq!((files.len(), max_size), (16, 64 << 20));
+        args.push("f16");
+        assert!(parse(&args).is_err());
     }
 
     #[test]

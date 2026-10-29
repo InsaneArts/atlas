@@ -28,7 +28,7 @@ use crate::{
         store::Store as Tasks,
     },
 };
-use plan::{Bundle, Step, merge};
+use plan::{Bundle, Step, merge_with};
 use receipt::{Entry, Receipt, Receipts, StepState};
 use reply::{described, said_state};
 use run::Hands;
@@ -90,7 +90,7 @@ pub(crate) async fn preview(
         .as_ref()
         .map(|receipt| receipt.steps.clone())
         .unwrap_or_default();
-    merge(&mut steps, &loaded.undoable());
+    merge_with(&mut steps, &loaded.undoable(), &loaded.others());
     if steps.is_empty() {
         let running = running_named(hands, loaded, None).await;
         return Ok(reply::nothing(
@@ -131,6 +131,16 @@ pub(crate) async fn preview(
         })
         .collect();
     let installs = run::installs_answer(hands, &bundles).await?;
+    let mut jobs = Vec::new();
+    for entry in &to_run {
+        if let Step::StopJob { job, .. } = &entry.step {
+            let state = match hands.job(job).await {
+                Ok(shown) => shown["state"].clone(),
+                Err(_) => json!("unknown"),
+            };
+            jobs.push((job.clone(), state));
+        }
+    }
 
     let mut untraced: Vec<String> = Vec::new();
     let shown: Vec<Value> = steps
@@ -175,6 +185,15 @@ pub(crate) async fn preview(
                 }
                 Step::RemoveCopy { copy } => {
                     value["present"] = json!(handoff::copy_exists(hands.copies(), copy));
+                }
+                Step::CheckOutputs { outputs } => {
+                    let found: Vec<_> = outputs.iter().map(|output| hands.intact(output)).collect();
+                    value["intact"] = json!(found.iter().all(crate::collect::Intact::whole));
+                }
+                Step::StopJob { job, .. } => {
+                    if let Some((_, state)) = jobs.iter().find(|(known, _)| known == job) {
+                        value["jobState"] = state.clone();
+                    }
                 }
             }
             value
@@ -252,7 +271,7 @@ pub(crate) async fn apply(
     let mut receipt = loaded
         .unfinished(scope)
         .unwrap_or_else(|| Receipt::new(scope.session.clone(), scope.task.clone(), actor));
-    merge(&mut receipt.steps, &loaded.undoable());
+    merge_with(&mut receipt.steps, &loaded.undoable(), &loaded.others());
     if receipt.steps.is_empty() {
         let running = running_named(hands, loaded, None).await;
         return Ok(reply::nothing(

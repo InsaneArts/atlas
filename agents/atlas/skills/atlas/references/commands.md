@@ -912,7 +912,7 @@ Examples:
 ```text
 Run a command in the helper and print its output.
 
-The command starts in the helper's home and finds programs where readiness looks for them: the helper's .local/bin and .cargo/bin, Homebrew, /usr/local/bin and the system folders. It is stopped after --timeout seconds (20 unless given, at most 600). Other agents may act while it runs; recovery, restart and updates answer busy until it ends. Atlas exits 1 when the command's exit code is not 0 or it was stopped, with the reply still ok.
+The command starts in the helper's home and finds programs where readiness looks for them: the helper's .local/bin and .cargo/bin, Homebrew, /usr/local/bin and the system folders. It is stopped after --timeout seconds (20 unless given, at most 600). Other agents may act while it runs; recovery, restart and updates answer busy until it ends. Atlas exits 1 when the command's exit code is not 0 or it was stopped, with the reply still ok. For a server or worker that must keep running, use atlas job start.
 
 Usage: atlas run [OPTIONS] -- <COMMAND>...
 
@@ -939,6 +939,186 @@ Global options:
 Examples:
   atlas run -- /bin/sh -c 'ls "$HOME/atlas-work"'
   atlas run --timeout 300 -- xcodebuild test-without-building -xctestrun Tests.xctestrun
+```
+
+## atlas job
+
+```text
+Keep a server or worker running in the helper, and stop it.
+
+A job starts in the helper's home like run, in a session and process group of its own, and keeps running after this command returns, for up to --timeout seconds. Atlas also ends it when the person stops agents and when the helper comes on screen. Stopping checks that it is still the same process, then ends its group and says what is left.
+
+Usage: atlas job [OPTIONS] <COMMAND>
+
+Commands:
+  start  Start a job and print its id
+  list   List this task's jobs; --all lists every job in the helper
+  log    Print the end of a job's output
+  stop   Stop a job: TERM, then KILL after --grace seconds
+  help   Print this message or the help of the given subcommand(s)
+
+Options:
+  -h, --help
+          Print help (see a summary with '-h')
+
+Global options:
+      --json
+          Print JSON (the default when the output is not a terminal)
+
+      --config <FILE>
+          Use another settings file
+
+Examples:
+  atlas job start --name web -- /usr/bin/python3 -m http.server 8000
+  atlas job list
+  atlas job log 7c2e91a04b3f
+  atlas job stop 7c2e91a04b3f
+```
+
+## atlas job start
+
+```text
+Start a job and print its id
+
+Usage: atlas job start [OPTIONS] -- <COMMAND>...
+
+Arguments:
+  <COMMAND>...
+          The program and its arguments, after `--`
+
+Options:
+      --name <NAME>
+          A short name to know it by; the program's name unless given
+
+      --timeout <SECONDS>
+          Seconds before Atlas stops it, 1 to 86400
+          
+          [default: 3600]
+
+  -h, --help
+          Print help
+
+Global options:
+      --json
+          Print JSON (the default when the output is not a terminal)
+
+      --config <FILE>
+          Use another settings file
+```
+
+## atlas job list
+
+```text
+List this task's jobs; --all lists every job in the helper
+
+Usage: atlas job list [OPTIONS]
+
+Options:
+      --all
+          
+
+  -h, --help
+          Print help
+
+Global options:
+      --json
+          Print JSON (the default when the output is not a terminal)
+
+      --config <FILE>
+          Use another settings file
+```
+
+## atlas job log
+
+```text
+Print the end of a job's output
+
+Usage: atlas job log [OPTIONS] <ID>
+
+Arguments:
+  <ID>
+          
+
+Options:
+      --bytes <BYTES>
+          Bytes from the end, at most 1048576
+          
+          [default: 16384]
+
+  -h, --help
+          Print help
+
+Global options:
+      --json
+          Print JSON (the default when the output is not a terminal)
+
+      --config <FILE>
+          Use another settings file
+```
+
+## atlas job stop
+
+```text
+Stop a job: TERM, then KILL after --grace seconds
+
+Usage: atlas job stop [OPTIONS] <ID>
+
+Arguments:
+  <ID>
+          
+
+Options:
+      --grace <GRACE>
+          Seconds between TERM and KILL, 1 to 60
+          
+          [default: 5]
+
+      --task <KEY>
+          Stop a job of another task, after that task's session was lost
+
+  -h, --help
+          Print help
+
+Global options:
+      --json
+          Print JSON (the default when the output is not a terminal)
+
+      --config <FILE>
+          Use another settings file
+```
+
+## atlas collect
+
+```text
+Copy files a task made in the helper into a private folder here.
+
+Each FILE is a regular file owned by the helper, in its home (a path relative to it) or in /tmp, that has not changed for two seconds. The reply gives each copy's path, size and SHA-256. The file in the helper is left as it is.
+
+Usage: atlas collect [OPTIONS] <FILE>...
+
+Arguments:
+  <FILE>...
+          Files in the helper, at most 16
+
+Options:
+      --max-size <SIZE>
+          The largest file accepted, such as 200M (64M unless given, at most 1G)
+          
+          [default: 64M]
+
+  -h, --help
+          Print help (see a summary with '-h')
+
+Global options:
+      --json
+          Print JSON (the default when the output is not a terminal)
+
+      --config <FILE>
+          Use another settings file
+
+Examples:
+  atlas collect atlas-work/report.pdf
+  atlas collect --max-size 200M atlas-work/build.zip
 ```
 
 ## atlas readiness

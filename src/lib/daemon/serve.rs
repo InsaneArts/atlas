@@ -3,8 +3,9 @@
 use crate::{
     daemon::{
         crop, facts,
-        protocol::{self, Crop, MAX_REQUEST, Region, Request, failure},
-        run,
+        job::{self, Jobs},
+        protocol::{self, Crop, JobRequest, MAX_REQUEST, ReadRequest, Region, Request, failure},
+        read, run,
     },
     error::{Error, Result},
     native::{apps, capture, endpoint, windows},
@@ -13,7 +14,11 @@ use crate::{
 use base64::{Engine, engine::general_purpose::STANDARD};
 use objc2_core_foundation::{CGPoint, CGRect, CGSize};
 use serde_json::{Value, json};
-use std::{path::PathBuf, sync::Arc, time::Duration};
+use std::{
+    path::{Path, PathBuf},
+    sync::Arc,
+    time::Duration,
+};
 use tokio::{
     io::{AsyncReadExt, AsyncWrite, AsyncWriteExt},
     net::UnixStream,
@@ -57,6 +62,9 @@ struct Daemon {
     restarting: Notify,
     /// Set when the daemon stops, so running commands are ended first.
     stopping: watch::Sender<bool>,
+    /// The background jobs it supervises; none when their folder could not
+    /// be opened, and then it offers none.
+    jobs: Option<Arc<Jobs>>,
 }
 
 impl Daemon {
@@ -75,7 +83,13 @@ impl Daemon {
             session,
             restarting: Notify::new(),
             stopping: watch::Sender::new(false),
+            jobs: None,
         }
+    }
+
+    /// The daemon's hello: its facts, and the background jobs it keeps.
+    fn hello(&self) -> Value {
+        facts::hello(&self.manager, self.jobs.as_deref().map(Jobs::running))
     }
 
     /// Completes once the daemon has begun to stop.
@@ -146,12 +160,21 @@ pub async fn serve(uid: u32, controller_uid: u32, socket: PathBuf) -> Result<()>
     crate::login_log::mark(&format!("daemon.start uid={uid}"));
     facts::type_exactly();
 
-    let daemon = Arc::new(Daemon::new(
+    let mut daemon = Daemon::new(
         manager,
         capture::main_display,
         facts::on_console,
         crate::native::session_info,
-    ));
+    );
+    // Jobs are kept beside the socket; the jobs a daemon before this one
+    // started are found again by their records.
+    if let (Some(folder), Ok(launcher)) = (socket.parent(), std::env::current_exe()) {
+        match Jobs::open(folder, launcher, uid) {
+            Ok(jobs) => daemon.jobs = Some(Arc::new(jobs)),
+            Err(error) => eprintln!("Background jobs are unavailable: {}", error.error),
+        }
+    }
+    let daemon = Arc::new(daemon);
 
     let (listener, _endpoint) = endpoint::bind(
         &socket,
@@ -175,6 +198,19 @@ pub async fn serve(uid: u32, controller_uid: u32, socket: PathBuf) -> Result<()>
     let recording = tokio::spawn(facts::restart_for_recording(move || {
         watcher.restarting.notify_one();
     }));
+    // The person's Stop is seen through the input service's saved marker.
+    let marker = socket
+        .parent()
+        .and_then(Path::parent)
+        .map(|root| root.join(crate::setup::helper::INPUT).join("input.stopped"));
+    let supervision = match (&daemon.jobs, marker) {
+        (Some(jobs), Some(marker)) => Some(tokio::spawn(job::supervise(
+            jobs.clone(),
+            marker,
+            daemon.on_console,
+        ))),
+        _ => None,
+    };
 
     let slots = Arc::new(Semaphore::new(CONNECTIONS));
     let mut tasks = JoinSet::new();
@@ -233,7 +269,8 @@ pub async fn serve(uid: u32, controller_uid: u32, socket: PathBuf) -> Result<()>
     };
 
     // Running commands are ended (TERM, then KILL) before the daemon exits,
-    // so a restart never leaves one unsupervised.
+    // so a restart never leaves one unsupervised. Background jobs go on: the
+    // next daemon finds them again by their records.
     daemon.stopping.send_replace(true);
     let drained =
         tokio::time::timeout(STOP, async { while tasks.join_next().await.is_some() {} }).await;
@@ -244,6 +281,9 @@ pub async fn serve(uid: u32, controller_uid: u32, socket: PathBuf) -> Result<()>
 
     consent.abort();
     recording.abort();
+    if let Some(supervision) = supervision {
+        supervision.abort();
+    }
     outcome
 }
 
@@ -297,13 +337,19 @@ fn refused(error: Error) -> Value {
     failure(error.code, error.error)
 }
 
-/// Whether `request` may run in the session's current state: commands and
-/// captures never run while the helper is on the console, where they would
-/// act on a desktop a person is using.
+/// Whether `request` may run in the session's current state: commands,
+/// captures, new background jobs and reads of files never run while the
+/// helper is on the console, where they would act on a desktop a person is
+/// using. Stopping, showing and reading a job's log go on: ending things is
+/// what the helper on screen asks for.
 fn allowed(request: &Request, on_console: bool) -> Option<Value> {
     let acts = matches!(
         request,
-        Request::Run { .. } | Request::Screenshot { .. } | Request::Logout { .. }
+        Request::Run { .. }
+            | Request::Screenshot { .. }
+            | Request::Logout { .. }
+            | Request::Job(JobRequest::Start { .. })
+            | Request::Read(_)
     );
 
     (acts && on_console).then(|| {
@@ -318,7 +364,10 @@ fn allowed(request: &Request, on_console: bool) -> Option<Value> {
 /// one, as `session` reads it now; none for a request with no pin.
 fn pinned_elsewhere(request: &Request, session: fn() -> Result<Value>) -> Option<Value> {
     let pin = match request {
-        Request::Apps { pin } | Request::Run { pin, .. } => (*pin)?,
+        Request::Apps { pin }
+        | Request::Run { pin, .. }
+        | Request::Job(JobRequest::Start { pin, .. })
+        | Request::Read(ReadRequest { pin, .. }) => (*pin)?,
         _ => return None,
     };
     let here = session()
@@ -600,7 +649,7 @@ async fn handle(stream: UnixStream, daemon: Arc<Daemon>, controller: bool) -> Re
             if !GREETED.swap(true, std::sync::atomic::Ordering::Relaxed) {
                 crate::login_log::mark("daemon.firstHello");
             }
-            facts::hello(&daemon.manager)
+            daemon.hello()
         }
         Ok(Request::Apps { .. }) => match tokio::task::spawn_blocking(apps::running).await {
             Ok(apps) => json!({"ok": true, "apps": apps}),
@@ -654,8 +703,46 @@ async fn handle(stream: UnixStream, daemon: Arc<Daemon>, controller: bool) -> Re
             return written;
         }
         Ok(Request::Logout { force: false }) => ask_to_log_out().await,
+        Ok(Request::Job(request)) => match &daemon.jobs {
+            Some(jobs) => jobs.serve(request).await,
+            None => failure(
+                "daemon",
+                "This helper daemon cannot keep background jobs; run atlas restart",
+            ),
+        },
+        Ok(Request::Read(request)) => return serve_read(request, writer).await,
     };
 
+    write(&mut writer, &reply).await
+}
+
+/// Read part of a file for the person's side, its `data` events written as
+/// they are read, so the daemon never holds more than a few of them.
+async fn serve_read(
+    request: ReadRequest,
+    mut writer: tokio::net::unix::OwnedWriteHalf,
+) -> Result<()> {
+    let (events, mut queue) = mpsc::channel(8);
+    let delivery = tokio::spawn(async move {
+        while let Some(event) = queue.recv().await {
+            write(&mut writer, &event).await?;
+        }
+        Ok::<_, Error>(writer)
+    });
+    let uid = nix::unistd::getuid().as_raw();
+    let reply = tokio::task::spawn_blocking(move || {
+        let Some(places) = read::Places::here() else {
+            return failure("collect", "The helper's home could not be found");
+        };
+        read::read(&request, &places, uid, &mut |event| {
+            events.blocking_send(event).is_ok()
+        })
+    })
+    .await
+    .unwrap_or_else(|_| failure("collect", "The file could not be read"));
+    let mut writer = delivery
+        .await
+        .map_err(|_| Error::new("transport", "The event writer failed"))??;
     write(&mut writer, &reply).await
 }
 
@@ -780,6 +867,9 @@ mod tests {
             r#"{"op":"apps"}"#,
             r#"{"op":"restart"}"#,
             r#"{"op":"logout","force":true}"#,
+            r#"{"op":"job","action":"show"}"#,
+            r#"{"op":"job","action":"stop-all","reason":"person"}"#,
+            r#"{"op":"read","path":".zshrc","maxSize":1024}"#,
         ] {
             let reply = &exchange_as(daemon(false), request, false).await[0];
             assert_eq!(reply["code"], "permission", "{request}");
@@ -1415,5 +1505,83 @@ mod tests {
 
         let hello = transport.call(&json!({"op": "hello"})).await.unwrap();
         assert_eq!(hello["daemon"]["pid"], std::process::id());
+    }
+
+    /// A daemon that keeps its jobs in a folder of its own.
+    fn with_jobs(on_console: bool) -> (tempfile::TempDir, Arc<Daemon>) {
+        let folder = tempfile::tempdir().unwrap();
+        let mut daemon = Daemon::new(
+            "Aqua".into(),
+            synthetic,
+            if on_console { || true } else { || false },
+            session,
+        );
+        daemon.jobs = Some(Arc::new(
+            Jobs::open(
+                folder.path(),
+                std::env::current_exe().unwrap(),
+                nix::unistd::getuid().as_raw(),
+            )
+            .unwrap(),
+        ));
+        (folder, Arc::new(daemon))
+    }
+
+    #[tokio::test]
+    async fn the_daemon_offers_jobs_and_reads() {
+        let hello = &exchange(daemon(false), r#"{"op":"hello"}"#).await[0];
+        assert_eq!(
+            hello["daemon"]["capabilities"],
+            json!(["session-pin", "read"]),
+            "no jobs without their folder"
+        );
+        let refused = &exchange(daemon(false), r#"{"op":"job","action":"show"}"#).await[0];
+        assert_eq!(refused["code"], "daemon");
+
+        let (_folder, daemon) = with_jobs(false);
+        let hello = &exchange(daemon.clone(), r#"{"op":"hello"}"#).await[0];
+        assert_eq!(
+            hello["daemon"]["capabilities"],
+            json!(["session-pin", "read", "jobs"])
+        );
+        assert_eq!(hello["daemon"]["jobs"], json!({"running": 0}));
+        let shown = &exchange(daemon, r#"{"op":"job","action":"show"}"#).await[0];
+        assert_eq!(shown["jobs"], json!([]));
+    }
+
+    #[tokio::test]
+    async fn jobs_and_reads_are_refused_while_the_helper_is_on_screen() {
+        let (_folder, daemon) = with_jobs(true);
+        for request in [
+            r#"{"op":"job","action":"start","argv":["/bin/sleep","9"],"lifetimeMs":5000,"uid":502}"#,
+            r#"{"op":"read","path":".zshrc","maxSize":1024}"#,
+        ] {
+            let reply = exchange(daemon.clone(), request).await;
+            assert_eq!(reply.len(), 1, "{request}");
+            assert_eq!(reply[0]["code"], "on-console", "{request}");
+        }
+        for request in [
+            r#"{"op":"job","action":"show"}"#,
+            r#"{"op":"job","action":"stop-all","reason":"on-console"}"#,
+            r#"{"op":"job","action":"log","id":"7c2e91a04b3f","bytes":10}"#,
+        ] {
+            let reply = &exchange(daemon.clone(), request).await[0];
+            assert_ne!(
+                reply["code"], "on-console",
+                "{request}: ending things goes on"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn a_job_start_for_another_account_is_refused() {
+        let (_folder, daemon) = with_jobs(false);
+        let reply = &exchange(
+            daemon,
+            r#"{"op":"job","action":"start","argv":["/bin/sleep","9"],"lifetimeMs":5000,"uid":1}"#,
+        )
+        .await[0];
+        assert_eq!(reply["code"], "identity");
+        assert_eq!(reply["uncertain"], false);
     }
 }

@@ -1,21 +1,29 @@
-//! The steps that undo what a task made, and the order they run in: quit
-//! what runs from the task's own installs and copies; undo its copies into
-//! the helper, newest first; remove its installs, which a copy into the
-//! helper may have written into; remove its copy folders. Each step names
-//! the steps it waits for. Steps for background jobs and collected outputs
-//! slot into this order as kinds of their own, before the copies into the
-//! helper are undone, without changing these.
+//! The steps that undo what a task made, and the order they run in: check
+//! that the files it collected are still kept, before anything is removed;
+//! quit what runs from the task's own installs and copies; stop its
+//! background jobs; undo its copies into the helper, newest first; remove
+//! its installs, which a copy into the helper may have written into;
+//! remove its copy folders. Each step names the steps it waits for.
 use super::receipt::Entry;
-use crate::{control::Token, task::Owned};
+use crate::{
+    collect::ReceiptId, control::Token, daemon::protocol::JobId, host_session::Key, task::Owned,
+};
 use serde::{Deserialize, Serialize};
 
 /// One step of a cleanup: what it does, and to which recorded thing.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "do", rename_all = "kebab-case")]
 pub(crate) enum Step {
+    /// Check that every copy these collections kept still has its size and
+    /// digest. It is checked again whenever the cleanup runs, and a step
+    /// that would remove the source of a copy that is not kept is blocked.
+    CheckOutputs { outputs: Vec<Collection> },
     /// Quit every process running from these bundles, chosen by where it
     /// runs from, never by its name.
     Quit { bundles: Vec<Bundle> },
+    /// Stop one background job of a task by its identity; its name is for
+    /// replies only.
+    StopJob { job: JobId, task: Key, name: String },
     /// Undo one copy into the helper, by its plan ID.
     UndoPlan {
         #[serde(rename = "planId")]
@@ -36,17 +44,19 @@ impl Step {
     /// Where a step of this kind runs among the others: lower first.
     fn rank(&self) -> u8 {
         match self {
-            Self::Quit { .. } => 0,
-            Self::UndoPlan { .. } => 1,
-            Self::RemoveInstall { .. } => 2,
-            Self::RemoveCopy { .. } => 3,
+            Self::CheckOutputs { .. } => 0,
+            Self::Quit { .. } => 1,
+            Self::StopJob { .. } => 2,
+            Self::UndoPlan { .. } => PLANS,
+            Self::RemoveInstall { .. } => 4,
+            Self::RemoveCopy { .. } => 5,
         }
     }
 
     /// The thing this step removes or undoes, when it is one.
     pub fn owned(&self) -> Option<Owned> {
         match self {
-            Self::Quit { .. } => None,
+            Self::CheckOutputs { .. } | Self::Quit { .. } | Self::StopJob { .. } => None,
             Self::UndoPlan { plan } => Some(Owned::Plan { id: plan.clone() }),
             Self::RemoveInstall { install, app } => Some(Owned::Install {
                 id: install.clone(),
@@ -55,6 +65,32 @@ impl Step {
             Self::RemoveCopy { copy } => Some(Owned::Copy { id: copy.clone() }),
         }
     }
+}
+
+/// Where plans rank among the kinds of step.
+const PLANS: u8 = 3;
+
+/// A collection one of the tasks made: whose, and its receipt.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub(crate) struct Collection {
+    pub task: Key,
+    pub receipt: ReceiptId,
+}
+
+/// A background job one of the tasks started and that may still run.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct Job {
+    pub id: JobId,
+    pub task: Key,
+    pub name: String,
+}
+
+/// What a cleanup covers beside the things the tasks claim: the jobs they
+/// started and the collections they made.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub(crate) struct Others {
+    pub jobs: Vec<Job>,
+    pub outputs: Vec<Collection>,
 }
 
 /// A bundle the task owns, which processes may run from.
@@ -83,24 +119,95 @@ pub(crate) struct Undoable {
 /// and nothing a step already covers is planned twice. Then every step not
 /// yet done or kept waits for what its kind waits for among all the steps,
 /// old and new. Pure: it decides from what it is given only.
+#[cfg(test)]
 pub(crate) fn merge(steps: &mut Vec<Entry>, work: &[Undoable]) {
+    merge_with(steps, work, &Others::default());
+}
+
+/// [`merge`], with a step to stop each of `others`' jobs that no step
+/// covers yet, after the quits, and one check of every collection first.
+/// A check that already ran is run again whenever another step is left to
+/// run: a copy may have gone since.
+pub(crate) fn merge_with(steps: &mut Vec<Entry>, work: &[Undoable], others: &Others) {
     add(steps, work);
+    add_others(steps, others);
     rewire(steps);
 }
 
 /// Make every step not yet done or kept wait for every step it must: a
-/// quit for nothing, a plan for every quit, an install for every quit and
-/// plan, a copy for every quit. Steps done or kept keep what they waited
-/// for, and every step keeps its number.
+/// check of outputs and a quit for nothing, a job's stop for every quit, a
+/// plan and a copy for every quit and every job's stop, an install for all
+/// of those and every plan. Steps done or kept keep what they waited for,
+/// and every step keeps its number.
 fn rewire(steps: &mut [Entry]) {
     let quits = numbers(steps, |step| matches!(step, Step::Quit { .. }));
+    let jobs = numbers(steps, |step| matches!(step, Step::StopJob { .. }));
     let plans = numbers(steps, |step| matches!(step, Step::UndoPlan { .. }));
     for entry in steps.iter_mut().filter(|entry| !entry.state.finished()) {
         entry.after = match entry.step {
-            Step::Quit { .. } => Vec::new(),
-            Step::UndoPlan { .. } | Step::RemoveCopy { .. } => quits.clone(),
-            Step::RemoveInstall { .. } => quits.iter().chain(&plans).copied().collect(),
+            Step::CheckOutputs { .. } | Step::Quit { .. } => Vec::new(),
+            Step::StopJob { .. } => quits.clone(),
+            Step::UndoPlan { .. } | Step::RemoveCopy { .. } => {
+                quits.iter().chain(&jobs).copied().collect()
+            }
+            Step::RemoveInstall { .. } => {
+                quits.iter().chain(&jobs).chain(&plans).copied().collect()
+            }
         };
+    }
+}
+
+/// Add a step for each of `others` no step covers yet: one check of every
+/// collection, first, and a stop of each job, after the quits.
+fn add_others(steps: &mut Vec<Entry>, others: &Others) {
+    let mut next = steps.iter().map(|entry| entry.n).max().unwrap_or(0) + 1;
+    let mut number = || {
+        let n = next;
+        next += 1;
+        n
+    };
+
+    if !others.outputs.is_empty() {
+        let unfinished = steps.iter().any(|entry| {
+            !entry.state.finished() && !matches!(entry.step, Step::CheckOutputs { .. })
+        });
+        let check = steps
+            .iter_mut()
+            .find(|entry| matches!(entry.step, Step::CheckOutputs { .. }));
+        match check {
+            Some(entry) => {
+                if let Step::CheckOutputs { outputs } = &mut entry.step {
+                    for collection in &others.outputs {
+                        if !outputs.contains(collection) {
+                            outputs.push(collection.clone());
+                        }
+                    }
+                }
+                if entry.state.finished() && unfinished {
+                    entry.set(super::receipt::StepState::Pending, None);
+                }
+            }
+            None => {
+                let step = Step::CheckOutputs {
+                    outputs: others.outputs.clone(),
+                };
+                steps.insert(0, Entry::new(number(), step, Vec::new()));
+            }
+        }
+    }
+
+    for job in &others.jobs {
+        let covered = steps.iter().any(
+            |entry| matches!(&entry.step, Step::StopJob { job: known, .. } if *known == job.id),
+        );
+        if !covered {
+            let step = Step::StopJob {
+                job: job.id.clone(),
+                task: job.task.clone(),
+                name: job.name.clone(),
+            };
+            place(steps, Entry::new(number(), step, Vec::new()));
+        }
     }
 }
 
@@ -152,7 +259,7 @@ fn add(steps: &mut Vec<Entry>, work: &[Undoable]) {
     plans.sort_by_key(|undoable| std::cmp::Reverse(undoable.claimed));
     let first_plan = steps
         .iter()
-        .position(|entry| entry.step.rank() >= 1)
+        .position(|entry| entry.step.rank() >= PLANS)
         .unwrap_or(steps.len());
     for (offset, undoable) in plans.into_iter().enumerate() {
         let Owned::Plan { id } = &undoable.owned else {
