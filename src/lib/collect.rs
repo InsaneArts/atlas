@@ -616,8 +616,9 @@ fn private_folders(root: &Path, levels: &[&str]) -> Result<PathBuf> {
     Ok(folder)
 }
 
-/// Remove the partial files that collections killed partway left under
-/// `root`: those older than an hour, in a receipt's folder.
+/// Remove what collections killed partway left under `root`, once it is an
+/// hour old: their partial files, and the folder of one that never wrote
+/// its receipt, whose copies were never reported.
 fn remove_abandoned(root: &Path) {
     let Ok(owners) = fs::read_dir(root) else {
         return;
@@ -627,7 +628,23 @@ fn remove_abandoned(root: &Path) {
             continue;
         };
         for receipt in receipts.flatten() {
-            let Ok(entries) = fs::read_dir(receipt.path()) else {
+            let folder = receipt.path();
+            let stale = receipt
+                .metadata()
+                .ok()
+                .filter(|metadata| metadata.is_dir())
+                .and_then(|metadata| metadata.modified().ok())
+                .and_then(|modified| modified.elapsed().ok())
+                .is_some_and(|age| age > ABANDONED);
+            let named = receipt
+                .file_name()
+                .to_str()
+                .is_some_and(|name| ReceiptId::parse(name).is_some());
+            if stale && named && !folder.join("receipt.json").exists() {
+                let _ = fs::remove_dir_all(&folder);
+                continue;
+            }
+            let Ok(entries) = fs::read_dir(&folder) else {
                 continue;
             };
             for entry in entries.flatten() {

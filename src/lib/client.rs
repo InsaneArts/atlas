@@ -2418,7 +2418,10 @@ fn job_started(request: &Value, reply: &Value) -> bool {
         && start == Some(true)
         && job["boot"].as_str().is_some_and(|boot| !boot.is_empty())
         && job["uid"] == request["uid"]
-        && matches!(job["state"].as_str(), Some("running" | "ended"))
+        && matches!(
+            job["state"].as_str(),
+            Some("running" | "stopping" | "ended")
+        )
 }
 
 /// The request that runs `argv` in the helper, stopping it after `timeout`:

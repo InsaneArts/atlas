@@ -536,3 +536,22 @@ fn a_running_job_keeps_its_record_and_collections_do_not() {
     let empty = serde_json::to_value(Record::new(&task("none", None), 1)).unwrap();
     assert!(empty.get("jobs").is_none() && empty.get("outputs").is_none());
 }
+
+#[test]
+fn a_job_that_may_still_run_is_never_forgotten_to_make_room() {
+    use crate::daemon::job::JobState;
+
+    let mut record = Record::new(&task("full", None), 1);
+    for n in 0..64 {
+        assert!(record.noted_job(job_entry(&format!("{n:012x}"), JobState::Running)));
+    }
+    assert!(!record.noted_job(job_entry("ffffffffffff", JobState::Running)));
+    assert_eq!(record.jobs.len(), 64);
+    assert!(record.noted_job(job_entry("000000000000", JobState::Ended)));
+    assert!(record.noted_job(job_entry("ffffffffffff", JobState::Running)));
+    assert!(
+        record
+            .job(&crate::daemon::protocol::JobId::parse("000000000000").unwrap())
+            .is_none()
+    );
+}

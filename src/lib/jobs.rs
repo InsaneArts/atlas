@@ -59,6 +59,11 @@ pub async fn start(
         ));
     }
 
+    // The helper ends every job while agents are stopped, the person's
+    // own included, so none is started then.
+    if client.stop_marked() {
+        return Err(Error::new("stopped", crate::error::STOPPED));
+    }
     let ownership = client.controller.acquire_beside_commands()?;
     let verified = client.verify_offering(JOBS, OLDER).await?;
     let started = started(client, verified.pin(), argv, lifetime, name).await;
@@ -441,9 +446,13 @@ fn listed_view(job: &Value) -> Value {
 /// The end of job `id`'s output, the last `bytes` of it, decoded lossily as
 /// `run`'s output is. Read without control.
 pub async fn log(client: &Client, id: &JobId, bytes: usize) -> Result<Value> {
-    client.verify_offering(JOBS, OLDER).await?;
+    // Read like a list: only the helper's account serves the socket, and a
+    // log is read on screen too.
     let request = json!({"op": "job", "action": "log", "id": id, "bytes": bytes});
     let reply = client.transport.call(&request).await.map_err(certain)?;
+    if reply["code"] == "bad-request" {
+        return Err(Error::new("daemon", OLDER));
+    }
     if reply["ok"] != true {
         return Err(refused(&reply));
     }
@@ -467,6 +476,9 @@ pub(crate) struct Everyone {
     pub asked: u64,
     /// How many still ran when Atlas stopped waiting.
     pub left: u64,
+    /// How many the helper would not signal: their processes no longer
+    /// matched them, or their records could not be written.
+    pub refused: u64,
     /// Why the helper could not be told, when it could not.
     pub error: Option<String>,
 }
@@ -486,7 +498,14 @@ impl Everyone {
                 crate::ui::text::count(left as usize, "background job")
             )),
         };
-        if let Some(warning) = warning {
+        let refused = (self.refused > 0).then(|| {
+            format!(
+                "{} could not be stopped, and nothing was signalled; atlas job list --all shows {}",
+                crate::ui::text::count(self.refused as usize, "background job"),
+                if self.refused == 1 { "it" } else { "them" }
+            )
+        });
+        for warning in warning.into_iter().chain(refused) {
             match reply["warnings"].as_array_mut() {
                 Some(warnings) => warnings.push(json!(warning)),
                 None => reply["warnings"] = json!([warning]),
@@ -503,6 +522,7 @@ pub(crate) async fn stop_every(client: &Client, reason: StopReason) -> Everyone 
     let none = Everyone {
         asked: 0,
         left: 0,
+        refused: 0,
         error: None,
     };
     let reply = match client.transport.call(&request).await {
@@ -512,20 +532,21 @@ pub(crate) async fn stop_every(client: &Client, reason: StopReason) -> Everyone 
         Err(error) if error.code == "io" && !client.transport.path.exists() => return none,
         Ok(reply) => {
             return Everyone {
-                asked: 0,
-                left: 0,
                 error: Some(refused(&reply).error),
+                ..none
             };
         }
         Err(error) => {
             return Everyone {
-                asked: 0,
-                left: 0,
                 error: Some(error.error),
+                ..none
             };
         }
     };
     let asked = reply["stopping"].as_u64().unwrap_or(0);
+    let refused = reply["refused"]
+        .as_array()
+        .map_or(0, |refused| refused.len() as u64);
     let mut left = asked;
     let started = Instant::now();
     while left > 0 && started.elapsed() < JOB_GRACE + BEYOND_GRACE {
@@ -540,6 +561,7 @@ pub(crate) async fn stop_every(client: &Client, reason: StopReason) -> Everyone 
     Everyone {
         asked,
         left,
+        refused,
         error: None,
     }
 }
@@ -614,8 +636,14 @@ fn note(client: &Client, owner: Option<&Key>, entry: JobEntry) -> Result<()> {
         },
     };
     Store::at(client.output_dir()?).update(&task, now_ms(), |record| {
-        record.noted_job(entry);
-        Ok(())
+        if record.noted_job(entry) {
+            Ok(())
+        } else {
+            Err(Error::new(
+                "state",
+                "This task's record is full of jobs that have not ended",
+            ))
+        }
     })
 }
 

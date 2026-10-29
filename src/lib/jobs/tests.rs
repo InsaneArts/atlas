@@ -122,7 +122,7 @@ async fn a_start_reply_that_does_not_prove_its_job_is_uncertain() {
         json!({"boot": ""}),
         json!({"start": [0, 0]}),
         json!({"pid": 1, "pgid": 1}),
-        json!({"state": "stopping"}),
+        json!({"state": "launched"}),
         json!({"id": "nope"}),
     ] {
         let dir = tempfile::tempdir().unwrap();
@@ -418,6 +418,7 @@ fn stopping_every_job_says_how_many_and_which_are_left() {
     Everyone {
         asked: 3,
         left: 1,
+        refused: 0,
         error: None,
     }
     .say(&mut reply);
@@ -431,6 +432,7 @@ fn stopping_every_job_says_how_many_and_which_are_left() {
     Everyone {
         asked: 0,
         left: 0,
+        refused: 0,
         error: Some("Connection refused".into()),
     }
     .say(&mut reply);
@@ -440,4 +442,29 @@ fn stopping_every_job_says_how_many_and_which_are_left() {
             .unwrap()
             .starts_with("Atlas could not stop the helper's background jobs")
     );
+}
+
+#[tokio::test]
+async fn a_jobs_log_is_read_without_control_and_an_older_helper_says_so() {
+    let dir = tempfile::tempdir().unwrap();
+    let client = client_in(dir.path());
+    let _held = client.controller.acquire(false).unwrap();
+    stand_in(&client.config.socket_path, |request| {
+        Some(match request["id"].as_str() {
+            Some(ID) => json!({"ok": true, "op": "job", "action": "log", "id": ID,
+                "data": STANDARD.encode(b"hello \xff\n"), "size": 81234,
+                "outputTruncated": true, "logResets": 0}),
+            _ => json!({"ok": false, "code": "bad-request", "error": "unknown op 'job'",
+                "uncertain": false}),
+        })
+    });
+    let reply = log(&client, &id(), 8).await.unwrap();
+    assert_eq!(reply["output"], "hello \u{fffd}\n");
+    assert_eq!(reply["size"], 81234);
+    assert_eq!(reply["outputTruncated"], true);
+
+    let other = JobId::parse("000000000000").unwrap();
+    let error = log(&client, &other, 8).await.unwrap_err();
+    assert_eq!(error.code, "daemon");
+    assert!(error.error.contains("run atlas restart"));
 }

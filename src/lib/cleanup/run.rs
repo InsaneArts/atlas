@@ -248,12 +248,14 @@ async fn removes_any(hands: &impl Hands, step: &Step, not_kept: &[NotKept]) -> b
     }
 }
 
-/// Whether `path` is `folder` or lies inside it.
+/// Whether `path` is `folder` or lies inside it, compared in any case, as
+/// the helper's file system compares names.
 fn within(path: &str, folder: &str) -> bool {
     let folder = folder.trim_end_matches('/');
+    let (path, folder) = (path.to_lowercase(), folder.to_lowercase());
     path == folder
         || path
-            .strip_prefix(folder)
+            .strip_prefix(&folder)
             .is_some_and(|rest| rest.starts_with('/'))
 }
 
@@ -301,13 +303,11 @@ fn check_outputs(hands: &impl Hands, outputs: &[Collection]) -> Outcome {
     let mut not_kept = Vec::new();
     let mut said = Vec::new();
     for (collection, intact) in outputs.iter().zip(&found) {
+        // A receipt that is gone names no file to keep: said, without
+        // holding every later step back for good.
         if intact.unknown {
-            not_kept.push(NotKept {
-                source: String::new(),
-                in_home: None,
-            });
             said.push(format!(
-                "the receipt of collection {} is gone",
+                "the receipt of collection {} is gone, so Atlas cannot tell which files it kept",
                 collection.receipt
             ));
         }
@@ -325,7 +325,7 @@ fn check_outputs(hands: &impl Hands, outputs: &[Collection]) -> Outcome {
             said.push(format!("the copy of {} {how}", file.source));
         }
     }
-    if not_kept.is_empty() {
+    if said.is_empty() {
         return Outcome::done();
     }
     Outcome::failed(Reason::OutputNotKept).with(CameTo {

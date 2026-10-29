@@ -116,6 +116,9 @@ fn protected_folders_are_refused_before_they_are_opened() {
         "Downloads/b.zip",
         "Library/Containers/com.apple.TextEdit/x",
         "Library/Preferences/x.plist",
+        "Pictures/Photos Library.photoslibrary/database/Photos.sqlite",
+        "Music/Music/Music Library.musiclibrary",
+        "movies/TV/x",
         "/Users/atlas/LIBRARY/Mail/x",
     ] {
         assert_eq!(locate(path, home), Err("protected"), "{path}");

@@ -63,6 +63,8 @@ const PRUNE_EVERY: Duration = Duration::from_secs(60 * 60);
 const LOG_LIMIT: u64 = 32 * 1024 * 1024;
 /// How long the launcher has to say it is a session of its own and exec.
 const LAUNCH: Duration = Duration::from_secs(5);
+/// How long a launch that failed waits to collect its launcher.
+const REAP: Duration = Duration::from_secs(2);
 /// How long KILL has, once sent, before a job is said to be stuck.
 const KILLED: Duration = Duration::from_secs(2);
 /// How often KILL is sent again to a stuck job, and for how long.
@@ -347,6 +349,35 @@ pub fn verdict(
     if live.iter().any(|member| !member.runs_as(uid)) {
         return Verdict::OtherAccount;
     }
+    // Without its leader, a group of that ID is the job's only when each
+    // of its processes was seen as the job's, or descends from one that
+    // was: a group made after the PID was used again is not.
+    if leader.is_none() && !live.is_empty() {
+        let mut known_pids: Vec<i32> = live
+            .iter()
+            .filter(|member| record.seen.contains(&member.instance))
+            .map(|member| member.instance.pid)
+            .collect();
+        loop {
+            let more: Vec<i32> = live
+                .iter()
+                .filter(|member| {
+                    !known_pids.contains(&member.instance.pid) && known_pids.contains(&member.ppid)
+                })
+                .map(|member| member.instance.pid)
+                .collect();
+            if more.is_empty() {
+                break;
+            }
+            known_pids.extend(more);
+        }
+        if live
+            .iter()
+            .any(|member| !known_pids.contains(&member.instance.pid))
+        {
+            return Verdict::Identity;
+        }
+    }
     if live
         .iter()
         .any(|member| member.instance.start < known.start)
@@ -457,6 +488,11 @@ struct State {
     /// Whether one is stopping, so it is looked at more often.
     stopping: bool,
     pruned: Option<Instant>,
+    /// The jobs a start is launching now, which no look touches yet.
+    launching: std::collections::HashSet<JobId>,
+    /// When every job was last stopped at once, and why: a job still
+    /// launching then is stopped as soon as it runs.
+    stopped_all: Option<(u64, How)>,
 }
 
 /// The helper's background jobs.
@@ -502,6 +538,8 @@ impl Jobs {
                 running: 0,
                 stopping: false,
                 pruned: None,
+                launching: std::collections::HashSet::new(),
+                stopped_all: None,
             }),
         };
         jobs.adopt();
@@ -518,8 +556,16 @@ impl Jobs {
         self.state().running
     }
 
-    /// Carry out `request`, the reply its connection gets.
-    pub async fn serve(&self, request: JobRequest) -> Value {
+    /// Carry out `request`, the reply its connection gets. What reads the
+    /// process table and writes records runs on a blocking thread, so the
+    /// daemon's other requests never wait for it.
+    pub async fn serve(self: &Arc<Self>, request: JobRequest) -> Value {
+        let jobs = self.clone();
+        let blocking = |answer: Box<dyn FnOnce(&Jobs) -> Value + Send>| async move {
+            tokio::task::spawn_blocking(move || answer(&jobs))
+                .await
+                .unwrap_or_else(|_| failure("job", "The helper could not answer about its jobs"))
+        };
         match request {
             JobRequest::Start {
                 argv,
@@ -545,10 +591,16 @@ impl Jobs {
                 })
                 .await
             }
-            JobRequest::Stop { id, expect, grace } => self.stop(&id, &expect, grace),
-            JobRequest::StopAll { reason } => self.stop_all(reason),
-            JobRequest::Show { id } => self.show(id.as_ref()),
-            JobRequest::Log { id, bytes } => self.log(&id, bytes),
+            JobRequest::Stop { id, expect, grace } => {
+                blocking(Box::new(move |jobs| jobs.stop(&id, &expect, grace))).await
+            }
+            JobRequest::StopAll { reason } => {
+                blocking(Box::new(move |jobs| jobs.stop_all(reason))).await
+            }
+            JobRequest::Show { id } => blocking(Box::new(move |jobs| jobs.show(id.as_ref()))).await,
+            JobRequest::Log { id, bytes } => {
+                blocking(Box::new(move |jobs| jobs.log(&id, bytes))).await
+            }
         }
     }
 
@@ -626,8 +678,36 @@ impl Jobs {
             if let Err(error) = self.write(&record) {
                 return failure(error.code, error.error);
             }
-            drop(state);
+            let mut state = state;
+            state.launching.insert(record.id.clone());
         }
+        let launched = self
+            .launch(
+                record,
+                &start,
+                &executable,
+                &path,
+                home.as_deref(),
+                lifetime,
+            )
+            .await;
+        self.state().launching.remove(&launched.1);
+        launched.0
+    }
+
+    /// [`Jobs::start`] once its record is written: launch it, and reply.
+    /// Returns the job's ID beside the reply.
+    async fn launch(
+        &self,
+        mut record: Record,
+        start: &Start,
+        executable: &Path,
+        path: &str,
+        home: Option<&Path>,
+        lifetime: u64,
+    ) -> (Value, JobId) {
+        let id = record.id.clone();
+        let program = &start.argv[0];
 
         let log = self.log_path(&record.id);
         let created = OpenOptions::new()
@@ -638,9 +718,12 @@ impl Jobs {
             .open(&log);
         if let Err(error) = created {
             self.forget(&record.id);
-            return failure(
-                "spawn-failed",
-                format!("The job's log could not be made: {error}"),
+            return (
+                failure(
+                    "spawn-failed",
+                    format!("The job's log could not be made: {error}"),
+                ),
+                id,
             );
         }
 
@@ -652,35 +735,40 @@ impl Jobs {
             .arg("--argv0")
             .arg(program)
             .arg("--")
-            .arg(&executable)
+            .arg(executable)
             .args(&start.argv[1..])
-            .env("PATH", &path)
-            .stdin(Stdio::null())
+            .env("PATH", path)
+            .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::null())
             .kill_on_drop(false);
         if let Some(lang) = run::locale() {
             command.env("LANG", lang);
         }
-        if let Some(home) = &home {
+        if let Some(home) = home {
             command.current_dir(home);
         }
         let mut child = match command.spawn() {
             Ok(child) => child,
             Err(error) => {
                 self.forget(&record.id);
-                return failure("spawn-failed", format!("{program}: {error}"));
+                return (failure("spawn-failed", format!("{program}: {error}")), id);
             }
         };
 
-        // Read while it is this daemon's unreaped child, so it is exact.
+        // Read while it is this daemon's unreaped child, so it is exact. The
+        // launcher waits on its standard input until its record says so: a
+        // daemon that ends before then leaves nothing running.
         let pid = child.id().and_then(|pid| i32::try_from(pid).ok());
         let started = pid.map(process::start);
         let (Some(pid), Some(Ok(started))) = (pid, started) else {
             let _ = child.start_kill();
-            let _ = child.wait().await;
+            let _ = tokio::time::timeout(REAP, child.wait()).await;
             self.forget(&record.id);
-            return failure("spawn-failed", "The job's process could not be observed");
+            return (
+                failure("spawn-failed", "The job's process could not be observed"),
+                id,
+            );
         };
         record.pid = Some(pid);
         record.start = Some(started);
@@ -688,16 +776,45 @@ impl Jobs {
         record.state = JobState::Launched;
         if let Err(error) = self.locked_write(&record) {
             let _ = child.start_kill();
-            let _ = child.wait().await;
+            let _ = tokio::time::timeout(REAP, child.wait()).await;
             self.forget(&record.id);
-            return failure(error.code, error.error);
+            return (failure(error.code, error.error), id);
         }
+        let go = match child.stdin.take() {
+            Some(mut go) => tokio::io::AsyncWriteExt::write_all(&mut go, b"go\n")
+                .await
+                .is_ok(),
+            None => false,
+        };
 
-        if let Err(said) = launched(&mut child).await {
+        let said = if go {
+            launched(&mut child).await
+        } else {
+            Err(Launch {
+                said: "the job's launcher could not be told to go on".into(),
+                setsid: false,
+            })
+        };
+        if let Err(Launch { said, setsid }) = said {
+            // Before its session of its own, the launcher is this daemon's
+            // child alone; after, its group may hold the program's
+            // processes too.
+            if setsid {
+                let _ = killpg(Pid::from_raw(pid), Signal::SIGKILL);
+            }
             let _ = child.start_kill();
-            let _ = child.wait().await;
-            self.forget(&record.id);
-            return failure("spawn-failed", format!("{program}: {said}"));
+            match tokio::time::timeout(REAP, child.wait()).await {
+                Ok(_) => {
+                    self.forget(&record.id);
+                    return (failure("spawn-failed", format!("{program}: {said}")), id);
+                }
+                Err(_) => {
+                    return (
+                        self.keep_unconfirmed(record, child, &format!("{program}: {said}")),
+                        id,
+                    );
+                }
+            }
         }
 
         let leader = process::info(pid).ok().flatten();
@@ -705,30 +822,58 @@ impl Jobs {
             leader.instance.start == started && leader.pgid == pid && leader.runs_as(self.uid)
         });
         if !own {
-            let _ = child.start_kill();
-            let _ = child.wait().await;
-            self.forget(&record.id);
-            return failure(
-                "spawn-failed",
-                format!("{program}: the job did not start in a process group of its own"),
+            // It runs, but Atlas cannot confirm it is a group of the helper's
+            // own: it is kept and shown, and signalled only once it is.
+            return (
+                self.keep_unconfirmed(
+                    record,
+                    child,
+                    &format!(
+                        "{program} started, but Atlas could not confirm it runs as the helper in a process group of its own"
+                    ),
+                ),
+                id,
             );
         }
 
         let mut state = self.state();
         record.state = JobState::Running;
-        if let Err(error) = self.write(&record) {
-            // It runs, and its record says launched: the next look, or the
-            // next daemon, finds it again by its identity.
-            state.children.insert(record.id.clone(), child);
-            state.running += 1;
-            return failure(error.code, error.error);
-        }
+        // Its time limit runs from when it runs.
+        record.ends_at = now_ms().saturating_add(lifetime);
+        let written = self.write(&record);
         state.children.insert(record.id.clone(), child);
         state.running += 1;
-        // A program that already ended is reported so.
+        if let Err(error) = written {
+            // It runs while its record says launched: the next look finds it
+            // again by its identity.
+            return (unconfirmed(&record, &error.error), id);
+        }
         let processes = process::of_user(self.uid).unwrap_or_default();
-        self.look(&mut state, &mut record, &processes, false, false, now_ms());
-        json!({"ok": true, "op": "job", "action": "start", "job": record.view()})
+        // Every job was stopped while this one launched: it stops too.
+        if let Some((at, why)) = state.stopped_all
+            && at >= record.started_at
+        {
+            self.begin_stop(&mut state, &mut record, why, &processes, now_ms());
+        } else {
+            // A program that already ended is reported so.
+            self.look(&mut state, &mut record, &processes, false, false, now_ms());
+        }
+        (
+            json!({"ok": true, "op": "job", "action": "start", "job": record.view()}),
+            id,
+        )
+    }
+
+    /// Keep `record`'s job, which may run, supervised but unconfirmed: its
+    /// record stays, its leader is held, and the reply says its outcome is
+    /// not known.
+    fn keep_unconfirmed(&self, mut record: Record, child: Child, said: &str) -> Value {
+        let mut state = self.state();
+        record.state = JobState::Running;
+        let _ = self.write(&record);
+        state.children.insert(record.id.clone(), child);
+        state.running += 1;
+        unconfirmed(&record, said)
     }
 
     /// Stop job `id` when it is still what `expect` says: TERM to its group
@@ -816,6 +961,7 @@ impl Jobs {
         let mut state = self.state();
         let processes = process::of_user(self.uid).unwrap_or_default();
         let now = now_ms();
+        state.stopped_all = Some((now, How::of(reason)));
         let mut stopping = 0;
         let mut ended = 0;
         let mut refused = Vec::new();
@@ -836,6 +982,9 @@ impl Jobs {
                             refused.push(json!({"id": record.id, "reason": record.stopping.as_ref().and_then(|stop| stop.refused.clone())}));
                         }
                         JobState::Stopping => stopping += 1,
+                        JobState::Running => {
+                            refused.push(json!({"id": record.id, "reason": "io"}));
+                        }
                         _ => ended += 1,
                     }
                 }
@@ -939,6 +1088,9 @@ impl Jobs {
             let Found::Record(mut record) = read else {
                 continue;
             };
+            if record.state == JobState::Launched && !state.launching.contains(&record.id) {
+                self.found_launched(&mut state, &mut record, &processes);
+            }
             if matches!(record.state, JobState::Running | JobState::Stopping) {
                 self.look(
                     &mut state,
@@ -1016,6 +1168,22 @@ impl Jobs {
         self.escalate(state, record, processes, now);
     }
 
+    /// Settle a job whose record says launched while no start is launching
+    /// it, as when its record could not be written as running: supervised
+    /// from here when it is still the job, ended when nothing of it is
+    /// left, and otherwise shown and never signalled.
+    fn found_launched(&self, state: &mut State, record: &mut Record, processes: &[Info]) {
+        match self.judge(record, None) {
+            Verdict::Signal { .. } => {
+                record.state = JobState::Running;
+                let _ = self.write(record);
+            }
+            Verdict::Ended | Verdict::Reused => self.finish(state, record, How::Gone, processes),
+            Verdict::Restarted => self.finish(state, record, How::Restarted, processes),
+            Verdict::Identity | Verdict::OtherAccount => {}
+        }
+    }
+
     /// Begin stopping `record` for `why`: TERM to its group when it is
     /// still the job's, its end when nothing of it is left.
     fn begin_stop(
@@ -1086,6 +1254,20 @@ impl Jobs {
             Verdict::Signal { pgid } => pgid,
         };
         self.note_seen(record, processes);
+
+        // What refused a signal before is gone: the TERM it never got is
+        // sent now, and its grace runs from here.
+        if stopping.refused.take().is_some() && stopping.killed.is_none() {
+            stopping.since = now;
+            stopping.signal = "SIGTERM".into();
+            if deliver(pgid, Signal::SIGTERM) == Delivered::Ended {
+                record.stopping = Some(stopping.clone());
+                return self.finish(state, record, stopping.why, processes);
+            }
+            record.stopping = Some(stopping);
+            let _ = self.write(record);
+            return;
+        }
 
         let after = |since: u64, wait: Duration| {
             now >= since.saturating_add(u64::try_from(wait.as_millis()).unwrap_or(u64::MAX))
@@ -1360,9 +1542,13 @@ pub async fn supervise(jobs: Arc<Jobs>, stop_marker: PathBuf, on_console: fn() -
 /// `setsid` on its status pipe, which closes when its exec succeeds. A line
 /// that says `error`, a close without `setsid`, or no close within
 /// [`LAUNCH`] means its program never ran.
-async fn launched(child: &mut Child) -> std::result::Result<(), String> {
+async fn launched(child: &mut Child) -> std::result::Result<(), Launch> {
+    let fail = |said: &str, setsid: bool| Launch {
+        said: said.to_owned(),
+        setsid,
+    };
     let Some(mut status) = child.stdout.take() else {
-        return Err("the job's launcher has no status pipe".into());
+        return Err(fail("the job's launcher has no status pipe", false));
     };
     let mut said = Vec::new();
     let read = tokio::time::timeout(LAUNCH, async {
@@ -1377,15 +1563,37 @@ async fn launched(child: &mut Child) -> std::result::Result<(), String> {
     })
     .await;
     let said = String::from_utf8_lossy(&said);
+    let setsid = said.lines().any(|line| line == "setsid");
     if let Some(error) = said.lines().find_map(|line| line.strip_prefix("error ")) {
-        return Err(error.to_owned());
+        return Err(fail(error, setsid));
     }
     match read {
-        Err(_) => Err("the job did not start within 5 seconds".into()),
-        Ok(Err(error)) => Err(error.to_string()),
-        Ok(Ok(())) if said.lines().any(|line| line == "setsid") => Ok(()),
-        Ok(Ok(())) => Err("the job's launcher ended before it started the program".into()),
+        Err(_) => Err(fail("the job did not start within 5 seconds", setsid)),
+        Ok(Err(error)) => Err(fail(&error.to_string(), setsid)),
+        Ok(Ok(())) if setsid => Ok(()),
+        Ok(Ok(())) => Err(fail(
+            "the job's launcher ended before it started the program",
+            false,
+        )),
     }
+}
+
+/// Why a launch failed, and whether the launcher had made its own session
+/// by then, so its group may hold more than the launcher.
+struct Launch {
+    said: String,
+    setsid: bool,
+}
+
+/// The reply for a job that may run but could not be confirmed: of unknown
+/// outcome, with the job as the daemon keeps it.
+fn unconfirmed(record: &Record, said: &str) -> Value {
+    let mut reply = failure("job", said);
+    reply["reason"] = json!("unconfirmed");
+    reply["uncertain"] = json!(true);
+    reply["id"] = json!(record.id);
+    reply["job"] = record.view();
+    reply
 }
 
 /// Send `signal` to group `pgid`, deciding a refusal from who is left in

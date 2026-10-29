@@ -208,8 +208,9 @@ fn report_failure(format: Format, error: &Error, advised: bool) {
     let _ = writeln!(std::io::stderr().lock(), "{text}");
 }
 
-/// Become a session and group leader of its own, then replace itself with
-/// the job's program, its output going to `log` and its input nowhere.
+/// Wait for the daemon's `go` on standard input, become a session and group
+/// leader of its own, then replace itself with the job's program, its
+/// output going to `log` and its input nowhere.
 /// Says `setsid` on the status pipe (standard output) first; a failure
 /// after that is written there too, and the pipe closes on a successful
 /// exec because only a close-on-exec copy of it is kept. A group leader
@@ -232,6 +233,14 @@ fn launch_job(log: &std::path::Path, argv0: &str, program: &[String]) -> ExitCod
     let mut say = |line: &str| {
         let _ = writeln!(status, "{line}");
     };
+    // The daemon says to go on once its record of this job is written; a
+    // daemon that ended before then leaves nothing to run.
+    let mut go = String::new();
+    if std::io::BufRead::read_line(&mut std::io::stdin().lock(), &mut go).is_err()
+        || go.trim_end() != "go"
+    {
+        return ExitCode::from(127);
+    }
     if let Err(error) = nix::unistd::setsid() {
         say(&format!("error a session of its own: {error}"));
         return ExitCode::from(127);

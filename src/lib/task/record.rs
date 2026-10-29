@@ -87,21 +87,26 @@ impl Record {
 
     /// Note that the task started `job`, or what became of it: an entry of
     /// the same ID takes its place. Room is made by forgetting the oldest
-    /// ended job once [`JOBS`] are listed; with none ended, the oldest goes.
-    pub fn noted_job(&mut self, job: JobEntry) {
+    /// ended job once [`JOBS`] are listed; a job that may still run is never
+    /// forgotten, so with none ended the new one is refused. Whether it was
+    /// noted.
+    pub fn noted_job(&mut self, job: JobEntry) -> bool {
         if let Some(known) = self.jobs.iter_mut().find(|known| known.id == job.id) {
             *known = job;
-            return;
+            return true;
         }
         if self.jobs.len() >= JOBS {
-            let place = self
+            let Some(place) = self
                 .jobs
                 .iter()
                 .position(|known| known.state == JobState::Ended)
-                .unwrap_or(0);
+            else {
+                return false;
+            };
             self.jobs.remove(place);
         }
         self.jobs.push(job);
+        true
     }
 
     /// The job `id` this task started, when it is listed.

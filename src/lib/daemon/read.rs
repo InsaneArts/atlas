@@ -30,8 +30,17 @@ const STILL: Duration = Duration::from_secs(2);
 /// (`SF_DATALESS`, `sys/stat.h`): reading it would download it.
 const SF_DATALESS: u32 = 0x4000_0000;
 /// The folders of the helper's home that macOS guards, or that hold other
-/// apps' data: refused by path, in any case, before anything is opened.
-const PROTECTED: [&str; 4] = ["Desktop", "Documents", "Downloads", "Library"];
+/// apps' data or media libraries: refused by path, in any case, before
+/// anything is opened.
+const PROTECTED: [&str; 7] = [
+    "Desktop",
+    "Documents",
+    "Downloads",
+    "Library",
+    "Pictures",
+    "Music",
+    "Movies",
+];
 /// Atlas's own folder in the helper's home.
 const OWN: &str = ".atlas";
 /// The system's shared temporary folder, as it really is.
@@ -94,8 +103,13 @@ fn served(
     let mut real = PathBuf::new();
     nix::fcntl::fcntl(&file, nix::fcntl::FcntlArg::F_GETPATH(&mut real))
         .map_err(|_| "unreadable")?;
-    if within(&real, &places.home).is_some_and(guarded) {
-        return Err("protected");
+    if let Some(inside) = within(&real, &places.home) {
+        if guarded(inside) {
+            return Err("protected");
+        }
+        if own(inside) {
+            return Err("outside");
+        }
     }
     let metadata = file.metadata().map_err(|_| "unreadable")?;
     let identity = readable(
@@ -175,11 +189,7 @@ fn locate(path: &str, home: &Path) -> Result<PathBuf, &'static str> {
         if guarded(inside) {
             return Err("protected");
         }
-        if inside
-            .components()
-            .next()
-            .is_some_and(|first| first.as_os_str().eq_ignore_ascii_case(OWN))
-        {
+        if own(inside) {
             return Err("outside");
         }
         return Ok(located);
@@ -207,6 +217,14 @@ fn guarded(inside: &Path) -> bool {
             .iter()
             .any(|folder| first.as_os_str().eq_ignore_ascii_case(folder))
     })
+}
+
+/// Whether a path inside the helper's home lies in Atlas's own folder.
+fn own(inside: &Path) -> bool {
+    inside
+        .components()
+        .next()
+        .is_some_and(|first| first.as_os_str().eq_ignore_ascii_case(OWN))
 }
 
 /// Why an open failed, as a reason.

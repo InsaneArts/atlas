@@ -1776,3 +1776,52 @@ async fn a_copy_of_a_file_no_step_removes_lets_every_step_run() {
     assert!(fake.logged().contains(&format!("undo {plan}")));
     assert_eq!(reply["state"], "incomplete");
 }
+
+#[tokio::test]
+async fn a_receipt_that_is_gone_is_said_without_holding_every_step_back() {
+    let place = Place::new();
+    let key = session("receipt-gone");
+    let task = default_task(&key);
+    let plan = plan_claimed(&place, &task);
+    let receipt = collected(&place, &task);
+    let fake = Fake::at(&place.root);
+    fake.intact.borrow_mut().insert(
+        receipt.to_string(),
+        crate::collect::Intact {
+            unknown: true,
+            ..Default::default()
+        },
+    );
+    let reply = place.apply(&fake, &own(&key)).await;
+    assert_eq!(states(&reply), ["failed", "done"], "{reply}");
+    assert!(
+        reply["steps"][0]["error"]
+            .as_str()
+            .unwrap()
+            .contains("receipt")
+    );
+    assert!(fake.logged().contains(&format!("undo {plan}")));
+}
+
+#[tokio::test]
+async fn a_source_named_in_another_case_is_kept_all_the_same() {
+    let place = Place::new();
+    let key = session("case");
+    let task = default_task(&key);
+    let plan = plan_claimed(&place, &task);
+    let receipt = collected(&place, &task);
+    let fake = Fake::at(&place.root);
+    fake.intact.borrow_mut().insert(
+        receipt.to_string(),
+        crate::collect::Intact {
+            missing: vec![copy_of(
+                "/Users/atlas/.Config/Probe/settings.toml",
+                ".Config/Probe/settings.toml",
+            )],
+            ..Default::default()
+        },
+    );
+    let reply = place.apply(&fake, &own(&key)).await;
+    assert_eq!(reply["steps"][1]["state"], "blocked", "{reply}");
+    assert!(!fake.logged().contains(&format!("undo {plan}")));
+}

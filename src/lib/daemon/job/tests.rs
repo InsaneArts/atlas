@@ -63,10 +63,38 @@ fn a_matching_job_is_signalled_only_through_its_own_group() {
         judged(None, Some(&members[0]), &members),
         Verdict::Signal { pgid: 4312 }
     );
-    // A leader that has exited leaves its group to its other members.
+    // A leader that has exited leaves its group to its other members, once
+    // they were seen as the job's.
+    let mut seen = record();
+    seen.seen.push(members[1].instance);
     assert_eq!(
-        judged(None, None, &members[1..]),
+        verdict(&seen, None, BOOT, UID, None, &members[1..]),
         Verdict::Signal { pgid: 4312 }
+    );
+}
+
+#[test]
+fn without_its_leader_a_group_is_the_jobs_only_when_it_was_seen() {
+    let mut record = record();
+    let child = process(4313, later(1), 4312, 4312);
+    let grandchild = process(4314, later(2), 4312, 4313);
+    record.seen.push(child.instance);
+    assert_eq!(
+        verdict(&record, None, BOOT, UID, None, &[child.clone(), grandchild]),
+        Verdict::Signal { pgid: 4312 },
+        "a process of one that was seen is the job's too"
+    );
+
+    // The PID was used again and made a group of its own, which later
+    // processes stay in: none of them was ever the job's.
+    let stranger = process(4400, later(60), 4312, 1);
+    assert_eq!(
+        verdict(&record, None, BOOT, UID, None, &[child, stranger]),
+        Verdict::Identity
+    );
+    assert_eq!(
+        judged(None, None, &[process(4401, later(60), 4312, 1)]),
+        Verdict::Identity
     );
 }
 
