@@ -11,6 +11,7 @@ use std::{
     collections::BTreeMap,
     fs::OpenOptions,
     os::unix::fs::{DirBuilderExt, PermissionsExt},
+    time::Instant,
 };
 
 fn session(id: &str) -> HostSession {
@@ -787,7 +788,7 @@ fn a_status_poll_reads_the_records_only_when_they_changed() {
 
     // Copies can go without a record changing: counted again in a while.
     if let Some(snapshot) = kept.lock().unwrap().as_mut() {
-        snapshot.taken -= COPIES_FRESH;
+        snapshot.age_by(COPIES_FRESH);
     }
     store.recent_in(&kept, counting);
     assert_eq!(reads.get(), 3);

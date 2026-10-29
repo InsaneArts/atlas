@@ -2,6 +2,7 @@
 //! what that task made in the helper, so it can be found and cleaned up
 //! later. A task is a label: it never decides who may act, what is pending
 //! or whether something may be removed.
+pub(crate) mod prune;
 pub(crate) mod record;
 pub(crate) mod store;
 
@@ -214,7 +215,7 @@ pub fn settle_rolled_back(client: &Client, kind: Kind, result: &Result<Value>) -
     let Some(reply) = rolled_back(kind, result) else {
         return Ok(());
     };
-    let Some(plan_id) = reply["planId"].as_str().and_then(Token::parse) else {
+    let Some(plan_id) = crate::host_session::store::plan(reply) else {
         return Ok(());
     };
     let kept = |field: &str| reply[field].as_array().is_some_and(|kept| !kept.is_empty());

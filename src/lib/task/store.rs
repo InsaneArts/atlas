@@ -10,21 +10,17 @@ use super::{
 use crate::{
     error::{Code, Error, Result},
     files::Durability,
-    host_session::{Key, store::Store as Sessions},
-    record_folder::{LISTED, RecordFolder, Records},
+    host_session::Key,
+    record_folder::{Cached, LISTED, RecordFolder, Records},
 };
 use std::{
-    path::{Path, PathBuf},
-    sync::{Arc, Mutex, PoisonError},
-    time::{Duration, SystemTime},
+    path::Path,
+    sync::{Arc, Mutex},
+    time::Duration,
 };
 
-/// The records [`Store::recent`] read last, by the folder they came from and
-/// when it last changed.
-static RECENT: Mutex<Option<Snapshot>> = Mutex::new(None);
-
-/// Records as read: from which folder, as it was when.
-type Snapshot = (PathBuf, SystemTime, Arc<[Record]>);
+/// The records [`Store::recent`] read last.
+static RECENT: Mutex<Option<Cached<Record>>> = Mutex::new(None);
 
 /// How task records are kept: through to the disk, and waited for as
 /// briefly as session records are, so a claim never holds `open` up long.
@@ -38,7 +34,7 @@ static TASKS: Records = Records {
 
 /// The task records of one output folder.
 pub(crate) struct Store {
-    folder: RecordFolder,
+    folder: RecordFolder<Key>,
     output: std::path::PathBuf,
 }
 
@@ -131,15 +127,11 @@ impl Store {
         Ok(())
     }
 
-    /// Remove the records whose session's record is gone and that hold
-    /// nothing that may still be in the helper. The record `keep` stays.
+    /// Remove the records [`super::prune::finished`] says may go. The
+    /// record `keep` stays.
     fn prune(&self, keep: &Key) {
-        let sessions = Sessions::at(&self.output);
         for record in self.all() {
-            let finished = record.key != *keep
-                && !record.holds_anything()
-                && sessions.read(&record.session).is_none();
-            if finished {
+            if record.key != *keep && super::prune::finished(&self.output, &record) {
                 self.folder.remove(&record.key);
             }
         }
@@ -150,20 +142,7 @@ impl Store {
     /// so readers that come often, such as the viewer's session list and
     /// session pruning, do not read every record each time.
     pub fn recent(&self) -> Arc<[Record]> {
-        let Some(modified) = self.folder.modified() else {
-            return Arc::from([]);
-        };
-        let directory = self.folder.directory().to_owned();
-        let mut cache = RECENT.lock().unwrap_or_else(PoisonError::into_inner);
-        if let Some((known, at, records)) = cache.as_ref()
-            && *known == directory
-            && *at == modified
-        {
-            return Arc::clone(records);
-        }
-        let records: Arc<[Record]> = self.all().into();
-        *cache = Some((directory, modified, Arc::clone(&records)));
-        records
+        self.folder.cached(&RECENT, Duration::MAX, || self.all())
     }
 
     /// The records among the newest [`LISTED`] in the folder.
@@ -181,8 +160,7 @@ impl Store {
         }
         let record = self
             .folder
-            .read(key)
-            .and_then(|bytes| serde_json::from_slice::<Record>(&bytes).ok())
+            .read_json::<Record>(key)
             .filter(|record| record.key == *key && record.version <= VERSION);
         match record {
             Some(record) => Read::Record(Box::new(record)),
@@ -192,6 +170,6 @@ impl Store {
 
     /// Write `record` whole in its place, through to the disk.
     fn write(&self, record: &Record) -> Result<()> {
-        self.folder.write(&record.key, &serde_json::to_vec(record)?)
+        self.folder.write_json(&record.key, record)
     }
 }

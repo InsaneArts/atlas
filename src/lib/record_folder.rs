@@ -8,13 +8,15 @@ use crate::{
     files::{Durability, Held, Lock, Token, lock_within, own_folder, read_own, write_private_with},
     host_session::Key,
 };
+use serde::{Serialize, de::DeserializeOwned};
 use std::{
     fmt::Display,
     fs::{self, File, OpenOptions},
     marker::PhantomData,
     os::unix::fs::{DirBuilderExt, OpenOptionsExt},
     path::{Path, PathBuf},
-    time::{Duration, SystemTime},
+    sync::{Arc, Mutex, PoisonError},
+    time::{Duration, Instant, SystemTime},
 };
 
 /// What a record is named by: one of Atlas's own names, so a file name
@@ -59,8 +61,25 @@ pub(crate) struct Records {
     pub bytes: u64,
 }
 
+/// What was last read of a records folder, by the folder and when it last
+/// changed: every write renames a record into it, which changes it.
+pub(crate) struct Cached<T> {
+    directory: PathBuf,
+    modified: SystemTime,
+    taken: Instant,
+    read: Arc<[T]>,
+}
+
+#[cfg(test)]
+impl<T> Cached<T> {
+    /// Take this as read `by` earlier than it was.
+    pub(crate) fn age_by(&mut self, by: Duration) {
+        self.taken -= by;
+    }
+}
+
 /// One output folder's records of one kind, each named by a `K`.
-pub(crate) struct RecordFolder<K = Key> {
+pub(crate) struct RecordFolder<K> {
     directory: PathBuf,
     records: &'static Records,
     names: PhantomData<K>,
@@ -123,6 +142,48 @@ impl<K: RecordName> RecordFolder<K> {
             .collect();
         named.sort_by_key(|(modified, _)| std::cmp::Reverse(*modified));
         named.into_iter().take(limit).map(|(_, key)| key).collect()
+    }
+
+    /// `key`'s record read as a `T`, when it is there and reads as one.
+    pub fn read_json<T: DeserializeOwned>(&self, key: &K) -> Option<T> {
+        self.read(key)
+            .and_then(|bytes| serde_json::from_slice(&bytes).ok())
+    }
+
+    /// Write `record` whole as `key`'s record.
+    pub fn write_json<T: Serialize>(&self, key: &K, record: &T) -> Result<()> {
+        self.write(key, &serde_json::to_vec(record)?)
+    }
+
+    /// What `read` gives, as `kept` holds it from the last time: read again
+    /// only once the folder changed, or once `fresh` passed since, so
+    /// readers that come often look at the folder once and nothing more.
+    /// Nothing when the folder is not there.
+    pub fn cached<T>(
+        &self,
+        kept: &Mutex<Option<Cached<T>>>,
+        fresh: Duration,
+        read: impl FnOnce() -> Vec<T>,
+    ) -> Arc<[T]> {
+        let Some(modified) = self.modified() else {
+            return Arc::from([]);
+        };
+        let mut kept = kept.lock().unwrap_or_else(PoisonError::into_inner);
+        if let Some(cached) = kept.as_ref()
+            && cached.directory == self.directory
+            && cached.modified == modified
+            && cached.taken.elapsed() < fresh
+        {
+            return Arc::clone(&cached.read);
+        }
+        let read: Arc<[T]> = read().into();
+        *kept = Some(Cached {
+            directory: self.directory.clone(),
+            modified,
+            taken: Instant::now(),
+            read: Arc::clone(&read),
+        });
+        read
     }
 
     /// Write `bytes` as `key`'s record, as far as its kind asks.

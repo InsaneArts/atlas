@@ -354,10 +354,14 @@ impl Reading<'_> {
     /// what it left: its copy folders still there, and its plans the
     /// session's record still lists as applied.
     fn tasks(&self, record: &Record) -> Vec<Value> {
-        crate::task::store::Store::at(self.output)
-            .of_session(&record.key)
+        let mut tasks: Vec<&crate::task::record::Record> = self
+            .tasks
+            .iter()
+            .filter(|task| task.session == record.key && task.name.is_some())
+            .collect();
+        tasks.sort_by_key(|task| task.started);
+        tasks
             .into_iter()
-            .filter(|task| task.name.is_some())
             .map(|task| {
                 let (mut copies, mut plans, mut installs) = (0, 0, 0);
                 for (owned, state) in task.claims() {

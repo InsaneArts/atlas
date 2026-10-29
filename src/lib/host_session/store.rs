@@ -18,15 +18,15 @@ use crate::{
     files::{Durability, Token},
     handoff,
     helper_info::Capture,
-    record_folder::{LISTED, RecordFolder, Records},
+    record_folder::{Cached, LISTED, RecordFolder, Records},
 };
 use serde::Deserialize;
 use serde_json::Value;
 use std::{
     fs,
     path::{Path, PathBuf},
-    sync::{Arc, Mutex, PoisonError},
-    time::{Duration, Instant, SystemTime},
+    sync::{Arc, Mutex},
+    time::Duration,
 };
 
 /// The most records kept; those with nothing left in the helper go first.
@@ -65,22 +65,13 @@ impl Kind {
     }
 }
 
-/// The records last read for status reads, by the folder they came from
-/// and its modification time (every write renames a record into it).
-struct Snapshot {
-    directory: PathBuf,
-    modified: SystemTime,
-    taken: Instant,
-    seen: Arc<[Seen]>,
-}
-
 /// The records status reads share, read again only once one was written,
 /// or once the copy folders they counted may have changed.
-static RECENT: Mutex<Option<Snapshot>> = Mutex::new(None);
+static RECENT: Mutex<Option<Cached<Seen>>> = Mutex::new(None);
 
 /// The records of one output folder.
 pub struct Store {
-    folder: RecordFolder,
+    folder: RecordFolder<Key>,
     /// Where `open`'s copy folders are.
     copies: PathBuf,
 }
@@ -119,8 +110,7 @@ impl Store {
     /// One record, when it is there and reads.
     pub(crate) fn read(&self, key: &Key) -> Option<Record> {
         self.folder
-            .read(key)
-            .and_then(|bytes| serde_json::from_slice::<Record>(&bytes).ok())
+            .read_json::<Record>(key)
             .filter(|record| record.key == *key)
     }
 
@@ -152,36 +142,18 @@ impl Store {
     /// [`Store::recent`], kept in `kept` and read with `read`.
     fn recent_in(
         &self,
-        kept: &Mutex<Option<Snapshot>>,
+        kept: &Mutex<Option<Cached<Seen>>>,
         read: impl FnOnce(&Self) -> Vec<Record>,
     ) -> Arc<[Seen]> {
-        let Some(modified) = self.folder.modified() else {
-            return Arc::from([]);
-        };
-
-        let mut kept = kept.lock().unwrap_or_else(PoisonError::into_inner);
-        if let Some(snapshot) = kept.as_ref()
-            && snapshot.directory == self.folder.directory()
-            && snapshot.modified == modified
-            && snapshot.taken.elapsed() < COPIES_FRESH
-        {
-            return Arc::clone(&snapshot.seen);
-        }
-
-        let seen: Arc<[Seen]> = read(self)
-            .into_iter()
-            .map(|record| Seen {
-                copies_left: self.copies_left(&record).len(),
-                record,
-            })
-            .collect();
-        *kept = Some(Snapshot {
-            directory: self.folder.directory().to_owned(),
-            modified,
-            taken: Instant::now(),
-            seen: Arc::clone(&seen),
-        });
-        seen
+        self.folder.cached(kept, COPIES_FRESH, || {
+            read(self)
+                .into_iter()
+                .map(|record| Seen {
+                    copies_left: self.copies_left(&record).len(),
+                    record,
+                })
+                .collect()
+        })
     }
 
     /// Change `session`'s record under the store's lock, making it when
@@ -308,16 +280,12 @@ impl Store {
         let idle = crate::time::ms(IDLE_FOR);
         // A session whose tasks still hold something, an unfinished cleanup
         // among them, has something left too.
-        let held: Vec<Key> = self
+        let held = self
             .folder
             .directory()
             .parent()
-            .map(|output| crate::task::store::Store::at(output).recent())
-            .into_iter()
-            .flat_map(|tasks| tasks.to_vec())
-            .filter(crate::task::record::Record::holds_anything)
-            .map(|task| task.session)
-            .collect();
+            .map(crate::task::prune::sessions_held)
+            .unwrap_or_default();
         let mut records: Vec<(Record, bool)> = self
             .listed(LISTED)
             .into_iter()
@@ -353,7 +321,7 @@ impl Store {
 
     /// Write `record` whole in its place.
     fn write(&self, record: &Record) -> Result<()> {
-        self.folder.write(&record.key, &serde_json::to_vec(record)?)
+        self.folder.write_json(&record.key, record)
     }
 }
 
@@ -455,7 +423,7 @@ fn refused(result: &Result<Value>) -> bool {
 }
 
 /// The plan a reply names, when it is one of Atlas's own.
-fn plan(reply: &Value) -> Option<Token> {
+pub(crate) fn plan(reply: &Value) -> Option<Token> {
     reply["planId"].as_str().and_then(Token::parse)
 }
 
