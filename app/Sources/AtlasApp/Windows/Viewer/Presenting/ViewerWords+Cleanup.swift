@@ -89,12 +89,14 @@ extension ViewerWords {
   /// The alert's line for checking the files the session collected out of the helper.
   static let checksOutputs = "Checks the files it collected are still kept"
 
-  /// The alert's line for stopping background jobs.
+  /// The alert's line for stopping background jobs: the job by name when it stops one the service names, else how
+  /// many it stops, so a job with no name still counts.
   ///
-  /// - Parameter names: The jobs' names; empty for a job the service names none for.
-  /// - Returns: "Stops the background job web", or "Stops 2 background jobs".
-  static func stopsJobs(_ names: [String]) -> String {
-    names.count == 1 ? "Stops the background job \(names[0])" : "Stops \(names.count) background jobs"
+  /// - Parameter names: Each job's name, in order; nil for a job the service names none for.
+  /// - Returns: "Stops the background job web", "Stops 1 background job" or "Stops 2 background jobs".
+  static func stopsJobs(_ names: [String?]) -> String {
+    if names.count == 1, let name = names[0] { return "Stops \(job(name))" }
+    return names.count == 1 ? "Stops 1 background job" : "Stops \(names.count) background jobs"
   }
 
   /// The alert's line for steps this app does not know.
@@ -140,7 +142,7 @@ extension ViewerWords {
   /// - Parameter name: The job's name; nil when the service names none.
   /// - Returns: "Stop the background job web", or "Stop a background job".
   static func stopJob(_ name: String?) -> String {
-    name.map { "Stop the background job \($0)" } ?? "Stop a background job"
+    "Stop \(job(name))"
   }
 
   /// The receipt's name for the processes that left a stopped job and still run.
@@ -239,6 +241,14 @@ extension ViewerWords {
     case "leader-gone": "the job's first process is gone"
     default: nil
     }
+  }
+
+  /// A background job, by its name when the service gives one, as the alert and the receipt both name it.
+  ///
+  /// - Parameter name: The job's name; nil when the service names none.
+  /// - Returns: "the background job web", or "a background job".
+  private static func job(_ name: String?) -> String {
+    name.map { "the background job \($0)" } ?? "a background job"
   }
 
   /// A count of copies.

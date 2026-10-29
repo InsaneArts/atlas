@@ -380,6 +380,20 @@ struct ViewerPresenterCleanupTests {
     #expect(ViewerPresenter.cleanupSteps(two) == ["Stops 2 background jobs"])
   }
 
+  @Test("the confirmation counts every background job it stops, named or not")
+  func theConfirmationCountsEveryJobNamedOrNot() {
+    let unnamed = CleanupReply(preview: true, steps: [CleanupStep(number: 1, kind: .stopJob, job: "7c2e91a04b3f")])
+    #expect(ViewerPresenter.cleanupSteps(unnamed) == ["Stops 1 background job"])
+    let mixed = CleanupReply(
+      preview: true,
+      steps: [
+        CleanupStep(number: 1, kind: .stopJob, name: "web"),
+        CleanupStep(number: 2, kind: .stopJob, job: "7c2e91a04b3f"),
+      ]
+    )
+    #expect(ViewerPresenter.cleanupSteps(mixed) == ["Stops 2 background jobs"])
+  }
+
   @Test("the receipt says which processes left a stopped job and how many collected files are not kept")
   func theReceiptSaysWhatLeftAJobAndWhatIsNotKept() {
     let applied = CleanupReply(

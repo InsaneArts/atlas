@@ -49,7 +49,7 @@ extension ViewerPresenter {
       lines.append(ViewerWords.quits(apps))
     }
     let jobs = kinds(.stopJob)
-    if !jobs.isEmpty { lines.append(ViewerWords.stopsJobs(jobs.compactMap(\.name))) }
+    if !jobs.isEmpty { lines.append(ViewerWords.stopsJobs(jobs.map(\.name))) }
     let plans = kinds(.undoPlan).count
     if plans > 0 { lines.append(ViewerWords.undoesChanges(plans)) }
     for install in kinds(.removeInstall) {
