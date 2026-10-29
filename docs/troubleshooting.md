@@ -59,7 +59,7 @@ Native Save and Open panels require an authenticated Screen Sharing connection t
 
 Use Google Chrome or Firefox for a web app in the hidden helper. Safari and other WebKit views can remain blank without Screen Sharing. Pass `--app` when opening a URL so the default browser does not decide the result. `capabilities.webContent` in `doctor --verbose` explains this constraint; it is not proof that the page loaded. See [practical limits](using-atlas.md#settings-and-practical-limits).
 
-If a named click fails, run `atlas elements --app NAME` and check its role and label. A hidden or ambiguous element is refused. When a name matches nothing or several elements, the error's `candidates` lists up to five with their role, name and click point. When the scan was incomplete, its `scan` says why. Use fresh screenshot coordinates only after inspecting the target.
+If a named click fails, run `atlas elements --app NAME` and check its role and label. A hidden or ambiguous element is refused. When a name matches nothing or several elements, the error's `candidates` lists up to five with their role, name and click point. When the scan was incomplete, its `scan` says why. `withheld` among its reasons means the app handed back itself instead of its windows, as macOS apps do while the Mac's screen is locked: the list then holds only the menu bar, so ask the person to unlock the Mac. Use fresh screenshot coordinates only after inspecting the target.
 
 ## The picture is stale or a viewer pane fails
 

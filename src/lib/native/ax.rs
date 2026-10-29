@@ -282,10 +282,18 @@ pub enum Stop {
     Time,
     /// Part of the app could not be read.
     Unread,
+    /// The app handed back itself in place of its windows.
+    Withheld,
 }
 
 impl Stop {
-    const ALL: [Stop; 4] = [Stop::Depth, Stop::Count, Stop::Time, Stop::Unread];
+    const ALL: [Stop; 5] = [
+        Stop::Depth,
+        Stop::Count,
+        Stop::Time,
+        Stop::Unread,
+        Stop::Withheld,
+    ];
 
     /// The word a reply names it by.
     pub(crate) fn word(self) -> &'static str {
@@ -294,6 +302,7 @@ impl Stop {
             Stop::Count => "count",
             Stop::Time => "time",
             Stop::Unread => "unread",
+            Stop::Withheld => "withheld",
         }
     }
 
@@ -309,6 +318,9 @@ impl Stop {
             Stop::Count => "the app has more elements than Atlas reads",
             Stop::Depth => "some elements are nested too deep",
             Stop::Unread => "part of the app could not be read",
+            Stop::Withheld => {
+                "the app withheld its windows, as macOS does while the Mac's screen is locked"
+            }
         }
     }
 }
@@ -682,6 +694,28 @@ impl Scan {
             .iter()
             .filter_map(|value| value.downcast::<AXUIElement>().ok())
             .collect()
+    }
+
+    /// `windows`, an app's windows, without any that is `app` itself. An
+    /// app hands back its own element for every window it will not show an
+    /// Accessibility client (AppKit does so while the Mac's screen is
+    /// locked); a withheld window might hold an unseen match, so the scan
+    /// is incomplete rather than empty.
+    fn shown(
+        &mut self,
+        app: &AXUIElement,
+        windows: Vec<CFRetained<AXUIElement>>,
+    ) -> Vec<CFRetained<AXUIElement>> {
+        let listed = windows.len();
+        let shown: Vec<_> = windows
+            .into_iter()
+            .filter(|window| **window != *app)
+            .collect();
+        if shown.len() < listed {
+            self.stop(Stop::Withheld);
+        }
+
+        shown
     }
 
     /// Whether an array attribute holds anything, from its count alone:
@@ -1137,6 +1171,7 @@ pub fn elements(pid: i32, limits: Limits) -> Result<Snapshot> {
     let mut scan = Scan::new(Instant::now() + limits.time);
     let windows = scan.children(&app, "AXWindows", limits.count);
     let windows_error = scan.last_error.take();
+    let windows = scan.shown(&app, windows);
 
     // An app that answers nothing at all, not even its role, is unreachable;
     // report why, not "empty".
@@ -1970,6 +2005,37 @@ mod tests {
         // SAFETY: a plain constructor returning an owned element or null,
         // adopted here.
         unsafe { AXUIElementCreateSystemWide().map(|system| CFRetained::from_raw(system)) }.unwrap()
+    }
+
+    fn application(pid: libc::pid_t) -> CFRetained<AXUIElement> {
+        // SAFETY: a plain constructor returning an owned element or null,
+        // adopted here.
+        unsafe { AXUIElementCreateApplication(pid).map(|app| CFRetained::from_raw(app)) }.unwrap()
+    }
+
+    #[test]
+    fn a_window_that_is_the_app_itself_is_withheld_not_listed() {
+        let pid = libc::pid_t::try_from(std::process::id()).unwrap();
+        let app = application(pid);
+        let mut scan = open_scan();
+
+        let shown = scan.shown(&app, vec![application(pid), system_wide()]);
+
+        assert_eq!(shown.len(), 1);
+        assert!(*shown[0] == *system_wide());
+        assert!(scan.incomplete, "a withheld window might hold a match");
+        assert_eq!(scan.stops, BTreeSet::from([Stop::Withheld]));
+    }
+
+    #[test]
+    fn windows_an_app_shows_leave_the_scan_complete() {
+        let pid = libc::pid_t::try_from(std::process::id()).unwrap();
+        let app = application(pid);
+        let mut scan = open_scan();
+
+        assert_eq!(scan.shown(&app, vec![system_wide()]).len(), 1);
+        assert!(scan.shown(&app, Vec::new()).is_empty());
+        assert!(!scan.incomplete && scan.stops.is_empty());
     }
 
     #[test]

@@ -1396,12 +1396,23 @@ impl Scanned {
             error = error.with("scan", diagnostics);
         }
 
-        error.with(
-            "next",
-            "Try again. If it stays incomplete, click the point from a screenshot instead.",
-        )
+        let next = if self.withheld() {
+            WITHHELD_NEXT
+        } else {
+            "Try again. If it stays incomplete, click the point from a screenshot instead."
+        };
+        error.with("next", next)
+    }
+
+    /// Whether the app handed back itself in place of its windows.
+    fn withheld(&self) -> bool {
+        self.reasons.contains(&Stop::Withheld)
     }
 }
+
+/// What to do about an app that withheld its windows from the scan.
+const WITHHELD_NEXT: &str = "Ask the person to unlock the Mac: apps hide their windows from \
+                             Accessibility while its screen is locked. Then look again.";
 
 /// The accessibility elements of process `pid`, scanned in the helper
 /// `verified` describes, which the caller verified just before.
@@ -1528,6 +1539,9 @@ fn listing(pid: i64, scanned: &Scanned, filter: &ElementFilter, max: usize, full
     // failure, say) changes nothing an agent does.
     if let Some(diagnostics) = scanned.diagnostics().filter(|_| scanned.incomplete) {
         listed["scan"] = diagnostics;
+    }
+    if scanned.withheld() {
+        listed["next"] = json!(WITHHELD_NEXT);
     }
 
     if filter.name.is_some() && matching.is_empty() {
@@ -3303,17 +3317,23 @@ mod tests {
         };
 
         let every = probe(
-            json!(["depth", "count", "time", "unread", "later"]),
+            json!(["depth", "count", "time", "unread", "withheld", "later"]),
             json!({}),
         );
         assert_eq!(
             every.reasons,
-            [Stop::Depth, Stop::Count, Stop::Time, Stop::Unread]
+            [
+                Stop::Depth,
+                Stop::Count,
+                Stop::Time,
+                Stop::Unread,
+                Stop::Withheld
+            ]
         );
         assert!(every.incomplete);
         assert_eq!(
             every.diagnostics(),
-            Some(json!({"reasons": ["depth", "count", "time", "unread"]}))
+            Some(json!({"reasons": ["depth", "count", "time", "unread", "withheld"]}))
         );
 
         let older = probe(Value::Null, json!({}));
@@ -3402,6 +3422,37 @@ mod tests {
             "The accessibility scan was incomplete, so a unique match cannot be established"
         );
         assert!(error.details.get("scan").is_none());
+    }
+
+    #[test]
+    fn an_app_that_withheld_its_windows_is_reported_never_listed_as_empty() {
+        let probe = json!({
+            "ok": true,
+            "elements": [{"index": 0, "depth": 0, "role": "AXMenuBarItem", "title": "Edit"}],
+            "truncated": true,
+            "reasons": ["withheld"],
+            "errors": {},
+        });
+        let scan = Scanned::from_probe(probe).unwrap();
+
+        let listed = listing(1, &scan, &ElementFilter::default(), 50, false);
+        assert_eq!(listed["scanIncomplete"], true);
+        assert_eq!(listed["scan"]["reasons"], json!(["withheld"]));
+        assert_eq!(listed["next"], WITHHELD_NEXT);
+
+        let error = scan.refusal();
+        assert!(
+            error.error.contains("the app withheld its windows"),
+            "{}",
+            error.error
+        );
+        assert_eq!(error.details["next"], WITHHELD_NEXT);
+
+        let mut complete = scanned(Vec::new());
+        complete.incomplete = true;
+        complete.reasons = vec![Stop::Unread];
+        let listed = listing(1, &complete, &ElementFilter::default(), 50, false);
+        assert!(listed.get("next").is_none(), "only a withheld scan says so");
     }
 
     /// The names a refused click lists, in order.
