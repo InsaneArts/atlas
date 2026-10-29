@@ -547,7 +547,7 @@ fn gathered(rows: &mut [Row], row: &Row, oldest_at: Option<u64>) -> bool {
     {
         newer.action_count = match (newer.action_count, row.action_count) {
             (None, None) => None,
-            (newer, older) => Some(newer.unwrap_or(0) + older.unwrap_or(0)),
+            (newer, older) => Some(newer.unwrap_or(0).saturating_add(older.unwrap_or(0))),
         };
         return true;
     }
@@ -707,6 +707,28 @@ mod tests {
             [true, false],
             "a failure is never folded into input that worked"
         );
+    }
+
+    #[test]
+    fn accepted_action_counts_saturate_when_a_personal_input_run_overflows() {
+        let dir = tempfile::tempdir().unwrap();
+        for counts in [
+            [u64::MAX, 1],
+            [1, u64::MAX],
+            [u64::MAX, u64::MAX],
+            [u64::MAX - 1, 1],
+        ] {
+            let rows = counts.into_iter().enumerate().map(|(at, count)| {
+                let mut row = persons(at as u64);
+                row["actionCount"] = json!(count);
+                row
+            });
+            fs::write(dir.path().join(FILE), log(rows)).unwrap();
+            let shown = recent(dir.path(), 1);
+            assert_eq!(shown.len(), 1, "{counts:?}");
+            assert_eq!(shown[0].action_count, Some(u64::MAX), "{counts:?}");
+            assert_eq!(shown[0].at.as_deref(), Some("1"));
+        }
     }
 
     #[test]
