@@ -2568,6 +2568,63 @@ fn the_persons_input_through_a_viewer_is_one_row_a_span_counting_every_action() 
 }
 
 #[test]
+fn a_failed_flush_keeps_every_buffered_action_until_the_log_can_be_written() {
+    let dir = tempfile::tempdir().unwrap();
+    let client = persons_client(dir.path(), LONG_SPAN);
+    let output = client.output_dir().unwrap();
+    fs::create_dir_all(output).unwrap();
+    let blocked = output.join(activity_log::FILE);
+    fs::create_dir(&blocked).unwrap();
+    let input = json!({"op": "input", "actions": [{"type": "click"}]});
+    client.record_for_test(&input, &json!({"ok": true}));
+    let gathering = client.person_input.as_ref().unwrap();
+    assert!(gathering.flush().is_err());
+    assert!(
+        client
+            .record_blocking(&input, &json!({"ok": true}), Duration::ZERO)
+            .is_err()
+    );
+    assert!(gathering.flush().is_err());
+
+    fs::remove_dir(blocked).unwrap();
+    gathering.flush().unwrap();
+    gathering.flush().unwrap();
+    let text = fs::read_to_string(output.join(activity_log::FILE)).unwrap();
+    assert_eq!(text.lines().count(), 2);
+    assert_eq!(activity_log::recent(output, 1)[0].action_count, Some(2));
+}
+
+#[test]
+fn a_failed_rollover_keeps_both_spans_in_their_original_order() {
+    let dir = tempfile::tempdir().unwrap();
+    let client = persons_client(dir.path(), Duration::ZERO);
+    let output = client.output_dir().unwrap();
+    fs::create_dir_all(output).unwrap();
+    let blocked = output.join(activity_log::FILE);
+    fs::create_dir(&blocked).unwrap();
+    let input =
+        |count: usize| json!({"op": "input", "actions": vec![json!({"type": "click"}); count]});
+    client.record_for_test(&input(1), &json!({"ok": true}));
+    assert!(
+        client
+            .record_blocking(&input(2), &json!({"ok": true}), Duration::ZERO)
+            .is_err()
+    );
+    fs::remove_dir(blocked).unwrap();
+    client.person_input.as_ref().unwrap().flush().unwrap();
+    let text = fs::read_to_string(output.join(activity_log::FILE)).unwrap();
+    let counts = text
+        .lines()
+        .map(|line| {
+            serde_json::from_str::<Value>(line).unwrap()["actionCount"]
+                .as_u64()
+                .unwrap()
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(counts, [1, 2]);
+}
+
+#[test]
 fn the_persons_input_gathers_five_seconds_a_row_unless_made_with_another_span() {
     assert_eq!(PersonInput::default().span(), PERSON_INPUT_SPAN);
     assert_eq!(PERSON_INPUT_SPAN, Duration::from_secs(5));

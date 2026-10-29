@@ -9,6 +9,7 @@ use crate::{
 };
 use serde_json::{Value, json};
 use std::{
+    collections::VecDeque,
     path::{Path, PathBuf},
     sync::{Arc, Mutex, PoisonError},
     time::{Duration, Instant},
@@ -41,7 +42,24 @@ impl Default for PersonInput {
 #[derive(Default)]
 struct Gathering {
     row: Option<(PathBuf, Row, Instant)>,
+    pending: VecDeque<(PathBuf, Row)>,
     timed: bool,
+}
+
+impl Gathering {
+    fn keep_row(&mut self) {
+        if let Some((directory, row, _)) = self.row.take() {
+            self.pending.push_back((directory, row));
+        }
+    }
+
+    fn write_pending(&mut self) -> Result<()> {
+        while let Some((directory, row)) = self.pending.front() {
+            activity_log::append(directory, row)?;
+            self.pending.pop_front();
+        }
+        Ok(())
+    }
 }
 
 impl PersonInput {
@@ -72,27 +90,21 @@ impl PersonInput {
             gathered.elapsed_ms =
                 Some(gathered.elapsed_ms.unwrap_or(0.0) + row.elapsed_ms.unwrap_or(0.0));
             gathered.at = row.at;
-            return Ok(());
+            return gathering.write_pending();
         }
 
-        let earlier = gathering
-            .row
-            .replace((directory.to_owned(), row, Instant::now()));
+        gathering.keep_row();
+        gathering.row = Some((directory.to_owned(), row, Instant::now()));
         gathering.timed = false;
-        match earlier {
-            Some((into, gathered, _)) => activity_log::append(&into, &gathered),
-            None => Ok(()),
-        }
+        gathering.write_pending()
     }
 
     /// Write the row gathered so far, when there is one.
     pub(crate) fn flush(&self) -> Result<()> {
         let mut gathering = self.lock();
         gathering.timed = false;
-        match gathering.row.take() {
-            Some((into, gathered, _)) => activity_log::append(&into, &gathered),
-            None => Ok(()),
-        }
+        gathering.keep_row();
+        gathering.write_pending()
     }
 
     /// Whether a row is gathering whose writing is not yet timed; it is
