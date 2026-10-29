@@ -488,7 +488,10 @@ mod tests {
 
     /// The literal keys read here are the framework's exported constants.
     #[test]
-    #[allow(unsafe_code)]
+    #[allow(
+        unsafe_code,
+        reason = "FFI: the framework's constants are extern statics"
+    )]
     fn window_keys_match_the_framework_constants() {
         use objc2_core_graphics::{
             kCGWindowAlpha, kCGWindowBounds, kCGWindowLayer, kCGWindowName, kCGWindowNumber,

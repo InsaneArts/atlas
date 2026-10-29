@@ -73,12 +73,15 @@ fn release_each(held: &mut u64, mut post: impl FnMut(u16, u64) -> Result<()>) ->
 /// itself.
 struct Source(CFRetained<CGEventSource>);
 
+#[allow(
+    unsafe_code,
+    reason = "FFI: CGEventSource is not marked Send by its binding"
+)]
 // SAFETY: a CGEventSource is a CoreFoundation object: its retain and release
 // are thread-safe, and creating events from it is not tied to the thread that
 // made it (CoreGraphics posting needs no main thread). The engine holds the
 // only reference and is used only under the service's mutex, so the source
 // is never used from two threads at once.
-#[allow(unsafe_code)]
 unsafe impl Send for Source {}
 
 pub struct Engine {
@@ -414,7 +417,7 @@ impl Engine {
         self.commit()
     }
 
-    #[allow(unsafe_code)] // FFI: key text is passed as a UTF-16 pointer.
+    #[allow(unsafe_code, reason = "FFI: key text is passed as a UTF-16 pointer")]
     fn key_event(&mut self, code: u16, down: bool, flags: u64, text: Option<&[u16]>) -> Result<()> {
         let event = created(CGEvent::new_keyboard_event(
             Some(&self.source.0),

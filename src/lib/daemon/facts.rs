@@ -12,7 +12,10 @@ use serde_json::{Value, json};
 use std::time::Duration;
 
 /// Ask for Accessibility with the system prompt, unless it is allowed.
-#[allow(unsafe_code)] // FFI: the consent prompt takes an options dictionary.
+#[allow(
+    unsafe_code,
+    reason = "FFI: the consent prompt takes an options dictionary"
+)]
 fn request_accessibility() {
     if accessibility() {
         return;
@@ -667,7 +670,10 @@ mod tests {
 
     /// The prompt option is passed by name; it is the exported constant.
     #[test]
-    #[allow(unsafe_code)]
+    #[allow(
+        unsafe_code,
+        reason = "FFI: the framework's constants are extern statics"
+    )]
     fn the_prompt_option_is_the_framework_constant() {
         // SAFETY: reading an immutable framework constant in a test.
         let key = unsafe { objc2_application_services::kAXTrustedCheckOptionPrompt };

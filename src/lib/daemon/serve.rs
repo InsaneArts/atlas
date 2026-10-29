@@ -798,7 +798,10 @@ mod tests {
 
     /// The run loop mode is passed by name; it is the default mode.
     #[test]
-    #[allow(unsafe_code)]
+    #[allow(
+        unsafe_code,
+        reason = "FFI: the framework's constants are extern statics"
+    )]
     fn the_run_loop_mode_is_the_default_mode() {
         // SAFETY: reading an immutable framework constant in a test.
         let mode = unsafe { objc2_core_foundation::kCFRunLoopDefaultMode }.unwrap();

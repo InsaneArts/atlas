@@ -122,8 +122,7 @@ fn now() -> u64 {
 }
 
 /// Seconds since the epoch at which this machine booted.
-// FFI: sysctl kern.boottime has no safe binding.
-#[allow(unsafe_code)]
+#[allow(unsafe_code, reason = "FFI: sysctl kern.boottime has no safe binding")]
 fn boot_time() -> Option<u64> {
     let mut boot = libc::timeval {
         tv_sec: 0,

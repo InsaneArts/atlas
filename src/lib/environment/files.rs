@@ -167,7 +167,7 @@ fn attribute_name(name: &[u8]) -> Result<CString> {
 /// The most extended-attribute data (names and values) kept for one file.
 const MAX_ATTRIBUTES: usize = 16 * 1024;
 
-#[allow(unsafe_code)] // FFI: bounded extended-attribute reads.
+#[allow(unsafe_code, reason = "FFI: bounded extended-attribute reads")]
 fn attributes(file: &fs::File) -> Result<std::collections::BTreeMap<String, String>> {
     // Sizes are read first so the limit holds before anything is allocated,
     // and each read must return exactly that size: a short read (as resource
@@ -277,7 +277,7 @@ pub(super) fn owned_attributes(
 /// with, so new contents never take it over from the file they replace.
 pub(super) const QUARANTINE: &str = "com.apple.quarantine";
 
-#[allow(unsafe_code)] // FFI: extended-attribute writes by descriptor.
+#[allow(unsafe_code, reason = "FFI: extended-attribute writes by descriptor")]
 pub(super) fn restore_attributes(
     path: &Path,
     expected: &std::collections::BTreeMap<String, String>,

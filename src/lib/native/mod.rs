@@ -7,9 +7,11 @@ use serde_json::Value;
 /// renews it, so how long one can outlive a holder that was killed.
 pub(crate) const GRANT_TTL: std::time::Duration = std::time::Duration::from_secs(6);
 
-// FFI: SessionGetInfo reports through out-pointers.
 #[cfg(target_os = "macos")]
-#[allow(unsafe_code)]
+#[allow(
+    unsafe_code,
+    reason = "FFI: SessionGetInfo reports through out-pointers"
+)]
 pub fn session_info() -> Result<Value> {
     use objc2_core_graphics::{CGDisplayBounds, CGMainDisplayID};
     use objc2_security::{SessionAttributeBits, SessionGetInfo, callerSecuritySession};
@@ -59,7 +61,10 @@ pub fn session_info() -> Result<Value> {
 /// Whether this process may use Accessibility (macOS has let the person
 /// allow it for Atlas).
 #[cfg(target_os = "macos")]
-#[allow(unsafe_code)] // FFI: Accessibility trust query.
+#[allow(
+    unsafe_code,
+    reason = "FFI: the Accessibility trust query has no safe binding"
+)]
 pub fn accessibility_trusted() -> bool {
     // SAFETY: no arguments; only reads this process's consent.
     unsafe { objc2_application_services::AXIsProcessTrusted() }
