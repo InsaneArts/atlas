@@ -1,14 +1,16 @@
 //! Apps installed into the helper's `~/Applications` for a task, run inside
 //! the helper by the environment worker. An install goes only where
-//! nothing is, and is removed only when it is still the exact copy Atlas
-//! made: its recorded destination, its folder's node, mode and owner, and
-//! a print of every entry inside it. Removal moves it into the install's
-//! own private folder first, prints it again there, and deletes it only
-//! when it is still that copy; anything else is put back or kept, never
-//! deleted. A bundle identifier or a name alone never selects anything to
-//! remove, and files the app writes outside its bundle are reported, never
-//! removed. Every record change is written before the step it announces,
-//! so a worker cut short is finished by the next request.
+//! nothing is, and is taken away only when it is still the exact copy
+//! Atlas made: its recorded destination, its folder's node, mode and
+//! owner, and a print of every entry inside it. Taking it away never
+//! deletes it: it is moved, never over anything and never by copying, into
+//! the helper's Trash under a name of its own, so a wrong judgement can
+//! always be undone by the person. A bundle identifier or a name alone
+//! never selects anything, and files the app writes outside its bundle are
+//! reported, never touched. Every record change is written before the step
+//! it announces, so a worker cut short is finished by the next request. A
+//! record this build cannot read is never acted on: its install is kept as
+//! it is, and said to be unreadable.
 mod print;
 mod processes;
 #[cfg(test)]
@@ -70,16 +72,16 @@ pub(super) struct Install {
     pub made_folder: bool,
     /// Which files keyed by the bundle identifier existed at install time.
     pub before: BTreeMap<String, bool>,
-    /// Why it was kept, once it was: `changed` or `replaced`.
+    /// Why it was kept, once it was: `changed`, `replaced` or
+    /// `other-volume`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub kept: Option<String>,
-    /// Whether what was kept is held aside in the install's own folder,
-    /// as it could not be put back.
-    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
-    pub held_aside: bool,
+    /// Its name in the helper's Trash, once moving it there was announced.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub trashed: Option<String>,
 }
 
-/// How far an install, or its removal, got.
+/// How far an install, or taking it away, got.
 #[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub(super) enum InstallPhase {
@@ -88,14 +90,24 @@ pub(super) enum InstallPhase {
     /// Printed, and being moved into place.
     Placing,
     Installed,
-    /// Being moved into the install's own folder, where what was moved has
-    /// not yet been checked: nothing is deleted in this phase.
-    Moving,
-    /// Moved and checked to be the copy Atlas made: being deleted.
-    Deleting,
+    /// Checked to be the copy Atlas made, and being moved into the
+    /// helper's Trash under its recorded name.
+    Trashing,
+    /// In the helper's Trash.
+    Trashed,
+    /// Never placed: nothing of it is left.
     Removed,
-    /// Left in place on purpose: it changed, or something else is there.
+    /// Left in place on purpose: it changed, something else is there, or
+    /// it could not be moved to the Trash without copying.
     Kept,
+}
+
+/// What the store holds for one install ID.
+enum Held {
+    Missing,
+    /// A record this build cannot read: never acted on.
+    Unreadable,
+    Record(Box<Install>),
 }
 
 /// The install store in `home`, locked: exclusively to change it, shared
@@ -151,16 +163,24 @@ impl Store {
         self.path.join(format!("install-{id}"))
     }
 
-    fn load(&self, id: &str) -> Result<Option<Install>> {
+    /// The record of install `id`. One that is there but does not read as
+    /// this build writes it, of any version, is unreadable, and is left
+    /// exactly as it is.
+    fn load(&self, id: &str) -> Held {
         let path = self.folder(id).join("record.json");
-        if fs::symlink_metadata(&path).is_err() {
-            return Ok(None);
+        if fs::symlink_metadata(&path)
+            .is_err_and(|error| error.kind() == std::io::ErrorKind::NotFound)
+        {
+            return Held::Missing;
         }
-        let install: Install = decode(&read_limited(&path, MAX_RECORD)?)?;
-        if install.id != id || install.version != 1 {
-            return Err(problem("Invalid install record"));
+        let install = read_limited(&path, MAX_RECORD)
+            .and_then(|bytes| decode::<Install>(&bytes))
+            .ok()
+            .filter(|install| install.id == id && install.version == 1);
+        match install {
+            Some(install) => Held::Record(Box::new(install)),
+            None => Held::Unreadable,
         }
-        Ok(Some(install))
     }
 
     fn save(&self, install: &Install) -> Result<()> {
@@ -174,10 +194,9 @@ impl Store {
         )
     }
 
-    /// A private folder of the install's own, `which` being "staging" or
-    /// "removing", made when missing.
-    fn place(&self, id: &str, which: &str) -> Result<(PathBuf, fs::File)> {
-        let path = self.folder(id).join(which);
+    /// The install's own staging folder, made when missing.
+    fn staging(&self, id: &str) -> Result<(PathBuf, fs::File)> {
+        let path = self.folder(id).join("staging");
         let folder = private_directory(&path)?;
         Ok((path, folder))
     }
@@ -224,6 +243,18 @@ pub(super) fn install(
     name: &str,
     guard: &impl Fn() -> Result<()>,
 ) -> Result<Value> {
+    install_moving(home, id, source, name, guard, &move_between)
+}
+
+/// [`install`], moving with `mover`.
+fn install_moving(
+    home: &Path,
+    id: &str,
+    source: &Path,
+    name: &str,
+    guard: &impl Fn() -> Result<()>,
+    mover: Mover,
+) -> Result<Value> {
     validate_id(id)?;
     if !bundle_name(name) || !source.is_absolute() {
         return Err(refused(
@@ -233,7 +264,7 @@ pub(super) fn install(
     guard()?;
 
     let store = Store::open(home, true)?.ok_or_else(|| problem("Missing install store"))?;
-    if store.load(id)?.is_some() {
+    if !matches!(store.load(id), Held::Missing) {
         return Err(refused("An install with this ID was already made"));
     }
     let applications = home.join(APPLICATIONS);
@@ -270,11 +301,11 @@ pub(super) fn install(
         made_folder: false,
         before: BTreeMap::new(),
         kept: None,
-        held_aside: false,
+        trashed: None,
     };
     store.save(&record)?;
 
-    match place(home, &store, &mut record, source, guard) {
+    match place(home, &store, &mut record, source, guard, mover) {
         Ok(Placed::Installed) => Ok(json!({
             "ok": true,
             "installed": true,
@@ -313,8 +344,9 @@ fn place(
     record: &mut Install,
     source: &Path,
     guard: &impl Fn() -> Result<()>,
+    mover: Mover,
 ) -> Result<Placed> {
-    let (staging, staging_folder) = store.place(&record.id, "staging")?;
+    let (staging, staging_folder) = store.staging(&record.id)?;
     let staged = staging.join(&record.name);
     let give_up = |record: &mut Install, error: Error| -> Result<Placed> {
         delete(&staging)?;
@@ -378,9 +410,12 @@ fn place(
 
     guard()?;
     let name = file_name(&record.name)?;
-    match move_between(&staging_folder, &name, &folder, &name) {
-        // Moved: a folder not yet written through changes nothing here.
-        Ok(Moved::Synced | Moved::Unsynced(_)) => {}
+    match mover(&staging_folder, &name, &folder, &name) {
+        Ok(Moved::Synced) => {}
+        // Moved, but not written through: the record stays placing, with
+        // the print that proves the bundle at the destination is this one,
+        // until a removal finds it there and takes it away.
+        Ok(Moved::Unsynced(error)) => return Err(error.into()),
         Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {
             return give_up(
                 record,
@@ -437,41 +472,36 @@ fn side_effects(home: &Path, id: &str) -> Vec<(String, bool)> {
         .collect()
 }
 
-/// What removing an install came to, as its reply names it.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+/// Where the helper keeps its Trash, in its home.
+const TRASH: &str = ".Trash";
+
+/// The name install `id` of the bundle `name` takes in the helper's
+/// Trash: its own, so it never meets another.
+fn trash_name(name: &str, id: &str) -> String {
+    format!("{name} (atlas {})", &id[..id.len().min(16)])
+}
+
+/// What taking an install away came to, as its reply names it.
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub(super) enum Outcome {
-    Removed,
+    /// Moved into the helper's Trash, under this name.
+    Trashed(String),
     AlreadyGone,
     Kept(&'static str),
     InUse,
 }
 
-impl Outcome {
-    fn said(self) -> (&'static str, Option<&'static str>) {
-        match self {
-            Self::Removed => ("removed", None),
-            Self::AlreadyGone => ("alreadyGone", None),
-            Self::Kept(reason) => ("kept", Some(reason)),
-            Self::InUse => ("inUse", None),
-        }
-    }
-}
-
-/// Remove install `id`, when it is still the exact copy Atlas made and
-/// nothing in the helper runs from it. Anything else is kept and said. A
-/// removal cut short is finished, every check made again first; a failure
-/// after anything changed is a reply to finish, never a refusal.
+/// Take install `id` away, into the helper's Trash, when it is still the
+/// exact copy Atlas made and nothing in the helper runs from it. Anything
+/// else is kept and said. One cut short is finished, every check made
+/// again first; a failure after anything changed is a reply to finish,
+/// never a refusal.
 pub(super) fn remove(
     home: &Path,
     id: &str,
     guard: &impl Fn() -> Result<()>,
     looks: &Looks,
 ) -> Result<Value> {
-    validate_id(id)?;
-    guard()?;
-    if directory(&home.join(INSTALLS), false)?.is_none() {
-        return Ok(removal(id, Outcome::AlreadyGone, None, home));
-    }
     remove_moving(home, id, guard, looks, &move_between)
 }
 
@@ -487,9 +517,16 @@ fn remove_moving(
     looks: &Looks,
     mover: Mover,
 ) -> Result<Value> {
+    validate_id(id)?;
+    guard()?;
+    if directory(&home.join(INSTALLS), false)?.is_none() {
+        return Ok(removal(id, &Outcome::AlreadyGone, None, home));
+    }
     let store = Store::open(home, true)?.ok_or_else(|| problem("Missing install store"))?;
-    let Some(mut record) = store.load(id)? else {
-        return Ok(removal(id, Outcome::AlreadyGone, None, home));
+    let mut record = match store.load(id) {
+        Held::Missing => return Ok(removal(id, &Outcome::AlreadyGone, None, home)),
+        Held::Unreadable => return Ok(removal(id, &Outcome::Kept("unreadable"), None, home)),
+        Held::Record(record) => *record,
     };
     let removing = Removing {
         home,
@@ -499,7 +536,7 @@ fn remove_moving(
         mover,
     };
     match removing.recorded(&mut record) {
-        Ok(outcome) => Ok(removal(id, outcome, Some(&record), home)),
+        Ok(outcome) => Ok(removal(id, &outcome, Some(&record), home)),
         Err(error) if store.changed.get() => Ok(unfinished(id, &record, &error)),
         Err(error) => Err(error),
     }
@@ -520,14 +557,6 @@ impl<G: Fn() -> Result<()>> Removing<'_, G> {
         self.home.join(APPLICATIONS).join(&record.name)
     }
 
-    /// Where a removal moves the bundle before deleting it.
-    fn moved(&self, record: &Install) -> PathBuf {
-        self.store
-            .folder(&record.id)
-            .join("removing")
-            .join(&record.name)
-    }
-
     /// Whether the destination holds the recorded bundle's folder.
     fn placed(&self, record: &Install) -> bool {
         fs::symlink_metadata(self.destination(record))
@@ -539,19 +568,24 @@ impl<G: Fn() -> Result<()>> Removing<'_, G> {
     fn recorded(&self, record: &mut Install) -> Result<Outcome> {
         match record.phase {
             InstallPhase::Removed => Ok(Outcome::AlreadyGone),
+            InstallPhase::Trashed => Ok(match &record.trashed {
+                Some(name) => Outcome::Trashed(name.clone()),
+                None => Outcome::AlreadyGone,
+            }),
             InstallPhase::Kept => Ok(Outcome::Kept(match record.kept.as_deref() {
                 Some("replaced") => "replaced",
+                Some("other-volume") => "other-volume",
                 _ => "changed",
             })),
             InstallPhase::Copying => self.unplaced(record),
             InstallPhase::Placing if !self.placed(record) => self.unplaced(record),
-            InstallPhase::Moving => self.check_moved(record),
-            InstallPhase::Deleting => self.finish_deleting(record),
+            InstallPhase::Trashing => self.finish_trashing(record),
             InstallPhase::Placing | InstallPhase::Installed => self.in_place(record),
         }
     }
 
-    /// An install never placed: what it staged goes, and it is removed.
+    /// An install never placed: what it staged (Atlas's own copy, made
+    /// for this install alone) goes, and it is removed.
     fn unplaced(&self, record: &mut Install) -> Result<Outcome> {
         delete(&self.store.folder(&record.id).join("staging"))?;
         record.phase = InstallPhase::Removed;
@@ -560,8 +594,7 @@ impl<G: Fn() -> Result<()>> Removing<'_, G> {
     }
 
     /// The bundle at its destination: checked to be the copy Atlas made
-    /// and in use by nothing, then moved into the install's own folder and
-    /// checked again there.
+    /// and in use by nothing, then moved into the helper's Trash.
     fn in_place(&self, record: &mut Install) -> Result<Outcome> {
         let destination = self.destination(record);
         let Some(print) = record.print.clone() else {
@@ -594,111 +627,61 @@ impl<G: Fn() -> Result<()>> Removing<'_, G> {
             return Ok(Outcome::InUse);
         }
 
-        record.phase = InstallPhase::Moving;
+        let trashed = trash_name(&record.name, &record.id);
+        record.trashed = Some(trashed.clone());
+        record.phase = InstallPhase::Trashing;
         self.store.save(record)?;
         (self.guard)()?;
-        let (_, removing) = self.store.place(&record.id, "removing")?;
+        let trash = self.trash()?;
         let applications = self.applications()?;
-        let name = file_name(&record.name)?;
-        match (self.mover)(&applications, &name, &removing, &name) {
-            Ok(Moved::Synced) => self.check_moved(record),
-            // Moved, but not written through: nothing is deleted on a move
-            // a power cut could undo. The record says moving, so the next
-            // removal checks what was moved before it deletes anything.
+        let (name, into) = (file_name(&record.name)?, file_name(&trashed)?);
+        match (self.mover)(&applications, &name, &trash, &into) {
+            Ok(Moved::Synced) => self.trashed(record, trashed),
+            // Moved, but not written through: the record says trashing, so
+            // the next removal finds it in the Trash and is done.
             Ok(Moved::Unsynced(error)) => Err(error.into()),
             Err(error) => {
                 // Nothing moved: the bundle is where it was.
                 record.phase = InstallPhase::Installed;
+                record.trashed = None;
                 self.store.save(record)?;
+                if error.raw_os_error() == Some(libc::EXDEV) {
+                    return self.keep(record, "other-volume");
+                }
                 Err(error.into())
             }
         }
     }
 
-    /// What the removal moved aside, not yet checked: deleted only when it
-    /// is still the copy Atlas made, else put back, or held aside when it
-    /// cannot be. With nothing moved aside, the bundle is looked for where
-    /// it was.
-    fn check_moved(&self, record: &mut Install) -> Result<Outcome> {
-        let moved = self.moved(record);
-        let Some(print) = record.print.clone() else {
-            return self.keep(record, "changed");
-        };
-        let folder = match fs::symlink_metadata(&moved) {
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
-                // The move never happened.
-                record.phase = InstallPhase::Installed;
-                self.store.save(record)?;
-                return if self.placed(record) {
-                    self.in_place(record)
-                } else {
-                    record.phase = InstallPhase::Removed;
-                    self.store.save(record)?;
-                    Ok(Outcome::AlreadyGone)
-                };
-            }
-            Err(error) => return Err(error.into()),
-            Ok(_) => directory(&moved, false)?,
-        };
-        let printed = folder
-            .as_ref()
-            .map(|folder| print_at(folder, record.executable.as_deref(), Limits::default()));
-        let same_node = folder
-            .as_ref()
-            .and_then(|folder| folder.metadata().ok())
-            .is_some_and(|metadata| node(&metadata) == print.root);
-
-        if same_node && matches!(&printed, Some(Ok(now)) if *now == print) {
-            record.phase = InstallPhase::Deleting;
+    /// A move into the Trash cut short: done when the Trash holds the
+    /// install under its recorded name; never begun when the bundle is
+    /// still at its destination, which is then checked again from the
+    /// start.
+    fn finish_trashing(&self, record: &mut Install) -> Result<Outcome> {
+        let Some(trashed) = record.trashed.clone() else {
+            record.phase = InstallPhase::Installed;
             self.store.save(record)?;
-            return self.finish_deleting(record);
+            return self.in_place(record);
+        };
+        let in_trash = self.home.join(TRASH).join(&trashed);
+        if fs::symlink_metadata(&in_trash).is_ok() {
+            return self.trashed(record, trashed);
         }
-
-        let reason = if same_node { "changed" } else { "replaced" };
-        self.put_back(record, reason)
-    }
-
-    /// Put what was moved aside back where it was, never over anything,
-    /// and keep it for `reason`; held aside when it cannot go back.
-    fn put_back(&self, record: &mut Install, reason: &'static str) -> Result<Outcome> {
-        let (_, removing) = self.store.place(&record.id, "removing")?;
-        let applications = self.applications();
-        let name = file_name(&record.name)?;
-        let back = applications.ok().is_some_and(|applications| {
-            (self.mover)(&removing, &name, &applications, &name).is_ok()
-        });
-        record.held_aside = !back;
-        self.keep(record, reason)
-    }
-
-    /// Delete what was checked to be the copy Atlas made, in the install's
-    /// own folder. A cut short deletion goes on only while what is there
-    /// is still that folder.
-    fn finish_deleting(&self, record: &mut Install) -> Result<Outcome> {
-        let moved = self.moved(record);
-        match fs::symlink_metadata(&moved) {
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
-            Err(error) => return Err(error.into()),
-            Ok(metadata) => {
-                let ours = record
-                    .print
-                    .as_ref()
-                    .is_some_and(|print| metadata.is_dir() && node(&metadata) == print.root);
-                if !ours {
-                    record.held_aside = true;
-                    return self.keep(record, "replaced");
-                }
-                delete(&moved)?;
-            }
-        }
-        record.phase = InstallPhase::Removed;
+        record.phase = InstallPhase::Installed;
+        record.trashed = None;
         self.store.save(record)?;
-        let _ = fs::remove_dir(self.store.folder(&record.id).join("removing"));
-        Ok(Outcome::Removed)
+        self.in_place(record)
+    }
+
+    fn trashed(&self, record: &mut Install, trashed: String) -> Result<Outcome> {
+        record.phase = InstallPhase::Trashed;
+        record.trashed = Some(trashed.clone());
+        self.store.save(record)?;
+        Ok(Outcome::Trashed(trashed))
     }
 
     /// Whether the bundle at `path` prints as `print`; one that cannot be
-    /// printed is never taken for unchanged.
+    /// printed in full is never taken for unchanged.
     fn same_print(&self, path: &Path, record: &Install, print: &BundlePrint) -> bool {
         directory(path, false)
             .ok()
@@ -716,6 +699,18 @@ impl<G: Fn() -> Result<()>> Removing<'_, G> {
         Ok(folder)
     }
 
+    /// The helper's Trash, made as macOS makes it when it is missing, and
+    /// only ever a folder the helper alone can change.
+    fn trash(&self) -> Result<fs::File> {
+        let path = self.home.join(TRASH);
+        let folder = match directory(&path, false)? {
+            Some(folder) => folder,
+            None => create_private_directory(&path)?,
+        };
+        installation_parent(&folder)?;
+        Ok(folder)
+    }
+
     /// Keep the install for `reason`, and say so from now on.
     fn keep(&self, record: &mut Install, reason: &'static str) -> Result<Outcome> {
         record.phase = InstallPhase::Kept;
@@ -725,20 +720,25 @@ impl<G: Fn() -> Result<()>> Removing<'_, G> {
     }
 }
 
-/// The reply to a removal: what became of the bundle, and, apart from it,
-/// which files keyed by its identifier exist now and whether each existed
-/// when it was installed. Those are never removed.
-fn removal(id: &str, outcome: Outcome, record: Option<&Install>, home: &Path) -> Value {
-    let (said, reason) = outcome.said();
-    let mut reply = json!({"ok": true, "installId": id, "outcome": said});
-    if let Some(reason) = reason {
-        reply["reason"] = json!(reason);
+/// The reply to taking an install away: what became of the bundle, and,
+/// apart from it, which files keyed by its identifier exist now and
+/// whether each existed when it was installed. Those are never touched.
+fn removal(id: &str, outcome: &Outcome, record: Option<&Install>, home: &Path) -> Value {
+    let mut reply = json!({"ok": true, "installId": id});
+    match outcome {
+        Outcome::Trashed(name) => {
+            reply["outcome"] = json!("trashed");
+            reply["trashName"] = json!(name);
+        }
+        Outcome::AlreadyGone => reply["outcome"] = json!("alreadyGone"),
+        Outcome::Kept(reason) => {
+            reply["outcome"] = json!("kept");
+            reply["reason"] = json!(reason);
+        }
+        Outcome::InUse => reply["outcome"] = json!("inUse"),
     }
     if let Some(record) = record {
         reply["app"] = json!(record.name.trim_end_matches(".app"));
-        if record.held_aside {
-            reply["heldAside"] = json!(true);
-        }
         if let Some(bundle_id) = &record.bundle_id {
             let kept: Vec<Value> = side_effects(home, bundle_id)
                 .into_iter()
@@ -784,11 +784,14 @@ pub(super) fn installs(
     let listed: Vec<Value> = ids
         .iter()
         .map(|id| {
-            let record = store
-                .as_ref()
-                .and_then(|store| store.load(id).ok().flatten());
-            let Some(record) = record else {
-                return json!({"installId": id, "phase": "missing"});
+            let record = match store.as_ref().map(|store| store.load(id)) {
+                None | Some(Held::Missing) => {
+                    return json!({"installId": id, "phase": "missing"});
+                }
+                Some(Held::Unreadable) => {
+                    return json!({"installId": id, "phase": "unreadable", "verified": false});
+                }
+                Some(Held::Record(record)) => *record,
             };
             let mut said = json!({
                 "installId": id,
@@ -799,7 +802,7 @@ pub(super) fn installs(
             });
             let placed_phase = matches!(
                 record.phase,
-                InstallPhase::Placing | InstallPhase::Installed | InstallPhase::Moving
+                InstallPhase::Placing | InstallPhase::Installed | InstallPhase::Trashing
             );
             let destination = home.join(APPLICATIONS).join(&record.name);
             let Some(print) = record.print.as_ref().filter(|_| placed_phase) else {

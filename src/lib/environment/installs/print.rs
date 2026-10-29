@@ -103,12 +103,16 @@ pub(in crate::environment) fn print_at(
         if limits.until.is_some_and(|until| Instant::now() >= until) {
             return Err(Unprinted::TooSlow);
         }
-        let names: Vec<std::ffi::CString> = folder
-            .iter()
-            .filter_map(std::result::Result::ok)
-            .map(|entry| entry.file_name().to_owned())
-            .filter(|name| name.as_bytes() != b"." && name.as_bytes() != b"..")
-            .collect();
+        // A folder that cannot be read to its end is never printed: a walk
+        // that skipped an entry would print less than is there.
+        let mut names: Vec<std::ffi::CString> = Vec::new();
+        for entry in folder.iter() {
+            let name = entry.map_err(Unprinted::read)?.file_name().to_owned();
+            if name.as_bytes() != b"." && name.as_bytes() != b".." {
+                names.push(name);
+            }
+        }
+        let mut looked: Vec<(std::ffi::CString, FileStat)> = Vec::new();
         for name in names {
             count += 1;
             if count > limits.entries {
@@ -171,6 +175,29 @@ pub(in crate::environment) fn print_at(
                 folders.push((path.clone(), inner));
             }
             lines.push((path, line));
+            looked.push((name, stat));
+        }
+        // Every entry is looked at again once its folder was read: one that
+        // was swapped, moved away or changed meanwhile leaves the print
+        // unreadable, never taken for the bundle as it was.
+        for (name, before) in &looked {
+            let after = fstatat(
+                folder.as_fd(),
+                name.as_c_str(),
+                AtFlags::AT_SYMLINK_NOFOLLOW,
+            )
+            .map_err(Unprinted::read)?;
+            let unchanged = after.st_ino == before.st_ino
+                && after.st_dev == before.st_dev
+                && after.st_mode == before.st_mode
+                && after.st_size == before.st_size
+                && after.st_mtime == before.st_mtime
+                && after.st_mtime_nsec == before.st_mtime_nsec;
+            if !unchanged {
+                return Err(Unprinted::Unreadable(
+                    "The app changed while it was read".into(),
+                ));
+            }
         }
     }
     lines.sort();

@@ -1,7 +1,8 @@
 //! Which of the helper's processes run from an install: from its path, or
-//! from a translocated copy macOS traces back to it. A translocated process
-//! macOS cannot trace is never taken for someone else's when it may be the
-//! install's own: it keeps the install in place, and is never signalled.
+//! perhaps from a copy macOS moved it to (App Translocation). The path
+//! macOS names for such a copy is never proof of which bundle it came
+//! from, as that path may since hold another: a process that may be the
+//! install's keeps the install in place, and is never signalled.
 use super::super::{Result, problem};
 use std::{
     path::{Path, PathBuf},
@@ -54,11 +55,11 @@ fn helper_processes() -> Result<Vec<(u32, String)>> {
 /// How one process stands to an install.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(in crate::environment) enum Runs {
-    /// It runs from the install: from its path, or from a translocated
-    /// copy macOS traces back to it.
+    /// It runs from the install's own path.
     From,
-    /// It runs from a translocated copy macOS cannot trace whose bundle
-    /// identifier is the install's: it may be the install's own.
+    /// It runs from a copy macOS moved an app to that macOS traces to the
+    /// install's path, or whose bundle identifier is the install's: it may
+    /// be the install's own.
     Maybe,
 }
 
@@ -95,15 +96,15 @@ fn runs(
     if !executable.contains(TRANSLOCATED) {
         return None;
     }
+    // A translocated copy is never proof of which bundle it came from: the
+    // path macOS names may since hold another. One that may be the
+    // install's keeps the install in place, and is never signalled.
     let bundle = translocated_bundle(path)?;
-    match (looks.original)(&bundle) {
-        Some(original) if original == destination => Some(Runs::From),
-        Some(_) => None,
-        None => bundle_id
-            .zip((looks.bundle_id)(&bundle))
-            .filter(|(install, translocated)| install == translocated)
-            .map(|_| Runs::Maybe),
-    }
+    let traced = (looks.original)(&bundle).is_some_and(|original| original == destination);
+    let same_id = bundle_id
+        .zip((looks.bundle_id)(&bundle))
+        .is_some_and(|(install, translocated)| install == translocated);
+    (traced || same_id).then_some(Runs::Maybe)
 }
 
 /// The bundle a translocated executable lies in: the first folder named
@@ -144,7 +145,7 @@ mod tests {
         "/private/var/folders/x/T/AppTranslocation/1F2E/d/Probe.app/Contents/MacOS/Probe";
 
     #[test]
-    fn a_translocated_process_counts_only_when_macos_traces_it_to_the_install() {
+    fn a_translocated_process_that_may_be_the_installs_keeps_it_and_is_never_proven() {
         let destination = Path::new("/Users/helper/Applications/Probe.app");
         let traced = |_: &Path| Some(destination.to_path_buf());
         let elsewhere = |_: &Path| Some(PathBuf::from("/Users/helper/Downloads/Probe.app"));
@@ -170,9 +171,13 @@ mod tests {
 
         assert_eq!(
             pids(&looks(&traced, &theirs)),
-            [(1, Runs::From), (2, Runs::From)]
+            [(1, Runs::From), (2, Runs::Maybe)]
         );
-        assert_eq!(pids(&looks(&elsewhere, &ours)), [(1, Runs::From)]);
+        assert_eq!(
+            pids(&looks(&elsewhere, &ours)),
+            [(1, Runs::From), (2, Runs::Maybe)]
+        );
+        assert_eq!(pids(&looks(&elsewhere, &theirs)), [(1, Runs::From)]);
         assert_eq!(
             pids(&looks(&untraced, &ours)),
             [(1, Runs::From), (2, Runs::Maybe)]

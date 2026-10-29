@@ -106,7 +106,9 @@ impl Hands for Fake {
             .removals
             .borrow_mut()
             .remove(install)
-            .unwrap_or_else(|| json!({"ok": true, "outcome": "removed"})))
+            .unwrap_or_else(|| {
+                json!({"ok": true, "outcome": "trashed", "trashName": format!("Probe.app (atlas {install})")})
+            }))
     }
 
     async fn quit(&self, processes: &[Process], _: &[String], _: &[Token]) -> Result<Quitted> {
@@ -1134,6 +1136,90 @@ async fn new_work_after_a_failed_quit_waits_for_every_quit() {
         assert_eq!(entry.after, quits, "{:?} waits for both quits", entry.step);
     }
     assert!(!still_slow.logged().contains(&format!("undo {plan}")));
+}
+
+#[tokio::test]
+async fn an_install_goes_to_the_helpers_trash_by_name_and_a_copy_is_removed() {
+    let place = Place::new();
+    let key = session("trash");
+    let task = default_task(&key);
+    let copy = place.copy(Some(&key));
+    place.claim(&task, Owned::Copy { id: copy.clone() });
+    let install = Token::new();
+    place.claim(
+        &task,
+        Owned::Install {
+            id: install.clone(),
+            app: "Probe".into(),
+        },
+    );
+    let fake = Fake::at(&place.root);
+
+    let reply = place.apply(&fake, &own(&key)).await;
+    let install_name = format!("Probe.app (atlas {install})");
+    assert_eq!(reply["steps"][1]["trashed"], json!(install_name));
+    assert_eq!(reply["steps"][2]["state"], "done");
+    assert!(reply["steps"][2].get("trashed").is_none());
+    assert!(!place.folder(&copy).exists(), "a copy is removed");
+    let receipt = place.receipt(&reply);
+    let trashed: Vec<Option<&str>> = receipt
+        .steps
+        .iter()
+        .map(|entry| entry.came_to.trashed.as_deref())
+        .collect();
+    assert_eq!(trashed, [None, Some(install_name.as_str()), None]);
+}
+
+#[tokio::test]
+async fn a_kept_step_is_settled_in_the_records_of_its_own_receipts_task() {
+    let place = Place::new();
+    let key = session("two-tasks");
+    let (first, second) = (
+        Task::of(&key, Some("first")).unwrap(),
+        Task::of(&key, Some("second")).unwrap(),
+    );
+    let theirs = place.copy(Some(&session("elsewhere")));
+    place.claim(&first, Owned::Copy { id: theirs.clone() });
+    let scope_of = |task: &Task| Scope {
+        session: key.clone(),
+        task: Some(task.key().clone()),
+        adopting: false,
+        named: true,
+    };
+    let fake = Fake::at(&place.root);
+    let kept = place.apply(&fake, &scope_of(&first)).await;
+    assert_eq!(kept["steps"][1]["reason"], "another-session");
+
+    // As a crash between the kept outcome and settling it leaves things.
+    let mut receipt = place.receipt(&kept);
+    for entry in &mut receipt.steps {
+        entry.settled = false;
+    }
+    Receipts::at(&place.output).save(&mut receipt).unwrap();
+    place.claim(&first, Owned::Copy { id: theirs.clone() });
+    let later = plan_claimed(&place, &second);
+
+    let fake = Fake::at(&place.root);
+    place.apply(&fake, &scope_of(&second)).await;
+    let first_record = Tasks::at(&place.output).load(first.key()).unwrap();
+    assert!(
+        first_record.claims().any(
+            |(owned, state)| owned.same(&Owned::Copy { id: theirs.clone() })
+                && state == State::Kept
+        ),
+        "settled where it was claimed"
+    );
+    let second_record = Tasks::at(&place.output).load(second.key()).unwrap();
+    assert!(
+        !second_record
+            .claims()
+            .any(|(owned, _)| owned.same(&Owned::Copy { id: theirs.clone() }))
+    );
+    assert!(second_record.claims().any(|(owned, state)| {
+        owned.same(&Owned::Plan { id: later.clone() }) && state == State::Gone
+    }));
+    let settled = Receipts::at(&place.output).load(&receipt.id).unwrap();
+    assert!(settled.steps.iter().all(|entry| entry.settled));
 }
 
 #[tokio::test]

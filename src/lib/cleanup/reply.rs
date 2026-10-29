@@ -61,8 +61,8 @@ pub(super) fn said_state(value: &mut Value, entry: &Entry) {
     if !came_to.side_effects.is_empty() {
         value["sideEffects"] = json!({"kept": came_to.side_effects});
     }
-    if came_to.held_aside {
-        value["heldAside"] = json!(true);
+    if let Some(trashed) = &came_to.trashed {
+        value["trashed"] = json!(trashed);
     }
     if let Some(error) = &came_to.error {
         value["error"] = json!(error);

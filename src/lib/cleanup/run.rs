@@ -253,19 +253,21 @@ async fn remove_install(hands: &impl Hands, install: &Token) -> Outcome {
     };
     let came_to = CameTo {
         side_effects: side_effects(&reply),
-        held_aside: reply["heldAside"] == true,
+        trashed: reply["trashName"].as_str().map(str::to_owned),
         ..CameTo::default()
     };
     if reply["ok"] != true {
         let said = reply["error"]
             .as_str()
-            .unwrap_or("The helper did not finish removing the app");
+            .unwrap_or("The helper did not finish moving the app to its Trash");
         return Outcome::failed(Reason::Helper).with(CameTo::failed(said));
     }
     let outcome = match (reply["outcome"].as_str(), reply["reason"].as_str()) {
-        (Some("removed"), _) => Outcome::done(),
+        (Some("trashed"), _) if came_to.trashed.is_some() => Outcome::done(),
         (Some("alreadyGone"), _) => Outcome::gone(),
         (Some("kept"), Some("replaced")) => Outcome::kept(Reason::Replaced),
+        (Some("kept"), Some("other-volume")) => Outcome::kept(Reason::OtherVolume),
+        (Some("kept"), Some("unreadable")) => Outcome::kept(Reason::Unreadable),
         (Some("kept"), _) => Outcome::kept(Reason::Changed),
         (Some("inUse"), _) => Outcome::failed(Reason::InUse),
         _ => Outcome::failed(Reason::Helper),

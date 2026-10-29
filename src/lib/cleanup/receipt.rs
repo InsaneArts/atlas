@@ -174,12 +174,13 @@ pub(crate) struct CameTo {
     /// which are never removed.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub side_effects: Vec<SideEffect>,
-    /// Whether a kept install is held aside in its own folder, as it could
-    /// not be put back.
-    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
-    pub held_aside: bool,
-    /// The apps running from a copy macOS moved them to that cannot be
-    /// traced to the task's own, so never quit.
+    /// The name an install or copy took in the Trash it was moved to: the
+    /// helper's for an install, this account's for a copy. Nothing is ever
+    /// deleted.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub trashed: Option<String>,
+    /// The apps that may run from a copy macOS moved them to (App
+    /// Translocation), which are never quit.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub untraced: Vec<String>,
     /// Why it failed, in the helper's words.
@@ -250,6 +251,11 @@ pub(crate) enum Reason {
     LabelUnreadable,
     /// Kept: undoing a copy left files the helper changed since.
     KeptTargets,
+    /// Kept: the Trash is on another volume, and Atlas never copies
+    /// something there to delete it here.
+    OtherVolume,
+    /// Kept: Atlas cannot read its own record of it.
+    Unreadable,
     /// Failed: what it waited for did not end in time.
     Timeout,
     /// Failed: something still runs from it.
@@ -282,6 +288,8 @@ impl Reason {
             Self::AnotherSession => "another-session",
             Self::LabelUnreadable => "label-unreadable",
             Self::KeptTargets => "kept-targets",
+            Self::OtherVolume => "other-volume",
+            Self::Unreadable => "unreadable",
             Self::Timeout => "timeout",
             Self::InUse => "in-use",
             Self::Io => "io",
@@ -335,8 +343,9 @@ impl Receipts {
     }
 
     /// Remove the receipts older than a week that are finished, or that
-    /// belong to a session `recorded` no longer knows of; the one `keep`
-    /// stays.
+    /// belong to a session `recorded` no longer knows of; the one `keep`,
+    /// and any with a finished step its records have not yet acknowledged,
+    /// stay.
     pub fn prune(&self, keep: &Token, recorded: impl Fn(&Key) -> bool) {
         let Ok(_lock) = self.folder.lock() else {
             return;
@@ -345,7 +354,12 @@ impl Receipts {
         let now = now_ms();
         for id in self.folder.listed(LISTED) {
             let old = self.load(&id).is_some_and(|receipt| {
+                let settled = receipt
+                    .steps
+                    .iter()
+                    .all(|entry| !entry.state.finished() || entry.settled);
                 now.saturating_sub(receipt.updated) > week
+                    && settled
                     && (receipt.state == CleanupState::Complete || !recorded(&receipt.session))
             });
             if old && id != *keep {

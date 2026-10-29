@@ -22,7 +22,11 @@ use crate::{
     error::Result,
     handoff,
     host_session::{Key, now_ms, store::Store as Sessions},
-    task::{Owned, State, Task, record::Adoption, store::Store as Tasks},
+    task::{
+        Owned, State, Task,
+        record::{Adoption, Record as TaskRecord},
+        store::Store as Tasks,
+    },
 };
 use plan::{Bundle, Step, merge};
 use receipt::{Entry, Receipt, Receipts, StepState};
@@ -235,7 +239,7 @@ pub(crate) async fn apply(
     let tasks = Tasks::at(output);
     let sessions = Sessions::at(output);
     let covered = loaded.covered(scope);
-    reconcile(&receipts, &tasks, &sessions, &covered, loaded);
+    reconcile(&receipts, &tasks, &sessions, loaded);
 
     let mut receipt = loaded
         .unfinished(scope)
@@ -259,12 +263,13 @@ pub(crate) async fn apply(
     });
     note(&tasks, &covered, &receipt, adoption.as_ref())?;
 
+    let own_scope = (scope.session.clone(), scope.task.clone());
     run::run(
         hands,
         &mut receipt,
         &scope.session,
         |receipt| receipts.save(receipt),
-        |step, state| settle(&tasks, &sessions, &covered, step, state),
+        |step, state| settle(&tasks, &sessions, &own_scope, step, state),
     )
     .await?;
     receipts.save(&mut receipt)?;
@@ -279,32 +284,91 @@ pub(crate) async fn apply(
     ))
 }
 
-/// Settle, in the task records, every step of the session's receipts that
-/// finished but whose settling did not take, as after a crash between the
-/// two: what a receipt says was removed, undone or kept is never planned
-/// again, and its claim says so too.
-fn reconcile(
-    receipts: &Receipts,
-    tasks: &Tasks,
-    sessions: &Sessions,
-    covered: &[Task],
-    loaded: &Loaded,
-) {
+/// Settle every step of the session's receipts that finished but whose
+/// settling was not acknowledged, as after a crash between the two, each
+/// in the records of its own receipt's scope: what a receipt says was
+/// moved to the Trash, undone or kept is never planned again, and its
+/// claims say so too.
+fn reconcile(receipts: &Receipts, tasks: &Tasks, sessions: &Sessions, loaded: &Loaded) {
     for receipt in &loaded.receipts {
         let mut receipt = receipt.clone();
         let mut changed = false;
+        let scope = (receipt.session.clone(), receipt.task.clone());
         for entry in receipt
             .steps
             .iter_mut()
             .filter(|entry| entry.state.finished() && !entry.settled)
         {
-            entry.settled = settle(tasks, sessions, covered, &entry.step, entry.state);
+            entry.settled = settle(tasks, sessions, &scope, &entry.step, entry.state);
             changed |= entry.settled;
         }
         if changed {
             let _ = receipts.save(&mut receipt);
         }
     }
+}
+
+/// Note what a step that ended `state` did to its thing, in the records of
+/// the receipt's own scope (`scope`: its session, and its one task when it
+/// covers one): gone wherever any record claims it, once moved to the
+/// Trash or undone; kept, in each record of that scope that claims it,
+/// once left on purpose. A plan undone leaves the session records too.
+/// Whether every record that must say so does, read back after writing:
+/// a step not acknowledged is settled again before anything is planned.
+fn settle(
+    tasks: &Tasks,
+    sessions: &Sessions,
+    scope: &(Key, Option<Key>),
+    step: &Step,
+    state: StepState,
+) -> bool {
+    let Some(owned) = step.owned() else {
+        return true;
+    };
+    let now = now_ms();
+    let (session, task) = scope;
+    let claiming = |records: Vec<TaskRecord>| -> Vec<TaskRecord> {
+        records
+            .into_iter()
+            .filter(|record| task.as_ref().is_none_or(|task| record.key == *task))
+            .filter(|record| record.claims().any(|(claimed, _)| claimed.same(&owned)))
+            .collect()
+    };
+    let state_of = |record: &TaskRecord| {
+        record
+            .claims()
+            .find(|(claimed, _)| claimed.same(&owned))
+            .map(|(_, state)| state)
+    };
+
+    let acknowledged = match state {
+        StepState::Done => {
+            tasks
+                .settle_everywhere(std::slice::from_ref(&owned), State::Gone, now)
+                .is_ok()
+                && tasks
+                    .all()
+                    .iter()
+                    .all(|record| !matches!(state_of(record), Some(State::Intent | State::Made)))
+        }
+        StepState::Kept => {
+            for record in claiming(tasks.of_session(session)) {
+                let _ = tasks.update(&Task::recorded(&record), now, |record| {
+                    record.settle(&owned, State::Kept, now);
+                    Ok(())
+                });
+            }
+            claiming(tasks.of_session(session))
+                .iter()
+                .all(|record| state_of(record) == Some(State::Kept))
+        }
+        _ => return false,
+    };
+    let forgotten = match &owned {
+        Owned::Plan { id } => sessions.forget_plan(id).is_ok(),
+        _ => true,
+    };
+    acknowledged && forgotten
 }
 
 /// Note `receipt`, as it stands, in each of `covered`'s records, and who
@@ -326,41 +390,4 @@ fn note(
         })?;
     }
     Ok(())
-}
-
-/// Note what a step that ended `state` did to its thing: gone wherever a
-/// record claims it, once removed or undone; kept, in the covered tasks'
-/// records, once left on purpose. A plan undone leaves the session records
-/// too. Whether every record that must be told was told: one that was not
-/// is told again before anything is planned again.
-fn settle(
-    tasks: &Tasks,
-    sessions: &Sessions,
-    covered: &[Task],
-    step: &Step,
-    state: StepState,
-) -> bool {
-    let Some(owned) = step.owned() else {
-        return true;
-    };
-    let now = now_ms();
-    let told = match state {
-        StepState::Done => tasks
-            .settle_everywhere(std::slice::from_ref(&owned), State::Gone, now)
-            .is_ok(),
-        StepState::Kept => covered.iter().all(|task| {
-            tasks
-                .update(task, now, |record| {
-                    record.settle(&owned, State::Kept, now);
-                    Ok(())
-                })
-                .is_ok()
-        }),
-        _ => return false,
-    };
-    let forgotten = match &owned {
-        Owned::Plan { id } => sessions.forget_plan(id).is_ok(),
-        _ => true,
-    };
-    told && forgotten
 }

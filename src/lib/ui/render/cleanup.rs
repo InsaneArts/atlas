@@ -106,7 +106,7 @@ fn step(step: &Value) -> String {
             }
         }
         Some("remove-install") => format!(
-            "Remove {} from the helper's Applications",
+            "Move {} from Applications to the helper's Trash",
             text::printable(step["app"].as_str().unwrap_or("the app"))
         ),
         Some("remove-copy") => {
@@ -130,6 +130,10 @@ fn step(step: &Value) -> String {
     };
     let said = match (state, reason) {
         (Some("done"), _) if step["alreadyGone"] == true => " · already gone".to_owned(),
+        (Some("done"), _) if step["trashed"].is_string() => format!(
+            " · in the Trash as {}",
+            text::printable(step["trashed"].as_str().unwrap_or_default())
+        ),
         (Some("kept"), Some(reason)) => format!(" · kept: {reason}"),
         (Some("failed"), Some(reason)) if step["retry"] == true => {
             format!(" · couldn't: {reason}; try again")
@@ -150,6 +154,8 @@ fn reason(reason: &str) -> &str {
         "another-session" => "another session made it",
         "label-unreadable" => "Atlas cannot tell whose it is",
         "kept-targets" => "the helper changed some of its files since",
+        "other-volume" => "it could not be moved to the Trash without copying",
+        "unreadable" => "Atlas cannot read its record of it",
         "timeout" => "it did not quit in time",
         "in-use" => "still in use",
         "io" => "the file system refused",

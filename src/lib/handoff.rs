@@ -539,34 +539,13 @@ enum Label {
     Unreadable,
 }
 
-/// The label of the copy folder `folder`.
+/// The label of the copy folder `folder`, read as every removal reads it:
+/// relative to the folder held open.
+#[cfg(test)]
 fn labelled(folder: &Path) -> Label {
-    let path = folder.join(SESSION);
-    if fs::symlink_metadata(&path).is_err_and(|error| error.kind() == std::io::ErrorKind::NotFound)
-    {
-        return Label::None;
-    }
-
-    crate::helper_info::read_own(&path, 64)
-        .and_then(|text| String::from_utf8(text).ok())
-        .and_then(|text| {
-            let line = text.strip_suffix('\n').unwrap_or(&text);
-            Key::parse(line)
-        })
-        .map_or(Label::Unreadable, Label::Session)
-}
-
-impl Label {
-    /// Whether a command of host `session` keeps a copy so labelled: one
-    /// another session made, or whose label cannot be read. Without a
-    /// session, no copy is kept for its label.
-    fn keeps_for(&self, session: Option<&Key>) -> bool {
-        match (self, session) {
-            (_, None) | (Self::None, _) => false,
-            (Self::Session(made), Some(own)) => made != own,
-            (Self::Unreadable, Some(_)) => true,
-        }
-    }
+    let folder = open_folder(folder).unwrap();
+    let metadata = folder.metadata().unwrap();
+    OpenCopy { folder, metadata }.label()
 }
 
 /// The token of the copy folder `path` lies in, when it lies in one under
@@ -730,11 +709,11 @@ impl Removed {
 }
 
 /// Remove the copies of `app` under `root` (ROOT, but in tests), which has
-/// quit, except any in use by an app in `running` (from a list the helper
-/// gave once `app` was gone) and, for a command of host `session`, any
-/// another session made or whose label cannot be read. Without a session,
-/// every copy not in use goes, as it always did: a session only ever keeps
-/// more.
+/// quit, by the rule every removal of a copy follows ([`remove_copy`]):
+/// except any in use by an app in `running` (from a list the helper gave
+/// once `app` was gone) and, for a command of host `session`, any another
+/// session made or whose label cannot be read. Without a session, every
+/// copy not in use goes, as it always did: a session only ever keeps more.
 pub(crate) fn remove_copies_in(
     root: &Path,
     app: &str,
@@ -743,20 +722,15 @@ pub(crate) fn remove_copies_in(
 ) -> Removed {
     let mut removed = Removed::default();
     for folder in copies_of(root, app) {
-        if in_use(&folder, running) {
+        let Some(name) = folder.file_name().and_then(|name| name.to_str()) else {
             continue;
-        }
-        if labelled(&folder).keeps_for(session) {
-            removed.kept_others += 1;
-            continue;
-        }
+        };
         let path = folder.to_string_lossy().into_owned();
-        match fs::remove_dir_all(&folder) {
-            Ok(()) => removed.folders.push(path),
-            Err(error) => removed.failed.push(Failed {
-                path,
-                error: error.to_string(),
-            }),
+        match take_copy(root, name, session, running) {
+            CopyRemoval::Removed => removed.folders.push(path),
+            CopyRemoval::AnotherSession | CopyRemoval::Unreadable => removed.kept_others += 1,
+            CopyRemoval::Failed(error) => removed.failed.push(Failed { path, error }),
+            CopyRemoval::AlreadyGone | CopyRemoval::InUse => {}
         }
     }
 
@@ -768,136 +742,170 @@ pub(crate) fn remove_copies_in(
 pub(crate) enum CopyRemoval {
     /// Nothing is there under that token.
     AlreadyGone,
-    /// Removed.
     Removed,
     /// Kept: another host session made it.
     AnotherSession,
-    /// Kept: what is there is not a private folder of this account, or its
-    /// label cannot be read.
+    /// Kept: what is there is not a private folder of this account, its
+    /// label cannot be read, or it was swapped while it was looked at.
     Unreadable,
     /// Kept for now: an app in the list runs from it or by one of its
     /// names.
     InUse,
-    /// It could not be removed, and why.
+    /// It could not be removed, and why; trying again may.
     Failed(String),
 }
 
-/// Whether a cleanup of host session `session`'s work may treat the copy
-/// folder `folder` as its own: a private folder of this account labelled
-/// for that session, or not labelled at all. An unlabelled copy is one a
-/// command without a session made, or one whose label was lost; a cleanup
-/// reaches it only when its own task's record claims its token, which is
-/// no wider than `close`, which removes every unlabelled copy of an app.
-fn cleanup_may_take(folder: &Path, session: &Key) -> std::result::Result<(), CopyRemoval> {
-    if !private_folder(folder) {
-        return Err(CopyRemoval::Unreadable);
+/// A copy folder held open once, with what that one descriptor says of
+/// it: whatever is judged of it is judged of the same folder.
+struct OpenCopy {
+    folder: fs::File,
+    metadata: fs::Metadata,
+}
+
+impl OpenCopy {
+    /// The copy folder called `name` in the copy root held open as
+    /// `root`, opened without following a link; none when nothing is
+    /// there.
+    fn open(root: &fs::File, name: &str) -> std::result::Result<Option<Self>, CopyRemoval> {
+        let opened = nix::fcntl::openat(
+            root,
+            name,
+            nix::fcntl::OFlag::O_RDONLY
+                | nix::fcntl::OFlag::O_DIRECTORY
+                | nix::fcntl::OFlag::O_NOFOLLOW
+                | nix::fcntl::OFlag::O_CLOEXEC,
+            nix::sys::stat::Mode::empty(),
+        );
+        let folder = match opened {
+            Ok(fd) => fs::File::from(fd),
+            Err(nix::errno::Errno::ENOENT) => return Ok(None),
+            Err(_) => return Err(CopyRemoval::Unreadable),
+        };
+        let metadata = folder.metadata().map_err(|_| CopyRemoval::Unreadable)?;
+        Ok(Some(Self { folder, metadata }))
     }
-    match labelled(folder) {
-        Label::Unreadable => Err(CopyRemoval::Unreadable),
-        Label::Session(made) if made != *session => Err(CopyRemoval::AnotherSession),
-        Label::Session(_) | Label::None => Ok(()),
+
+    /// Whether a command of host session `session` may take this folder
+    /// for its own, judged from this one descriptor: a private folder of
+    /// this account, and for a command with a session one labelled for it
+    /// or not at all. An unlabelled copy is one a command without a
+    /// session made, or one whose label was lost: `close` removes it as it
+    /// always did, and a cleanup reaches it only when its own task's
+    /// record claims its token.
+    fn may_take(&self, session: Option<&Key>) -> std::result::Result<(), CopyRemoval> {
+        let private = self.metadata.is_dir()
+            && self.metadata.uid() == nix::unistd::getuid().as_raw()
+            && self.metadata.mode() & 0o022 == 0;
+        if !private {
+            return Err(CopyRemoval::Unreadable);
+        }
+        let Some(session) = session else {
+            return Ok(());
+        };
+        match self.label() {
+            Label::Unreadable => Err(CopyRemoval::Unreadable),
+            Label::Session(made) if made != *session => Err(CopyRemoval::AnotherSession),
+            Label::Session(_) | Label::None => Ok(()),
+        }
+    }
+
+    /// The folder's label, read from a file opened relative to it.
+    fn label(&self) -> Label {
+        let opened = nix::fcntl::openat(
+            &self.folder,
+            SESSION,
+            nix::fcntl::OFlag::O_RDONLY
+                | nix::fcntl::OFlag::O_NOFOLLOW
+                | nix::fcntl::OFlag::O_NONBLOCK
+                | nix::fcntl::OFlag::O_CLOEXEC,
+            nix::sys::stat::Mode::empty(),
+        );
+        let mut file = match opened {
+            Ok(fd) => fs::File::from(fd),
+            Err(nix::errno::Errno::ENOENT) => return Label::None,
+            Err(_) => return Label::Unreadable,
+        };
+        let plain = file.metadata().is_ok_and(|metadata| {
+            metadata.is_file() && metadata.uid() == nix::unistd::getuid().as_raw()
+        });
+        let mut text = String::new();
+        let read =
+            std::io::Read::read_to_string(&mut std::io::Read::take(&mut file, 64), &mut text);
+        if !plain || read.is_err() {
+            return Label::Unreadable;
+        }
+        let line = text.strip_suffix('\n').unwrap_or(&text);
+        Key::parse(line).map_or(Label::Unreadable, Label::Session)
+    }
+
+    /// The folder's node, as `DEVICE:INODE`.
+    fn node(&self) -> String {
+        format!("{}:{}", self.metadata.dev(), self.metadata.ino())
+    }
+
+    /// Whether `path` still names the folder this descriptor holds.
+    fn still_at(&self, path: &Path) -> bool {
+        fs::symlink_metadata(path)
+            .is_ok_and(|now| now.dev() == self.metadata.dev() && now.ino() == self.metadata.ino())
     }
 }
 
 /// The node (`DEVICE:INODE`) of the copy folder `token` names under
 /// `root`, when a cleanup of host session `session`'s work may treat it as
-/// its own: what quitting what runs from it is checked against.
+/// its own, judged from one descriptor: what quitting what runs from it is
+/// checked against.
 pub(crate) fn copy_node(root: &Path, token: &Token, session: &Key) -> Option<String> {
-    let folder = root.join(token.as_str());
     root_if_owned_in(root)?;
-    cleanup_may_take(&folder, session).ok()?;
-    let metadata = fs::symlink_metadata(&folder).ok()?;
-    Some(format!("{}:{}", metadata.dev(), metadata.ino()))
-}
-
-/// The name a copy folder being removed is moved to first.
-fn quarantined(token: &Token) -> String {
-    format!(".atlas-removing-{token}")
+    let held = open_folder(root).ok()?;
+    let copy = OpenCopy::open(&held, token.as_str()).ok()??;
+    copy.may_take(Some(session)).ok()?;
+    Some(copy.node())
 }
 
 /// Remove the copy folder `token` names under `root` (ROOT, but in tests),
-/// for a cleanup of host session `session`'s work: only when it is a
-/// private folder of this account, labelled for that session or not at
-/// all, and not in use by an app in `running` (from a list the helper gave
-/// once the apps running from it were quit). It is moved, never replacing
-/// anything, to a name of its own in the root held open, checked again
-/// there to be the folder that was checked, and only then deleted; a
-/// folder that is not is put back, or kept where it is. A removal cut
-/// short is finished from that name, with the same checks. Only that one
-/// folder is looked at.
+/// for a cleanup of host session `session`'s work, by the rule every
+/// removal of a copy follows: only when it is a private folder of this
+/// account, labelled for that session or not at all, all judged from one
+/// descriptor, and not in use by an app in `running` (from a list the
+/// helper gave once the apps running from it were quit). Copies are
+/// Atlas's own duplicates of the person's files, so it is deleted where it
+/// is, once its path is seen to name that same folder still; one swapped
+/// meanwhile is kept. Only that one folder is looked at.
 pub(crate) fn remove_copy(
     root: &Path,
     token: &Token,
     session: &Key,
     running: &[Running],
 ) -> CopyRemoval {
+    take_copy(root, token.as_str(), Some(session), running)
+}
+
+/// [`remove_copy`], for a command of host `session` or none.
+fn take_copy(root: &Path, name: &str, session: Option<&Key>, running: &[Running]) -> CopyRemoval {
     if root_if_owned_in(root).is_none() {
         return CopyRemoval::Unreadable;
     }
     let Ok(parent) = open_folder(root) else {
         return CopyRemoval::Unreadable;
     };
-    let (Some(name), Some(aside_name)) = (
-        crate::fs_move::FileName::new(token.as_str()),
-        crate::fs_move::FileName::new(&quarantined(token)),
-    ) else {
-        return CopyRemoval::Unreadable;
+    let copy = match OpenCopy::open(&parent, name) {
+        Ok(Some(copy)) => copy,
+        Ok(None) => return CopyRemoval::AlreadyGone,
+        Err(kept) => return kept,
     };
-    let folder = root.join(token.as_str());
-    let aside = root.join(quarantined(token));
-
-    // A removal cut short after the move: finished with the same checks.
-    if fs::symlink_metadata(&aside).is_ok() {
-        if let Err(kept) = cleanup_may_take(&aside, session) {
-            return kept;
-        }
-        return delete_aside(&aside);
-    }
-
-    let looked = match fs::symlink_metadata(&folder) {
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
-            return CopyRemoval::AlreadyGone;
-        }
-        Err(error) => return CopyRemoval::Failed(error.to_string()),
-        Ok(metadata) => metadata,
-    };
-    if let Err(kept) = cleanup_may_take(&folder, session) {
+    if let Err(kept) = copy.may_take(session) {
         return kept;
     }
+    let folder = root.join(name);
     if in_use(&folder, running) {
         return CopyRemoval::InUse;
     }
-
-    match crate::fs_move::move_between(&parent, &name, &parent, &aside_name) {
-        Ok(_) => {}
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
-            return CopyRemoval::AlreadyGone;
-        }
-        Err(error) => return CopyRemoval::Failed(error.to_string()),
+    if !copy.still_at(&folder) {
+        return CopyRemoval::Unreadable;
     }
-    let same = fs::symlink_metadata(&aside)
-        .is_ok_and(|moved| moved.dev() == looked.dev() && moved.ino() == looked.ino());
-    let still_ours = same.then(|| cleanup_may_take(&aside, session));
-    match still_ours {
-        Some(Ok(())) => delete_aside(&aside),
-        // Not the folder that was checked, or no longer this session's:
-        // put back where it was, never over anything, or kept where it is.
-        other => {
-            let _ = crate::fs_move::move_between(&parent, &aside_name, &parent, &name);
-            match other {
-                Some(Err(kept)) => kept,
-                _ => CopyRemoval::Unreadable,
-            }
-        }
-    }
-}
-
-/// Delete a copy folder moved aside; anything but its absence afterwards
-/// is a failure, so it is tried again.
-fn delete_aside(aside: &Path) -> CopyRemoval {
-    match fs::remove_dir_all(aside) {
+    match fs::remove_dir_all(&folder) {
         Ok(()) => CopyRemoval::Removed,
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => CopyRemoval::Removed,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => CopyRemoval::AlreadyGone,
         Err(error) => CopyRemoval::Failed(error.to_string()),
     }
 }
@@ -1528,7 +1536,7 @@ mod tests {
     }
 
     #[test]
-    fn a_copy_cleanup_removes_is_moved_aside_and_deleted_there() {
+    fn a_copy_this_session_may_take_is_removed_in_place() {
         let dir = tempfile::tempdir().unwrap();
         let base = fs::canonicalize(dir.path()).unwrap();
         let session = Key::of(crate::host_session::Host::Codex, "removing");
@@ -1540,7 +1548,7 @@ mod tests {
         );
         assert!(
             fs::read_dir(&root).unwrap().next().is_none(),
-            "nothing left aside"
+            "nothing moved anywhere"
         );
         assert_eq!(
             remove_copy(&root, &token, &session, &[]),
@@ -1549,33 +1557,45 @@ mod tests {
     }
 
     #[test]
-    fn a_copy_removal_cut_short_after_its_move_is_finished_with_the_same_checks() {
+    fn a_copy_labelled_for_another_session_or_unreadably_is_kept() {
         let dir = tempfile::tempdir().unwrap();
         let base = fs::canonicalize(dir.path()).unwrap();
         let (own, other) = (
             Key::of(crate::host_session::Host::Codex, "own"),
             Key::of(crate::host_session::Host::Codex, "other"),
         );
-
-        let (root, token) = labelled_copy(&base, &own);
-        let aside = root.join(quarantined(&token));
-        fs::rename(root.join(token.as_str()), &aside).unwrap();
-        assert_eq!(remove_copy(&root, &token, &own, &[]), CopyRemoval::Removed);
-        assert!(!aside.exists());
-
-        let theirs = base.join("theirs");
-        fs::create_dir(&theirs).unwrap();
-        let (root, token) = labelled_copy(&theirs, &other);
-        let aside = root.join(quarantined(&token));
-        fs::rename(root.join(token.as_str()), &aside).unwrap();
+        let (root, theirs) = labelled_copy(&base, &other);
         assert_eq!(
-            remove_copy(&root, &token, &own, &[]),
+            remove_copy(&root, &theirs, &own, &[]),
             CopyRemoval::AnotherSession
         );
-        assert!(
-            aside.join("notes.rtf").exists(),
-            "another session's is kept"
+        let linked = Token::new();
+        let folder = root.join(linked.as_str());
+        fs::DirBuilder::new().mode(0o700).create(&folder).unwrap();
+        std::os::unix::fs::symlink("/etc/hosts", folder.join(SESSION)).unwrap();
+        assert_eq!(
+            remove_copy(&root, &linked, &own, &[]),
+            CopyRemoval::Unreadable
         );
+        assert!(root.join(theirs.as_str()).exists() && folder.exists());
+    }
+
+    #[test]
+    fn a_copy_folder_swapped_after_it_was_opened_is_kept() {
+        let dir = tempfile::tempdir().unwrap();
+        let base = fs::canonicalize(dir.path()).unwrap();
+        let session = Key::of(crate::host_session::Host::Codex, "swapped");
+        let (root, token) = labelled_copy(&base, &session);
+        let parent = open_folder(&root).unwrap();
+        let copy = OpenCopy::open(&parent, token.as_str()).unwrap().unwrap();
+        assert!(copy.may_take(Some(&session)).is_ok());
+
+        // Another folder takes its place after it was judged.
+        let path = root.join(token.as_str());
+        fs::rename(&path, base.join("judged")).unwrap();
+        fs::DirBuilder::new().mode(0o700).create(&path).unwrap();
+        assert!(!copy.still_at(&path), "the path names another folder now");
+        assert!(copy.still_at(&base.join("judged")));
     }
 
     #[test]

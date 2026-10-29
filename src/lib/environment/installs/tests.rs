@@ -35,12 +35,20 @@ impl Homes {
         self.home.join(APPLICATIONS).join(name)
     }
 
+    /// Where install `id` of Probe.app goes in the helper's Trash.
+    fn in_trash(&self, id: &str) -> PathBuf {
+        self.home.join(TRASH).join(trash_name("Probe.app", id))
+    }
+
     fn store(&self) -> Store {
         Store::open(&self.home, true).unwrap().unwrap()
     }
 
     fn record(&self, id: &str) -> Install {
-        self.store().load(id).unwrap().unwrap()
+        match self.store().load(id) {
+            Held::Record(record) => *record,
+            Held::Missing | Held::Unreadable => panic!("no record of {id}"),
+        }
     }
 
     /// Install `name` from outside as install `id`.
@@ -70,15 +78,18 @@ impl Homes {
     fn cut(&self, id: &str, phase: InstallPhase) {
         let mut record = self.record(id);
         record.phase = phase;
+        if phase == InstallPhase::Trashing {
+            record.trashed = Some(trash_name(&record.name, id));
+        }
         self.store().save(&record).unwrap();
     }
 
-    /// Where a removal moves install `id`'s bundle aside, its folder made.
-    fn aside(&self, id: &str) -> PathBuf {
-        let folder = self.store().folder(id).join("removing");
-        fs::create_dir_all(&folder).unwrap();
-        fs::set_permissions(&folder, fs::Permissions::from_mode(0o700)).unwrap();
-        folder.join("Probe.app")
+    /// The helper's Trash, made as macOS makes it.
+    fn trash(&self) -> PathBuf {
+        let trash = self.home.join(TRASH);
+        fs::create_dir_all(&trash).unwrap();
+        fs::set_permissions(&trash, fs::Permissions::from_mode(0o700)).unwrap();
+        trash
     }
 }
 
@@ -126,6 +137,16 @@ fn id() -> String {
     crate::control::token()
 }
 
+/// The real move.
+fn moved(
+    from_dir: &fs::File,
+    from: &FileName,
+    to_dir: &fs::File,
+    to: &FileName,
+) -> std::io::Result<Moved> {
+    move_between(from_dir, from, to_dir, to)
+}
+
 /// Every path under `path` with its bytes, for a byte-for-byte comparison.
 fn contents(path: &Path) -> Vec<(PathBuf, Vec<u8>)> {
     let mut found = Vec::new();
@@ -148,15 +169,13 @@ fn contents(path: &Path) -> Vec<(PathBuf, Vec<u8>)> {
 }
 
 #[test]
-fn an_app_already_in_applications_is_never_installed_over_or_removed() {
+fn an_app_already_in_applications_is_never_installed_over_or_taken() {
     let homes = Homes::new();
     fs::create_dir(homes.home.join(APPLICATIONS)).unwrap();
     let file = homes.destination("File.app");
     fs::write(&file, "a file").unwrap();
-    let folder = homes.destination("Folder.app");
-    fs::create_dir(&folder).unwrap();
-    let link = homes.destination("Link.app");
-    symlink(&homes.outside, &link).unwrap();
+    fs::create_dir(homes.destination("Folder.app")).unwrap();
+    symlink(&homes.outside, homes.destination("Link.app")).unwrap();
     let other = bundle(&homes.destination("Other.app"));
     let before = contents(&homes.home.join(APPLICATIONS));
 
@@ -165,10 +184,7 @@ fn an_app_already_in_applications_is_never_installed_over_or_removed() {
         let error = homes.install(&id, name).unwrap_err();
         assert_eq!(error.code, "input", "{name}");
         assert!(error.error.contains("already has"), "{error}");
-        assert!(
-            homes.store().load(&id).unwrap().is_none(),
-            "no record for {name}"
-        );
+        assert!(matches!(homes.store().load(&id), Held::Missing), "{name}");
         assert_eq!(homes.remove(&id)["outcome"], "alreadyGone");
     }
     assert_eq!(contents(&homes.home.join(APPLICATIONS)), before);
@@ -200,6 +216,27 @@ fn an_install_record_never_names_a_destination_that_existed_before() {
             .exists(),
         "nothing is left staged"
     );
+}
+
+#[test]
+fn an_unchanged_install_goes_to_the_helpers_trash_whole_and_nothing_is_deleted() {
+    let homes = Homes::new();
+    let id = id();
+    homes.install(&id, "Probe.app").unwrap();
+    let placed = node(&fs::symlink_metadata(homes.destination("Probe.app")).unwrap());
+
+    let reply = homes.remove(&id);
+    assert_eq!(reply["outcome"], "trashed");
+    assert_eq!(reply["trashName"], json!(trash_name("Probe.app", &id)));
+    assert!(!homes.destination("Probe.app").exists());
+    let in_trash = homes.in_trash(&id);
+    assert_eq!(node(&fs::symlink_metadata(&in_trash).unwrap()), placed);
+    assert_eq!(
+        fs::read_to_string(in_trash.join("Contents/Resources/strings.txt")).unwrap(),
+        "hello"
+    );
+    assert_eq!(homes.record(&id).phase, InstallPhase::Trashed);
+    assert_eq!(homes.remove(&id)["outcome"], "trashed", "the same, again");
 }
 
 #[test]
@@ -245,17 +282,49 @@ fn a_changed_bundle_is_kept_and_reported() {
 }
 
 #[test]
+fn a_bundle_made_writable_by_others_is_kept() {
+    for mode in [0o775, 0o777] {
+        let homes = Homes::new();
+        let id = id();
+        homes.install(&id, "Probe.app").unwrap();
+        let destination = homes.destination("Probe.app");
+        fs::set_permissions(&destination, fs::Permissions::from_mode(mode)).unwrap();
+
+        let reply = homes.remove(&id);
+        assert_eq!(reply["reason"], "changed", "{mode:o}");
+        assert!(destination.join("Contents/MacOS/Probe").exists());
+    }
+}
+
+#[test]
 fn a_replaced_bundle_is_kept() {
     let homes = Homes::new();
     let id = id();
     homes.install(&id, "Probe.app").unwrap();
     let destination = homes.destination("Probe.app");
-    fs::remove_dir_all(&destination).unwrap();
+    // The bundle Atlas placed is kept under another name, so the one made
+    // in its place cannot reuse its node.
+    fs::rename(&destination, homes.destination("Probe.app.original")).unwrap();
     bundle(&destination);
 
     let reply = homes.remove(&id);
     assert_eq!(reply["reason"], "replaced");
     assert!(destination.exists());
+    assert!(homes.destination("Probe.app.original").exists());
+}
+
+#[test]
+fn a_bundle_that_cannot_be_read_to_its_end_is_kept() {
+    let homes = Homes::new();
+    let id = id();
+    homes.install(&id, "Probe.app").unwrap();
+    let locked = homes.destination("Probe.app/Contents/Resources");
+    fs::set_permissions(&locked, fs::Permissions::from_mode(0o000)).unwrap();
+
+    let reply = homes.remove(&id);
+    fs::set_permissions(&locked, fs::Permissions::from_mode(0o755)).unwrap();
+    assert_eq!(reply["reason"], "changed", "{reply}");
+    assert!(homes.destination("Probe.app/Contents/MacOS/Probe").exists());
 }
 
 #[test]
@@ -289,21 +358,20 @@ fn attributes_macos_adds_on_first_launch_do_not_count_as_changes() {
 
     let print = print_path(&destination, Some("Probe"), Limits::default()).unwrap();
     assert_eq!(Some(print), homes.record(&id).print);
-    assert_eq!(homes.remove(&id)["outcome"], "removed");
+    assert_eq!(homes.remove(&id)["outcome"], "trashed");
     assert!(!destination.exists());
 }
 
 #[test]
-fn an_install_cut_at_each_step_resumes_or_cleans_its_own_staging() {
+fn an_install_cut_at_each_step_is_finished_without_deleting_it() {
     let staged = |homes: &Homes, id: &str| {
         let staging = homes.store().folder(id).join("staging");
         fs::create_dir_all(&staging).unwrap();
         staging.join("Probe.app")
     };
-    let removing = |homes: &Homes, id: &str| homes.store().folder(id).join("removing/Probe.app");
-
-    // Cut after copying: only a staged copy, never printed.
     let homes = Homes::new();
+
+    // Cut after copying: only Atlas's own staged copy, never placed.
     let cut = id();
     homes.install(&cut, "Probe.app").unwrap();
     fs::rename(homes.destination("Probe.app"), staged(&homes, &cut)).unwrap();
@@ -312,45 +380,46 @@ fn an_install_cut_at_each_step_resumes_or_cleans_its_own_staging() {
     record.print = None;
     homes.store().save(&record).unwrap();
     assert_eq!(homes.remove(&cut)["outcome"], "alreadyGone");
+    assert_eq!(homes.record(&cut).phase, InstallPhase::Removed);
 
-    // Cut after printing, before the move.
+    // Cut after printing, before the move into place.
     let before_move = id();
     homes.install(&before_move, "Probe.app").unwrap();
     fs::rename(homes.destination("Probe.app"), staged(&homes, &before_move)).unwrap();
-    let mut record = homes.record(&before_move);
-    record.phase = InstallPhase::Placing;
-    homes.store().save(&record).unwrap();
+    homes.cut(&before_move, InstallPhase::Placing);
     assert_eq!(homes.remove(&before_move)["outcome"], "alreadyGone");
 
-    // Cut after the move, before it was written installed.
+    // Cut after the move into place, before it was written installed.
     let after_move = id();
     homes.install(&after_move, "Probe.app").unwrap();
-    let mut record = homes.record(&after_move);
-    record.phase = InstallPhase::Placing;
-    homes.store().save(&record).unwrap();
-    assert_eq!(homes.remove(&after_move)["outcome"], "removed");
+    homes.cut(&after_move, InstallPhase::Placing);
+    assert_eq!(homes.remove(&after_move)["outcome"], "trashed");
+    assert!(homes.in_trash(&after_move).exists());
 
-    // Cut while removing: moved out of place, not yet deleted.
-    let inside = id();
-    homes.install(&inside, "Probe.app").unwrap();
-    fs::create_dir_all(removing(&homes, &inside).parent().unwrap()).unwrap();
-    fs::rename(homes.destination("Probe.app"), removing(&homes, &inside)).unwrap();
-    let mut record = homes.record(&inside);
-    record.phase = InstallPhase::Moving;
-    homes.store().save(&record).unwrap();
-    assert_eq!(homes.remove(&inside)["outcome"], "removed");
+    // Cut after the move into the Trash, before it was written trashed:
+    // found there, it is done, never moved again.
+    let in_trash = id();
+    homes.install(&in_trash, "Probe.app").unwrap();
+    homes.trash();
+    fs::rename(homes.destination("Probe.app"), homes.in_trash(&in_trash)).unwrap();
+    homes.cut(&in_trash, InstallPhase::Trashing);
+    assert_eq!(homes.remove(&in_trash)["outcome"], "trashed");
+    assert!(
+        homes
+            .in_trash(&in_trash)
+            .join("Contents/MacOS/Probe")
+            .exists()
+    );
 
-    // Cut while removing, before it moved: every check runs again.
+    // Cut before the move into the Trash: every check runs again.
     let unmoved = id();
     homes.install(&unmoved, "Probe.app").unwrap();
-    let mut record = homes.record(&unmoved);
-    record.phase = InstallPhase::Moving;
-    homes.store().save(&record).unwrap();
-    assert_eq!(homes.remove(&unmoved)["outcome"], "removed");
+    homes.cut(&unmoved, InstallPhase::Trashing);
+    assert_eq!(homes.remove(&unmoved)["outcome"], "trashed");
 
-    for id in [&cut, &before_move, &after_move, &inside, &unmoved] {
-        assert_eq!(homes.record(id).phase, InstallPhase::Removed);
-        assert!(!staged(&homes, id).exists() && !removing(&homes, id).exists());
+    for id in [&after_move, &in_trash, &unmoved] {
+        assert_eq!(homes.record(id).phase, InstallPhase::Trashed);
+        assert!(homes.in_trash(id).join("Contents/MacOS/Probe").exists());
     }
     assert!(!homes.destination("Probe.app").exists());
     assert!(homes.home.join(APPLICATIONS).is_dir(), "never removed");
@@ -358,7 +427,99 @@ fn an_install_cut_at_each_step_resumes_or_cleans_its_own_staging() {
 }
 
 #[test]
-fn a_bundle_a_process_runs_from_is_not_removed() {
+fn a_move_into_the_trash_not_written_through_is_found_there_next_time() {
+    let homes = Homes::new();
+    let id = id();
+    homes.install(&id, "Probe.app").unwrap();
+    let unsynced = |from: &fs::File, a: &FileName, to: &fs::File, b: &FileName| {
+        moved(from, a, to, b).map(|_| Moved::Unsynced(std::io::Error::other("no sync")))
+    };
+
+    let first = homes.remove_with(&id, &unsynced);
+    assert_eq!(first["ok"], false, "{first}");
+    assert_eq!(homes.record(&id).phase, InstallPhase::Trashing);
+    assert!(homes.in_trash(&id).exists());
+
+    let second = homes.remove(&id);
+    assert_eq!(second["outcome"], "trashed");
+    assert_eq!(homes.record(&id).phase, InstallPhase::Trashed);
+}
+
+#[test]
+fn an_install_whose_trash_is_on_another_volume_is_kept_never_copied() {
+    let homes = Homes::new();
+    let id = id();
+    homes.install(&id, "Probe.app").unwrap();
+    let elsewhere = |_: &fs::File, _: &FileName, _: &fs::File, _: &FileName| {
+        Err(std::io::Error::from_raw_os_error(libc::EXDEV))
+    };
+
+    let reply = homes.remove_with(&id, &elsewhere);
+    assert_eq!(
+        (&reply["outcome"], &reply["reason"]),
+        (&json!("kept"), &json!("other-volume"))
+    );
+    assert!(homes.destination("Probe.app/Contents/MacOS/Probe").exists());
+    assert!(!homes.in_trash(&id).exists());
+}
+
+#[test]
+fn a_placement_not_written_through_stays_placing() {
+    let homes = Homes::new();
+    let id = id();
+    let source = homes.app("Probe.app");
+    let unsynced = |from: &fs::File, a: &FileName, to: &fs::File, b: &FileName| {
+        moved(from, a, to, b).map(|_| Moved::Unsynced(std::io::Error::other("no sync")))
+    };
+
+    let reply = install_moving(
+        &homes.home,
+        &id,
+        &source,
+        "Probe.app",
+        &|| Ok(()),
+        &unsynced,
+    )
+    .unwrap();
+    assert_eq!(reply["ok"], false, "{reply}");
+    assert_eq!(homes.record(&id).phase, InstallPhase::Placing);
+    assert!(homes.destination("Probe.app").exists());
+    assert_eq!(
+        homes.remove(&id)["outcome"],
+        "trashed",
+        "the print proves it"
+    );
+}
+
+#[test]
+fn a_record_atlas_cannot_read_is_kept_untouched_and_never_acted_on() {
+    let homes = Homes::new();
+    let id = id();
+    homes.install(&id, "Probe.app").unwrap();
+    let path = homes.store().folder(&id).join("record.json");
+    let unreadable = b"{\"version\": 2, \"id\": \"elsewhere\"}";
+    fs::write(&path, unreadable).unwrap();
+
+    let reply = homes.remove(&id);
+    assert_eq!(
+        (&reply["outcome"], &reply["reason"]),
+        (&json!("kept"), &json!("unreadable"))
+    );
+    assert_eq!(fs::read(&path).unwrap(), unreadable);
+    assert!(homes.destination("Probe.app/Contents/MacOS/Probe").exists());
+    let listed = installs(
+        &homes.home,
+        std::slice::from_ref(&id),
+        &|| Ok(()),
+        &looks(&|| Ok(Vec::new())),
+    )
+    .unwrap();
+    assert_eq!(listed["installs"][0]["phase"], "unreadable");
+    assert_eq!(listed["installs"][0]["verified"], false);
+}
+
+#[test]
+fn a_bundle_a_process_runs_from_is_not_taken() {
     let homes = Homes::new();
     let id = id();
     homes.install(&id, "Probe.app").unwrap();
@@ -383,6 +544,43 @@ fn a_bundle_a_process_runs_from_is_not_removed() {
 }
 
 #[test]
+fn a_translocated_process_keeps_the_install_and_is_never_signalled() {
+    let homes = Homes::new();
+    let id = id();
+    homes.install(&id, "Probe.app").unwrap();
+    let translocated =
+        "/private/var/folders/x/T/AppTranslocation/1F2E/d/Probe.app/Contents/MacOS/Probe"
+            .to_owned();
+    let processes = move || Ok(vec![(900, translocated.clone())]);
+    let destination = homes.destination("Probe.app");
+    let traced = move |_: &Path| Some(destination.clone());
+    let ours = |_: &Path| Some(BUNDLE_ID.to_owned());
+
+    for looks in [
+        Looks {
+            processes: &processes,
+            original: &|_| None,
+            bundle_id: &ours,
+        },
+        Looks {
+            processes: &processes,
+            original: &traced,
+            bundle_id: &|_| None,
+        },
+    ] {
+        let reply = remove(&homes.home, &id, &|| Ok(()), &looks).unwrap();
+        assert_eq!(reply["outcome"], "inUse");
+        let listed = installs(&homes.home, std::slice::from_ref(&id), &|| Ok(()), &looks).unwrap();
+        assert_eq!(
+            listed["installs"][0]["processes"],
+            json!([]),
+            "never signalled"
+        );
+        assert_eq!(listed["installs"][0]["unproven"][0]["pid"], 900);
+    }
+}
+
+#[test]
 fn the_bundle_identifier_alone_never_selects_anything() {
     let homes = Homes::new();
     let id = id();
@@ -390,13 +588,13 @@ fn the_bundle_identifier_alone_never_selects_anything() {
     let twin = bundle(&homes.home.join("Desktop/Probe.app"));
     let other = bundle(&homes.destination("Probe Copy.app"));
 
-    assert_eq!(homes.remove(&id)["outcome"], "removed");
+    assert_eq!(homes.remove(&id)["outcome"], "trashed");
     assert!(twin.join("Contents/MacOS/Probe").exists());
     assert!(other.join("Contents/MacOS/Probe").exists());
 }
 
 #[test]
-fn side_effect_files_are_reported_and_never_removed() {
+fn side_effect_files_are_reported_and_never_touched() {
     let homes = Homes::new();
     let earlier = homes.home.join(format!("Library/Caches/{BUNDLE_ID}"));
     fs::create_dir_all(&earlier).unwrap();
@@ -409,7 +607,7 @@ fn side_effect_files_are_reported_and_never_removed() {
     fs::write(&preferences, "written by the app").unwrap();
 
     let reply = homes.remove(&id);
-    assert_eq!(reply["outcome"], "removed");
+    assert_eq!(reply["outcome"], "trashed");
     assert_eq!(
         reply["sideEffects"]["kept"],
         json!([
@@ -431,7 +629,7 @@ fn links_inside_a_bundle_are_never_followed() {
     let id = id();
     install(&homes.home, &id, &source, "Probe.app", &|| Ok(())).unwrap();
 
-    assert_eq!(homes.remove(&id)["outcome"], "removed");
+    assert_eq!(homes.remove(&id)["outcome"], "trashed");
     assert_eq!(fs::read_to_string(&outside).unwrap(), "keep me");
     assert!(homes.outside.join("Probe.app").exists());
 }
@@ -462,177 +660,37 @@ fn an_oversized_bundle_is_refused_before_it_is_placed() {
     assert!(print_path(&app, Some("Probe"), Limits::default()).is_ok());
 }
 
-/// The real move.
-fn moved(
-    from_dir: &fs::File,
-    from: &FileName,
-    to_dir: &fs::File,
-    to: &FileName,
-) -> std::io::Result<Moved> {
-    move_between(from_dir, from, to_dir, to)
-}
-
 #[test]
-fn a_bundle_made_writable_by_others_is_kept() {
-    for mode in [0o775, 0o777] {
-        let homes = Homes::new();
-        let id = id();
-        homes.install(&id, "Probe.app").unwrap();
-        let destination = homes.destination("Probe.app");
-        fs::set_permissions(&destination, fs::Permissions::from_mode(mode)).unwrap();
-
-        let reply = homes.remove(&id);
-        assert_eq!(reply["reason"], "changed", "{mode:o}");
-        assert!(destination.join("Contents/MacOS/Probe").exists());
-    }
-}
-
-#[test]
-fn a_foreign_folder_found_moved_aside_is_put_back_never_deleted() {
+fn an_install_that_cannot_be_copied_leaves_nothing_but_a_removed_record() {
     let homes = Homes::new();
+    let missing = id();
+    let error = install(
+        &homes.home,
+        &missing,
+        &homes.outside.join("Missing.app"),
+        "Missing.app",
+        &|| Ok(()),
+    )
+    .unwrap_err();
+    assert_eq!(error.code, "input");
+    assert!(matches!(homes.store().load(&missing), Held::Missing));
+
+    let source = homes.app("Locked.app");
+    let locked = source.join("Contents/Resources");
+    fs::set_permissions(&locked, fs::Permissions::from_mode(0o000)).unwrap();
     let id = id();
-    homes.install(&id, "Probe.app").unwrap();
-    // The bundle Atlas placed is kept under another name, so the one made
-    // in its place cannot reuse its node.
-    let destination = homes.destination("Probe.app");
-    let original = homes.destination("Probe.app.original");
-    fs::rename(&destination, &original).unwrap();
-    let foreign = bundle(&homes.aside(&id));
-    fs::write(foreign.join("Contents/Resources/mine.txt"), "someone's").unwrap();
-    homes.cut(&id, InstallPhase::Moving);
-
-    let reply = homes.remove(&id);
-    assert_eq!(
-        (&reply["outcome"], &reply["reason"]),
-        (&json!("kept"), &json!("replaced"))
-    );
-    assert_eq!(
-        fs::read_to_string(destination.join("Contents/Resources/mine.txt")).unwrap(),
-        "someone's",
-        "put back where it was, whole"
-    );
-    assert!(!homes.aside(&id).exists());
-    assert!(original.exists());
-}
-
-#[test]
-fn a_removal_cut_after_the_move_checks_what_was_moved_before_deleting() {
-    let homes = Homes::new();
-    let id = id();
-    homes.install(&id, "Probe.app").unwrap();
-    // The move happens, but is not written through, as a crash leaves it.
-    let unsynced = |from: &fs::File, a: &FileName, to: &fs::File, b: &FileName| {
-        moved(from, a, to, b).map(|_| Moved::Unsynced(std::io::Error::other("no sync")))
-    };
-
-    let first = homes.remove_with(&id, &unsynced);
-    assert_eq!(first["ok"], false, "{first}");
-    assert_eq!(homes.record(&id).phase, InstallPhase::Moving);
-    assert!(
-        homes.aside(&id).join("Contents/MacOS/Probe").exists(),
-        "nothing deleted yet"
-    );
-    assert!(!homes.destination("Probe.app").exists());
-
-    let second = homes.remove(&id);
-    assert_eq!(second["outcome"], "removed");
-    assert!(!homes.aside(&id).exists());
-    assert_eq!(homes.record(&id).phase, InstallPhase::Removed);
-}
-
-#[test]
-fn a_bundle_that_changed_as_it_was_moved_is_put_back_and_kept() {
-    let homes = Homes::new();
-    let id = id();
-    homes.install(&id, "Probe.app").unwrap();
-    let aside = homes.aside(&id);
-    // An updater rewrites a resource just as the bundle is moved.
-    let rewriting = |from: &fs::File, a: &FileName, to: &fs::File, b: &FileName| {
-        let result = moved(from, a, to, b);
-        if result.is_ok() && aside.exists() {
-            fs::write(aside.join("Contents/Resources/strings.txt"), "updated").unwrap();
-        }
-        result
-    };
-
-    let reply = homes.remove_with(&id, &rewriting);
-    assert_eq!(reply["reason"], "changed", "{reply}");
-    let destination = homes.destination("Probe.app");
-    assert_eq!(
-        fs::read_to_string(destination.join("Contents/Resources/strings.txt")).unwrap(),
-        "updated"
-    );
-    assert!(reply.get("heldAside").is_none());
-}
-
-#[test]
-fn a_changed_bundle_that_cannot_be_put_back_is_held_aside_not_deleted() {
-    let homes = Homes::new();
-    let id = id();
-    homes.install(&id, "Probe.app").unwrap();
-    let aside = homes.aside(&id);
-    let calls = std::cell::Cell::new(0);
-    let failing_back = |from: &fs::File, a: &FileName, to: &fs::File, b: &FileName| {
-        calls.set(calls.get() + 1);
-        if calls.get() > 1 {
-            return Err(std::io::Error::other("cannot move back"));
-        }
-        let result = moved(from, a, to, b);
-        fs::write(aside.join("Contents/Resources/strings.txt"), "updated").unwrap();
-        result
-    };
-
-    let reply = homes.remove_with(&id, &failing_back);
-    assert_eq!(
-        (&reply["reason"], &reply["heldAside"]),
-        (&json!("changed"), &json!(true))
-    );
-    assert!(aside.join("Contents/MacOS/Probe").exists(), "kept, aside");
-    let record = homes.record(&id);
-    assert!(record.held_aside && record.phase == InstallPhase::Kept);
-    assert_eq!(homes.remove(&id)["outcome"], "kept", "never deleted later");
-    assert!(aside.exists());
-}
-
-#[test]
-fn a_deletion_cut_short_goes_on_only_for_the_folder_it_checked() {
-    let homes = Homes::new();
-    let id = id();
-    homes.install(&id, "Probe.app").unwrap();
-    let original = homes.destination("Probe.app.original");
-    fs::rename(homes.destination("Probe.app"), &original).unwrap();
-    let foreign = bundle(&homes.aside(&id));
-    homes.cut(&id, InstallPhase::Deleting);
-
-    let reply = homes.remove(&id);
-    assert_eq!(
-        (&reply["reason"], &reply["heldAside"]),
-        (&json!("replaced"), &json!(true))
-    );
-    assert!(foreign.join("Contents/MacOS/Probe").exists());
-}
-
-#[test]
-fn a_deletion_that_fails_stays_retryable_and_is_never_taken_for_removed() {
-    let homes = Homes::new();
-    let id = id();
-    homes.install(&id, "Probe.app").unwrap();
-    let aside = homes.aside(&id);
-    fs::rename(homes.destination("Probe.app"), &aside).unwrap();
-    homes.cut(&id, InstallPhase::Deleting);
-    let locked = aside.join("Contents/Resources");
-    fs::set_permissions(&locked, fs::Permissions::from_mode(0o500)).unwrap();
-
-    let failed = remove(&homes.home, &id, &|| Ok(()), &looks(&|| Ok(Vec::new())));
+    let error = install(&homes.home, &id, &source, "Locked.app", &|| Ok(())).unwrap_err();
     fs::set_permissions(&locked, fs::Permissions::from_mode(0o755)).unwrap();
+    assert_eq!(error.code, "input", "{error}");
+    assert_eq!(homes.record(&id).phase, InstallPhase::Removed);
     assert!(
-        failed.is_err() || failed.as_ref().unwrap()["ok"] == false,
-        "{failed:?}"
+        !homes
+            .store()
+            .folder(&id)
+            .join("staging/Locked.app")
+            .exists()
     );
-    assert_eq!(homes.record(&id).phase, InstallPhase::Deleting);
-
-    assert_eq!(homes.remove(&id)["outcome"], "removed");
-    assert!(!aside.exists());
+    assert!(!homes.destination("Locked.app").exists());
 }
 
 #[test]
@@ -663,76 +721,4 @@ fn an_install_read_says_where_it_is_only_while_its_own_folder_is_there() {
         entry.get("processes").is_none() && entry.get("path").is_none(),
         "{entry}"
     );
-}
-
-#[test]
-fn a_translocated_process_macos_cannot_trace_keeps_the_install() {
-    let homes = Homes::new();
-    let id = id();
-    homes.install(&id, "Probe.app").unwrap();
-    let translocated =
-        "/private/var/folders/x/T/AppTranslocation/1F2E/d/Probe.app/Contents/MacOS/Probe"
-            .to_owned();
-    let processes = move || Ok(vec![(900, translocated.clone())]);
-    let ours = |_: &Path| Some(BUNDLE_ID.to_owned());
-    let looks = Looks {
-        processes: &processes,
-        original: &|_| None,
-        bundle_id: &ours,
-    };
-
-    let reply = remove(&homes.home, &id, &|| Ok(()), &looks).unwrap();
-    assert_eq!(reply["outcome"], "inUse");
-    let listed = installs(&homes.home, std::slice::from_ref(&id), &|| Ok(()), &looks).unwrap();
-    assert_eq!(
-        listed["installs"][0]["processes"],
-        json!([]),
-        "never signalled"
-    );
-    assert_eq!(listed["installs"][0]["unproven"][0]["pid"], 900);
-
-    let destination = homes.destination("Probe.app");
-    let traced = move |_: &Path| Some(destination.clone());
-    let looks = Looks {
-        original: &traced,
-        ..looks
-    };
-    let listed = installs(&homes.home, std::slice::from_ref(&id), &|| Ok(()), &looks).unwrap();
-    assert_eq!(
-        listed["installs"][0]["processes"][0]["pid"], 900,
-        "traced to it"
-    );
-}
-
-#[test]
-fn an_install_that_cannot_be_copied_leaves_nothing_but_a_removed_record() {
-    let homes = Homes::new();
-    let missing = id();
-    let error = install(
-        &homes.home,
-        &missing,
-        &homes.outside.join("Missing.app"),
-        "Missing.app",
-        &|| Ok(()),
-    )
-    .unwrap_err();
-    assert_eq!(error.code, "input");
-    assert!(homes.store().load(&missing).unwrap().is_none());
-
-    let source = homes.app("Locked.app");
-    let locked = source.join("Contents/Resources");
-    fs::set_permissions(&locked, fs::Permissions::from_mode(0o000)).unwrap();
-    let id = id();
-    let error = install(&homes.home, &id, &source, "Locked.app", &|| Ok(())).unwrap_err();
-    fs::set_permissions(&locked, fs::Permissions::from_mode(0o755)).unwrap();
-    assert_eq!(error.code, "input", "{error}");
-    assert_eq!(homes.record(&id).phase, InstallPhase::Removed);
-    assert!(
-        !homes
-            .store()
-            .folder(&id)
-            .join("staging/Locked.app")
-            .exists()
-    );
-    assert!(!homes.destination("Locked.app").exists());
 }

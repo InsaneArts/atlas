@@ -495,8 +495,8 @@ pub(super) enum Command {
     ///
     /// Copies an .app from this Mac into ~/Applications in the helper, never
     /// over anything already there, and records it, so that atlas cleanup
-    /// --apply removes it once the task is done, unless it changed
-    /// meanwhile. Settings and data the app writes in the helper stay.
+    /// --apply moves it to the helper's Trash once the task is done, unless it
+    /// changed meanwhile. Settings and data the app writes in the helper stay.
     InstallApp {
         /// The .app to install.
         #[arg(value_name = "PATH")]
@@ -507,9 +507,10 @@ pub(super) enum Command {
     /// Lists the copies into the helper this task applied, the apps it
     /// installed, the copies it opened and the apps running from them. With
     /// --apply it quits those apps, rolls the copies into the helper back
-    /// newest first, removes the installs and copies, and reports what it
-    /// kept and why. Run it again to finish what is left. Apps opened by
-    /// name are listed, not quit.
+    /// newest first, moves the installs to the helper's Trash (it never deletes
+    /// them), removes the copies, and reports what it kept and why. Run
+    /// it again to finish what is left. Apps opened by name are listed, not
+    /// quit.
     Cleanup {
         /// Do it; otherwise only show what would be done.
         #[arg(long)]
