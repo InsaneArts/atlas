@@ -2501,7 +2501,7 @@ fn persons_client(dir: &Path, span: Duration) -> Client {
 
 /// A span no test outlasts, so gathering never ends while a test runs.
 const LONG_SPAN: Duration = Duration::from_secs(3600);
-/// A span short enough to wait out in a test.
+/// A span advanced explicitly by timer tests.
 const SHORT_SPAN: Duration = Duration::from_millis(200);
 
 #[test]
@@ -2631,7 +2631,7 @@ fn the_persons_input_gathers_five_seconds_a_row_unless_made_with_another_span() 
     assert_eq!(PersonInput::with_span(SHORT_SPAN).span(), SHORT_SPAN);
 }
 
-#[tokio::test]
+#[tokio::test(start_paused = true)]
 async fn the_persons_gathered_input_is_written_once_its_span_ends_with_nothing_after_it() {
     let dir = tempfile::tempdir().unwrap();
     let client = persons_client(dir.path(), SHORT_SPAN);
@@ -2639,24 +2639,75 @@ async fn the_persons_gathered_input_is_written_once_its_span_ends_with_nothing_a
     let clicked = json!({"op": "input", "actions": [{"type": "click", "x": 1, "y": 2}]});
     for _ in 0..3 {
         client
-            .record(&clicked, &json!({"ok": true}), Duration::ZERO)
-            .await
+            .record_blocking(&clicked, &json!({"ok": true}), Duration::ZERO)
             .unwrap();
     }
+    let gathering = client.person_input.clone().unwrap();
+    let timer = gathering.untimed().unwrap();
+    let mut writing = Box::pin(gathering.write_at(timer));
     assert!(activity_log::recent(&output, 5).is_empty());
 
-    tokio::time::sleep(SHORT_SPAN).await;
-    let mut rows = Vec::new();
-    for _ in 0..300 {
-        rows = activity_log::recent(&output, 5);
-        if !rows.is_empty() {
-            break;
-        }
-        tokio::time::sleep(Duration::from_millis(10)).await;
+    for _ in 0..2 {
+        std::future::poll_fn(|cx| {
+            assert!(std::future::Future::poll(writing.as_mut(), cx).is_pending());
+            std::task::Poll::Ready(())
+        })
+        .await;
+        tokio::time::advance(SHORT_SPAN / 2).await;
     }
+    writing.await.unwrap();
+    let rows = activity_log::recent(&output, 5);
     assert_eq!(rows.len(), 1);
     assert_eq!(rows[0].action_count, Some(3));
     assert_eq!(rows[0].actor(), "viewer");
+}
+
+#[tokio::test(start_paused = true)]
+async fn an_input_timer_keeps_the_deadline_set_when_gathering_began() {
+    let dir = tempfile::tempdir().unwrap();
+    let client = persons_client(dir.path(), SHORT_SPAN);
+    client.record_for_test(
+        &json!({"op": "input", "actions": [{"type": "click"}]}),
+        &json!({"ok": true}),
+    );
+    let deadline = tokio::time::Instant::now() + SHORT_SPAN;
+    tokio::time::advance(SHORT_SPAN / 2).await;
+    let gathering = client.person_input.clone().unwrap();
+    let timer = gathering.untimed().unwrap();
+    let writing = tokio::spawn(gathering.write_at(timer));
+    tokio::time::advance(SHORT_SPAN / 2).await;
+    writing.await.unwrap().unwrap();
+    assert_eq!(tokio::time::Instant::now(), deadline);
+    assert_eq!(
+        activity_log::recent(client.output_dir().unwrap(), 1)[0].action_count,
+        Some(1)
+    );
+}
+
+#[tokio::test(start_paused = true)]
+async fn an_old_input_timer_cannot_flush_input_gathered_after_an_explicit_flush() {
+    let dir = tempfile::tempdir().unwrap();
+    let client = persons_client(dir.path(), SHORT_SPAN);
+    let input = json!({"op": "input", "actions": [{"type": "click"}]});
+    client.record_for_test(&input, &json!({"ok": true}));
+    let gathering = client.person_input.clone().unwrap();
+    let earlier = gathering.untimed().unwrap();
+    tokio::time::advance(SHORT_SPAN / 2).await;
+    gathering.flush().unwrap();
+    client.record_for_test(&input, &json!({"ok": true}));
+    let later = gathering.untimed().unwrap();
+    assert!(gathering.untimed().is_none(), "each span gets one timer");
+
+    let old_writing = tokio::spawn(gathering.clone().write_at(earlier));
+    tokio::time::advance(SHORT_SPAN / 2).await;
+    old_writing.await.unwrap().unwrap();
+    let path = client.output_dir().unwrap().join(activity_log::FILE);
+    assert_eq!(fs::read_to_string(&path).unwrap().lines().count(), 1);
+
+    let new_writing = tokio::spawn(gathering.write_at(later));
+    tokio::time::advance(SHORT_SPAN / 2).await;
+    new_writing.await.unwrap().unwrap();
+    assert_eq!(fs::read_to_string(path).unwrap().lines().count(), 2);
 }
 
 #[test]

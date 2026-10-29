@@ -12,8 +12,9 @@ use std::{
     collections::VecDeque,
     path::{Path, PathBuf},
     sync::{Arc, Mutex, PoisonError},
-    time::{Duration, Instant},
+    time::Duration,
 };
+use tokio::time::Instant;
 
 /// How long the person's input through a viewer gathers into one row
 /// before the row is written.
@@ -37,13 +38,20 @@ impl Default for PersonInput {
     }
 }
 
-/// The row being gathered, where it goes and since when, and whether its
-/// writing is already timed.
+/// The current span and its deadline, rows awaiting a successful append,
+/// and which generation has a timer.
 #[derive(Default)]
 struct Gathering {
     row: Option<(PathBuf, Row, Instant)>,
     pending: VecDeque<(PathBuf, Row)>,
+    generation: u64,
     timed: bool,
+}
+
+#[derive(Clone, Copy)]
+pub(super) struct InputTimer {
+    generation: u64,
+    deadline: Instant,
 }
 
 impl Gathering {
@@ -72,6 +80,7 @@ impl PersonInput {
     }
 
     /// How long input gathers into one row before it is written.
+    #[cfg(test)]
     pub(crate) fn span(&self) -> Duration {
         self.span
     }
@@ -81,9 +90,9 @@ impl PersonInput {
     /// span has ended or it is for another log.
     fn gather(&self, directory: &Path, row: Row) -> Result<()> {
         let mut gathering = self.lock();
-        if let Some((into, gathered, since)) = gathering.row.as_mut()
+        if let Some((into, gathered, deadline)) = gathering.row.as_mut()
             && into == directory
-            && since.elapsed() < self.span
+            && Instant::now() < *deadline
         {
             gathered.action_count =
                 Some(gathered.action_count.unwrap_or(0) + row.action_count.unwrap_or(0));
@@ -94,7 +103,8 @@ impl PersonInput {
         }
 
         gathering.keep_row();
-        gathering.row = Some((directory.to_owned(), row, Instant::now()));
+        gathering.row = Some((directory.to_owned(), row, Instant::now() + self.span));
+        gathering.generation = gathering.generation.wrapping_add(1);
         gathering.timed = false;
         gathering.write_pending()
     }
@@ -107,13 +117,42 @@ impl PersonInput {
         gathering.write_pending()
     }
 
-    /// Whether a row is gathering whose writing is not yet timed; it is
-    /// from now on.
-    fn untimed(&self) -> bool {
+    /// Time this generation's row once, at the deadline set when it began.
+    pub(super) fn untimed(&self) -> Option<InputTimer> {
         let mut gathering = self.lock();
-        let untimed = gathering.row.is_some() && !gathering.timed;
-        gathering.timed |= untimed;
-        untimed
+        let deadline = gathering.row.as_ref()?.2;
+        if gathering.timed {
+            return None;
+        }
+        gathering.timed = true;
+        Some(InputTimer {
+            generation: gathering.generation,
+            deadline,
+        })
+    }
+
+    /// A timer only writes the row it was scheduled for, once it is due.
+    fn flush_due(&self, timer: InputTimer) -> Result<()> {
+        let mut gathering = self.lock();
+        if gathering.generation != timer.generation
+            || gathering
+                .row
+                .as_ref()
+                .is_none_or(|(_, _, deadline)| *deadline != timer.deadline)
+            || Instant::now() < timer.deadline
+        {
+            return Ok(());
+        }
+        gathering.timed = false;
+        gathering.keep_row();
+        gathering.write_pending()
+    }
+
+    pub(super) async fn write_at(self, timer: InputTimer) -> Result<()> {
+        tokio::time::sleep_until(timer.deadline).await;
+        tokio::task::spawn_blocking(move || self.flush_due(timer))
+            .await
+            .map_err(|_| Error::new(Code::State, "The activity row could not be written"))?
     }
 
     fn lock(&self) -> std::sync::MutexGuard<'_, Gathering> {
@@ -231,11 +270,10 @@ impl Client {
         // The person's gathered input is written once its span ends, even
         // when no more comes.
         if let Some(gathering) = self.person_input.clone()
-            && gathering.untimed()
+            && let Some(timer) = gathering.untimed()
         {
             tokio::spawn(async move {
-                tokio::time::sleep(gathering.span()).await;
-                let _ = tokio::task::spawn_blocking(move || gathering.flush()).await;
+                let _ = gathering.write_at(timer).await;
             });
         }
 
