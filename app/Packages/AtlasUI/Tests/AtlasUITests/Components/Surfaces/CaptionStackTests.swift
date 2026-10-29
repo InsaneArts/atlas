@@ -74,4 +74,10 @@ struct CaptionStackTests {
       #expect(Layout.showsWords(depth: depth, fanned: true), "\(depth)")
     }
   }
+
+  @Test("a chip stepping behind a newer one drops its words at once, so they never cross the newer chip's")
+  func aChipSteppingBackDropsItsWordsAtOnce() {
+    #expect(CaptionStack.wording(showsWords: false) == nil)
+    #expect(CaptionStack.wording(showsWords: true) == Motion.textSwap)
+  }
 }

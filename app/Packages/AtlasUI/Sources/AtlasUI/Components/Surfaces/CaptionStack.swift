@@ -62,7 +62,7 @@ struct CaptionStack: View {
           .foregroundStyle(Color.textTertiary)
       }
       .opacity(showsWords ? 1 : 0)
-      .animation(Motion.textSwap, value: showsWords)
+      .animation(Self.wording(showsWords: showsWords), value: showsWords)
     }
   }
 
@@ -97,6 +97,15 @@ struct CaptionStack: View {
   /// - Returns: The animation.
   nonisolated static func fading(reduceMotion: Bool) -> Animation {
     Motion.animation(Motion.state, reduceMotion: reduceMotion, reduced: Motion.reduced)
+  }
+
+  /// How a chip's words come and go: fading in as the pile fans out, gone at once as the chip steps behind a newer
+  /// one, so the arriving chip's words never cross the old ones while both still show.
+  ///
+  /// - Parameter showsWords: Whether the words now show.
+  /// - Returns: The animation, or nil to hide them at once.
+  nonisolated static func wording(showsWords: Bool) -> Animation? {
+    showsWords ? Motion.textSwap : nil
   }
 
   /// The newest actions the pile shows, each with its depth: at most ``Layout/limit``, the newest at depth 0, in
