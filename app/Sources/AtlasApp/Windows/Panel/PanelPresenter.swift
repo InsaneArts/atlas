@@ -129,11 +129,7 @@ enum PanelPresenter {
       .last
       .map(String.init)
     let name = item.row.app ?? lastPart ?? ""
-    let image = [AppIconKey(bundleId: item.row.bundleId), AppIconKey(name: name)]
-      .compactMap { $0 }
-      .lazy
-      .compactMap { icons[$0.text] }
-      .first
+    let image = AppIconSelection.image(bundleId: item.row.bundleId, name: name, images: icons)
     return .app(.of(image, name: name))
   }
 

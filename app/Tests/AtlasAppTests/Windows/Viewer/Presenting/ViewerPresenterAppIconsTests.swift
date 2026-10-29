@@ -1,4 +1,5 @@
 import AtlasService
+import AtlasStatus
 import AtlasUI
 import CoreGraphics
 import Testing
@@ -24,7 +25,7 @@ struct ViewerPresenterAppIconsTests {
     return IconImage(id: "notes", image: image)
   }()
 
-  @Test("an app's icon is the one found by its bundle id, then by the bundle its name was seen with, then by its name")
+  @Test("an app of known identity selects its own icon and an unknown app may use its name")
   func found() throws {
     let icon = try #require(Self.icon)
     var icons = ViewerIconsFacts()
@@ -37,6 +38,29 @@ struct ViewerPresenterAppIconsTests {
     var byName = ViewerIconsFacts()
     byName.images[AppIconKey.name("notes").text] = icon
     #expect(ViewerPresenter.appIcon(bundleId: nil, name: "Notes", byName) == .image(icon))
+  }
+
+  @Test("an explicit bundle never borrows a same-named app's icon in either window")
+  func explicitIdentityNeverBorrowsAnIcon() throws {
+    let icon = try #require(Self.icon)
+    let nameKey = try #require(AppIconKey(name: "Notes"))
+    var icons = ViewerIconsFacts()
+    icons.images[nameKey.text] = icon
+    icons.images[AppIconKey.bundle("com.apple.Notes").text] = icon
+    icons.names[nameKey.text] = "com.apple.Notes"
+    #expect(icons.image(bundleId: "com.other.Notes", name: "Notes") == nil)
+    #expect(icons.image(bundleId: nil, name: "Notes") == icon)
+    #expect(icons.image(bundleId: "", name: "Notes") == icon)
+    var status = ViewerStatus()
+    status.overview.activity = [
+      ViewerStatus.Activity(id: "app", operation: "input", ok: true, app: "Notes", bundleId: "com.other.Notes")
+    ]
+    let recent = PanelPresenter.recent(
+      StatusReading(status),
+      mode: .seen(by: status.overview, holdingControl: false),
+      icons: icons.images
+    )
+    #expect(recent.first?.icon == .app(.monogram(AppMonogram(name: "Notes"))))
   }
 
   @Test("a copy only the helper can read draws its initial")
