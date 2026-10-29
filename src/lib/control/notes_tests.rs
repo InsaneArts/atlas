@@ -2,7 +2,7 @@
 //! claimed each pending change, which holds control and which waits, and
 //! the order waiters take control in.
 use super::*;
-use crate::host_session::{Host, HostSession, Process};
+use crate::host_session::{Host, HostSession, Instance};
 use std::os::unix::fs::DirBuilderExt;
 
 fn session(id: &str) -> HostSession {
@@ -220,7 +220,7 @@ fn the_person_taking_control_removes_a_stale_note() {
         host: Some(Host::Codex),
         folder: None,
         named: None,
-        process: Process::new(i32::MAX, [1, 0]),
+        process: Instance::new(i32::MAX, [1, 0]),
         since: 1,
     };
     fs::create_dir_all(directory.path()).unwrap();
@@ -261,7 +261,7 @@ fn a_refused_acquire_leaves_no_note() {
 /// `since`, touched `touched` ago.
 fn waiter_note(
     controller: &Controller,
-    process: Process,
+    process: Instance,
     since: u64,
     touched: Duration,
 ) -> PathBuf {
@@ -374,11 +374,11 @@ fn a_dead_or_stale_waiters_note_is_skipped() {
     }
     let directory = tempfile::tempdir().unwrap();
     let controller = Controller::at(505, directory.path());
-    let this = Process::current().unwrap();
+    let this = Instance::current().unwrap();
     let now = crate::host_session::now_ms();
     let dead = waiter_note(
         &controller,
-        Process::new(i32::MAX, [1, 0]),
+        Instance::new(i32::MAX, [1, 0]),
         now - 1000,
         Duration::ZERO,
     );
@@ -449,7 +449,7 @@ fn a_newcomer_waits_its_turn_but_the_person_and_a_stop_end_every_wait() {
     }
     let directory = tempfile::tempdir().unwrap();
     let controller = Controller::at(505, directory.path());
-    let this = Process::current().unwrap();
+    let this = Instance::current().unwrap();
     let now = crate::host_session::now_ms();
     let ahead = waiter_note(&controller, this, now - 1000, Duration::ZERO);
 

@@ -6,7 +6,7 @@
 //! cleanup. Recording is best effort and never holds a command up: when
 //! another command is writing the records, this one's goes unrecorded.
 use super::{
-    HostSession, Key, Process, now_ms,
+    HostSession, Instance, Key, now_ms,
     record::{Leftovers, Record, Seen},
 };
 use crate::{
@@ -230,7 +230,7 @@ impl Store {
     /// while nothing would change; a session with no record gets none. The
     /// lock is tried once: while another command writes the records, this
     /// one is refused at once rather than wait.
-    pub(crate) fn touch(&self, key: &Key, ancestor: Option<Process>, now: u64) -> Result<()> {
+    pub(crate) fn touch(&self, key: &Key, ancestor: Option<Instance>, now: u64) -> Result<()> {
         if !self
             .read(key)
             .is_some_and(|mut record| record.touched(ancestor, now))

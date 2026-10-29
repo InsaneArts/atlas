@@ -2,7 +2,7 @@ use super::*;
 use crate::error::Error;
 use crate::{
     doing::Doing,
-    host_session::{Host, HostSession, Process},
+    host_session::{Host, HostSession, Instance},
 };
 use fs2::FileExt;
 use serde_json::json;
@@ -338,7 +338,7 @@ fn a_plan_rolled_back_by_anyone_leaves_every_record() {
 fn a_claude_session_after_clear_links_to_the_one_before_and_ends_it() {
     let directory = tempfile::tempdir().unwrap();
     let client = client(directory.path());
-    let process = Process::current().unwrap();
+    let process = Instance::current().unwrap();
     let before = session("before").run_by(Some(process));
     let after = session("after").run_by(Some(process));
 
@@ -360,7 +360,7 @@ fn a_claude_session_after_clear_links_to_the_one_before_and_ends_it() {
 fn a_session_resumed_in_a_new_process_is_the_same_record_and_not_ended() {
     let directory = tempfile::tempdir().unwrap();
     let client = client(directory.path());
-    let gone = session("resumed").run_by(Some(Process::new(i32::MAX, [1, 0])));
+    let gone = session("resumed").run_by(Some(Instance::new(i32::MAX, [1, 0])));
 
     noted(&client, &gone, Kind::Other, "click", json!({"ok": true}));
     let ended = store(&client).read(gone.key()).unwrap();
@@ -370,7 +370,7 @@ fn a_session_resumed_in_a_new_process_is_the_same_record_and_not_ended() {
         "its process is gone"
     );
 
-    let resumed = session("resumed").run_by(Process::current());
+    let resumed = session("resumed").run_by(Instance::current());
     noted(&client, &resumed, Kind::Other, "click", json!({"ok": true}));
     let record = store(&client).read(gone.key()).unwrap();
     assert_eq!(record.ended_at(), None);
@@ -378,9 +378,9 @@ fn a_session_resumed_in_a_new_process_is_the_same_record_and_not_ended() {
 }
 
 /// A process that is this one's ancestor: its parent.
-fn parent() -> Process {
+fn parent() -> Instance {
     let pid = nix::unistd::getppid().as_raw();
-    Process::new(
+    Instance::new(
         pid,
         crate::host_session::ancestry::process(pid).unwrap().start,
     )
@@ -390,7 +390,7 @@ fn parent() -> Process {
 fn any_command_of_a_resumed_session_takes_its_new_process_before_it_acts() {
     let directory = tempfile::tempdir().unwrap();
     let client = client(directory.path());
-    let gone = session("resumed").run_by(Some(Process::new(i32::MAX, [1, 0])));
+    let gone = session("resumed").run_by(Some(Instance::new(i32::MAX, [1, 0])));
     noted(&client, &gone, Kind::Other, "click", json!({"ok": true}));
     let before = store(&client).read(gone.key()).unwrap();
     assert!(before.ended_at().is_some(), "its first process is gone");
@@ -411,7 +411,7 @@ fn any_command_of_a_resumed_session_takes_its_new_process_before_it_acts() {
 fn a_forged_id_naming_an_unrelated_process_neither_revives_nor_takes_a_record() {
     let directory = tempfile::tempdir().unwrap();
     let client = client(directory.path());
-    let real = session("real").run_by(Some(Process::new(i32::MAX, [1, 0])));
+    let real = session("real").run_by(Some(Instance::new(i32::MAX, [1, 0])));
     noted(&client, &real, Kind::Other, "click", json!({"ok": true}));
     let mut ended = store(&client).read(real.key()).unwrap();
     ended.last_seen -= 60_000;
@@ -419,7 +419,7 @@ fn a_forged_id_naming_an_unrelated_process_neither_revives_nor_takes_a_record() 
     store(&client).write(&ended).unwrap();
 
     // A live process, but not one this command runs in: the command itself.
-    let forged = session("real").run_by(Process::current());
+    let forged = session("real").run_by(Instance::current());
     assert_eq!(forged.ancestor(), None, "not this command's host");
     touch(&client, &forged).unwrap();
     assert_eq!(
@@ -487,7 +487,7 @@ fn a_session_ended_by_clear_stays_ended_unless_resumed_in_another_process() {
     store(&client).touch(before.key(), None, later).unwrap();
     assert_eq!(store(&client).read(before.key()).unwrap(), cleared);
 
-    let resumed = Process::current().unwrap();
+    let resumed = Instance::current().unwrap();
     store(&client)
         .touch(before.key(), Some(resumed), later)
         .unwrap();
@@ -500,7 +500,7 @@ fn a_session_ended_by_clear_stays_ended_unless_resumed_in_another_process() {
 fn a_touch_never_waits_for_another_command_writing_the_records() {
     let directory = tempfile::tempdir().unwrap();
     let client = client(directory.path());
-    let session = session("contended").run_by(Some(Process::new(i32::MAX, [1, 0])));
+    let session = session("contended").run_by(Some(Instance::new(i32::MAX, [1, 0])));
     noted(&client, &session, Kind::Other, "click", json!({"ok": true}));
     let before = fs::read(store(&client).folder.path(session.key())).unwrap();
 

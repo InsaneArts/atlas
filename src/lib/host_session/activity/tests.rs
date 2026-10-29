@@ -2,7 +2,7 @@ use super::*;
 use crate::{
     doing::Doing,
     host_session::{
-        Process,
+        Instance,
         store::{Kind, note},
     },
 };
@@ -192,14 +192,14 @@ fn activity_after_compaction_finds_the_same_session() {
     let directory = tempfile::tempdir().unwrap();
     let client = client(directory.path());
     let before = HostSession {
-        process: Some(Process::new(i32::MAX, [1, 0])),
+        process: Some(Instance::new(i32::MAX, [1, 0])),
         ..session(Host::Claude, "left")
     };
     act(&client, &before, "click", json!({"ok": true}));
     shot(&client, &before, &capture(1));
 
     let after = HostSession {
-        process: Process::current(),
+        process: Instance::current(),
         ..session(Host::Claude, "left")
     };
     let earlier = list(&client, Some(&before), false, None, 10).unwrap();
@@ -385,7 +385,7 @@ fn activity_works_while_another_controller_holds_the_lock_and_after_a_stop() {
 fn a_previous_session_with_leftovers_is_mentioned_and_one_without_is_not() {
     let directory = tempfile::tempdir().unwrap();
     let client = client(directory.path());
-    let process = Process::current().unwrap();
+    let process = Instance::current().unwrap();
     let labelled = |id: &str| HostSession {
         process: Some(process),
         ..session(Host::Claude, id)

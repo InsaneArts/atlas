@@ -4,7 +4,7 @@ use crate::{
     doing::Doing,
     error::Error,
     host_session::{
-        Host, Process, ancestry,
+        Host, Instance, ancestry,
         store::{Kind, note},
     },
     ui::hints,
@@ -32,13 +32,13 @@ fn recorded(client: &Client, session: &HostSession) {
 }
 
 /// The process that started this one, as a live command other than this one.
-fn another_process() -> Process {
+fn another_process() -> Instance {
     let parent = nix::unistd::getppid().as_raw();
-    Process::new(parent, ancestry::process(parent).unwrap().start)
+    Instance::new(parent, ancestry::process(parent).unwrap().start)
 }
 
 /// A holder note naming `session`, as another command `process` left it.
-fn holder(client: &Client, session: &HostSession, process: Process) {
+fn holder(client: &Client, session: &HostSession, process: Instance) {
     let path = client.controller.holder_path();
     fs::create_dir_all(path.parent().unwrap()).unwrap();
     let note = Note {
@@ -109,9 +109,9 @@ fn a_note_whose_process_has_ended_names_nobody() {
     let alive = another_process();
 
     for gone in [
-        Process::new(i32::MAX, alive.start),
-        Process::new(alive.pid, [alive.start[0] + 1, 0]),
-        Process::current().unwrap(),
+        Instance::new(i32::MAX, alive.start),
+        Instance::new(alive.pid, [alive.start[0] + 1, 0]),
+        Instance::current().unwrap(),
     ] {
         holder(&client, &codex, gone);
         let error = reply(busy(), || Some(client.clone()), None).unwrap_err();

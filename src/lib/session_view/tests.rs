@@ -1,5 +1,5 @@
 use super::*;
-use crate::host_session::{Host, Process};
+use crate::host_session::{Host, Instance};
 
 /// Now, in nanoseconds since 1970: a fixed moment the rows are dated from.
 const NOW: u128 = 1_793_170_000_000_000_000;
@@ -29,7 +29,7 @@ fn note(session: Option<&Key>, ago: u64) -> Note {
         host: session.map(|_| Host::Claude),
         folder: None,
         named: None,
-        process: Process::current().unwrap(),
+        process: Instance::current().unwrap(),
         since: u64::try_from(NOW / 1_000_000).unwrap() - ago * 1000,
     }
 }
@@ -145,7 +145,7 @@ fn a_holder_note_whose_command_ended_holds_nothing_and_a_row_under_way_stands_fo
         row(Some(&left), 3, json!({})),
     ];
     let mut gone = note(Some(&left), 3);
-    gone.process = Process::new(i32::MAX, [1, 0]);
+    gone.process = Instance::new(i32::MAX, [1, 0]);
     let scene = Scene {
         holder: Some(&gone),
         ..scene(&rows)
@@ -277,7 +277,7 @@ fn a_row_under_way_holds_nothing_while_an_outcome_is_unknown() {
     ];
     let causes = [cause(None)];
     let mut killed = note(None, 1);
-    killed.process = Process::new(i32::MAX, [1, 0]);
+    killed.process = Instance::new(i32::MAX, [1, 0]);
     let scene = Scene {
         holder: Some(&killed),
         causes: &causes,

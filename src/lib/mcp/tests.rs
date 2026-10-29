@@ -561,10 +561,10 @@ fn rows_are_named_from_the_status_they_came_with_and_never_taken_for_terminal() 
 
 #[test]
 fn the_view_learns_its_own_session_only_when_certain() {
-    use crate::host_session::{Host, HostSession, Process, record::Record};
+    use crate::host_session::{Host, HostSession, Instance, record::Record};
 
-    let claude = Process::new(4242, [1_700_000_000, 5]);
-    let record = |host: Host, id: &str, process: Option<Process>, last_seen: u64| {
+    let claude = Instance::new(4242, [1_700_000_000, 5]);
+    let record = |host: Host, id: &str, process: Option<Instance>, last_seen: u64| {
         let session = HostSession::new(host, id).unwrap();
         let mut record = Record::new(&session, last_seen, None);
         record.host_process = process;
@@ -576,7 +576,12 @@ fn the_view_learns_its_own_session_only_when_certain() {
     let seen = [
         record(Host::Claude, "before-clear", Some(claude), 10),
         record(Host::Claude, "after-clear", Some(claude), 20),
-        record(Host::Claude, "elsewhere", Some(Process::new(7, [1, 0])), 30),
+        record(
+            Host::Claude,
+            "elsewhere",
+            Some(Instance::new(7, [1, 0])),
+            30,
+        ),
     ];
     let own = HostSession::new(Host::Claude, "before-clear")
         .unwrap()

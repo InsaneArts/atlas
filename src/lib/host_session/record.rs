@@ -1,7 +1,7 @@
 //! What a host session's record says of it, and what it left in the helper.
 //! Every name a record keeps is typed as Atlas writes it, so a record that
 //! holds anything else does not read at all.
-use super::{Host, HostId, HostSession, Key, Process};
+use super::{Host, HostId, HostSession, Instance, Key};
 use crate::{environment::Phase, files::Token, helper_info::Capture};
 use serde::{Deserialize, Serialize};
 use std::{collections::BTreeMap, time::Duration};
@@ -30,7 +30,7 @@ pub(crate) struct Record {
     pub host_session: HostId,
     /// The host's process, where the host names it (Claude Code).
     #[serde(default)]
-    pub host_process: Option<Process>,
+    pub host_process: Option<Instance>,
     /// The project folder's name, never its path.
     #[serde(default)]
     pub folder: Option<String>,
@@ -120,7 +120,7 @@ impl Record {
     /// only the last seen time moves, at most every [`SEEN_WITHIN`], and an
     /// ended session stays ended: a command's word alone, as an id in its
     /// environment, never revives one. Whether anything changed.
-    pub fn touched(&mut self, ancestor: Option<Process>, now: u64) -> bool {
+    pub fn touched(&mut self, ancestor: Option<Instance>, now: u64) -> bool {
         if let Some(process) = ancestor.filter(|process| self.host_process != Some(*process)) {
             self.host_process = Some(process);
             self.ended = None;

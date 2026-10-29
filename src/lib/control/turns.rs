@@ -6,7 +6,8 @@
 use super::{CONTROL_WAIT_MAX, notes::Note};
 use crate::{
     files::{own_folder, token},
-    host_session::{Label, ancestry::State, now_ms},
+    host_session::{Label, now_ms},
+    process::State,
 };
 use std::{
     fs::{self, File, OpenOptions},
@@ -184,10 +185,10 @@ fn make_folder(folder: &Path) -> std::io::Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::host_session::Process;
+    use crate::host_session::Instance;
 
     /// A waiting note in `folder` for `process`, begun `since`.
-    fn noted(folder: &Path, process: Process, since: u64) -> PathBuf {
+    fn noted(folder: &Path, process: Instance, since: u64) -> PathBuf {
         make_folder(folder).unwrap();
         let mut name = crate::files::token();
         name.truncate(NAME_LEN);
@@ -222,7 +223,7 @@ mod tests {
     fn every_waiter_counts_however_many_there_are_and_whatever_else_is_there() {
         let directory = tempfile::tempdir().unwrap();
         let folder = directory.path().join("waiting");
-        let this = Process::current().unwrap();
+        let this = Instance::current().unwrap();
         let now = now_ms();
         let turn = Turn::join(&folder, None);
 
@@ -256,7 +257,7 @@ mod tests {
             .unwrap();
         let pid = i32::try_from(child.id()).unwrap();
         let start = crate::host_session::ancestry::process(pid).unwrap().start;
-        let suspended = Process::new(pid, start);
+        let suspended = Instance::new(pid, start);
         let path = noted(&folder, suspended, now_ms() - 1000);
         assert!(queued(&folder), "a running waiter is in line");
 
@@ -281,7 +282,7 @@ mod tests {
         let directory = tempfile::tempdir().unwrap();
         let folder = directory.path().join("waiting");
         // launchd is another account's process: macOS will not say more.
-        let other = Process::new(1, [1, 0]);
+        let other = Instance::new(1, [1, 0]);
         assert_eq!(other.state(), State::Unknown);
         let path = noted(&folder, other, now_ms() - 1000);
 
@@ -293,7 +294,7 @@ mod tests {
     fn stale_waiting_notes_are_ignored_and_reading_them_changes_nothing() {
         let directory = tempfile::tempdir().unwrap();
         let folder = directory.path().join("waiting");
-        let this = Process::current().unwrap();
+        let this = Instance::current().unwrap();
         let now = now_ms();
         let live = noted(&folder, this, now - 1000);
         let stale = noted(
@@ -301,7 +302,7 @@ mod tests {
             this,
             now - u64::try_from(STALE.as_millis()).unwrap() - 1000,
         );
-        let gone = noted(&folder, Process::new(i32::MAX, [1, 0]), now - 1000);
+        let gone = noted(&folder, Instance::new(i32::MAX, [1, 0]), now - 1000);
 
         let notes = waiting(&folder);
         assert_eq!(notes.len(), 1);

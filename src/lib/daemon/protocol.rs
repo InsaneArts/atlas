@@ -1,7 +1,7 @@
 //! Protocol v1 requests the helper daemon accepts, validated before anything
 //! runs. Refusals keep their exact wording: clients and the live checks
 //! match on it.
-use crate::host_session::Key;
+use crate::{host_session::Key, process::Start};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use std::time::Duration;
@@ -171,7 +171,7 @@ impl std::fmt::Display for JobId {
 pub struct Expected {
     pub boot: String,
     pub pid: i32,
-    pub start: [u64; 2],
+    pub start: Start,
     pub pgid: i32,
 }
 

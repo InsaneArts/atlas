@@ -1,67 +1,6 @@
 //! What macOS says of this account's processes: a process's parent, command
 //! name and exact start, and this process's ancestors.
-use serde::{Deserialize, Serialize};
-
-/// A process and the exact time it started, so a reused pid is never it.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
-pub struct Process {
-    pub pid: i32,
-    /// Seconds and microseconds since 1970.
-    pub start: [u64; 2],
-}
-
-impl Process {
-    pub fn new(pid: i32, start: [u64; 2]) -> Self {
-        Self { pid, start }
-    }
-
-    /// This process, when macOS describes it.
-    pub fn current() -> Option<Self> {
-        let pid = i32::try_from(std::process::id()).ok()?;
-        process(pid).map(|facts| Self::new(pid, facts.start))
-    }
-
-    /// How this very process is now.
-    pub fn state(&self) -> State {
-        match super::sys::process(self.pid) {
-            Lookup::Found(facts) if facts.start != self.start => State::Gone,
-            Lookup::Found(facts) if facts.stopped => State::Stopped,
-            Lookup::Found(_) => State::Running,
-            Lookup::Gone => State::Gone,
-            Lookup::Unknown => State::Unknown,
-        }
-    }
-
-    /// Whether this very process still runs, stopped or not: its pid lives
-    /// with the same start time.
-    pub fn running(&self) -> bool {
-        matches!(self.state(), State::Running | State::Stopped)
-    }
-
-    /// When it started, in milliseconds since 1970.
-    pub fn started_ms(&self) -> u64 {
-        self.start[0]
-            .saturating_mul(1000)
-            .saturating_add(self.start[1] / 1000)
-    }
-
-    /// Whether this is the process asking.
-    pub fn is_this_one(&self) -> bool {
-        u32::try_from(self.pid).is_ok_and(|pid| pid == std::process::id())
-    }
-}
-
-/// How a [`Process`] is now, as macOS says.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum State {
-    Running,
-    /// Suspended, as by SIGSTOP: it runs again only once continued.
-    Stopped,
-    /// No such process runs: its pid is free, or another process's.
-    Gone,
-    /// macOS would not say, as for another account's process.
-    Unknown,
-}
+use crate::process::{Own, Start, own};
 
 /// What macOS says of one of this account's processes.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -69,9 +8,7 @@ pub struct Facts {
     pub parent: i32,
     /// Its command name, at most 16 bytes as the kernel keeps it.
     pub command: String,
-    pub start: [u64; 2],
-    /// Whether it is suspended.
-    pub stopped: bool,
+    pub start: Start,
 }
 
 /// One ancestor of this process.
@@ -81,21 +18,15 @@ pub struct Ancestor {
     pub command: String,
 }
 
-/// What looking a pid up found.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub(crate) enum Lookup {
-    Found(Facts),
-    /// No process has that pid.
-    Gone,
-    /// macOS would not say.
-    Unknown,
-}
-
 /// The facts of `pid`, when it is a live process of this account.
 pub fn process(pid: i32) -> Option<Facts> {
-    match super::sys::process(pid) {
-        Lookup::Found(facts) => Some(facts),
-        Lookup::Gone | Lookup::Unknown => None,
+    match own(pid) {
+        Own::Found(info) => Some(Facts {
+            parent: info.ppid,
+            command: info.name,
+            start: info.instance.start,
+        }),
+        Own::Gone | Own::Unknown => None,
     }
 }
 
@@ -134,6 +65,7 @@ fn ancestors_from(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::process::{Instance, State};
 
     #[test]
     fn this_process_is_described_with_its_parent_and_start() {
@@ -148,10 +80,10 @@ mod tests {
         assert!(facts.start[0] > 0 && facts.start[0] <= now, "{facts:?}");
         assert!(facts.start[1] < 1_000_000);
         assert!(!facts.command.is_empty());
-        let this = Process::current().unwrap();
+        let this = Instance::current().unwrap();
         assert!(this.running() && this.is_this_one());
         assert!(
-            !Process::new(pid, [1, 0]).running(),
+            !Instance::new(pid, [1, 0]).running(),
             "another start is another process"
         );
     }
@@ -165,7 +97,7 @@ mod tests {
             .spawn()
             .unwrap();
         let pid = i32::try_from(child.id()).unwrap();
-        let process = Process::new(pid, super::process(pid).unwrap().start);
+        let process = Instance::new(pid, super::process(pid).unwrap().start);
         let seen = |want: State| {
             let started = std::time::Instant::now();
             while process.state() != want {
@@ -215,7 +147,6 @@ mod tests {
                 parent: if pid == 3 { 2 } else { 3 },
                 command: "sh".to_owned(),
                 start: [1, 0],
-                stopped: false,
             })
         };
         let walked = ancestors_from(2, 64, looping);

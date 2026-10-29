@@ -117,7 +117,7 @@ fn them(left: &Leftovers, installed: usize) -> &'static str {
 mod tests {
     use super::*;
     use crate::host_session::{
-        Host, Process,
+        Host, Instance,
         store::{Kind, note},
     };
     use serde_json::json;
@@ -125,7 +125,7 @@ mod tests {
     fn session(id: &str) -> HostSession {
         HostSession::new(Host::Claude, id)
             .unwrap()
-            .run_by(Process::current())
+            .run_by(Instance::current())
     }
 
     /// `session` applied an environment plan, and so left it in the helper.

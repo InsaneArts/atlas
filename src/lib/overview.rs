@@ -1233,7 +1233,7 @@ mod tests {
 
     #[test]
     fn a_first_commands_name_stays_once_its_record_is_written() {
-        use crate::host_session::{Host, HostSession, Process, store::note};
+        use crate::host_session::{Host, HostSession, Instance, store::note};
 
         let directory = tempfile::tempdir().unwrap();
         let client = crate::transaction_test::client(directory.path());
@@ -1256,7 +1256,7 @@ mod tests {
         let first = HostSession::new(Host::Codex, "first")
             .unwrap()
             .in_folder(Some("left"))
-            .begun(Process::current().map(|process| process.started_ms()));
+            .begun(Instance::current().map(|process| process.started_ms()));
         let holding = client
             .controller
             .clone()
@@ -1332,7 +1332,7 @@ mod tests {
     #[test]
     fn a_session_at_work_has_never_ended_whatever_its_record_says() {
         use crate::host_session::{
-            Host, HostSession, Process,
+            Host, HostSession, Instance,
             store::{Kind, note, touch},
         };
 
@@ -1340,7 +1340,7 @@ mod tests {
         let client = crate::transaction_test::client(directory.path());
         let first = HostSession::new(Host::Claude, "resumed")
             .unwrap()
-            .run_by(Some(Process::new(i32::MAX, [1, 0])));
+            .run_by(Some(Instance::new(i32::MAX, [1, 0])));
         note(
             &client,
             &first,
@@ -1358,7 +1358,7 @@ mod tests {
         let host = crate::host_session::ancestry::process(parent).unwrap();
         let resumed = HostSession::new(Host::Claude, "resumed")
             .unwrap()
-            .run_by(Some(Process::new(parent, host.start)));
+            .run_by(Some(Instance::new(parent, host.start)));
         let holding = client
             .controller
             .clone()

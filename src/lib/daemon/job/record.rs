@@ -4,7 +4,7 @@
 use crate::{
     daemon::protocol::{Expected, JobId, StopReason},
     host_session::Key,
-    process::Instance,
+    process::{Instance, Start},
 };
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
@@ -23,15 +23,14 @@ const BOOT_MAX: usize = 64;
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct JobIdentity {
     boot: String,
-    pid: i32,
-    start: [u64; 2],
+    leader: Instance,
 }
 
 impl JobIdentity {
     /// The identity these say, when the boot is named, the PID is a user
     /// process's, the start time is a real one, and the group is the
     /// leader's own.
-    pub fn new(boot: &str, pid: i32, start: [u64; 2], pgid: i32) -> Option<Self> {
+    pub fn new(boot: &str, pid: i32, start: Start, pgid: i32) -> Option<Self> {
         let sound = !boot.is_empty()
             && boot.len() <= BOOT_MAX
             && (2..=PID_MAX).contains(&pid)
@@ -40,8 +39,7 @@ impl JobIdentity {
             && start[1] < 1_000_000;
         sound.then(|| Self {
             boot: boot.to_owned(),
-            pid,
-            start,
+            leader: Instance::new(pid, start),
         })
     }
 
@@ -56,33 +54,30 @@ impl JobIdentity {
 
     /// The leader's PID.
     pub fn pid(&self) -> i32 {
-        self.pid
+        self.leader.pid
     }
 
     /// The job's process group: always its leader's PID.
     pub fn pgid(&self) -> i32 {
-        self.pid
+        self.leader.pid
     }
 
-    pub fn start(&self) -> [u64; 2] {
-        self.start
+    pub fn start(&self) -> Start {
+        self.leader.start
     }
 
     /// The leader as a process instance.
     pub fn leader(&self) -> Instance {
-        Instance {
-            pid: self.pid,
-            start: self.start,
-        }
+        self.leader
     }
 
     /// As the person's side keeps it.
     pub fn as_expected(&self) -> Expected {
         Expected {
             boot: self.boot.clone(),
-            pid: self.pid,
-            start: self.start,
-            pgid: self.pid,
+            pid: self.leader.pid,
+            start: self.leader.start,
+            pgid: self.leader.pid,
         }
     }
 }
@@ -226,7 +221,7 @@ pub struct Record {
     pub uid: u32,
     pub boot: String,
     pub pid: Option<i32>,
-    pub start: Option<[u64; 2]>,
+    pub start: Option<Start>,
     pub pgid: Option<i32>,
     pub state: JobState,
     pub started_at: u64,

@@ -307,13 +307,13 @@ mod tests {
         let session = HostSession::new(Host::Named, "agent-a")
             .unwrap()
             .in_folder(Some("left"));
-        let current = crate::host_session::Process::current().unwrap();
+        let current = crate::host_session::Instance::current().unwrap();
         let note = Note {
             session: Some(session.key().clone()),
             host: Some(Host::Named),
             folder: Some("left".into()),
             named: HostId::parse("agent-a"),
-            process: crate::host_session::Process::new(i32::MAX, current.start),
+            process: crate::host_session::Instance::new(i32::MAX, current.start),
             since: DAY,
         };
 

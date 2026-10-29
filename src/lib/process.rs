@@ -4,10 +4,15 @@
 //!
 //! Everything is read through the `KERN_PROC` sysctls, which report any
 //! account's process and a process that has exited but is not yet reaped,
-//! with its exact start time. `proc_pidinfo` refuses both.
+//! with its exact start time. `proc_pidinfo` refuses both; [`own`] keeps
+//! its rule, for what describes only this account's live processes.
 use crate::error::{Error, Result};
 use serde::{Deserialize, Serialize};
 use std::ffi::CStr;
+
+/// When a process started: seconds and microseconds since 1970, as the
+/// kernel keeps them.
+pub type Start = [u64; 2];
 
 /// One process instance: the same PID with another start time is another
 /// process.
@@ -15,9 +20,93 @@ use std::ffi::CStr;
 #[serde(deny_unknown_fields)]
 pub struct Instance {
     pub pid: i32,
-    /// When it started: seconds and microseconds since 1970, as the kernel
-    /// keeps them.
-    pub start: [u64; 2],
+    pub start: Start,
+}
+
+impl Instance {
+    pub fn new(pid: i32, start: Start) -> Self {
+        Self { pid, start }
+    }
+
+    /// This process, when macOS describes it.
+    pub fn current() -> Option<Self> {
+        let pid = i32::try_from(std::process::id()).ok()?;
+        match own(pid) {
+            Own::Found(info) => Some(Self::new(pid, info.instance.start)),
+            Own::Gone | Own::Unknown => None,
+        }
+    }
+
+    /// How this very process is now, as this account may know it.
+    pub fn state(&self) -> State {
+        match own(self.pid) {
+            Own::Found(info) if info.instance.start != self.start => State::Gone,
+            Own::Found(info) if info.stopped => State::Stopped,
+            Own::Found(_) => State::Running,
+            Own::Gone => State::Gone,
+            Own::Unknown => State::Unknown,
+        }
+    }
+
+    /// Whether this very process still runs, stopped or not: its PID lives
+    /// with the same start time.
+    pub fn running(&self) -> bool {
+        matches!(self.state(), State::Running | State::Stopped)
+    }
+
+    /// When it started, in milliseconds since 1970.
+    pub fn started_ms(&self) -> u64 {
+        self.start[0]
+            .saturating_mul(1000)
+            .saturating_add(self.start[1] / 1000)
+    }
+
+    /// Whether this is the process asking.
+    pub fn is_this_one(&self) -> bool {
+        u32::try_from(self.pid).is_ok_and(|pid| pid == std::process::id())
+    }
+}
+
+/// How an [`Instance`] is now, as this account may know it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum State {
+    Running,
+    /// Suspended, as by SIGSTOP: it runs again only once continued.
+    Stopped,
+    /// No such process runs: its PID is free, or another process's, or it
+    /// has exited and waits to be reaped.
+    Gone,
+    /// macOS would not say, as for another account's process.
+    Unknown,
+}
+
+/// What looking up a PID as this account found.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) enum Own {
+    /// A live process this account may describe.
+    Found(Info),
+    /// No live process has that PID.
+    Gone,
+    /// It is not this account's to describe, or macOS would not say.
+    Unknown,
+}
+
+/// `pid` as this account may describe it: a process that has exited,
+/// reaped or not, is gone, and another account's process (the kernel's own
+/// among them) is not described unless this runs as root, by the rule
+/// `proc_pidinfo` keeps.
+pub(crate) fn own(pid: i32) -> Own {
+    if pid == 0 {
+        return Own::Unknown;
+    }
+    let euid = nix::unistd::geteuid().as_raw();
+    match info(pid) {
+        Ok(Some(info)) if info.zombie => Own::Gone,
+        Ok(Some(info)) if euid != 0 && info.uid != euid => Own::Unknown,
+        Ok(Some(info)) => Own::Found(info),
+        Ok(None) => Own::Gone,
+        Err(_) => Own::Unknown,
+    }
 }
 
 /// What the kernel says of one process now.
@@ -34,6 +123,8 @@ pub struct Info {
     pub svuid: u32,
     /// It has exited and waits for its parent to collect its status.
     pub zombie: bool,
+    /// It is suspended, as by SIGSTOP.
+    pub stopped: bool,
     /// Its command name, as the kernel keeps it (at most 16 bytes).
     pub name: String,
 }
@@ -193,6 +284,8 @@ const _: () = {
     assert!(PGID == 564);
     assert!(std::mem::size_of::<libc::timeval>() == 16);
 };
+/// `p_stat` of a process that is suspended.
+const SSTOP: u8 = 4;
 /// `p_stat` of a process that has exited and is not yet reaped.
 const SZOMB: u8 = 5;
 
@@ -228,7 +321,7 @@ fn boot_named(name: &CStr) -> Result<String> {
 
 /// The exact start time of any account's process, an unreaped one
 /// included. A process that does not exist is an error.
-pub fn start(pid: i32) -> Result<[u64; 2]> {
+pub fn start(pid: i32) -> Result<Start> {
     info(pid)?
         .map(|info| info.instance.start)
         .ok_or_else(|| Error::new("state", "The process's start time is unavailable"))
@@ -381,6 +474,7 @@ fn parse(record: &[u8]) -> Option<Info> {
         ruid: unsigned(RUID)?,
         svuid: unsigned(SVUID)?,
         zombie: *record.get(STAT)? == SZOMB,
+        stopped: *record.get(STAT)? == SSTOP,
         name: String::from_utf8_lossy(&comm[..end]).into_owned(),
     })
 }
@@ -503,5 +597,102 @@ mod tests {
         let boot = boot().unwrap();
         assert_eq!(boot.len(), 36);
         assert_eq!(boot.matches('-').count(), 4);
+    }
+
+    /// Records written before every read went through the sysctls hold the
+    /// start time `proc_pidinfo` gave: the two must agree to the
+    /// microsecond, or every recorded process would read as another.
+    #[test]
+    #[allow(
+        unsafe_code,
+        reason = "FFI: proc_pidinfo, which older records were read with, has no safe binding"
+    )]
+    fn the_start_time_is_the_one_proc_pidinfo_gives() {
+        let pid = nix::unistd::getpid().as_raw();
+        let mut info = std::mem::MaybeUninit::<libc::proc_bsdinfo>::uninit();
+        let size = std::mem::size_of_val(&info) as i32;
+        // SAFETY: proc_pidinfo receives a writable buffer of the declared size.
+        let read = unsafe {
+            libc::proc_pidinfo(
+                pid,
+                libc::PROC_PIDTBSDINFO,
+                0,
+                info.as_mut_ptr().cast(),
+                size,
+            )
+        };
+        assert_eq!(read, size);
+        // SAFETY: proc_pidinfo initialized the complete proc_bsdinfo above.
+        let info = unsafe { info.assume_init() };
+        assert_eq!(
+            start(pid).unwrap(),
+            [info.pbi_start_tvsec, info.pbi_start_tvusec]
+        );
+    }
+
+    #[test]
+    fn only_this_accounts_live_processes_are_described() {
+        let this = Instance::current().unwrap();
+        assert!(this.is_this_one());
+        assert_eq!(this.state(), State::Running);
+        assert_eq!(
+            Instance::new(this.pid, [this.start[0], this.start[1] ^ 1]).state(),
+            State::Gone,
+            "another start is another process"
+        );
+
+        if nix::unistd::geteuid().is_root() {
+            return;
+        }
+        let launchd = info(1).unwrap().unwrap();
+        assert_eq!(
+            launchd.instance.state(),
+            State::Unknown,
+            "another account's"
+        );
+        assert_eq!(
+            Instance::new(0, [1, 0]).state(),
+            State::Unknown,
+            "the kernel's"
+        );
+
+        let mut child = std::process::Command::new("/usr/bin/true").spawn().unwrap();
+        let pid = child.id() as i32;
+        let exited = Instance::new(pid, start(pid).unwrap());
+        let mut zombie = false;
+        for _ in 0..200 {
+            zombie = info(pid).unwrap().is_some_and(|info| info.zombie);
+            if zombie {
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
+        assert!(zombie, "the child exited");
+        assert_eq!(
+            exited.state(),
+            State::Gone,
+            "an unreaped process runs no more"
+        );
+        child.wait().unwrap();
+        assert_eq!(exited.state(), State::Gone);
+    }
+
+    #[test]
+    fn a_suspended_process_reads_as_stopped() {
+        use nix::sys::signal::{Signal, kill};
+
+        let mut child = std::process::Command::new("/bin/sleep")
+            .arg("30")
+            .spawn()
+            .unwrap();
+        let pid = child.id() as i32;
+        kill(nix::unistd::Pid::from_raw(pid), Signal::SIGSTOP).unwrap();
+        let started = std::time::Instant::now();
+        while !info(pid).unwrap().unwrap().stopped {
+            assert!(started.elapsed() < std::time::Duration::from_secs(10));
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
+        child.kill().unwrap();
+        child.wait().unwrap();
     }
 }

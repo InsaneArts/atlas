@@ -26,6 +26,7 @@ use crate::{
     files::{open_lock, probe_write, token},
     host_session::{HostSession, Key, Label},
     interrupt::{Hold, Interrupt},
+    process::Start,
 };
 use fs2::FileExt;
 use rand::Rng;
@@ -260,7 +261,7 @@ pub(crate) fn record_executor(pid: nix::unistd::Pid) -> Result<()> {
 fn record_executor_with(
     pid: nix::unistd::Pid,
     boot: impl FnOnce() -> Result<String>,
-    start: impl FnOnce(i32) -> Result<[u64; 2]>,
+    start: impl FnOnce(i32) -> Result<Start>,
 ) -> Result<()> {
     EXECUTOR_CLAIMS.with(|claims| {
         let claims = claims.borrow();
@@ -349,7 +350,7 @@ fn remove_claim(live: &Path) {
 struct Executor {
     pid: i32,
     boot: String,
-    start: [u64; 2],
+    start: Start,
 }
 
 /// The immutable identity of this boot, unaffected by wall-clock changes.
@@ -365,7 +366,7 @@ fn executor_boot_with(read: impl FnOnce(&std::ffi::CStr) -> Result<String>) -> R
 /// The exact start time of the executor, whichever account it runs as:
 /// `proc_pidinfo` refuses another user's process, the root executor
 /// included, and the kernel's process sysctl does not.
-fn executor_start(pid: i32) -> Result<[u64; 2]> {
+fn executor_start(pid: i32) -> Result<Start> {
     crate::process::start(pid)
 }
 
@@ -378,7 +379,7 @@ fn executor_running(file: &File) -> bool {
 fn executor_running_with(
     mut file: &File,
     boot: impl FnOnce() -> Result<String>,
-    start: impl FnOnce(i32) -> Result<[u64; 2]>,
+    start: impl FnOnce(i32) -> Result<Start>,
 ) -> bool {
     let mut text = String::new();
     if file
@@ -1720,34 +1721,6 @@ mod tests {
             controller.acquire(true).unwrap_err().code,
             "busy",
             "recovery stays excluded"
-        );
-    }
-
-    #[test]
-    #[allow(
-        unsafe_code,
-        reason = "FFI: compare the previously stored proc_pidinfo timestamp"
-    )]
-    fn executor_start_keeps_the_previously_recorded_microsecond_identity() {
-        let pid = nix::unistd::getpid().as_raw();
-        let mut info = std::mem::MaybeUninit::<libc::proc_bsdinfo>::uninit();
-        let size = std::mem::size_of_val(&info) as i32;
-        // SAFETY: proc_pidinfo receives a writable buffer of the declared size.
-        let read = unsafe {
-            libc::proc_pidinfo(
-                pid,
-                libc::PROC_PIDTBSDINFO,
-                0,
-                info.as_mut_ptr().cast(),
-                size,
-            )
-        };
-        assert_eq!(read, size);
-        // SAFETY: proc_pidinfo initialized the complete proc_bsdinfo above.
-        let info = unsafe { info.assume_init() };
-        assert_eq!(
-            executor_start(pid).unwrap(),
-            [info.pbi_start_tvsec, info.pbi_start_tvusec]
         );
     }
 

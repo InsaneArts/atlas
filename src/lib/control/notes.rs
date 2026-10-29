@@ -5,7 +5,7 @@
 use crate::{
     error::Result,
     files::{Durability, write_private_with},
-    host_session::{Host, HostId, Key, Label, Process, now_ms},
+    host_session::{Host, HostId, Instance, Key, Label, now_ms},
 };
 use serde::{Deserialize, Serialize};
 use std::path::Path;
@@ -29,7 +29,7 @@ pub struct Note {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub named: Option<HostId>,
     #[serde(flatten)]
-    pub process: Process,
+    pub process: Instance,
     /// When it took control, or began to wait, in milliseconds since 1970.
     pub since: u64,
 }
@@ -43,7 +43,7 @@ impl Note {
             host: label.map(|label| label.host),
             folder: label.and_then(|label| label.folder.clone()),
             named: label.and_then(|label| label.named.clone()),
-            process: Process::current()?,
+            process: Instance::current()?,
             since: now_ms(),
         })
     }

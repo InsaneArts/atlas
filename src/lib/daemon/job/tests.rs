@@ -1,11 +1,11 @@
 use super::*;
-use crate::process::{Info, Instance};
+use crate::process::{Info, Instance, Start};
 use nix::errno::Errno;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 
 const UID: u32 = 502;
 const BOOT: &str = "6A1E0000-0000-0000-0000-000000000000";
-const START: [u64; 2] = [1_761_650_000, 123_456];
+const START: Start = [1_761_650_000, 123_456];
 const ID: &str = "7c2e91a04b3f";
 
 fn record() -> Record {
@@ -31,7 +31,7 @@ fn record() -> Record {
     }
 }
 
-fn process(pid: i32, start: [u64; 2], pgid: i32, ppid: i32) -> Info {
+fn process(pid: i32, start: Start, pgid: i32, ppid: i32) -> Info {
     Info {
         instance: Instance { pid, start },
         ppid,
@@ -40,6 +40,7 @@ fn process(pid: i32, start: [u64; 2], pgid: i32, ppid: i32) -> Info {
         ruid: UID,
         svuid: UID,
         zombie: false,
+        stopped: false,
         name: "sleep".into(),
     }
 }
@@ -48,7 +49,7 @@ fn leader() -> Info {
     process(4312, START, 4312, 1)
 }
 
-fn later(by: u64) -> [u64; 2] {
+fn later(by: u64) -> Start {
     [START[0] + by, START[1]]
 }
 

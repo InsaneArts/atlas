@@ -9,13 +9,10 @@ pub mod explain;
 pub(crate) mod names;
 pub(crate) mod record;
 pub mod store;
-#[allow(
-    unsafe_code,
-    reason = "FFI: proc_pidinfo and localtime_r have no safe binding"
-)]
+#[allow(unsafe_code, reason = "FFI: localtime_r has no safe binding")]
 mod sys;
 
-pub use ancestry::Process;
+pub use crate::process::Instance;
 
 use crate::{control::Cause, ui::hints};
 use ancestry::{Ancestor, Facts};
@@ -199,7 +196,7 @@ pub struct HostSession {
     /// The host's own id, or the ATLAS_SESSION label.
     id: HostId,
     /// The host's process, where the host names it (Claude Code).
-    process: Option<Process>,
+    process: Option<Instance>,
     /// The project folder's name its command works in, never its path.
     folder: Option<String>,
     /// When its command started, in milliseconds since 1970.
@@ -239,7 +236,7 @@ impl HostSession {
     /// This session, run by host process `process`.
     #[cfg(test)]
     #[must_use]
-    pub(crate) fn run_by(mut self, process: Option<Process>) -> Self {
+    pub(crate) fn run_by(mut self, process: Option<Instance>) -> Self {
         self.process = process;
         self
     }
@@ -259,14 +256,14 @@ impl HostSession {
     }
 
     /// The host's process, where the host names it (Claude Code).
-    pub fn process(&self) -> Option<Process> {
+    pub fn process(&self) -> Option<Instance> {
         self.process
     }
 
     /// The host's process when it is one of this command's ancestors and
     /// still the process it names: proof, beyond the environment's word,
     /// that this command runs in that host.
-    pub(crate) fn ancestor(&self) -> Option<Process> {
+    pub(crate) fn ancestor(&self) -> Option<Instance> {
         self.process.filter(|process| {
             process.running()
                 && ancestry::ancestors(ANCESTORS)
@@ -299,7 +296,7 @@ impl HostSession {
         let folder = std::env::current_dir()
             .ok()
             .and_then(|directory| store::project_folder(&directory));
-        let began = Process::current().map(|process| process.started_ms());
+        let began = Instance::current().map(|process| process.started_ms());
         Some(Self {
             folder,
             began,
@@ -344,7 +341,7 @@ impl HostSession {
 
         let process = claude_pid
             .filter(|_| host == Host::Claude)
-            .and_then(|pid| process(pid).map(|facts| Process::new(pid, facts.start)));
+            .and_then(|pid| process(pid).map(|facts| Instance::new(pid, facts.start)));
 
         Some(Self {
             key: Key::of(host, id.as_str()),
@@ -507,7 +504,6 @@ mod tests {
                 parent: 1,
                 command: "claude".to_owned(),
                 start: [1_761_655_000, 412_233],
-                stopped: false,
             })
         }
     }
@@ -541,7 +537,7 @@ mod tests {
         assert_eq!(session.id.as_str(), CLAUDE_ID);
         assert_eq!(
             session.process,
-            Some(Process::new(4242, [1_761_655_000, 412_233]))
+            Some(Instance::new(4242, [1_761_655_000, 412_233]))
         );
     }
 
