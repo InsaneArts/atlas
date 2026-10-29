@@ -80,7 +80,7 @@ Atlas requires confirmed logout and verifies that the account is the helper it r
 
 Uninstall is not a complete reset of every related state:
 
-- The helper account and its application data remain unless you choose `--remove-helper`. So do test apps `atlas install-app` put in the helper's `~/Applications` and their install records: clean them up with `atlas cleanup --apply` first.
+- The helper account and its application data remain unless you choose `--remove-helper`. So do test apps `atlas install-app` put in the helper's `~/Applications` and their install records: clean them up with `atlas cleanup --apply` first, which moves them to the helper's Trash.
 - macOS privacy approvals and Atlas's user-default preferences are not cleared. Picture rate, mini-screen position and other UI choices can survive reinstalling.
 - Project instructions added with `atlas agents project` remain in the project. Use `atlas agents forget DIR` before uninstalling if you want to remove Atlas's sections.
 - Unrelated plugin entries and host configuration are preserved. A host that could not disconnect is reported in warnings and can retain its Atlas entry.

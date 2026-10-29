@@ -40,10 +40,10 @@ assuming you are signed in.
 To test installing an app, or an app that must run from Applications,
 `atlas install-app /path/App.app` copies it into the helper's
 `~/Applications`, never over an app already there, and prints its `path`;
-then `atlas open --app NAME`. `atlas cleanup --apply` removes it when you
-are done, unless it changed meanwhile (`kept`). Settings and data the app
-wrote in the helper stay. An app you put there any other way is not
-removed for you.
+then `atlas open --app NAME`. `atlas cleanup --apply` moves it to the
+helper's Trash when you are done (`trashed` names it there), unless it
+changed meanwhile (`kept`). Settings and data the app wrote in the helper
+stay. An app you put there any other way is not moved for you.
 
 ### Finder windows
 
