@@ -290,12 +290,13 @@ pub async fn status(config_path: &Path) -> Result<Value> {
 
     // Asked by this window but never answered: the request may be taken
     // back, so another account can be chosen.
-    let forgettable = may_forget(
-        requested(uid, &helper),
-        setup::migrate::in_effect_for(helper.uid, &helper.home),
-        answering || answers(&config),
-        prepared(&helper),
-    );
+    let forgettable = Asked {
+        requested: requested(uid, &helper),
+        recorded: setup::migrate::in_effect_for(helper.uid, &helper.home),
+        answered: answering || answers(&config),
+        prepared: prepared(&helper),
+    }
+    .may_forget();
 
     Ok(json!({
         "ok": true,
@@ -450,11 +451,26 @@ fn requested(controller: u32, helper: &setup::Account) -> bool {
     })
 }
 
-/// Whether a request may be taken back: this account's own, for a helper
-/// that never answered, was never prepared for it and has no setup
-/// recorded. A real setup is never undone this way.
-fn may_forget(requested: bool, recorded: bool, answered: bool, prepared: bool) -> bool {
-    requested && !recorded && !answered && !prepared
+/// What is known of a shared request when it is shown.
+#[derive(Clone, Copy, Debug, Default)]
+struct Asked {
+    /// It is this account's own.
+    requested: bool,
+    /// A setup for its helper is recorded.
+    recorded: bool,
+    /// The helper answered it.
+    answered: bool,
+    /// The helper was prepared for this account.
+    prepared: bool,
+}
+
+impl Asked {
+    /// Whether the request may be taken back: this account's own, for a
+    /// helper that never answered, was never prepared for it and has no
+    /// setup recorded. A real setup is never undone this way.
+    fn may_forget(self) -> bool {
+        self.requested && !self.recorded && !self.answered && !self.prepared
+    }
 }
 
 /// Whether `helper`'s Atlas folder was prepared for this account, as `atlas
@@ -1971,17 +1987,27 @@ mod tests {
     /// was never prepared and has no setup recorded, may be taken back.
     #[test]
     fn only_an_unanswered_request_may_be_taken_back() {
-        assert!(may_forget(true, false, false, false));
-        assert!(
-            !may_forget(false, false, false, false),
-            "not this account's"
-        );
-        assert!(!may_forget(true, true, false, false), "a setup is recorded");
-        assert!(!may_forget(true, false, true, false), "the helper answered");
-        assert!(
-            !may_forget(true, false, false, true),
-            "prepared for this account"
-        );
+        let mine = Asked {
+            requested: true,
+            ..Asked::default()
+        };
+        assert!(mine.may_forget());
+        assert!(!Asked::default().may_forget(), "not this account's");
+        let recorded = Asked {
+            recorded: true,
+            ..mine
+        };
+        assert!(!recorded.may_forget(), "a setup is recorded");
+        let answered = Asked {
+            answered: true,
+            ..mine
+        };
+        assert!(!answered.may_forget(), "the helper answered");
+        let prepared = Asked {
+            prepared: true,
+            ..mine
+        };
+        assert!(!prepared.may_forget(), "prepared for this account");
     }
 
     #[test]
