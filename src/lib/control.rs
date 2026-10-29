@@ -472,15 +472,24 @@ fn record_executor_with(
     })
 }
 
+/// The extension an executor record is written under before it is renamed
+/// over the claim's executor record; a random token follows it.
+const EXECUTOR_WRITING: &str = "executor-";
+
 /// Publish identity separately from the stable claim inode: a failed write
 /// cannot destroy the previous executor's identity or release its flock.
+/// Only the holder of the claim writes it, so a record still being written
+/// is never swept while its claim is held.
 fn publish_executor_with(
     live: &Path,
     record: &[u8],
     write: impl FnOnce(&mut File, &[u8]) -> std::io::Result<()>,
 ) -> Result<()> {
+    let Some(directory) = live.parent() else {
+        return Err(Error::new("state", "A claim needs a folder"));
+    };
     let path = live.with_extension("executor.live");
-    let temporary = live.with_extension(format!("executor-{}", token()));
+    let temporary = live.with_extension(format!("{EXECUTOR_WRITING}{}", token()));
     let mut file = OpenOptions::new()
         .create_new(true)
         .write(true)
@@ -491,7 +500,7 @@ fn publish_executor_with(
         write(&mut file, record)?;
         file.sync_all()?;
         fs::rename(&temporary, &path)?;
-        File::open(path.parent().expect("claim directory"))?.sync_all()?;
+        File::open(directory)?.sync_all()?;
         Ok(())
     })();
     let _ = fs::remove_file(temporary);
@@ -1398,6 +1407,21 @@ impl Controller {
                 && !self.in_progress(generation)
             {
                 remove_claim(&entry.path());
+                continue;
+            }
+            // An executor record still unnamed when its claim is no longer
+            // held was left by a writer that was killed.
+            let writing = name.to_str().and_then(|name| {
+                let (generation, _) = name
+                    .strip_prefix(&prefix)?
+                    .split_once(&format!(".{EXECUTOR_WRITING}"))?;
+                Some(generation)
+            });
+            if let Some(generation) = writing
+                && self.live(generation).is_some()
+                && !self.in_progress(generation)
+            {
+                let _ = fs::remove_file(entry.path());
             }
         }
         let _ = causes::keep(&self.causes, &running);
@@ -2115,11 +2139,14 @@ mod tests {
 
         assert_eq!(controller.pending().unwrap(), vec![generation]);
         assert!(live.exists());
+        let leftover = live.with_extension(format!("{EXECUTOR_WRITING}{}", token()));
+        fs::write(&leftover, &record[..record.len() / 2]).unwrap();
         let _ownership = controller.acquire(true).unwrap();
         controller.clear().unwrap();
         assert!(controller.pending().unwrap().is_empty());
         assert!(!live.exists());
         assert!(!live.with_extension("executor.live").exists());
+        assert!(!leftover.exists(), "a killed writer's record is swept");
     }
 
     thread_local! {
