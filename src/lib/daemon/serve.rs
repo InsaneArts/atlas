@@ -14,11 +14,7 @@ use crate::{
 use base64::{Engine, engine::general_purpose::STANDARD};
 use objc2_core_foundation::{CGPoint, CGRect, CGSize};
 use serde_json::{Value, json};
-use std::{
-    path::{Path, PathBuf},
-    sync::Arc,
-    time::Duration,
-};
+use std::{path::PathBuf, sync::Arc, time::Duration};
 use tokio::{
     io::{AsyncReadExt, AsyncWrite, AsyncWriteExt},
     net::UnixStream,
@@ -198,11 +194,11 @@ pub async fn serve(uid: u32, controller_uid: u32, socket: PathBuf) -> Result<()>
     let recording = tokio::spawn(facts::restart_for_recording(move || {
         watcher.restarting.notify_one();
     }));
-    // The person's Stop is seen through the input service's saved marker.
-    let marker = socket
-        .parent()
-        .and_then(Path::parent)
-        .map(|root| root.join(crate::setup::helper::INPUT).join("input.stopped"));
+    // The person's Stop is seen through the input service's saved marker,
+    // where the helper's layout puts it: the configuration's input socket
+    // comes from the same layout.
+    let marker = std::env::var_os("HOME")
+        .map(|home| crate::setup::helper::Layout::new(uid, PathBuf::from(home)).stop_marker());
     let supervision = match (&daemon.jobs, marker) {
         (Some(jobs), Some(marker)) => Some(tokio::spawn(job::supervise(
             jobs.clone(),

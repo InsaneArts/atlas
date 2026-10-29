@@ -233,6 +233,17 @@ impl Layout {
         self.root().join(DAEMON)
     }
 
+    /// The input service's socket, which the configuration names.
+    pub fn input_socket(&self) -> PathBuf {
+        self.root().join(INPUT).join("input.sock")
+    }
+
+    /// The input service's saved stop, beside its socket: present while the
+    /// person has stopped agents.
+    pub fn stop_marker(&self) -> PathBuf {
+        self.input_socket().with_extension("stopped")
+    }
+
     /// The managed daemon's socket.
     pub fn socket(&self) -> PathBuf {
         self.daemon().join(format!("{}.sock", self.uid))

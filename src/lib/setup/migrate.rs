@@ -187,7 +187,7 @@ fn save_log(path: &Path, log: &Log) -> Result<()> {
 pub fn managed(config: &Config, layout: &Layout) -> Config {
     Config {
         socket_path: layout.socket(),
-        input_socket: layout.root().join(super::helper::INPUT).join("input.sock"),
+        input_socket: layout.input_socket(),
         ..config.clone()
     }
 }

@@ -18,6 +18,7 @@ use nix::{
 use serde_json::Value;
 use std::{
     os::unix::fs::PermissionsExt,
+    sync::Arc,
     time::{Duration, Instant},
 };
 
@@ -25,8 +26,8 @@ fn uid() -> u32 {
     nix::unistd::getuid().as_raw()
 }
 
-fn jobs_in(folder: &std::path::Path) -> Jobs {
-    Jobs::open(folder, env!("CARGO_BIN_EXE_atlas").into(), uid()).unwrap()
+fn jobs_in(folder: &std::path::Path) -> Arc<Jobs> {
+    Arc::new(Jobs::open(folder, env!("CARGO_BIN_EXE_atlas").into(), uid()).unwrap())
 }
 
 fn start(argv: &[&str]) -> Start {
@@ -39,7 +40,7 @@ fn start(argv: &[&str]) -> Start {
     }
 }
 
-async fn started(jobs: &Jobs, argv: &[&str]) -> Value {
+async fn started(jobs: &Arc<Jobs>, argv: &[&str]) -> Value {
     let reply = jobs.start(start(argv)).await;
     assert_eq!(reply["ok"], true, "{reply}");
     reply["job"].clone()
@@ -145,27 +146,21 @@ async fn stopping_ends_the_whole_group_and_reports_what_left_it() {
     let folder = tempfile::tempdir().unwrap();
     let jobs = jobs_in(folder.path());
     // The escaping process's parent lingers, so it is seen while its link
-    // to the job is still there to see.
-    let job = started(
-        &jobs,
-        &[
-            "/bin/sh",
-            "-c",
-            "sleep 60 & /usr/bin/perl -MPOSIX -e 'if (fork) { sleep 1; exit } POSIX::setsid(); exec q(/bin/sleep), 61' & wait",
-        ],
-    )
-    .await;
+    // to the job is still there to see. The escaped process says its own
+    // PID, which exec keeps, so the test knows it exactly.
+    let said = folder.path().join("escaped.pid");
+    let script = format!(
+        "sleep 60 & /usr/bin/perl -MPOSIX -e 'if (fork) {{ sleep 1; exit }} POSIX::setsid(); open(my $f, \">\", q({})) or die; print $f $$; close($f); exec q(/bin/sleep), 61' & wait",
+        said.display()
+    );
+    let job = started(&jobs, &["/bin/sh", "-c", &script]).await;
     let id = id_of(&job);
     let pgid = pid_of(&job);
     let escaped = || {
-        process::of_user(uid()).unwrap().into_iter().find(|info| {
-            info.name == "sleep"
-                && info.pgid != pgid
-                && info.instance.start >= {
-                    let start = job["start"].as_array().unwrap();
-                    [start[0].as_u64().unwrap(), start[1].as_u64().unwrap()]
-                }
-        })
+        let pid: i32 = std::fs::read_to_string(&said).ok()?.trim().parse().ok()?;
+        process::info(pid)
+            .unwrap()
+            .filter(|info| !info.zombie && info.name == "sleep" && info.pgid != pgid)
     };
     assert!(eventually(|| {
         jobs.watch_once(false, false);
@@ -192,9 +187,9 @@ async fn stopping_ends_the_whole_group_and_reports_what_left_it() {
     let left = shown["left"].as_array().unwrap();
     assert_eq!(left.len(), 1, "{shown}");
     assert_eq!(left[0]["name"], "sleep");
-    let escaped = left[0]["pid"].as_i64().unwrap() as i32;
-    assert!(alive(escaped), "what left the group was never signalled");
-    let _ = kill(Pid::from_raw(escaped), Signal::SIGKILL);
+    let escaped = escaped().expect("it still runs");
+    assert_eq!(left[0]["pid"], escaped.instance.pid);
+    let _ = kill(Pid::from_raw(escaped.instance.pid), Signal::SIGKILL);
 }
 
 #[tokio::test]
@@ -325,13 +320,15 @@ async fn a_job_that_ends_at_once_is_reported_ended_with_its_exit() {
 #[tokio::test]
 async fn a_job_log_past_its_limit_starts_again() {
     let folder = tempfile::tempdir().unwrap();
-    let jobs = Jobs::open_with(
-        folder.path(),
-        env!("CARGO_BIN_EXE_atlas").into(),
-        uid(),
-        1000,
-    )
-    .unwrap();
+    let jobs = Arc::new(
+        Jobs::open_with(
+            folder.path(),
+            env!("CARGO_BIN_EXE_atlas").into(),
+            uid(),
+            1000,
+        )
+        .unwrap(),
+    );
     let job = started(
         &jobs,
         &["/bin/sh", "-c", "head -c 5000 /dev/zero; sleep 30"],
@@ -395,4 +392,43 @@ async fn a_record_that_cannot_be_read_is_shown_and_never_acted_on() {
     assert_eq!(refused["reason"], "unknown");
     let reopened = jobs_in(folder.path());
     assert_eq!(reopened.show(Some(&id))["job"]["state"], "unknown");
+}
+
+#[tokio::test]
+async fn a_stop_the_client_leaves_is_finished_by_the_daemon() {
+    let folder = tempfile::tempdir().unwrap();
+    let jobs = jobs_in(folder.path());
+    let job = started(&jobs, &["/bin/sh", "-c", "trap '' TERM; sleep 60"]).await;
+    let id = id_of(&job);
+    std::thread::sleep(Duration::from_millis(300));
+    // The client asks, hears TERM was sent, and goes away.
+    assert_eq!(
+        jobs.stop(&id, &expected_of(&job), Duration::from_secs(1))["signalled"],
+        "SIGTERM"
+    );
+    // Only supervision runs from here.
+    let until = Instant::now() + Duration::from_secs(8);
+    while Instant::now() < until && alive(pid_of(&job)) {
+        jobs.watch_once(false, false);
+        std::thread::sleep(Duration::from_millis(100));
+    }
+    jobs.watch_once(false, false);
+    let shown = jobs.show(Some(&id))["job"].clone();
+    assert_eq!(shown["state"], "ended", "{shown}");
+    assert_eq!(shown["signal"], "SIGKILL");
+}
+
+#[tokio::test]
+async fn a_set_user_id_style_member_of_the_helpers_own_is_still_stopped() {
+    // A process whose saved user ID is the helper's is the helper's by the
+    // kernel's own rule; here the job's own processes stand for it.
+    let folder = tempfile::tempdir().unwrap();
+    let jobs = jobs_in(folder.path());
+    let job = started(&jobs, &["/bin/sleep", "60"]).await;
+    let leader = process::info(pid_of(&job)).unwrap().unwrap();
+    assert!(leader.owned_by(uid()));
+    assert_eq!(leader.svuid, nix::unistd::geteuid().as_raw());
+    jobs.stop(&id_of(&job), &expected_of(&job), Duration::from_secs(1));
+    let shown = ended(&jobs, &id_of(&job), Duration::from_secs(8));
+    assert_eq!(shown["how"], "stopped");
 }

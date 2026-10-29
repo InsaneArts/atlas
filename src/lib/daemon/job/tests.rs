@@ -1,13 +1,17 @@
 use super::*;
+use crate::process::{Info, Instance};
+use nix::errno::Errno;
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 
 const UID: u32 = 502;
 const BOOT: &str = "6A1E0000-0000-0000-0000-000000000000";
 const START: [u64; 2] = [1_761_650_000, 123_456];
+const ID: &str = "7c2e91a04b3f";
 
 fn record() -> Record {
     Record {
         version: VERSION,
-        id: JobId::parse("7c2e91a04b3f").unwrap(),
+        id: JobId::parse(ID).unwrap(),
         name: "nc".into(),
         task: None,
         session: None,
@@ -18,7 +22,7 @@ fn record() -> Record {
         pgid: Some(4312),
         state: JobState::Running,
         started_at: 1,
-        ends_at: 2,
+        ends_at: u64::MAX,
         adopted: false,
         seen: Vec::new(),
         stopping: None,
@@ -34,6 +38,7 @@ fn process(pid: i32, start: [u64; 2], pgid: i32, ppid: i32) -> Info {
         pgid,
         uid: UID,
         ruid: UID,
+        svuid: UID,
         zombie: false,
         name: "sleep".into(),
     }
@@ -47,8 +52,16 @@ fn later(by: u64) -> [u64; 2] {
     [START[0] + by, START[1]]
 }
 
-fn judged(expect: Option<&Expected>, leader: Option<&Info>, members: &[Info]) -> Verdict {
-    verdict(&record(), expect, BOOT, UID, leader, members)
+fn seen(leader: Option<Info>, members: &[Info]) -> Observation {
+    Observation {
+        leader,
+        members: members.to_vec(),
+        own_child: false,
+    }
+}
+
+fn judged(expect: Option<&Expected>, leader: Option<Info>, members: &[Info]) -> Verdict {
+    verdict(&record(), expect, BOOT, UID, Some(&seen(leader, members)))
 }
 
 #[test]
@@ -56,60 +69,65 @@ fn a_matching_job_is_signalled_only_through_its_own_group() {
     let members = [leader(), process(4313, later(1), 4312, 4312)];
     let expected = record().expected().unwrap();
     assert_eq!(
-        judged(Some(&expected), Some(&members[0]), &members),
+        judged(Some(&expected), Some(leader()), &members),
         Verdict::Signal { pgid: 4312 }
     );
     assert_eq!(
-        judged(None, Some(&members[0]), &members),
-        Verdict::Signal { pgid: 4312 }
-    );
-    // A leader that has exited leaves its group to its other members, once
-    // they were seen as the job's.
-    let mut seen = record();
-    seen.seen.push(members[1].instance);
-    assert_eq!(
-        verdict(&seen, None, BOOT, UID, None, &members[1..]),
+        judged(None, Some(leader()), &members),
         Verdict::Signal { pgid: 4312 }
     );
 }
 
 #[test]
-fn without_its_leader_a_group_is_the_jobs_only_when_it_was_seen() {
-    let mut record = record();
-    let child = process(4313, later(1), 4312, 4312);
-    let grandchild = process(4314, later(2), 4312, 4313);
-    record.seen.push(child.instance);
+fn a_job_whose_leader_is_gone_is_never_signalled() {
+    let member = process(4313, later(1), 4312, 4312);
     assert_eq!(
-        verdict(&record, None, BOOT, UID, None, &[child.clone(), grandchild]),
-        Verdict::Signal { pgid: 4312 },
-        "a process of one that was seen is the job's too"
+        judged(None, None, std::slice::from_ref(&member)),
+        Verdict::LeaderGone {
+            remaining: vec![member.clone()]
+        }
     );
-
-    // The PID was used again and made a group of its own, which later
-    // processes stay in: none of them was ever the job's.
-    let stranger = process(4400, later(60), 4312, 1);
+    // A leader that exited and is not this daemon's to collect is gone too.
+    let mut zombie = leader();
+    zombie.zombie = true;
     assert_eq!(
-        verdict(&record, None, BOOT, UID, None, &[child, stranger]),
-        Verdict::Identity
+        judged(
+            None,
+            Some(zombie.clone()),
+            &[zombie.clone(), member.clone()]
+        ),
+        Verdict::LeaderGone {
+            remaining: vec![member.clone()]
+        }
     );
+    // This daemon's own unreaped leader still holds the group's ID.
+    let own = Observation {
+        own_child: true,
+        ..seen(Some(zombie.clone()), &[zombie, member])
+    };
     assert_eq!(
-        judged(None, None, &[process(4401, later(60), 4312, 1)]),
-        Verdict::Identity
+        verdict(&record(), None, BOOT, UID, Some(&own)),
+        Verdict::Signal { pgid: 4312 }
     );
 }
 
 #[test]
-fn a_reused_pid_is_never_signalled() {
-    let reused = process(4312, later(60), 4312, 1);
+fn a_reused_pid_in_a_leaderless_group_is_never_signalled() {
+    let stranger = process(4312, later(60), 4312, 1);
+    let his = process(4400, later(61), 4312, 4312);
     assert_eq!(
-        judged(None, Some(&reused), std::slice::from_ref(&reused)),
+        judged(None, Some(stranger.clone()), &[stranger, his.clone()]),
         Verdict::Reused
     );
+    // Even a stranger's group that outlived its own leader is not the job's.
+    assert!(matches!(
+        judged(None, None, &[his]),
+        Verdict::LeaderGone { .. }
+    ));
 }
 
 #[test]
 fn a_record_that_disagrees_with_the_person_is_never_signalled() {
-    let members = [leader()];
     let known = record().expected().unwrap();
     let changes: [fn(&mut Expected); 4] = [
         |expect| expect.boot = "another".into(),
@@ -121,57 +139,50 @@ fn a_record_that_disagrees_with_the_person_is_never_signalled() {
         let mut expect = known.clone();
         change(&mut expect);
         assert_eq!(
-            judged(Some(&expect), Some(&members[0]), &members),
+            judged(Some(&expect), Some(leader()), &[leader()]),
             Verdict::Identity
         );
     }
 }
 
 #[test]
-fn a_member_running_as_another_account_stops_the_whole_stop() {
+fn ownership_follows_the_kernels_own_rule() {
+    // Another account's process: neither its real nor its saved ID is ours.
+    let mut theirs = process(4313, later(1), 4312, 4312);
+    (theirs.uid, theirs.ruid, theirs.svuid) = (501, 501, 501);
+    assert_eq!(
+        judged(None, Some(leader()), &[leader(), theirs]),
+        Verdict::OtherAccount
+    );
+
+    // A set-user-ID-root program the helper started is still the helper's.
     let mut setuid = process(4313, later(1), 4312, 4312);
-    setuid.uid = 0;
-    let members = [leader(), setuid.clone()];
+    (setuid.uid, setuid.svuid) = (0, 0);
     assert_eq!(
-        judged(None, Some(&members[0]), &members),
-        Verdict::OtherAccount
+        judged(None, Some(leader()), &[leader(), setuid]),
+        Verdict::Signal { pgid: 4312 }
     );
 
-    let mut real = setuid;
-    real.uid = UID;
-    real.ruid = 501;
-    let members = [leader(), real];
+    // A process that exited belongs to no account.
+    let mut gone = process(4314, later(1), 4312, 4312);
+    (gone.uid, gone.ruid, gone.svuid, gone.zombie) = (0, 0, 0, true);
     assert_eq!(
-        judged(None, Some(&members[0]), &members),
-        Verdict::OtherAccount
-    );
-
-    let mut theirs = leader();
-    theirs.ruid = 501;
-    assert_eq!(
-        judged(None, Some(&theirs), std::slice::from_ref(&theirs)),
-        Verdict::OtherAccount
+        judged(None, Some(leader()), &[leader(), gone]),
+        Verdict::Signal { pgid: 4312 }
     );
 
     let mut record = record();
     record.uid = 501;
     assert_eq!(
-        verdict(&record, None, BOOT, UID, Some(&leader()), &[leader()]),
+        verdict(&record, None, BOOT, UID, Some(&seen(Some(leader()), &[]))),
         Verdict::OtherAccount
     );
 }
 
 #[test]
-fn a_member_older_than_the_job_is_refused() {
-    let older = process(4313, [START[0] - 1, START[1]], 4312, 1);
-    let members = [leader(), older];
-    assert_eq!(judged(None, Some(&members[0]), &members), Verdict::Identity);
-}
-
-#[test]
 fn a_leader_in_another_group_is_refused() {
     let moved = process(4312, START, 9999, 1);
-    assert_eq!(judged(None, Some(&moved), &[]), Verdict::Identity);
+    assert_eq!(judged(None, Some(moved), &[]), Verdict::Identity);
 }
 
 #[test]
@@ -179,30 +190,67 @@ fn a_job_from_another_boot_has_ended() {
     let mut record = record();
     record.boot = "an earlier boot".into();
     assert_eq!(
-        verdict(&record, None, BOOT, UID, Some(&leader()), &[leader()]),
+        verdict(
+            &record,
+            None,
+            BOOT,
+            UID,
+            Some(&seen(Some(leader()), &[leader()]))
+        ),
         Verdict::Restarted
     );
 }
 
 #[test]
-fn a_group_with_no_members_has_ended() {
+fn a_group_with_no_live_member_has_ended() {
     assert_eq!(judged(None, None, &[]), Verdict::Ended);
-
-    // Only the daemon's own unreaped leader is left.
     let mut zombie = leader();
     zombie.zombie = true;
+    let own = Observation {
+        own_child: true,
+        ..seen(Some(zombie.clone()), &[zombie])
+    };
     assert_eq!(
-        judged(None, Some(&zombie), std::slice::from_ref(&zombie)),
+        verdict(&record(), None, BOOT, UID, Some(&own)),
         Verdict::Ended
     );
 }
 
 #[test]
-fn a_record_without_a_process_is_never_signalled() {
-    let mut record = record();
-    record.pid = None;
+fn processes_that_could_not_be_read_end_nothing() {
+    assert_eq!(verdict(&record(), None, BOOT, UID, None), Verdict::Unknown);
+}
+
+#[test]
+fn a_job_identity_is_bounded_and_led_by_its_own_group() {
+    assert!(JobIdentity::new(BOOT, 4312, START, 4312).is_some());
+    for (pid, start, pgid) in [
+        (4312, START, 4313),
+        (0, START, 0),
+        (1, START, 1),
+        (100_000, START, 100_000),
+        (-5, START, -5),
+        (4312, [0, 1], 4312),
+        (4312, [1, 1_000_000], 4312),
+    ] {
+        assert!(
+            JobIdentity::new(BOOT, pid, start, pgid).is_none(),
+            "{pid} {pgid}"
+        );
+    }
+    assert!(JobIdentity::new("", 4312, START, 4312).is_none());
+
+    let mut corrupt = record();
+    corrupt.pgid = Some(4400);
+    assert!(!corrupt.sound(), "a record whose group is not its leader's");
     assert_eq!(
-        verdict(&record, None, BOOT, UID, None, &[]),
+        verdict(
+            &corrupt,
+            None,
+            BOOT,
+            UID,
+            Some(&seen(Some(leader()), &[leader()]))
+        ),
         Verdict::Identity
     );
 }
@@ -224,19 +272,16 @@ fn descendants_that_left_the_group_are_reported_not_signalled() {
         grandchild,
         unrelated,
     ];
-    let mut seen = Vec::new();
-    observe(&mut seen, &job, &[leader(), child], &processes, |_| None);
-    assert!(seen.contains(&escaped.instance));
-    assert!(seen.iter().any(|instance| instance.pid == 4401));
-    assert!(!seen.iter().any(|instance| instance.pid == 5000));
+    let mut noted = Vec::new();
+    observe(&mut noted, &job, &[leader(), child], &processes, |_| None);
+    assert!(noted.contains(&escaped.instance));
+    assert!(noted.iter().any(|instance| instance.pid == 4401));
+    assert!(!noted.iter().any(|instance| instance.pid == 5000));
 
-    // Its parent gone, the escaped process is still known by what was seen;
-    // one whose PID is another process's now is not.
     let reused = process(4401, later(30), 4401, 1);
     let now = [leader(), escaped, reused];
-    let left = left(&seen, &now, 4312, UID);
     assert_eq!(
-        left,
+        left(&noted, &now, 4312, UID),
         vec![Left {
             pid: 4400,
             name: "sleep".into()
@@ -245,37 +290,16 @@ fn descendants_that_left_the_group_are_reported_not_signalled() {
 }
 
 #[test]
-fn a_process_in_the_jobs_session_is_its_own() {
-    let job = Instance {
-        pid: 4312,
-        start: START,
-    };
-    let moved = process(4500, later(1), 4500, 1);
-    let mut seen = Vec::new();
-    observe(
-        &mut seen,
-        &job,
-        &[leader()],
-        &[leader(), moved.clone()],
-        |pid| (pid == 4500).then_some(4312),
-    );
-    assert!(seen.contains(&moved.instance));
-}
-
-#[test]
 fn what_was_seen_stays_within_its_bound() {
     let job = Instance {
         pid: 4312,
         start: START,
     };
-    let children: Vec<Info> = (0..300)
-        .map(|n| process(5000 + n, later(1), 4312, 4312))
-        .collect();
     let mut processes = vec![leader()];
-    processes.extend(children.iter().cloned());
-    let mut seen = Vec::new();
-    observe(&mut seen, &job, &processes, &processes, |_| None);
-    assert_eq!(seen.len(), SEEN_MAX);
+    processes.extend((0..300).map(|n| process(5000 + n, later(1), 4312, 4312)));
+    let mut noted = Vec::new();
+    observe(&mut noted, &job, &processes, &processes, |_| None);
+    assert_eq!(noted.len(), observe::SEEN_MAX);
 }
 
 #[test]
@@ -283,10 +307,10 @@ fn a_job_record_reads_back_as_it_was_written() {
     let mut record = record();
     record.state = JobState::Ended;
     record.ended = Some(Ended {
-        how: How::OnConsole,
+        how: How::LeaderGone,
         at: 5,
         signal: Some("SIGTERM".into()),
-        exit_code: Some(0),
+        exit_code: None,
         exit_signal: None,
         left: vec![Left {
             pid: 9,
@@ -294,11 +318,255 @@ fn a_job_record_reads_back_as_it_was_written() {
         }],
     });
     let text = serde_json::to_string(&record).unwrap();
-    assert!(text.contains("\"how\":\"on-console\""), "{text}");
+    assert!(text.contains("\"how\":\"leader-gone\""), "{text}");
     assert_eq!(serde_json::from_str::<Record>(&text).unwrap(), record);
-
     let view = record.view();
-    assert_eq!(view["how"], "on-console");
-    assert_eq!(view["left"][0]["pid"], 9);
+    assert_eq!(view["how"], "leader-gone");
+    assert_eq!(view["remaining"], 1);
     assert!(view.get("argv").is_none(), "arguments are never kept");
+}
+
+/// A stand-in kernel: a process table the test changes, every signal kept.
+#[derive(Default)]
+struct Table {
+    processes: Mutex<Vec<Info>>,
+    /// Whether reads of the table fail.
+    failing: AtomicBool,
+    /// After this many reads of one process, its PID is another process's.
+    reused_after: AtomicUsize,
+    reads: AtomicUsize,
+    signals: Mutex<Vec<(i32, Signal)>>,
+}
+
+impl Table {
+    fn with(processes: Vec<Info>) -> Arc<Self> {
+        Arc::new(Self {
+            processes: Mutex::new(processes),
+            reused_after: AtomicUsize::new(usize::MAX),
+            ..Self::default()
+        })
+    }
+
+    fn signals(&self) -> Vec<(i32, Signal)> {
+        self.signals.lock().unwrap().clone()
+    }
+
+    fn read(&self) -> Result<Vec<Info>> {
+        if self.failing.load(Ordering::SeqCst) {
+            return Err(Error::new("state", "The process list is unavailable"));
+        }
+        Ok(self.processes.lock().unwrap().clone())
+    }
+}
+
+/// The table as a kernel, shared with the test.
+struct Shared(Arc<Table>);
+
+impl Kernel for Shared {
+    fn process(&self, pid: i32) -> Result<Option<Info>> {
+        let reads = self.0.reads.fetch_add(1, Ordering::SeqCst) + 1;
+        let mut found = self
+            .0
+            .read()?
+            .into_iter()
+            .find(|info| info.instance.pid == pid);
+        if reads >= self.0.reused_after.load(Ordering::SeqCst)
+            && let Some(found) = found.as_mut()
+        {
+            found.instance.start = later(600);
+        }
+        Ok(found)
+    }
+
+    fn group(&self, pgid: i32) -> Result<Vec<Info>> {
+        Ok(self
+            .0
+            .read()?
+            .into_iter()
+            .filter(|info| info.pgid == pgid)
+            .collect())
+    }
+
+    fn of_user(&self, _: u32) -> Result<Vec<Info>> {
+        self.0.read()
+    }
+
+    fn session(&self, _: i32) -> Option<i32> {
+        None
+    }
+
+    fn killpg(&self, pgid: i32, signal: Signal) -> std::result::Result<(), Errno> {
+        self.0.signals.lock().unwrap().push((pgid, signal));
+        let live = self
+            .0
+            .processes
+            .lock()
+            .unwrap()
+            .iter()
+            .any(|info| info.pgid == pgid && !info.zombie);
+        if live { Ok(()) } else { Err(Errno::ESRCH) }
+    }
+}
+
+/// Jobs in a folder of their own, with `record` already kept there, over
+/// the stand-in `table`.
+fn jobs_with(record: &Record, table: &Arc<Table>) -> (tempfile::TempDir, Jobs) {
+    let folder = tempfile::tempdir().unwrap();
+    let jobs = folder.path().join("jobs");
+    std::fs::create_dir(&jobs).unwrap();
+    std::fs::write(
+        jobs.join(format!("{}.json", record.id)),
+        serde_json::to_vec(record).unwrap(),
+    )
+    .unwrap();
+    let opened = Jobs::open_in(
+        folder.path(),
+        PathBuf::from("/nonexistent"),
+        UID,
+        1 << 20,
+        Box::new(Shared(table.clone())),
+        BOOT.into(),
+    )
+    .unwrap();
+    (folder, opened)
+}
+
+fn shown(jobs: &Jobs) -> Value {
+    jobs.show(Some(&JobId::parse(ID).unwrap()))["job"].clone()
+}
+
+#[test]
+fn an_identity_refusal_followed_by_a_stop_never_signals() {
+    // The PID's group is another's now: its leader moved to a group whose
+    // ID is not its own PID.
+    let moved = process(4312, START, 9999, 1);
+    let table = Table::with(vec![moved, process(4313, later(1), 9999, 4312)]);
+    let (_folder, jobs) = jobs_with(&record(), &table);
+    for _ in 0..3 {
+        jobs.watch_once(true, false);
+    }
+    assert_eq!(shown(&jobs)["refused"], "identity");
+    let refused = jobs.stop(
+        &JobId::parse(ID).unwrap(),
+        &record().expected().unwrap(),
+        Duration::from_secs(1),
+    );
+    assert!(refused.get("signalled").is_none(), "{refused}");
+    for _ in 0..3 {
+        jobs.watch_once(true, false);
+    }
+    assert!(table.signals().is_empty(), "{:?}", table.signals());
+}
+
+#[test]
+fn an_adopted_group_without_its_leader_is_reported_never_signalled() {
+    let member = process(4313, later(1), 4312, 1);
+    let table = Table::with(vec![member]);
+    let (_folder, jobs) = jobs_with(&record(), &table);
+    let job = shown(&jobs);
+    assert_eq!(job["state"], "ended", "{job}");
+    assert_eq!(job["how"], "leader-gone");
+    assert_eq!(job["left"][0]["pid"], 4313);
+    jobs.stop_all(StopReason::Person);
+    jobs.watch_once(true, true);
+    assert!(table.signals().is_empty());
+}
+
+#[test]
+fn a_record_whose_group_is_not_its_leaders_is_refused_on_load() {
+    let mut corrupt = record();
+    corrupt.pgid = Some(4313);
+    let table = Table::with(vec![leader(), process(4313, later(1), 4313, 4312)]);
+    let (_folder, jobs) = jobs_with(&corrupt, &table);
+    assert_eq!(shown(&jobs)["state"], "unknown");
+    jobs.stop_all(StopReason::Person);
+    jobs.watch_once(true, false);
+    assert!(table.signals().is_empty());
+}
+
+#[test]
+fn a_failed_process_query_ends_nothing_and_is_tried_again() {
+    let table = Table::with(vec![leader()]);
+    let mut due = record();
+    due.ends_at = 0;
+    let (_folder, jobs) = jobs_with(&due, &table);
+    table.failing.store(true, Ordering::SeqCst);
+    jobs.watch_once(false, false);
+    jobs.watch_once(false, false);
+    let job = shown(&jobs);
+    assert_eq!(job["state"], "stopping", "{job}");
+    assert_eq!(job["refused"], "unobserved");
+    assert!(table.signals().is_empty());
+
+    table.failing.store(false, Ordering::SeqCst);
+    jobs.watch_once(false, false);
+    assert_eq!(table.signals(), [(4312, Signal::SIGTERM)]);
+}
+
+#[test]
+fn every_signal_is_decided_by_a_look_taken_right_before_it() {
+    // The stop's own look finds the job; by the look right before TERM its
+    // PID is another process's.
+    let table = Table::with(vec![leader()]);
+    let (_folder, jobs) = jobs_with(&record(), &table);
+    table.reads.store(0, Ordering::SeqCst);
+    table.reused_after.store(2, Ordering::SeqCst);
+    let reply = jobs.stop(
+        &JobId::parse(ID).unwrap(),
+        &record().expected().unwrap(),
+        Duration::from_secs(1),
+    );
+    assert!(reply.get("signalled").is_none(), "{reply}");
+    assert!(table.signals().is_empty());
+}
+
+#[test]
+fn a_stop_is_sent_even_when_its_record_cannot_be_written() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let table = Table::with(vec![leader()]);
+    let (folder, jobs) = jobs_with(&record(), &table);
+    let records = folder.path().join("jobs");
+    std::fs::set_permissions(&records, std::fs::Permissions::from_mode(0o500)).unwrap();
+    jobs.watch_once(true, false);
+    let job = shown(&jobs);
+    std::fs::set_permissions(&records, std::fs::Permissions::from_mode(0o700)).unwrap();
+    assert_eq!(table.signals(), [(4312, Signal::SIGTERM)]);
+    assert_eq!(job["state"], "stopping", "kept in memory: {job}");
+    assert_eq!(jobs.running(), 1);
+}
+
+#[test]
+fn the_log_of_an_ended_job_whose_processes_still_write_is_kept_in_bounds() {
+    let table = Table::with(Vec::new());
+    let mut ended = record();
+    ended.state = JobState::Ended;
+    ended.ended = Some(Ended {
+        how: How::LeaderGone,
+        at: now_ms(),
+        signal: None,
+        exit_code: None,
+        exit_signal: None,
+        left: vec![Left {
+            pid: 4313,
+            name: "sleep".into(),
+        }],
+    });
+    let (folder, jobs) = jobs_with(&ended, &table);
+    let log = folder.path().join(format!("jobs/{ID}.log"));
+    std::fs::write(&log, vec![b'x'; 2 << 20]).unwrap();
+    jobs.watch_once(false, false);
+    assert_eq!(std::fs::metadata(&log).unwrap().len(), 0);
+    assert_eq!(shown(&jobs)["logResets"], 1);
+}
+
+#[test]
+fn every_job_is_counted_from_the_records() {
+    let table = Table::with(vec![leader()]);
+    let (_folder, jobs) = jobs_with(&record(), &table);
+    assert_eq!(jobs.running(), 1);
+    table.processes.lock().unwrap().clear();
+    jobs.watch_once(false, false);
+    assert_eq!(jobs.running(), 0);
+    assert_eq!(shown(&jobs)["how"], "exited");
 }

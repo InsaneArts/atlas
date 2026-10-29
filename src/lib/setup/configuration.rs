@@ -23,7 +23,7 @@ pub(crate) fn proposed(helper: &setup::Account) -> Result<Config> {
         helper_uid: helper.uid,
         socket_path: layout.socket(),
         identity_probe: "/Users/Shared/Atlas/atlas".into(),
-        input_socket: layout.root().join(setup::helper::INPUT).join("input.sock"),
+        input_socket: layout.input_socket(),
         output_dir: config::home()?.join("Library/Application Support/Atlas/runs"),
     })
 }
