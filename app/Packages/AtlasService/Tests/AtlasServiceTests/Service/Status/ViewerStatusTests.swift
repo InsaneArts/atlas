@@ -129,6 +129,27 @@ struct ViewerStatusTests {
     #expect(try !overview("agent").offersResume)
   }
 
+  @Test("Stop stays offered while a background job may run, however long ago an agent last acted")
+  func stopStaysWhileJobsRun() throws {
+    func overview(_ mode: String, running: Any?) throws -> ViewerStatus.Overview {
+      let aged = [["operation": "job", "ok": true, "actor": "agent", "ageSeconds": 3600]]
+      var fields: [String: Any] = ["mode": mode, "activity": aged]
+      if let running {
+        fields["jobs"] = ["running": running]
+      }
+      return try status(["overview": fields]).overview
+    }
+    #expect(try overview("observing", running: 1).offersStop, "an hour-old job still runs")
+    #expect(try overview("observing", running: 1).jobs.running == 1)
+    #expect(try !overview("observing", running: 0).offersStop)
+    #expect(try !overview("observing", running: nil).offersStop, "no count reads as none")
+    #expect(try !overview("observing", running: "two").offersStop, "a mistyped count reads as none")
+    #expect(try overview("blocked", running: 2).offersStop)
+    #expect(try !overview("stopped", running: 1).offersStop, "already stopped: Resume takes its place")
+    #expect(try !overview("controlling", running: 1).offersStop, "the person has control")
+    #expect(try !overview("unavailable", running: 1).offersStop, "the helper is not reached")
+  }
+
   @Test("missing or mistyped fields fall back to safe defaults, and an unknown mode reads as unavailable")
   func defaults() throws {
     let empty = try status([:])

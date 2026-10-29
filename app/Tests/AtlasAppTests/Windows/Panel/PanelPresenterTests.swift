@@ -168,6 +168,14 @@ struct PanelPresenterTests {
     #expect(PanelPresenter.state(stopping).controls.agent == .stop, "a Stop under way leaves Stop in place")
   }
 
+  @Test("an idle helper whose background job still runs keeps Stop in the bottom row")
+  func stopStaysWhileABackgroundJobRuns() throws {
+    let aged = [["operation": "job", "ok": true, "actor": "agent", "ageSeconds": 900]]
+    let fields: [String: Any] = ["mode": "observing", "state": "idle", "activity": aged, "jobs": ["running": 1]]
+    let snapshot = PanelSnapshot(status: try status(["overview": fields]), connecting: false, holdingControl: false)
+    #expect(PanelPresenter.state(snapshot).controls.agent == .stop)
+  }
+
   @Test("connecting says the helper is starting the first time, and reconnecting once answers came and stopped")
   func connectingSaysWhichKind() throws {
     var snapshot = try Self.snapshot("Connecting")

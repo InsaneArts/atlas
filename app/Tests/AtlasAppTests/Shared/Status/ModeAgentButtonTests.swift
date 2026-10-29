@@ -41,4 +41,14 @@ struct ModeAgentButtonTests {
     #expect(try Self.button("controlling", "control", holdingControl: true) == nil, "no agent acts in control")
     #expect(try Self.button("stopped", "stopped") == .resume(isEnabled: true), "Resume takes its place")
   }
+
+  @Test("Stop stays while a background job runs after an agent's last step has aged")
+  func stopStaysWhileABackgroundJobRuns() throws {
+    let aged = [["operation": "job", "ok": true, "actor": "agent", "ageSeconds": 900]]
+    let fields: [String: Any] = ["mode": "observing", "state": "idle", "activity": aged, "jobs": ["running": 1]]
+    let overview = try status(["overview": fields]).overview
+    let mode = Mode.seen(by: overview, holdingControl: false)
+    #expect(mode.agentButton(overview, holdingControl: false, isBusy: false) == .stop)
+    #expect(mode.agentButton(overview, holdingControl: true, isBusy: false) == nil, "not while holding control")
+  }
 }

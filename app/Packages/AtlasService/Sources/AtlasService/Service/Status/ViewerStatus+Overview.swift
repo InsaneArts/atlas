@@ -42,15 +42,25 @@ extension ViewerStatus {
     public var hostSessions: [HostSession] = []
     /// How many more sessions there are than the service lists.
     public var moreSessions = 0
+    /// The background jobs agents keep running in the helper.
+    public var jobs = Jobs()
 
     /// How long after an agent's last action Stop Agent stays offered, in seconds: an agent between two steps still
     /// reads as working, so Stop stays where the person reaches for it.
     static let stopStaysFor: Double = 60
 
-    /// Whether Stop Agent is offered: an agent acts, or acted within ``stopStaysFor``.
+    /// Whether Stop Agent is offered: an agent acts, or acted within ``stopStaysFor``, or a background job an agent
+    /// started may still run, however long ago it started. Stop also ends those jobs, so it stays the person's way to
+    /// end them while the helper otherwise looks idle.
     public var offersStop: Bool {
-      mode == .agent || (mode == .observing && agentActed(within: Self.stopStaysFor))
+      mode == .agent
+        || (mode == .observing && agentActed(within: Self.stopStaysFor))
+        || (jobs.running > 0 && Self.jobsStop.contains(mode))
     }
+
+    /// The modes in which running background jobs keep Stop offered: wherever the helper is reached and agents are
+    /// not stopped already.
+    static let jobsStop: Set<HelperMode> = [.observing, .agent, .recovering, .blocked]
 
     /// Whether Resume Agent is offered: the person stopped agents.
     public var offersResume: Bool { mode == .stopped }
@@ -83,7 +93,7 @@ extension ViewerStatus {
     enum CodingKeys: String, CodingKey {
       /// Each field by the name the service writes.
       case mode, state, label, reason, recoverable, recoveryHelps, account, accountName, display, pending, inFlight,
-        commands, activity, sessionsShown, holder, hostSessions, moreSessions
+        commands, activity, sessionsShown, holder, hostSessions, moreSessions, jobs
     }
 
     /// Decodes an overview, keeping the default of anything missing or of the wrong type.
@@ -112,6 +122,7 @@ extension ViewerStatus {
         (try? container.decodeIfPresent([Lenient<HostSession>].self, forKey: .hostSessions))?
         .compactMap(\.value) ?? []
       moreSessions = max(0, (try? container.decodeIfPresent(Int.self, forKey: .moreSessions)) ?? 0)
+      jobs = (try? container.decodeIfPresent(Jobs.self, forKey: .jobs)) ?? Jobs()
     }
   }
 }
