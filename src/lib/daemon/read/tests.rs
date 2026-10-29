@@ -47,7 +47,7 @@ fn request(path: &str, offset: u64, length: u64) -> ReadRequest {
 /// Read `request` with no stillness wait: its reply and its bytes.
 fn served(request: &ReadRequest, places: &Places) -> (Value, Vec<u8>) {
     let mut bytes = Vec::new();
-    let reply = read(request, places, uid(), &mut |event| {
+    let reply = read(request, places, uid(), &|| Ok(()), &mut |event| {
         bytes.extend(STANDARD.decode(event["data"].as_str().unwrap()).unwrap());
         true
     });
@@ -59,39 +59,79 @@ fn settle() {
     std::thread::sleep(STILL + Duration::from_millis(100));
 }
 
+/// The places of a helper named atlas, its own temporary folder `T`.
+fn atlas() -> Places {
+    Places {
+        home: PathBuf::from("/Users/atlas"),
+        temporary: Some(PathBuf::from("/private/var/folders/ab/cd/T")),
+    }
+}
+
 #[test]
 fn a_relative_path_starts_at_the_helpers_home() {
-    let home = Path::new("/Users/atlas");
+    let places = atlas();
     assert_eq!(
-        locate("atlas-work/report.pdf", home).unwrap(),
+        locate("atlas-work/report.pdf", &places).unwrap(),
         Path::new("/Users/atlas/atlas-work/report.pdf")
     );
     assert_eq!(
-        locate("~/atlas-work/a.bin", home).unwrap(),
+        locate("~/atlas-work/a.bin", &places).unwrap(),
         Path::new("/Users/atlas/atlas-work/a.bin")
     );
     assert_eq!(
-        locate("/Users/atlas/x.txt", home).unwrap(),
+        locate("/Users/atlas/x.txt", &places).unwrap(),
         Path::new("/Users/atlas/x.txt")
     );
 }
 
 #[test]
 fn the_two_system_links_are_read_as_their_private_paths() {
-    let home = Path::new("/Users/atlas");
+    let places = atlas();
     assert_eq!(
-        locate("/tmp/out.png", home).unwrap(),
+        locate("/tmp/out.png", &places).unwrap(),
         Path::new("/private/tmp/out.png")
     );
     assert_eq!(
-        locate("/var/folders/ab/cd/T/x", home).unwrap(),
+        locate("/var/folders/ab/cd/T/x", &places).unwrap(),
         Path::new("/private/var/folders/ab/cd/T/x")
     );
 }
 
 #[test]
+fn only_the_helpers_own_temporary_folder_is_read() {
+    let places = atlas();
+    for path in [
+        "/var/folders/zz/yy/T/theirs",
+        "/private/var/folders/ab/cd/C/cache",
+        "/private/var/folders/ab/cd/T",
+    ] {
+        assert_eq!(locate(path, &places), Err(Refused::Outside), "{path}");
+    }
+    let unknown = Places {
+        temporary: None,
+        ..atlas()
+    };
+    assert_eq!(
+        locate("/var/folders/ab/cd/T/x", &unknown),
+        Err(Refused::Outside),
+        "no account's when its own is not known"
+    );
+}
+
+#[test]
+fn the_helpers_own_temporary_folder_is_the_one_macos_names() {
+    let own = own_temporary().unwrap();
+    assert!(own.starts_with("/var/folders") || own.starts_with("/private/var/folders"));
+    assert!(
+        own.ends_with("T") || own.ends_with("T/"),
+        "{}",
+        own.display()
+    );
+}
+
+#[test]
 fn dots_and_paths_outside_the_allowed_folders_are_refused() {
-    let home = Path::new("/Users/atlas");
+    let places = atlas();
     for path in [
         "../p/secret",
         "atlas-work/../../p/x",
@@ -102,13 +142,13 @@ fn dots_and_paths_outside_the_allowed_folders_are_refused() {
         ".atlas/helper/jobs/x.log",
         ".ATLAS/x",
     ] {
-        assert_eq!(locate(path, home), Err("outside"), "{path}");
+        assert_eq!(locate(path, &places), Err(Refused::Outside), "{path}");
     }
 }
 
 #[test]
 fn protected_folders_are_refused_before_they_are_opened() {
-    let home = Path::new("/Users/atlas");
+    let places = atlas();
     for path in [
         "Documents/x.txt",
         "documents/x.txt",
@@ -119,10 +159,43 @@ fn protected_folders_are_refused_before_they_are_opened() {
         "Pictures/Photos Library.photoslibrary/database/Photos.sqlite",
         "Music/Music/Music Library.musiclibrary",
         "movies/TV/x",
+        ".Trash/deleted.pdf",
         "/Users/atlas/LIBRARY/Mail/x",
+        "De\u{17F}ktop/x.png",
+        "Des\u{212A}top/x.png",
+        "Document\u{17F}/x.txt",
+        "Library\u{17F}/x",
     ] {
-        assert_eq!(locate(path, home), Err("protected"), "{path}");
+        let refused = locate(path, &places);
+        let expected = if path.starts_with("Library\u{17F}") {
+            Ok(PathBuf::from("/Users/atlas").join(path))
+        } else {
+            Err(Refused::Protected)
+        };
+        assert_eq!(refused, expected, "{path}");
     }
+}
+
+#[test]
+fn a_spelling_the_disk_takes_for_a_guarded_folder_is_refused() {
+    let (_dir, places) = home();
+    std::fs::create_dir(places.home.join("Desktop")).unwrap();
+    std::fs::create_dir(places.home.join("Kits")).unwrap();
+    still(&places, "Desktop/secret.txt", b"s");
+    // The disk folds the long s and the Kelvin sign as APFS does when it
+    // compares names in any case; either way the guarded folder is refused.
+    for path in [
+        "De\u{17F}ktop/secret.txt",
+        "Des\u{212A}top/secret.txt",
+        "DESKTOP/secret.txt",
+    ] {
+        let (reply, bytes) = served(&request(path, 0, 1), &places);
+        assert_eq!(reply["reason"], "protected", "{path}: {reply}");
+        assert!(bytes.is_empty());
+    }
+    // A folder that is not guarded, whatever its spelling, is looked up as
+    // what it is.
+    assert!(locate("\u{212A}its/x", &places).is_ok());
 }
 
 #[test]
@@ -171,7 +244,7 @@ fn another_owners_file_is_refused() {
             1 << 20,
             SystemTime::now()
         ),
-        Err("owner")
+        Err(Refused::Owner)
     );
 }
 
@@ -285,4 +358,66 @@ fn a_missing_file_says_so() {
     assert_eq!(reply["reason"], "missing");
     assert_eq!(reply["code"], "collect");
     assert_eq!(reply["uncertain"], false);
+}
+
+#[test]
+fn nothing_is_opened_or_sent_once_the_guard_refuses() {
+    let (_dir, places) = home();
+    let bytes: Vec<u8> = vec![7; CHUNK * 3];
+    still(&places, "big.bin", &bytes);
+    settle();
+    let refusal =
+        || json!({"ok": false, "code": "on-console", "error": "on screen", "uncertain": false});
+
+    let mut sent = 0;
+    let reply = read(
+        &request("big.bin", 0, bytes.len() as u64),
+        &places,
+        uid(),
+        &|| Err(refusal()),
+        &mut |_| {
+            sent += 1;
+            true
+        },
+    );
+    assert_eq!(reply, refusal());
+    assert_eq!(sent, 0, "refused before it was opened");
+
+    // The helper comes on screen after the first part: no more are read.
+    let asked = std::cell::Cell::new(0);
+    let guard = || {
+        asked.set(asked.get() + 1);
+        if asked.get() > 2 {
+            Err(refusal())
+        } else {
+            Ok(())
+        }
+    };
+    let mut sent = 0;
+    let reply = read(
+        &request("big.bin", 0, bytes.len() as u64),
+        &places,
+        uid(),
+        &guard,
+        &mut |_| {
+            sent += 1;
+            true
+        },
+    );
+    assert_eq!(reply, refusal());
+    assert_eq!(sent, 1);
+
+    let mut digest = request("big.bin", 0, 0);
+    digest.digest = true;
+    let asked = std::cell::Cell::new(0);
+    let guard = || {
+        asked.set(asked.get() + 1);
+        if asked.get() > 1 {
+            Err(refusal())
+        } else {
+            Ok(())
+        }
+    };
+    let reply = read(&digest, &places, uid(), &guard, &mut |_| true);
+    assert_eq!(reply, refusal(), "nor is it hashed");
 }

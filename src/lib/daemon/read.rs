@@ -3,16 +3,21 @@
 //! size and that nothing is writing it), sent as base64 `data` events, and
 //! never changed.
 //!
-//! Only files in the helper's home, its temporary folder and `/private/tmp`
-//! are read, and none in the folders macOS guards (all of `~/Library`
-//! among them) nor in Atlas's own `~/.atlas`: those are refused by path
-//! before anything is opened, so reading never makes macOS ask for access
-//! in a login nobody watches. No link is followed anywhere in the path.
+//! Only files in the helper's home, its own temporary folder and
+//! `/private/tmp` are read, and none in the folders macOS guards (all of
+//! `~/Library` among them), in the Trash nor in Atlas's own `~/.atlas`:
+//! those are refused before anything is opened, by name and by the folder
+//! the path's first part is, so reading never makes macOS ask for access in
+//! a login nobody watches. No link is followed anywhere in the path. The
+//! session is checked again before the file is opened and between parts,
+//! so nothing is read once the helper has come on screen.
 use super::protocol::{FileIdentity, READ_RANGE_MAX, ReadRequest, failure};
+use crate::collect::Refused;
 use base64::{Engine, engine::general_purpose::STANDARD};
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 use std::{
+    ffi::OsStr,
     fs::{File, Metadata, OpenOptions},
     os::{
         macos::fs::MetadataExt as _,
@@ -30,9 +35,9 @@ const STILL: Duration = Duration::from_secs(2);
 /// (`SF_DATALESS`, `sys/stat.h`): reading it would download it.
 const SF_DATALESS: u32 = 0x4000_0000;
 /// The folders of the helper's home that macOS guards, or that hold other
-/// apps' data or media libraries: refused by path, in any case, before
-/// anything is opened.
-const PROTECTED: [&str; 7] = [
+/// apps' data, media libraries or deleted files: refused before anything
+/// is opened.
+const PROTECTED: [&str; 8] = [
     "Desktop",
     "Documents",
     "Downloads",
@@ -40,28 +45,32 @@ const PROTECTED: [&str; 7] = [
     "Pictures",
     "Music",
     "Movies",
+    ".Trash",
 ];
 /// Atlas's own folder in the helper's home.
 const OWN: &str = ".atlas";
 /// The system's shared temporary folder, as it really is.
 const SHARED_TEMPORARY: &str = "/private/tmp";
+/// Where every account's own temporary folder is, as it really is.
+const TEMPORARY_FOLDERS: &str = "/private/var/folders";
 
 /// Where the helper's files may be read from: its home and its own
 /// temporary folder, as they really are.
 pub struct Places {
     pub home: PathBuf,
+    /// The account's own temporary folder; none when it is not known, and
+    /// then no account's is read.
     pub temporary: Option<PathBuf>,
 }
 
 impl Places {
-    /// The places of the daemon's own account: `HOME` and `TMPDIR`, each as
-    /// it really is.
+    /// The places of the daemon's own account: `HOME`, and the temporary
+    /// folder macOS keeps for it, each as it really is.
     pub fn here() -> Option<Self> {
-        let real =
-            |name: &str| std::env::var_os(name).and_then(|path| std::fs::canonicalize(path).ok());
+        let home = std::env::var_os("HOME").and_then(|path| std::fs::canonicalize(path).ok())?;
         Some(Self {
-            home: real("HOME")?,
-            temporary: real("TMPDIR"),
+            home,
+            temporary: own_temporary().and_then(|path| std::fs::canonicalize(path).ok()),
         })
     }
 
@@ -72,19 +81,69 @@ impl Places {
     }
 }
 
+/// This account's own temporary folder, as macOS names it
+/// (`_CS_DARWIN_USER_TEMP_DIR`), whatever `TMPDIR` says.
+#[allow(
+    unsafe_code,
+    reason = "FFI: confstr(_CS_DARWIN_USER_TEMP_DIR) has no safe binding"
+)]
+fn own_temporary() -> Option<PathBuf> {
+    // SAFETY: a null buffer of length 0 asks only for the size the value
+    // needs, its NUL included; nothing is written.
+    let size = unsafe { libc::confstr(libc::_CS_DARWIN_USER_TEMP_DIR, std::ptr::null_mut(), 0) };
+    if size == 0 || size > 4096 {
+        return None;
+    }
+    let mut buffer = vec![0_u8; size];
+    // SAFETY: the buffer is writable for `size` bytes, the length passed in;
+    // confstr writes at most that many, its NUL included, and returns the
+    // length the whole value needs, checked below.
+    let needed = unsafe {
+        libc::confstr(
+            libc::_CS_DARWIN_USER_TEMP_DIR,
+            buffer.as_mut_ptr().cast(),
+            buffer.len(),
+        )
+    };
+    if needed == 0 || needed > buffer.len() {
+        return None;
+    }
+    let text = std::ffi::CStr::from_bytes_until_nul(&buffer).ok()?;
+    let path = PathBuf::from(<OsStr as std::os::unix::ffi::OsStrExt>::from_bytes(
+        text.to_bytes(),
+    ));
+    path.is_absolute().then_some(path)
+}
+
 /// Serve `request` for the account `uid`: its reply, after the part's
 /// bytes went to `events` one `data` event at a time. `events` says
 /// whether the client still takes them; once it does not, nothing more is
-/// read.
+/// read. `guard` says whether the helper may still be read, as before the
+/// request was taken: it is asked before the file is opened, before each
+/// part and before the digest, and its refusal is the reply.
 pub fn read(
     request: &ReadRequest,
     places: &Places,
     uid: u32,
+    guard: &dyn Fn() -> Result<(), Value>,
     events: &mut dyn FnMut(Value) -> bool,
 ) -> Value {
-    match served(request, places, uid, events) {
+    match served(request, places, uid, guard, events) {
         Ok(reply) => reply,
-        Err(reason) => refusal(reason),
+        Err(Stop::Refused(reason)) => refusal(reason),
+        Err(Stop::Guard(refusal)) => refusal,
+    }
+}
+
+/// Why a read stopped: a reason of its own, or the guard's refusal.
+enum Stop {
+    Refused(Refused),
+    Guard(Value),
+}
+
+impl From<Refused> for Stop {
+    fn from(reason: Refused) -> Self {
+        Self::Refused(reason)
     }
 }
 
@@ -92,9 +151,11 @@ fn served(
     request: &ReadRequest,
     places: &Places,
     uid: u32,
+    guard: &dyn Fn() -> Result<(), Value>,
     events: &mut dyn FnMut(Value) -> bool,
-) -> Result<Value, &'static str> {
-    let path = locate(&request.path, &places.home)?;
+) -> Result<Value, Stop> {
+    let path = locate(&request.path, places)?;
+    guard().map_err(Stop::Guard)?;
     let file = OpenOptions::new()
         .read(true)
         .custom_flags(libc::O_NOFOLLOW_ANY | libc::O_NONBLOCK)
@@ -102,16 +163,11 @@ fn served(
         .map_err(|error| opened(&error))?;
     let mut real = PathBuf::new();
     nix::fcntl::fcntl(&file, nix::fcntl::FcntlArg::F_GETPATH(&mut real))
-        .map_err(|_| "unreadable")?;
+        .map_err(|_| Refused::Unreadable)?;
     if let Some(inside) = within(&real, &places.home) {
-        if guarded(inside) {
-            return Err("protected");
-        }
-        if own(inside) {
-            return Err("outside");
-        }
+        refuse_inside(inside, &places.home)?;
     }
-    let metadata = file.metadata().map_err(|_| "unreadable")?;
+    let metadata = file.metadata().map_err(|_| Refused::Unreadable)?;
     let identity = readable(
         &metadata,
         &real,
@@ -138,6 +194,7 @@ fn served(
     });
 
     if request.digest {
+        guard().map_err(Stop::Guard)?;
         reply["sha256"] = json!(digest(&file, identity.size)?);
         reply["length"] = json!(0);
     } else {
@@ -145,28 +202,32 @@ fn served(
             .length
             .min(READ_RANGE_MAX)
             .min(identity.size.saturating_sub(request.offset));
-        send(&file, request.offset, length, events)?;
+        send(&file, request.offset, length, guard, events)?;
         reply["length"] = json!(length);
     }
 
     // Unchanged to the nanosecond while it was read, or it was being written.
-    let after = file.metadata().map_err(|_| "unreadable")?;
+    let after = file.metadata().map_err(|_| Refused::Unreadable)?;
     if identity_of(&after) != identity {
-        return Err("changing");
+        return Err(Refused::Changing.into());
     }
+    guard().map_err(Stop::Guard)?;
     Ok(reply)
 }
 
 /// Where `path` points inside the helper, or why it may not be read: the
 /// two fixed system links (`/tmp`, `/var/folders`) are read as their
-/// `/private` paths, a relative path (or one starting `~/`) starts at
-/// `home`, and `.` and `..` components, the folders macOS guards and
-/// Atlas's own are refused. Decided from the text alone.
-fn locate(path: &str, home: &Path) -> Result<PathBuf, &'static str> {
+/// `/private` paths, a relative path (or one starting `~/`) starts at the
+/// helper's home, and `.` and `..` components, the folders macOS guards,
+/// Atlas's own and every temporary folder but the helper's own are
+/// refused. Nothing is opened: only the first part of a path in the home
+/// is looked at, without following it.
+fn locate(path: &str, places: &Places) -> Result<PathBuf, Refused> {
+    let home = &places.home;
     let rewritten = if let Some(rest) = path.strip_prefix("/tmp/") {
-        format!("/private/tmp/{rest}")
+        format!("{SHARED_TEMPORARY}/{rest}")
     } else if let Some(rest) = path.strip_prefix("/var/folders/") {
-        format!("/private/var/folders/{rest}")
+        format!("{TEMPORARY_FOLDERS}/{rest}")
     } else {
         path.to_owned()
     };
@@ -175,7 +236,7 @@ fn locate(path: &str, home: &Path) -> Result<PathBuf, &'static str> {
         .components()
         .any(|part| matches!(part, Component::CurDir | Component::ParentDir))
     {
-        return Err("outside");
+        return Err(Refused::Outside);
     }
     let located = if given.is_absolute() {
         given.to_owned()
@@ -186,22 +247,86 @@ fn locate(path: &str, home: &Path) -> Result<PathBuf, &'static str> {
     };
 
     if let Some(inside) = within(&located, home) {
-        if guarded(inside) {
-            return Err("protected");
-        }
-        if own(inside) {
-            return Err("outside");
-        }
+        refuse_inside(inside, home)?;
         return Ok(located);
     }
-    let elsewhere = [SHARED_TEMPORARY, "/private/var/folders"]
-        .iter()
-        .any(|root| located.starts_with(root) && located != Path::new(root));
-    if elsewhere {
+    let shared = located.starts_with(SHARED_TEMPORARY) && located != Path::new(SHARED_TEMPORARY);
+    let own = places
+        .temporary
+        .as_deref()
+        .is_some_and(|temporary| located.starts_with(temporary) && located != temporary);
+    if shared || own {
         Ok(located)
     } else {
-        Err("outside")
+        Err(Refused::Outside)
     }
+}
+
+/// Refuse a path inside the helper's `home` (`inside`) whose first part is
+/// a folder macOS guards or Atlas's own: by its name in any ASCII case, and
+/// by what the first part is on the disk, so a spelling the file system
+/// takes for one of them (another Unicode case, say) is refused too.
+fn refuse_inside(inside: &Path, home: &Path) -> Result<(), Refused> {
+    let Some(first) = inside.components().next().map(Component::as_os_str) else {
+        return Err(Refused::Outside);
+    };
+    let named = |name: &str| first.eq_ignore_ascii_case(name);
+    if PROTECTED.iter().any(|folder| named(folder)) {
+        return Err(Refused::Protected);
+    }
+    if named(OWN) {
+        return Err(Refused::Outside);
+    }
+    // A spelling APFS takes for one of them in another Unicode case.
+    if !first.is_ascii() && differs_only_in_unicode_case(first) {
+        return Err(Refused::Protected);
+    }
+
+    let Some(found) = node(&home.join(first)) else {
+        return Ok(());
+    };
+    let is = |name: &str| node(&home.join(name)) == Some(found);
+    if PROTECTED.iter().any(|folder| is(folder)) {
+        return Err(Refused::Protected);
+    }
+    if is(OWN) {
+        return Err(Refused::Outside);
+    }
+    Ok(())
+}
+
+/// Whether `name` folds, by Unicode's lowercase, to the name of a folder
+/// macOS guards or Atlas's own.
+fn differs_only_in_unicode_case(name: &OsStr) -> bool {
+    let Some(name) = name.to_str() else {
+        return false;
+    };
+    let folded = fold(name);
+    PROTECTED
+        .iter()
+        .chain(std::iter::once(&OWN))
+        .any(|folder| fold(folder) == folded)
+}
+
+/// `name` in a form two spellings that APFS takes for one share: lowercase,
+/// with the long s and the Kelvin sign read as the letters they fold to.
+fn fold(name: &str) -> String {
+    name.chars()
+        .map(|character| match character {
+            '\u{017F}' => 's',
+            '\u{212A}' => 'k',
+            '\u{212B}' => 'å',
+            other => other,
+        })
+        .collect::<String>()
+        .to_lowercase()
+}
+
+/// The device and node of `path` itself, not following a link.
+fn node(path: &Path) -> Option<(u64, u64)> {
+    std::fs::symlink_metadata(path)
+        .ok()
+        .map(|metadata| (metadata.dev(), metadata.ino()))
 }
 
 /// `path` relative to `home`, when it lies inside it.
@@ -209,30 +334,12 @@ fn within<'a>(path: &'a Path, home: &Path) -> Option<&'a Path> {
     path.strip_prefix(home).ok()
 }
 
-/// Whether a path inside the helper's home lies in a folder macOS guards,
-/// its name compared in any case, as the file system compares it.
-fn guarded(inside: &Path) -> bool {
-    inside.components().next().is_some_and(|first| {
-        PROTECTED
-            .iter()
-            .any(|folder| first.as_os_str().eq_ignore_ascii_case(folder))
-    })
-}
-
-/// Whether a path inside the helper's home lies in Atlas's own folder.
-fn own(inside: &Path) -> bool {
-    inside
-        .components()
-        .next()
-        .is_some_and(|first| first.as_os_str().eq_ignore_ascii_case(OWN))
-}
-
 /// Why an open failed, as a reason.
-fn opened(error: &std::io::Error) -> &'static str {
+fn opened(error: &std::io::Error) -> Refused {
     match error.raw_os_error() {
-        Some(libc::ELOOP) => "symlink",
-        Some(libc::ENOENT | libc::ENOTDIR) => "missing",
-        _ => "unreadable",
+        Some(libc::ELOOP) => Refused::Symlink,
+        Some(libc::ENOENT | libc::ENOTDIR) => Refused::Missing,
+        _ => Refused::Unreadable,
     }
 }
 
@@ -248,28 +355,28 @@ fn readable(
     expect: Option<&FileIdentity>,
     max_size: u64,
     now: SystemTime,
-) -> Result<FileIdentity, &'static str> {
+) -> Result<FileIdentity, Refused> {
     if !roots
         .iter()
         .any(|root| real.starts_with(root) && real != *root)
     {
-        return Err("outside");
+        return Err(Refused::Outside);
     }
     if !metadata.is_file() {
-        return Err("not-regular");
+        return Err(Refused::NotRegular);
     }
     if metadata.st_flags() & SF_DATALESS != 0 {
-        return Err("dataless");
+        return Err(Refused::Dataless);
     }
     if metadata.uid() != uid {
-        return Err("owner");
+        return Err(Refused::Owner);
     }
     if metadata.len() > max_size {
-        return Err("too-large");
+        return Err(Refused::TooLarge);
     }
     let identity = identity_of(metadata);
     match expect {
-        Some(expect) if *expect != identity => Err("changing"),
+        Some(expect) if *expect != identity => Err(Refused::Changing),
         Some(_) => Ok(identity),
         None => {
             let now = now.duration_since(UNIX_EPOCH).unwrap_or_default();
@@ -280,7 +387,7 @@ fn readable(
             if still(identity.mtime) && still(identity.ctime) {
                 Ok(identity)
             } else {
-                Err("changing")
+                Err(Refused::Changing)
             }
         }
     }
@@ -297,30 +404,33 @@ fn identity_of(metadata: &Metadata) -> FileIdentity {
     }
 }
 
-/// Send `length` bytes of `file` from `offset` as `data` events.
+/// Send `length` bytes of `file` from `offset` as `data` events, asking
+/// `guard` before each one.
 fn send(
     file: &File,
     offset: u64,
     length: u64,
+    guard: &dyn Fn() -> Result<(), Value>,
     events: &mut dyn FnMut(Value) -> bool,
-) -> Result<(), &'static str> {
+) -> Result<(), Stop> {
     let mut buffer = vec![0_u8; CHUNK];
     let mut sent = 0;
     while sent < length {
+        guard().map_err(Stop::Guard)?;
         let want = usize::try_from(length - sent).map_or(CHUNK, |left| left.min(CHUNK));
         let mut filled = 0;
         while filled < want {
             let count = file
                 .read_at(&mut buffer[filled..want], offset + sent + filled as u64)
-                .map_err(|_| "unreadable")?;
+                .map_err(|_| Refused::Unreadable)?;
             if count == 0 {
                 // Shorter than it said it was: written meanwhile.
-                return Err("changing");
+                return Err(Refused::Changing.into());
             }
             filled += count;
         }
         if !events(json!({"event": "data", "data": STANDARD.encode(&buffer[..filled])})) {
-            return Err("gone");
+            return Err(Refused::Gone.into());
         }
         sent += filled as u64;
     }
@@ -328,14 +438,16 @@ fn send(
 }
 
 /// SHA-256 of the first `size` bytes of `file`, which must be all of it.
-fn digest(file: &File, size: u64) -> Result<String, &'static str> {
+fn digest(file: &File, size: u64) -> Result<String, Refused> {
     let mut hasher = Sha256::new();
     let mut buffer = vec![0_u8; 1024 * 1024];
     let mut read = 0;
     while read < size {
-        let count = file.read_at(&mut buffer, read).map_err(|_| "unreadable")?;
+        let count = file
+            .read_at(&mut buffer, read)
+            .map_err(|_| Refused::Unreadable)?;
         if count == 0 {
-            return Err("changing");
+            return Err(Refused::Changing);
         }
         let count = usize::try_from(size - read).map_or(count, |left| count.min(left));
         hasher.update(&buffer[..count]);
@@ -349,23 +461,8 @@ fn digest(file: &File, size: u64) -> Result<String, &'static str> {
 }
 
 /// The refusal for `reason`: nothing in the helper changed.
-fn refusal(reason: &'static str) -> Value {
-    let error = match reason {
-        "outside" => "Only files in the helper's home, its temporary folder or /tmp are collected",
-        "protected" => {
-            "Files in a folder macOS guards, such as Documents or Library, are never collected"
-        }
-        "symlink" => "A link anywhere in the path is never followed",
-        "not-regular" => "Only regular files are collected, not folders, devices or pipes",
-        "dataless" => "The file's contents are not on this Mac yet",
-        "owner" => "The file does not belong to the helper",
-        "too-large" => "The file is larger than allowed",
-        "changing" => "The file changed in the last 2 seconds, or while it was read",
-        "missing" => "No such file in the helper",
-        "gone" => "The client went away",
-        _ => "The file could not be read",
-    };
-    let mut reply = failure("collect", error);
+fn refusal(reason: Refused) -> Value {
+    let mut reply = failure("collect", reason.said());
     reply["reason"] = json!(reason);
     reply
 }

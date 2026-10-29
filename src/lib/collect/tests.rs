@@ -81,6 +81,7 @@ impl Place {
                         &request,
                         &places,
                         nix::unistd::getuid().as_raw(),
+                        &|| Ok(()),
                         &mut |event| {
                             lines.push(event);
                             true
@@ -349,6 +350,65 @@ async fn a_linked_receipt_folder_is_refused() {
         .unwrap_err();
     assert_eq!(error.code, "state");
     assert!(fs::read_dir(&elsewhere).unwrap().next().is_none());
+}
+
+#[tokio::test]
+async fn an_older_daemon_is_refused_before_anything_is_read() {
+    use base64::{Engine, engine::general_purpose::STANDARD};
+
+    let place = Place::new();
+    let listener = UnixListener::bind(&place.client.config.socket_path).unwrap();
+    let asked: Arc<Mutex<Vec<Value>>> = Arc::default();
+    let heard = asked.clone();
+    tokio::spawn(async move {
+        while let Ok((stream, _)) = listener.accept().await {
+            let (reader, mut writer) = stream.into_split();
+            let mut line = String::new();
+            BufReader::new(reader).read_line(&mut line).await.unwrap();
+            let request: Value = serde_json::from_str(&line).unwrap();
+            heard.lock().unwrap().push(request.clone());
+            let proof = json!({"ok": true, "uid": 60001, "hasGraphicAccess": true,
+                "parentPID": 123, "onConsole": false, "securitySessionID": 42,
+                "displayID": 7, "width": 100, "height": 100});
+            let lines = match request["op"].as_str() {
+                Some("hello") => vec![json!({"ok": true, "op": "hello",
+                    "user": {"uid": 60001, "name": "atlas", "home": "/Users/atlas"},
+                    "session": {"managerName": "Aqua", "onConsole": false},
+                    "display": {"width": 100, "height": 100, "scale": 1},
+                    "permissions": {"screenCapture": true, "accessibility": true},
+                    "daemon": {"protocol": 1, "pid": 123, "capabilities": ["session-pin"]}})],
+                Some("run") => vec![
+                    json!({"event": "output", "data": STANDARD.encode(proof.to_string())}),
+                    json!({"ok": true, "exitCode": 0, "timedOut": false, "signal": null,
+                        "durationMs": 1}),
+                ],
+                _ => vec![
+                    json!({"ok": false, "code": "bad-request", "error": "unknown op",
+                    "uncertain": false}),
+                ],
+            };
+            for line in lines {
+                writer
+                    .write_all(format!("{line}\n").as_bytes())
+                    .await
+                    .unwrap();
+            }
+        }
+    });
+
+    let error = collect(&place.client, &["a.bin".to_owned()], 1024)
+        .await
+        .unwrap_err();
+    assert_eq!(error.code, "daemon", "{error:?}");
+    assert!(error.error.contains("run atlas restart"));
+    assert!(
+        !asked
+            .lock()
+            .unwrap()
+            .iter()
+            .any(|request| request["op"] == "read"),
+        "nothing was read"
+    );
 }
 
 #[tokio::test]

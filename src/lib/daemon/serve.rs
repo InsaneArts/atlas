@@ -706,39 +706,81 @@ async fn handle(stream: UnixStream, daemon: Arc<Daemon>, controller: bool) -> Re
                 "This helper daemon cannot keep background jobs; run atlas restart",
             ),
         },
-        Ok(Request::Read(request)) => return serve_read(request, writer).await,
+        Ok(Request::Read(request)) => return serve_read(&daemon, request, writer).await,
     };
 
     write(&mut writer, &reply).await
 }
 
 /// Read part of a file for the person's side, its `data` events written as
-/// they are read, so the daemon never holds more than a few of them.
+/// they are read, so the daemon never holds more than a few of them. The
+/// worker checks again, before it opens the file, before each part and
+/// before the digest, that the helper is still off screen and in the
+/// session it was when the request came, as a screenshot's worker does; a
+/// part already queued is not sent once the helper is on screen.
 async fn serve_read(
+    daemon: &Daemon,
     request: ReadRequest,
     mut writer: tokio::net::unix::OwnedWriteHalf,
 ) -> Result<()> {
+    let on_console = daemon.on_console;
+    let session = daemon.session;
+    let epoch = match session().and_then(|proof| InputEpoch::from_proof(&proof, std::process::id()))
+    {
+        Ok(epoch) => epoch,
+        Err(error) => return write(&mut writer, &refused(error)).await,
+    };
+
     let (events, mut queue) = mpsc::channel(8);
     let delivery = tokio::spawn(async move {
         while let Some(event) = queue.recv().await {
+            if on_console() {
+                return Ok::<_, Error>((writer, true));
+            }
             write(&mut writer, &event).await?;
         }
-        Ok::<_, Error>(writer)
+        Ok((writer, false))
     });
     let uid = nix::unistd::getuid().as_raw();
+    let screened = Request::Read(request.clone());
+    let delivered = screened.clone();
     let reply = tokio::task::spawn_blocking(move || {
-        let Some(places) = read::Places::here() else {
-            return failure("collect", "The helper's home could not be found");
+        let guard = || {
+            if let Some(refusal) = allowed(&screened, on_console()) {
+                return Err(refusal);
+            }
+            let current = InputEpoch::from_proof(&session().map_err(refused)?, std::process::id())
+                .map_err(refused)?;
+            if current == epoch {
+                Ok(())
+            } else {
+                Err(failure(
+                    "session-changed",
+                    "The helper changed since Atlas checked it; look again",
+                ))
+            }
         };
-        read::read(&request, &places, uid, &mut |event| {
+        guard()?;
+        let Some(places) = read::Places::here() else {
+            return Ok(failure("collect", "The helper's home could not be found"));
+        };
+        Ok(read::read(&request, &places, uid, &guard, &mut |event| {
             events.blocking_send(event).is_ok()
-        })
+        }))
     })
     .await
-    .unwrap_or_else(|_| failure("collect", "The file could not be read"));
-    let mut writer = delivery
+    .map_or_else(
+        |_| failure("collect", "The file could not be read"),
+        |reply: std::result::Result<Value, Value>| reply.unwrap_or_else(|refusal| refusal),
+    );
+    let (mut writer, cut) = delivery
         .await
         .map_err(|_| Error::new("transport", "The event writer failed"))??;
+    let reply = if cut {
+        allowed(&delivered, true).unwrap_or(reply)
+    } else {
+        reply
+    };
     write(&mut writer, &reply).await
 }
 
@@ -1579,5 +1621,51 @@ mod tests {
         .await[0];
         assert_eq!(reply["code"], "identity");
         assert_eq!(reply["uncertain"], false);
+    }
+
+    #[test]
+    fn nothing_is_read_if_the_helper_comes_on_screen_while_the_worker_waits() {
+        use std::sync::atomic::{AtomicBool, Ordering};
+
+        static SHOWN: AtomicBool = AtomicBool::new(false);
+        static CHECKED: Notify = Notify::const_new();
+
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .max_blocking_threads(1)
+            .build()
+            .unwrap();
+        let (release, waiting) = std::sync::mpsc::channel();
+        let blocker = runtime.spawn_blocking(move || {
+            waiting.recv_timeout(Duration::from_secs(5)).unwrap();
+        });
+        let daemon = Arc::new(Daemon::new(
+            "Aqua".into(),
+            synthetic,
+            || {
+                let shown = SHOWN.load(Ordering::SeqCst);
+                CHECKED.notify_one();
+                shown
+            },
+            session,
+        ));
+
+        runtime.block_on(async {
+            let request = tokio::spawn(exchange(
+                daemon,
+                r#"{"op":"read","path":".zshrc","maxSize":1048576}"#,
+            ));
+            tokio::time::timeout(Duration::from_secs(5), CHECKED.notified())
+                .await
+                .unwrap();
+            SHOWN.store(true, Ordering::SeqCst);
+            release.send(()).unwrap();
+            blocker.await.unwrap();
+
+            let reply = request.await.unwrap();
+            assert_eq!(reply.len(), 1, "no part was sent: {reply:?}");
+            assert_eq!(reply[0]["code"], "on-console");
+            assert_eq!(reply[0]["uncertain"], false);
+        });
     }
 }
