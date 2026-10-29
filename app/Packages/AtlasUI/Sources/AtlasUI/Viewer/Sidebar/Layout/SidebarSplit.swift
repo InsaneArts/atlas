@@ -65,6 +65,7 @@ struct SidebarSplit<Card: View>: View {
         .opacity(showsContent ? 1 : 0)
         .frame(width: ViewerLayout.sidebarRoom(drawn), alignment: .leading)
         .clipped()
+        .disabled(sidebar.mode == .hidden || sidebar.overlay || drawn == .hidden)
         .allowsHitTesting(drawn != .hidden)
         .accessibilityHidden(drawn == .hidden)
       card(SidebarSlide(drawn: drawn, settling: reduceMotion ? drawn : sidebar.mode, rested: rested))
@@ -81,6 +82,7 @@ struct SidebarSplit<Card: View>: View {
     .overlay(alignment: .leading) {
       if showsOverlay {
         SidebarOverlay(sidebar: sidebar, isFullScreen: isFullScreen, send: send)
+          .disabled(!sidebar.overlay)
           .transition(Motion.transition(.move(edge: .leading), reduceMotion: reduceMotion))
       }
     }
@@ -95,10 +97,10 @@ struct SidebarSplit<Card: View>: View {
     }
   }
 
-  /// The sidebar beside the card: as it is, but with its search closed while it shows over the card, so only the
-  /// field the person sees takes the focus.
+  /// The sidebar beside the card, with search closed whenever it is hidden or shown over the card.
+  /// Only the visible search field may hold keyboard focus.
   private var beside: ViewerSidebarState {
-    guard sidebar.overlay else { return sidebar }
+    guard sidebar.overlay || sidebar.mode == .hidden || drawn == .hidden else { return sidebar }
     var beside = sidebar
     beside.search.isOpen = false
     return beside

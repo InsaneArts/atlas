@@ -70,6 +70,38 @@ struct SidebarSearchFocusTests {
     focus.stop()
   }
 
+  @Test("dismissing a narrow sidebar overlay relinquishes its search focus without focusing a hidden field")
+  func dismissingTheOverlayRelinquishesSearchFocus() throws {
+    var state = PreviewStates.viewerSessions
+    state.sidebar.mode = .hidden
+    let window = NSWindow(
+      contentRect: NSRect(origin: .zero, size: PreviewStates.viewerSize),
+      styleMask: [.titled],
+      backing: .buffered,
+      defer: false
+    )
+    window.isReleasedWhenClosed = false
+    let hosting = NSHostingView(rootView: ViewerHostContent(state: state))
+    window.contentView = hosting
+    defer { window.contentView = nil }
+    hosting.layoutSubtreeIfNeeded()
+    state.sidebar.overlay = true
+    state.sidebar.search.isOpen = true
+    state.sidebar.search.query = "Claude"
+    hosting.rootView = ViewerHostContent(state: state)
+    hosting.layoutSubtreeIfNeeded()
+    RunLoop.main
+      .run(until: Date(timeIntervalSinceNow: Self.settling))
+    try #require(window.firstResponder is NSTextView, "the visible overlay search holds the typing")
+    state.sidebar.overlay = false
+    hosting.rootView = ViewerHostContent(state: state)
+    hosting.layoutSubtreeIfNeeded()
+    RunLoop.main
+      .run(until: Date(timeIntervalSinceNow: Self.settling))
+    #expect(!(window.firstResponder is NSTextView), "a hidden search cannot keep the typing")
+    #expect(state.sidebar.search.query == "Claude", "dismissing preserves the query without retaining an editor")
+  }
+
   /// A left press at `point`, in the window content's space from its top left.
   ///
   /// - Parameters:

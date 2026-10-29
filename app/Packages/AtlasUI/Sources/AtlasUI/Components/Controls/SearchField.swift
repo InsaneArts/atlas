@@ -27,6 +27,7 @@ struct SearchField: View {
   @FocusState private var focused: Bool
   /// Where the capsule stands in the window, for the window to tell a click on it from one outside it.
   @State private var frame = CGRect.null
+  @Environment(\.isEnabled) private var isEnabled
   @Environment(\.focusedFieldReport) private var report
 
   /// The magnifier, the query and its clear button on their quiet capsule.
@@ -81,9 +82,17 @@ struct SearchField: View {
       report?.report(isFocused ? frame : nil)
       if !isFocused, text.isEmpty { onExit?() }
     }
-    .onChange(of: focusRequests) { focused = true }
-    .onAppear { if focusesOnAppear { focused = true } }
-    .onDisappear { if focused { report?.report(nil) } }
+    .onChange(of: isEnabled) { _, enabled in
+      if !enabled { focused = false }
+    }
+    .onChange(of: focusRequests) { if isEnabled { focused = true } }
+    .onAppear { if focusesOnAppear && isEnabled { focused = true } }
+    .onDisappear {
+      if focused {
+        focused = false
+        report?.report(nil)
+      }
+    }
   }
 
   /// The fine accent edge and its soft halo along the capsule, showing while the field has the focus.
