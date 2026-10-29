@@ -1,12 +1,16 @@
 import SwiftUI
 
-/// One screenshot in the grid: its thumbnail at the screen's shape, a brighter ring under the pointer with nothing
-/// moving, as a Finder icon highlights rather than jumps, ringed in blue while selected, and its time under it. A click
-/// selects it, a double click shows it large, zooming from here, and it can be dragged out where the app allows. While
-/// it is shown large its picture has left the grid for the large view, so its place stays empty.
+/// One screenshot in the grid: the whole screenshot at its own shape, never cut, standing at the foot of a place the
+/// grid's shape for every tile, so the rows stand even and every time lines up under its picture; a brighter edge
+/// under the pointer with nothing moving, as a Finder icon highlights rather than jumps; a blue ring outside it while
+/// selected, which comes and goes at once; and its time under it. A click selects it, a double click shows it large,
+/// zooming from here, and it can be dragged out where the app allows. While it is shown large its picture has left
+/// the grid for the large view, so its place stays empty.
 struct ShotTileView: View {
   /// The screenshot.
   let tile: ViewerShotTile
+  /// The shape of its place in the grid, every tile's (``ViewerShotsState/tileShape``).
+  var place = ShotShape.standard
   /// Whether it is the one shown large.
   var isOpen = false
   /// The namespace its picture zooms in, the window's.
@@ -42,13 +46,13 @@ struct ShotTileView: View {
 
   /// The thumbnail over its time, taking clicks.
   private var shown: some View {
-    VStack(alignment: .leading, spacing: Spacing.xsPlus) {
+    VStack(alignment: .leading, spacing: ViewerLayout.shotTimeGap) {
       picture
+        .aspectRatio(place, contentMode: .fit)
       Text(tile.time)
         .font(Typography.digits(.caption))
         .foregroundStyle(Color.textTertiary)
         .lineLimit(1)
-        .padding(.horizontal, Spacing.half)
     }
     .contentShape(Rectangle())
     .onTapGesture { send(.selectShot(tile.id)) }
@@ -61,17 +65,20 @@ struct ShotTileView: View {
     .animation(Motion.animation(Motion.zoom, reduceMotion: reduceMotion, reduced: Motion.reduced), value: isOpen)
   }
 
-  /// The thumbnail, ringed while the pointer is on it; its place, empty, while it is shown large.
+  /// The thumbnail at the screenshot's own shape, standing at the foot of its place, its edge brighter while the
+  /// pointer is on it; its place, empty, while it is shown large.
   @ViewBuilder private var picture: some View {
     if isOpen {
       Color.clear
-        .aspectRatio(ViewerLayout.placeholderAspect, contentMode: .fit)
     } else {
-      PictureTile(picture: tile.thumbnail, isSelected: tile.isSelected, isHighlighted: isHovered)
-        .aspectRatio(ViewerLayout.placeholderAspect, contentMode: .fit)
-        .shotZoom(id: tile.id, in: zoom)
-        .elevation(.resting)
-        .animation(Motion.hover(isHovered), value: isHovered)
+      ShotThumbnail(
+        picture: tile.thumbnail,
+        shape: tile.shape,
+        isSelected: tile.isSelected,
+        isHighlighted: isHovered,
+        zoom: (tile.id, zoom)
+      )
+      .animation(Motion.hover(isHovered), value: isHovered)
     }
   }
 }

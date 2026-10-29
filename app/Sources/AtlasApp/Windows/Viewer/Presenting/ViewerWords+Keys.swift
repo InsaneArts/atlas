@@ -1,7 +1,9 @@
-/// The Keys menu's headers.
+/// Send Key's words: its item and its headers.
 extension ViewerWords {
-  /// The Keys menu's first header: the keys this Mac would keep for itself.
+  /// The Helper menu's submenu of keys to send.
+  static let sendKeyItem = "Send Key"
+  /// Send Key's first header: the keys this Mac would keep for itself.
   static let macKeys = "Mac Shortcuts"
-  /// The Keys menu's second header: the keys an app would keep.
+  /// Send Key's second header: the keys an app would keep.
   static let appKeys = "App Shortcuts"
 }

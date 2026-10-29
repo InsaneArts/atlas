@@ -9,6 +9,8 @@ enum SymbolScale: CaseIterable, Sendable {
   case row
   /// 19: a tab's symbol over its word, such as Settings' tabs.
   case tab
+  /// 15: a title bar's symbol standing alone with no fill round it at rest, such as the sidebar's toggle.
+  case glyph
 
   /// The symbol's size in points.
   var pointSize: CGFloat {
@@ -16,6 +18,7 @@ enum SymbolScale: CaseIterable, Sendable {
     case .control: 13
     case .row: 12
     case .tab: 19
+    case .glyph: 15
     }
   }
 }

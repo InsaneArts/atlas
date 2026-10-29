@@ -73,7 +73,7 @@ struct PanelPresenterTests {
     #expect(!PanelPresenter.state(loggedOut).controls.main.isEnabled)
   }
 
-  @Test("stopped offers Resume in glass before Open Atlas, the pair working offers with Stop")
+  @Test("stopped offers Resume as the secondary button before Open Atlas, the pair working offers with Stop")
   func stoppedPairsResumeWithOpenAtlas() throws {
     let stopped = PanelPresenter.state(try Self.snapshot("Stopped")).controls
     #expect(stopped.agent == .resume(isEnabled: true))

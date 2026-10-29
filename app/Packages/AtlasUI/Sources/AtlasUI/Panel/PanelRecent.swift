@@ -20,7 +20,7 @@ struct PanelRecent: View {
           .buttonStyle(.textLink(.small))
           .help("Open every action in Atlas")
       }
-      .padding(.horizontal, Spacing.half)
+      .padding(.horizontal, PanelLayout.textInset)
       .padding(.bottom, Spacing.half)
       VStack(spacing: .zero) {
         // An entry's id is the service's id for the action, which holds as newer ones arrive.
@@ -63,7 +63,13 @@ struct PanelRecent: View {
       Button(String("New action")) {
         count += 1
         entries.insert(
-          PanelRecentEntry(id: "new-\(count)", line: "Clicked Save in Opie", when: "0 s", isLive: true),
+          PanelRecentEntry(
+            id: "new-\(count)",
+            icon: .app(.monogram(AppMonogram(name: "Opie"))),
+            line: "Clicked Save in Opie",
+            when: "0 s",
+            isLive: true
+          ),
           at: 0
         )
         entries = entries.prefix(3)

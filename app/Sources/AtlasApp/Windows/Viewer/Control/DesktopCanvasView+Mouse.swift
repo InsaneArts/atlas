@@ -2,7 +2,7 @@ import AppKit
 import AtlasService
 
 /// The mouse's side: presses, drags and releases of any button, movement and scrolling go to the helper while in
-/// control, and a right click never opens a menu here.
+/// control, and a right click never opens a menu here; out of control the canvas lets every press through.
 extension DesktopCanvasView {
   /// The button a mouse event is about.
   ///
@@ -104,6 +104,15 @@ extension DesktopCanvasView {
       at: location(event),
       in: bounds.size
     )
+  }
+
+  /// The canvas takes the pointer only while this window holds control; otherwise a press passes through to the
+  /// screen under it, so a right click there opens the screen's own menu.
+  ///
+  /// - Parameter point: The point, in the superview's coordinates.
+  /// - Returns: This view or one inside it while in control, else nil.
+  override func hitTest(_ point: NSPoint) -> NSView? {
+    controller?.holdingControl == true ? super.hitTest(point) : nil
   }
 
   /// A right click goes to the helper, never to a menu here.

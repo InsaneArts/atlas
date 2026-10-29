@@ -28,11 +28,15 @@ extension Motion {
       damping = 2 * ratio * sqrt(stiffness * mass)
     }
 
-    /// A check, a badge or a symbol popping in: ``Motion/Springs/pop``, 0.35 seconds with bounce 0.3.
+    /// A check, a badge or a symbol popping in: ``Motion/Springs/pop``, 0.35 seconds with bounce 0.15.
     public static let pop = LayerSpring(duration: Springs.pop.duration, bounce: Springs.pop.bounce)
 
     /// A window catching up with another it follows, such as the setup panel beside System Settings after a jump:
     /// ``Motion/Springs/arrive``, 0.25 seconds with no bounce.
     public static let catchUp = LayerSpring(duration: Springs.arrive.duration, bounce: Springs.arrive.bounce)
+
+    /// The live picture's corners following it as it moves between the stage and the small screen, so the layer's
+    /// corners and the view's clip land together: ``Motion/Springs/zoom``, 0.35 seconds with no bounce.
+    public static let zoom = LayerSpring(duration: Springs.zoom.duration, bounce: Springs.zoom.bounce)
   }
 }

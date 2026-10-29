@@ -7,8 +7,9 @@ import Observation
 /// The Activity, Apps and Screenshots tabs: each reads only while it shows and the window is on screen, one reading
 /// at a time on the injected clock, and a reply that arrives after its tab was left or the window hidden has no
 /// effect. Activity reads the log, and the screenshots with it while a screenshot's row can show its capture. Apps
-/// decodes each app's icon once off the main actor, and Show on screen outlines a window on the Screen tab and acts on
-/// nothing in the helper. Screenshots has the selection, which the arrows move and Esc clears, the large view with
+/// lists the helper's apps, and Show on screen outlines a window on the Screen tab and acts on nothing in the helper.
+/// The apps' icons, which Activity's rows and Apps' apps both want, are found once each, a couple at a time off the
+/// main actor (`ViewerPanesModel+Icons`). Screenshots has the selection, which the arrows move and Esc clears, the large view with
 /// Previous and Next, Copy, Save and Show in Finder: Copy and Save take the picture as taken, of the large screenshot
 /// or else the selected one, Save only where the person picks in a save panel, and Show in Finder shows only a listed
 /// screenshot in the folder the service names. The screenshots' thumbnails, which Activity's screenshot lines
@@ -36,10 +37,10 @@ final class ViewerPanesModel {
   /// request slots.
   static let thumbnailsAtOnce = 2
 
-  /// What the Activity, Apps and Screenshots tabs hold.
-  private(set) var panes = ViewerPanes()
+  /// What the Activity, Apps and Screenshots tabs hold, written by this model alone, here and in its extensions.
+  var panes = ViewerPanes()
 
-  /// The window these tabs belong to: whether it is on screen, the tab it shows, and its tab switch. Weak, as the
+  /// The window these tabs belong to: whether it is on screen, the place it shows, and its tab switch. Weak, as the
   /// window owns them.
   @ObservationIgnored private weak var viewer: ViewerController?
   /// The viewer service it reads.
@@ -54,6 +55,10 @@ final class ViewerPanesModel {
   @ObservationIgnored private(set) var work = ViewerPaneWork()
   /// What the window does once the sessions' list is read, before the next reading is waited for.
   @ObservationIgnored private let onSessionsRead: @MainActor (HostSessionList) async -> Void
+  /// Where the apps' icons are found and kept.
+  @ObservationIgnored let icons: AppIcons
+  /// The icon queue's working parts.
+  @ObservationIgnored var iconWork = ViewerIconWork()
 
   /// Creates tabs that have read nothing yet.
   ///
@@ -71,6 +76,7 @@ final class ViewerPanesModel {
     clock = dependencies.clock
     wallClock = dependencies.wallClock
     shotOutlet = dependencies.shotOutlet
+    icons = dependencies.icons
     self.onSessionsRead = onSessionsRead
   }
 
@@ -83,8 +89,8 @@ final class ViewerPanesModel {
     work.reading?.cancel()
     work.reading = nil
     let shown = viewer?.shown == true
-    let tab = viewer?.session.tab ?? .screen
-    if !shown || (tab != .activity && tab != .screenshots) {
+    let place = viewer?.session.place ?? .screen
+    if !shown || (place != .activity && place != .screenshots) {
       resetThumbnails()
     } else {
       work.thumbnails.wanted = work.thumbnails.wanted.filter { name in
@@ -93,25 +99,25 @@ final class ViewerPanesModel {
       readThumbnails()
     }
     followLarge()
-    guard shown, tab != .screen else { return }
+    guard shown, place != .screen else { return }
     let number = work.generation
     work.reading = Task { [weak self, clock] in
       while !Task.isCancelled {
         guard self?.work.generation == number else { return }
-        await self?.read(tab, number)
+        await self?.read(place, number)
         guard self?.work.generation == number, !Task.isCancelled else { return }
         // A cancelled pause ends at once, and the loop's condition ends the loop.
-        try? await clock.sleep(for: Self.pause(for: tab))
+        try? await clock.sleep(for: Self.pause(for: place))
       }
     }
   }
 
   /// The pause between a tab's readings.
   ///
-  /// - Parameter tab: The tab.
+  /// - Parameter place: The place.
   /// - Returns: Its pause.
-  static func pause(for tab: ViewerTab) -> Duration {
-    switch tab {
+  static func pause(for place: ViewerPlace) -> Duration {
+    switch place {
     case .activity: activityEvery
     case .apps: appsEvery
     case .screen, .screenshots: shotsEvery
@@ -121,10 +127,10 @@ final class ViewerPanesModel {
   /// One reading of a tab.
   ///
   /// - Parameters:
-  ///   - tab: The tab.
+  ///   - place: The place.
   ///   - number: The reading's generation; a newer one drops its reply.
-  func read(_ tab: ViewerTab, _ number: Int) async {
-    switch tab {
+  func read(_ place: ViewerPlace, _ number: Int) async {
+    switch place {
     case .activity: await readActivity(number)
     case .apps: await readApps(number)
     case .screenshots: await readShots(number)
@@ -137,9 +143,9 @@ final class ViewerPanesModel {
   /// - Parameter event: What the person did.
   func sendPane(_ event: ViewerEvent) {
     switch event {
-    case .searchActivity(let query): panes.activity.query = query
     case .filterActivity(let filter): panes.activity.filter = filter
-    case .searchApps(let query): panes.apps.query = query
+    case .toggleMoment(let id, let opens): panes.activity.choices[id] = opens
+    case .showMomentSteps(let id): panes.activity.expanded.insert(id)
     case .showWindow(let app, let window): showWindow(app: app, window: window)
     case .clearOutline: panes.apps.shown = nil
     case .shotColumns(let columns): if panes.shots.columns != columns { panes.shots.columns = columns }
@@ -229,6 +235,7 @@ final class ViewerPanesModel {
       panes.activity.log = log
       panes.activity.readAt = readAt
       panes.activity.failure = nil
+      wantIcons(for: log.entries)
       if let list { keep(list) }
       // What the tab now shows is seen, also while the picture, and with it the status, is paused.
       viewer?.noteActivitySeen()
@@ -238,37 +245,43 @@ final class ViewerPanesModel {
     }
   }
 
-  /// Reads the apps and decodes the icons not known yet. A reply overtaken by a newer start or stop has no effect; a
+  /// Reads the apps and wants the icons not found yet. A reply overtaken by a newer start or stop has no effect; a
   /// failure is kept to say only while nothing was read, and a cancelled request says nothing.
   ///
   /// - Parameter number: The reading's generation.
   func readApps(_ number: Int) async {
     do {
-      let apps = try await service.apps().apps
-      let icons = await Self.newIcons(apps, known: Set(panes.apps.icons.keys))
+      let list = try await service.apps()
       guard number == work.generation else { return }
-      panes.apps.apps = apps
-      panes.apps.icons.merge(icons) { _, new in new }
+      panes.apps.steadyWindows = Self.steadyWindows(list.apps, since: panes.apps.apps)
+      panes.apps.apps = list.apps
+      panes.apps.sessions = list.sessions
       panes.apps.failure = nil
+      wantIcons(for: list.apps)
     } catch {
       guard number == work.generation, !error.isCancelled else { return }
       panes.apps.failure = error.message
     }
   }
 
-  /// The icons of `apps` not yet known, decoded off the main actor.
+  /// The windows that stand where they stood in the reading before, at the same size, whose pictures may be cut
+  /// from the live picture.
   ///
   /// - Parameters:
-  ///   - apps: The apps read.
-  ///   - known: The icons decoded already, by what they are known by.
-  /// - Returns: The new icons, by what they are known by.
-  static func newIcons(_ apps: [HelperApp], known: Set<String>) async -> [String: IconImage] {
-    var icons: [String: IconImage] = [:]
-    for app in apps where !known.contains(app.iconID) && icons[app.iconID] == nil {
-      guard let png = app.icon, let image = await ImageDecoding.image(png) else { continue }
-      icons[app.iconID] = IconImage(id: app.iconID, image: image)
-    }
-    return icons
+  ///   - apps: The apps just read.
+  ///   - earlier: The apps the reading before listed; nil for none.
+  /// - Returns: The steady windows' numbers.
+  static func steadyWindows(_ apps: [HelperApp], since earlier: [HelperApp]?) -> Set<Int> {
+    let before = Dictionary(
+      (earlier ?? []).flatMap(\.windows)
+        .map { ($0.id, $0) },
+      uniquingKeysWith: { first, _ in first }
+    )
+    return Set(
+      apps.flatMap(\.windows)
+        .filter { window in before[window.id].map(window.standsAsBefore) ?? false }
+        .map(\.id)
+    )
   }
 
   /// Show on screen: outlines a window as it is now and shows the Screen tab. View-only: nothing goes to the helper.
@@ -280,8 +293,8 @@ final class ViewerPanesModel {
     guard let app = panes.apps.apps?.first(where: { $0.pid == pid }),
       let window = app.windows.first(where: { $0.id == id })
     else { return }
-    panes.apps.shown = ViewerShownWindow(app: app.name, icon: app.icon == nil ? nil : app.iconID, window: window)
-    viewer?.selectTab(.screen)
+    panes.apps.shown = ViewerShownWindow(app: app.name, bundleId: app.bundleId, window: window)
+    viewer?.show(.screen)
   }
 
   /// Reads the screenshots and their folder. A reply overtaken by a newer start or stop has no effect; a failure is
@@ -318,7 +331,7 @@ final class ViewerPanesModel {
   /// - Parameter name: The screenshot's file name.
   func openShot(_ name: String) {
     guard let viewer else { return }
-    if viewer.session.tab != .screenshots { viewer.selectTab(.screenshots) }
+    if viewer.session.place != .screenshots { viewer.show(.screenshots) }
     select(name)
     showLarge(name)
   }
@@ -337,15 +350,6 @@ final class ViewerPanesModel {
     panes.shots.navigationColumn = nil
     panes.shots.selected = nil
     panes.shots.selectionCleared = true
-  }
-
-  /// Find: the search field of the tab shown takes the focus, Activity's or Apps'.
-  func find() {
-    switch viewer?.session.tab {
-    case .activity: panes.activity.findRequests += 1
-    case .apps: panes.apps.findRequests += 1
-    default: return
-    }
   }
 
   /// Space: closes the large view, or shows the selected screenshot large.
@@ -469,7 +473,7 @@ final class ViewerPanesModel {
   /// on screen again, or with each reading of the screenshots, a screenshot still large and not yet read is read
   /// again.
   private func followLarge() {
-    if viewer?.shown != true || viewer?.session.tab != .screenshots {
+    if viewer?.shown != true || viewer?.session.place != .screenshots {
       stopLargeLoad()
     } else if let name = panes.shots.large, panes.shots.full == nil, work.large.load == nil {
       loadLarge(name)
@@ -524,9 +528,22 @@ final class ViewerPanesModel {
     readThumbnails()
   }
 
-  /// Starts the waiting thumbnails, oldest first, while fewer than ``thumbnailsAtOnce`` are being read.
+  /// Holds new thumbnail reads while the window is being resized, so tiles coming into view as it changes wait in turn
+  /// rather than read in a burst; once it ends, those waiting are read.
+  ///
+  /// - Parameter held: Whether new reads wait.
+  func holdThumbnails(_ held: Bool) {
+    guard work.thumbnails.isHeld != held else { return }
+    work.thumbnails.isHeld = held
+    if !held { readThumbnails() }
+  }
+
+  /// Starts the waiting thumbnails, oldest first, while fewer than ``thumbnailsAtOnce`` are being read, unless reads
+  /// are held.
   private func readThumbnails() {
-    while work.thumbnails.loading.count < Self.thumbnailsAtOnce, !work.thumbnails.wanted.isEmpty {
+    while !work.thumbnails.isHeld, work.thumbnails.loading.count < Self.thumbnailsAtOnce,
+      !work.thumbnails.wanted.isEmpty
+    {
       let name = work.thumbnails.wanted.removeFirst()
       let number = work.thumbnails.generation
       work.thumbnails.loading[name] = Task { [weak self, service] in

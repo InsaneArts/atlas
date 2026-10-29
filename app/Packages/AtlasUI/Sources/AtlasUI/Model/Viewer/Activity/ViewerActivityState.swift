@@ -1,64 +1,51 @@
-/// The Activity pane: its title, how many actions were done today, the search and the filters, and the lines in their
-/// groups, by time or by host session, or why there are none.
+/// The Activity pane: whose work it lists and how much was done today for VoiceOver, the filters, and the moments with
+/// their steps as one flat list, or why there are none. The sidebar's search narrows the steps.
 public struct ViewerActivityState: Equatable, Sendable {
-  /// The most lines a host session's group lists before Show all.
-  public static let mostSessionLines = ViewerLayout.groupLines
-
-  /// The pane's title: "Activity", or the chosen session's name.
+  /// What VoiceOver calls the pane: "Activity", or the chosen session's name.
   public var title: String
-  /// The chosen session's icon before the title; nil for none.
-  public var titleIcon: RowIcon?
-  /// The note beside the title, such as "38 actions today"; empty while the log holds nothing.
+  /// What VoiceOver says of it, such as "38 actions today"; empty while the log holds nothing.
   public var meta: String
-  /// The search, as the person typed it.
-  public var query: String
   /// The filters, and which one is chosen.
   public var filters: CapsuleTabsState<ViewerActivityFilter>
-  /// The lines in their groups, newest first.
-  public var groups: [ViewerActivityGroup]
-  /// The lines under each host session, drawn in place of ``groups`` while there are any.
-  public var sessions: [ViewerActivitySessionGroup]
-  /// Why no line shows, in place of them; nil while lines show or before the first reading.
+  /// The days, moments, steps and "Show more" rows, in the order they draw, newest first.
+  public var items: [ViewerActivityItem]
+  /// Why nothing shows, in place of the items; nil while items show or before the first reading.
   public var empty: EmptyMessageState?
-  /// Whether the log holds anything to search or filter, so the search and the filters show.
-  public var isSearchable: Bool
-  /// Counts Find's asks for the search field's focus while the pane shows.
-  public var findRequests: Int
+  /// Whether the log holds anything to filter, so the filters show.
+  public var showsFilters: Bool
 
   /// Creates the Activity pane's state.
   ///
   /// - Parameters:
-  ///   - title: The pane's title; "Activity" by default.
-  ///   - titleIcon: The chosen session's icon; none by default.
-  ///   - meta: The note beside the title.
-  ///   - query: The search.
+  ///   - title: What VoiceOver calls the pane; "Activity" by default.
+  ///   - meta: What VoiceOver says of it.
   ///   - filters: The filters, and which one is chosen.
-  ///   - groups: The lines in their groups.
-  ///   - sessions: The lines under each host session; none by default.
-  ///   - empty: Why no line shows.
-  ///   - isSearchable: Whether the search and the filters show; they do by default.
-  ///   - findRequests: Find's asks counted; none by default.
+  ///   - items: The days, moments, steps and "Show more" rows.
+  ///   - empty: Why nothing shows.
+  ///   - showsFilters: Whether the filters show; they do by default.
   public init(
     title: String = "Activity",
-    titleIcon: RowIcon? = nil,
     meta: String,
-    query: String,
     filters: CapsuleTabsState<ViewerActivityFilter>,
-    groups: [ViewerActivityGroup],
-    sessions: [ViewerActivitySessionGroup] = [],
+    items: [ViewerActivityItem],
     empty: EmptyMessageState? = nil,
-    isSearchable: Bool = true,
-    findRequests: Int = 0
+    showsFilters: Bool = true
   ) {
     self.title = title
-    self.titleIcon = titleIcon
     self.meta = meta
-    self.query = query
     self.filters = filters
-    self.groups = groups
-    self.sessions = sessions
+    self.items = items
     self.empty = empty
-    self.isSearchable = isSearchable
-    self.findRequests = findRequests
+    self.showsFilters = showsFilters
+  }
+
+  /// The newest step's identity, whose change is a new step arriving at the top.
+  public var newest: String? {
+    items.lazy
+      .compactMap { item -> String? in
+        if case .step(let step) = item { return step.id }
+        return nil
+      }
+      .first
   }
 }

@@ -1,7 +1,7 @@
 import SwiftUI
 
-/// An alert as macOS 26 draws one: Atlas's icon, a bold title, what it means, and its capsule buttons, on a
-/// near-opaque modal surface with a fine top highlight, opaque under Reduce Transparency. Short labels sit
+/// An alert as macOS 26 draws one: Atlas's icon, a bold title, what it means, and its capsule buttons, on an opaque
+/// modal surface with a fine top highlight, lifted off the scrim by its shadow. Short labels sit
 /// side by side with the default on the right; a long one stacks them with the default on top. Return presses
 /// the default and Escape the way out. Its command shows in place: a spinner beside the word of the button
 /// that runs it while the others wait, a refusal as a problem line with one shake, and once done the done
@@ -24,7 +24,7 @@ struct AlertCard<ID: Hashable & Sendable>: View {
   @State private var refusals = 0
   @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
-  /// The icon, the title, the message and the buttons, on the glass.
+  /// The icon, the title, the message and the buttons, on the modal surface.
   var body: some View {
     VStack(spacing: .zero) {
       AppIcon(tile: AlertCardLayout.icon)
@@ -40,7 +40,7 @@ struct AlertCard<ID: Hashable & Sendable>: View {
     .padding(.top, Spacing.xl)
     .padding([.horizontal, .bottom], Spacing.l)
     .frame(width: AlertCardLayout.width)
-    .glass(.thick, in: shape)
+    .surface(.modal, in: shape)
     .overlay(edge)
     .background { CutoutShadow(shape: shape, level: .modal) }
     .shakes(refusals)
@@ -54,10 +54,10 @@ struct AlertCard<ID: Hashable & Sendable>: View {
 
   /// The card's outline.
   private var shape: RoundedRectangle {
-    RoundedRectangle(cornerRadius: Radius.extraLarge)
+    RoundedRectangle(cornerRadius: Radius.extraLarge, style: .continuous)
   }
 
-  /// The glass's edge: a hairline all round, and a brighter one along the top that fades by the corners' end.
+  /// The surface's edge: a hairline all round, and a brighter one along the top that fades by the corners' end.
   private var edge: some View {
     ZStack {
       shape

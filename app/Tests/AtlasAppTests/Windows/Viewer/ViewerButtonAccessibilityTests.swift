@@ -7,7 +7,7 @@ import Testing
 struct ViewerButtonAccessibilityTests {
   @Test("Give Back and both agent actions expose the full menu names regardless of their shortened visible titles")
   func fullActionNames() throws {
-    let control = try #require(PreviewStates.viewerControl.top.actions.control)
+    let control = try #require(PreviewStates.viewerControl.footer.controls.control)
     #expect(control.title == "Give Back")
     #expect(control.accessibilityLabel == "Give Back Control")
     #expect(control.accessibilityLabel == ViewerWords.giveBackItem)

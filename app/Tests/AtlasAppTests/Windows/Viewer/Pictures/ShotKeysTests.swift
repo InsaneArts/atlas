@@ -45,4 +45,15 @@ struct ShotKeysTests {
         == nil
     )
   }
+
+  @Test("Escape puts away the sidebar shown over the card, but not while this window holds control")
+  func escapePutsAwayTheSidebarOverTheCard() {
+    #expect(
+      ShotKeys.overlayEvent(keyCode: ShotKeys.escape, hasModifiers: false, holdingControl: false)
+        == .dismissSidebarOverlay
+    )
+    #expect(ShotKeys.overlayEvent(keyCode: ShotKeys.escape, hasModifiers: false, holdingControl: true) == nil)
+    #expect(ShotKeys.overlayEvent(keyCode: ShotKeys.escape, hasModifiers: true, holdingControl: false) == nil)
+    #expect(ShotKeys.overlayEvent(keyCode: ShotKeys.space, hasModifiers: false, holdingControl: false) == nil)
+  }
 }

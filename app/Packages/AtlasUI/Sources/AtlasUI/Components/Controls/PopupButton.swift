@@ -1,7 +1,7 @@
 import SwiftUI
 
-/// A small popup button, as a settings row ends with one: the choice's word and a chevron on a glass fill, opening
-/// the choices as a menu with the current one checked.
+/// A small popup button, as a settings row ends with one: the choice's word and a chevron on a quiet capsule with no
+/// edge, opening the choices as a menu with the current one checked.
 struct PopupButton<Value: Hashable & Sendable>: View {
   /// The popup's name, which VoiceOver reads, such as "Picture".
   let label: String
@@ -31,18 +31,13 @@ struct PopupButton<Value: Hashable & Sendable>: View {
           .accessibilityHidden(true)
       }
       .foregroundStyle(Color.textPrimary)
-      .padding(.leading, Spacing.sPlus)
-      .padding(.trailing, Spacing.s)
+      .padding(.horizontal, Spacing.sPlus)
       .frame(height: ControlHeight.xs)
       .background(
-        RoundedRectangle(cornerRadius: Radius.extraSmall)
+        Capsule()
           .fill(Color.fillControl)
       )
-      .overlay(
-        RoundedRectangle(cornerRadius: Radius.extraSmall)
-          .strokeBorder(Color.strokeStrong, lineWidth: Stroke.hairline)
-      )
-      .contentShape(RoundedRectangle(cornerRadius: Radius.extraSmall))
+      .contentShape(Capsule())
     }
     .menuStyle(.button)
     .buttonStyle(.plain)

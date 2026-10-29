@@ -3,7 +3,7 @@ import AtlasStatus
 import AtlasUI
 
 extension Mode {
-  /// The button for agents, as the main window's top row and the menu bar panel both offer it: Stop while an agent
+  /// The button for agents, as the main window's footer and the menu bar panel both offer it: Stop while an agent
   /// acts, or acted a moment ago, Resume once the person stopped agents, waiting while `isBusy`. While the person holds
   /// control, here or elsewhere, Stop follows ``ViewerStatus/Overview/offersStop(holdingControl:)`` and Resume is not
   /// offered.

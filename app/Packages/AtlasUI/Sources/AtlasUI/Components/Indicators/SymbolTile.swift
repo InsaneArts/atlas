@@ -38,7 +38,7 @@ struct SymbolTile: View {
       .foregroundStyle(foreground)
       .frame(width: side, height: side)
       .background(
-        RoundedRectangle(cornerRadius: Radius.extraSmall)
+        RoundedRectangle(cornerRadius: Radius.extraSmall, style: .continuous)
           .fill(fill)
       )
       .accessibilityHidden(true)

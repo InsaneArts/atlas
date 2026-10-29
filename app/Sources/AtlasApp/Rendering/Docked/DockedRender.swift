@@ -69,7 +69,7 @@
             .anchorPreference(key: DragIconAnchor.self, value: .bounds) { $0 }
         ) { _ in }
         .frame(width: panel.width, height: panel.height)
-        .clipShape(RoundedRectangle(cornerRadius: 12))
+        .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
       }
       .padding(margin)
       .frame(width: size.width, height: size.height, alignment: .topLeading)

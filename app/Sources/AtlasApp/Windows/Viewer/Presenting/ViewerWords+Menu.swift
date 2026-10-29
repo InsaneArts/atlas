@@ -1,11 +1,32 @@
 import AtlasUI
 
-/// The main menu's words: the View and Helper menus' items that change with the window, Find, and each tab's word.
+/// The menus' words: the View, Session and Helper menus' items, those of a session's and the helper line's menus, and
+/// each place's word.
 extension ViewerWords {
-  /// The View menu's item while Details is hidden, and the Details button's name.
-  static let showDetailsItem = "Show Details"
-  /// The View menu's item while Details shows, and the Details button's name.
-  static let hideDetailsItem = "Hide Details"
+  /// The Session menu.
+  static let sessionMenu = "Session"
+  /// The Session menu's item that shows every session's work.
+  static let allSessionsItem = "All Sessions"
+  /// The Session menu's item that chooses the session over the one chosen.
+  static let previousSessionItem = "Previous Session"
+  /// The Session menu's item that chooses the session under the one chosen.
+  static let nextSessionItem = "Next Session"
+  /// The Session menu's item, ticked while Ended lists every session that ended.
+  static let showEndedItem = "Show Ended Sessions"
+  /// A session's menu's item that shows its work in Activity.
+  static let showActivity = "Show Activity"
+  /// A session's menu's item that shows its screenshots.
+  static let showScreenshots = "Show Screenshots"
+  /// The heading over a session's facts in its menu.
+  static let details = "Details"
+  /// The Helper menu's and the helper line's item that reads the helper's status now.
+  static let checkAgainItem = "Check Again"
+  /// The Helper menu's and the helper line's item that opens Settings on Helper.
+  static let openSettingsItem = "Open Settings on Helper…"
+  /// The View menu's item while the sidebar shows.
+  static let hideSidebarItem = "Hide Sidebar"
+  /// The View menu's item while the sidebar is hidden.
+  static let showSidebarItem = "Show Sidebar"
   /// The View menu's actual size item.
   static let actualSizeItem = "Actual Size"
   /// The View menu's full screen item, which the system renames while in full screen.
@@ -17,12 +38,12 @@ extension ViewerWords {
   /// The Helper menu's item while this window holds control.
   static let giveBackItem = HelperActionNames.giveBack
 
-  /// A tab's word, in the top row and the View menu.
+  /// A place's word, in the Library and the View menu.
   ///
-  /// - Parameter tab: The tab.
+  /// - Parameter place: The place.
   /// - Returns: "Screen", "Activity", "Apps" or "Screenshots".
-  static func tab(_ tab: ViewerTab) -> String {
-    switch tab {
+  static func place(_ place: ViewerPlace) -> String {
+    switch place {
     case .screen: "Screen"
     case .activity: "Activity"
     case .apps: "Apps"

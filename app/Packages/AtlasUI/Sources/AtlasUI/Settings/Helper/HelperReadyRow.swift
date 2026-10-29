@@ -26,7 +26,7 @@ struct HelperReadyRow: View {
     ) {
       if row.offersRecover {
         Button("Recover…", action: recover)
-          .buttonStyle(.capsule(.glass, size: .mini))
+          .buttonStyle(.capsule(.secondary, size: .mini))
           .disabled(!buttons.canRecover)
           .help("Check the helper and start its mouse and keyboard again")
       }

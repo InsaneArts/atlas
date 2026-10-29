@@ -7,17 +7,38 @@ import Testing
 
 @Suite("PanelPresenter+Sessions")
 struct PanelPresenterSessionsTests {
-  @Test("one session keeps Recent, and so does a status that names no session")
-  func oneSessionKeepsRecent() throws {
+  @Test("one live session takes Recent's place, and a status that names no session keeps Recent")
+  func oneSessionTakesRecentsPlace() throws {
     let one = PanelPresenter.state(try SessionReplies.snapshot([SessionReplies.claudeActing]))
-    #expect(one.sessions.isEmpty && one.moreSessions == nil)
-    #expect(one.recent.map(\.line) == ["Clicking Show Center in Opie"])
+    #expect(one.recent.isEmpty)
+    #expect(one.sessions.map(\.name) == ["Claude Code · understudy"])
+    #expect(one.sessions.map(\.line) == ["Clicking Show Center in Opie"])
+    #expect(one.sessions.map(\.icon) == [.app(AgentLogos.claude)])
+    #expect(one.moreSessions == nil)
     #expect(one.status.line == "Clicking Show Center in Opie · just now", "the line names no session")
     #expect(one.picture.caption?.icon == nil, "the caption keeps its blue dot")
     let older = PanelPresenter.state(
       PanelSnapshot(status: try status(["overview": ["mode": "agent", "state": "working"]]))
     )
     #expect(older.sessions.isEmpty)
+    #expect(older.moreSessions == nil)
+  }
+
+  @Test("an ended session alone keeps Recent")
+  func anEndedSessionAloneKeepsRecent() throws {
+    var ended = SessionReplies.cursorIdle
+    ended["state"] = "ended"
+    ended["live"] = false
+    let panel = PanelPresenter.state(try SessionReplies.snapshot([ended]))
+    #expect(panel.sessions.isEmpty)
+    #expect(panel.recent.map(\.line) == ["Clicking Show Center in Opie"])
+  }
+
+  @Test("one live session listed past its row still counts the rest")
+  func oneListedSessionStillCountsTheRest() throws {
+    let panel = PanelPresenter.state(try SessionReplies.snapshot([SessionReplies.claudeActing], more: 2))
+    #expect(panel.sessions.count == 1)
+    #expect(panel.moreSessions == "+2 more", "the two the service did not list")
   }
 
   @Test("Sessions take Recent's place with each session's line, state and icon, in the service's order")

@@ -69,7 +69,7 @@ struct PanelControllerTests {
 
   @Test("the picture opens the main window on Screen and Open Atlas on the tab it shows")
   func theOpenersOpenTheirTabs() {
-    var opened: [ViewerTab?] = []
+    var opened: [ViewerPlace?] = []
     let controller = PanelController.scripted(links: PanelLinks(openViewer: { opened.append($0) }))
     controller.send(.openScreen)
     controller.send(.openAtlas)

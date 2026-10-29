@@ -2,7 +2,7 @@
 public struct MiniScreenState: Equatable, Sendable {
   /// The latest picture.
   public var picture: DesktopPicture
-  /// Whether the picture is paused, which draws it faded with "Paused" in place of "Live".
+  /// Whether the picture is paused, which draws it faded.
   public var isPaused: Bool
 
   /// How the picture is drawn: paused, or live.

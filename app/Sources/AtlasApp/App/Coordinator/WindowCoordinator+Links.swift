@@ -10,13 +10,13 @@ extension WindowCoordinator {
   /// - Returns: The links.
   func panelLinks() -> PanelLinks {
     PanelLinks(
-      openViewer: { [weak self] tab in
+      openViewer: { [weak self] place in
         self?.parts?.closePanel()
-        self?.openViewer(tab: tab)
+        self?.openViewer(place: place)
       },
       openSessions: { [weak self] choice in
         self?.parts?.closePanel()
-        self?.openViewer(tab: .activity, session: choice)
+        self?.openViewer(place: .activity, session: choice)
       },
       openSettings: { [weak self] in
         self?.parts?.closePanel()

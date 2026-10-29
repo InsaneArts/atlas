@@ -12,7 +12,7 @@ extension View {
 
 #if DEBUG
   #Preview("Stage") {
-    RoundedRectangle(cornerRadius: Radius.large)
+    RoundedRectangle(cornerRadius: Radius.large, style: .continuous)
       .fill(Color.fillCard)
       .frame(width: SampleWidth.narrow, height: SampleWidth.narrow / 2)
       .elevation(.raised)

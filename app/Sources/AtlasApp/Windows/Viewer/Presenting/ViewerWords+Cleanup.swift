@@ -6,12 +6,14 @@ import AtlasService
 extension ViewerWords {
   /// The alert's title.
   static let cleanupTitle = "Clean up this session's work?"
-  /// The button last in the session's part of Details.
+  /// The item in a session's menu and the Session menu.
   static let cleanUpSession = "Clean Up This Session's Work…"
   /// The alert's red button.
   static let cleanupButton = "Clean Up"
-  /// What VoiceOver hears for Clean Up while it runs.
+  /// What the alert says while its cleanup runs.
   static let cleaningUp = "Cleaning Up…"
+  /// A session's line while its work is cleaned up.
+  static let cleaningUpLine = "Cleaning up…"
   /// The alert's warning while the session acted in the last few minutes, or its host still runs.
   static let mayStillBeWorking = "This session may still be working."
   /// The alert's one line when every step is left from a cleanup that did not finish before.
@@ -21,7 +23,7 @@ extension ViewerWords {
   /// The notice once every step is done, or kept on purpose.
   static let cleanedUp = "Cleaned up this session's work."
   /// The notice when a step failed or did not run.
-  static let cleanupUnfinished = "The cleanup didn't finish. Details lists each step."
+  static let cleanupUnfinished = "The cleanup didn't finish. The session's tooltip lists each step."
   /// The notice when Atlas does not know whether a step worked, which Recover settles before cleaning up again.
   static let cleanupUncertain =
     "Atlas doesn't know whether the last step finished. Recover the helper first, then clean up again."
@@ -34,7 +36,7 @@ extension ViewerWords {
   static let cleanupJobsUnreached =
     "Atlas couldn't reach the helper to stop a background job. Recover the helper, then clean up again."
   /// The notice when the cleanup's reply never came: it may still run, and the button waits until it ended.
-  static let cleanupUnanswered = "The cleanup is taking a while. Details shows each step once it ends."
+  static let cleanupUnanswered = "The cleanup is taking a while. The session's tooltip lists each step once it ends."
 
   /// The alert's sentence: a line for each thing it does, then the warning after a blank line.
   ///

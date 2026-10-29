@@ -15,7 +15,7 @@ struct AboutUpdateButton: View {
       switch update {
       case .check, .checking:
         button
-          .buttonStyle(.capsule(.glass, size: .mini))
+          .buttonStyle(.capsule(.secondary, size: .mini))
       case .install, .installing:
         button
           .buttonStyle(.capsule(.accent, size: .mini))
@@ -31,7 +31,8 @@ struct AboutUpdateButton: View {
       if let event = update.event { send(event) }
     } label: {
       ZStack {
-        // Reserve the widest title without tracking, so glass and accent keep one width despite their letter spacing.
+        // Reserve the widest title without tracking, so secondary and accent keep one width despite their letter
+        // spacing.
         ForEach(SettingsUpdateButton.titles, id: \.self) { title in
           Text(title)
             .tracking(.zero)

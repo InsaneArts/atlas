@@ -33,8 +33,8 @@ struct PanelRenderOverridesTests {
   }
 
   @Test(
-    "each sessions render lists its sessions, and one session reads as the panel always has",
-    arguments: zip(PanelRender.sessions, [0, 2, 3, 3, 3])
+    "each sessions render lists its sessions, one session included, in Recent's place",
+    arguments: zip(PanelRender.sessions, [1, 2, 3, 3, 3])
   )
   func eachSessionsRenderListsItsSessions(sessions: String, rows: Int) {
     let mode = sessions == "needsYou" ? "recovering" : "agent"
@@ -44,7 +44,7 @@ struct PanelRenderOverridesTests {
     .applied(to: PanelSnapshot())
     let panel = PanelPresenter.state(shown)
     #expect(panel.sessions.count == rows)
-    #expect(panel.recent.isEmpty == (rows > 0))
+    #expect(panel.recent.isEmpty)
     #expect((panel.moreSessions != nil) == (sessions == "more"))
   }
 }

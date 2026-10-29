@@ -1,6 +1,6 @@
 import SwiftUI
 
-/// A caption's words on glass, led by its session's icon while sessions show: one line for the captions over the
+/// A caption's words on a solid chip, led by its session's icon while sessions show: one line for the captions over the
 /// main window's screen and the panel's picture alike, cut short at its end.
 struct CaptionLine: View {
   /// The session's icon; nil for none.
@@ -29,10 +29,10 @@ private enum Layout {
 #if DEBUG
   #Preview("Samples") {
     VStack(alignment: .leading, spacing: Spacing.m) {
-      GlassChip(lead: .dot(.active)) {
+      PictureChip(lead: .dot(.active)) {
         CaptionLine(icon: SessionSamples.claudeIcon, text: SessionSamples.claudeDoing)
       }
-      GlassChip(lead: .dot(.active), size: .small) {
+      PictureChip(lead: .dot(.active), size: .small) {
         CaptionLine(icon: nil, text: SessionSamples.claudeDoing)
       }
     }

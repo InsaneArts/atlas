@@ -12,8 +12,8 @@ public struct PanelState: Equatable, Sendable {
   public var picture: PanelPictureState
   /// The newest actions, newest first, at most three; empty hides Recent.
   public var recent: [PanelRecentEntry]
-  /// The live host sessions, at most ``mostSessions``, while two or more are live; when there are any, they take
-  /// Recent's place, whatever `recent` holds.
+  /// The live host sessions, at most ``mostSessions``, while any is live; when there are any, they take Recent's
+  /// place, whatever `recent` holds.
   public var sessions: [PanelSessionEntry]
   /// The row under the sessions that opens every one, such as "+2 more", while there are more than the rows show;
   /// nil for none.

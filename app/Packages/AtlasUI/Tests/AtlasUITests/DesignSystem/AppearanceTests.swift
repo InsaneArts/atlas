@@ -9,19 +9,20 @@ import Testing
 struct AppearanceTests {
   /// The tokens drawn on a window, each of which must change with the Mac's appearance.
   private static let adaptive: [(name: String, colour: Color)] = [
-    ("ground", .ground), ("textPrimary", .textPrimary), ("textSecondary", .textSecondary),
+    ("ground", .ground), ("groundRecessed", .groundRecessed), ("fillContent", .fillContent),
+    ("strokeContent", .strokeContent), ("textPrimary", .textPrimary), ("textSecondary", .textSecondary),
     ("textTertiary", .textTertiary), ("textPlaceholder", .textPlaceholder), ("accent", .accent),
     ("accentHover", .accentHover), ("accentPressed", .accentPressed), ("accentWash", .accentWash),
     ("success", .success), ("textSuccess", .textSuccess), ("attention", .attention),
-    ("textAttention", .textAttention), ("textLink", .textLink), ("textOnGlass", .textOnGlass),
+    ("textAttention", .textAttention), ("textLink", .textLink), ("textOnModal", .textOnModal),
     ("textDestructive", .textDestructive), ("fillQuiet", .fillQuiet), ("fillCard", .fillCard),
-    ("fillGroup", .fillGroup), ("fillRowHover", .fillRowHover), ("fillPinned", .fillPinned),
+    ("fillGroup", .fillGroup), ("fillRowHover", .fillRowHover), ("fillTile", .fillTile),
+    ("fillTileRaised", .fillTileRaised),
     ("fillControl", .fillControl), ("fillControlHover", .fillControlHover), ("fillControlOn", .fillControlOn),
     ("fillControlRaised", .fillControlRaised), ("fillPrimaryHover", .fillPrimaryHover),
     ("fillPrimaryPressed", .fillPrimaryPressed), ("fillPill", .fillPill), ("fillAvatar", .fillAvatar),
-    ("fillTrack", .fillTrack), ("fillTrackDone", .fillTrackDone), ("fillChip", .fillChip), ("scrim", .scrim),
-    ("fillPlaceholder", .fillPlaceholder), ("fillModalSolid", .fillModalSolid),
-    ("fillFloatingSolid", .fillFloatingSolid), ("fillGlass", .fillGlass), ("fillGlassThick", .fillGlassThick),
+    ("fillTrack", .fillTrack), ("fillTrackDone", .fillTrackDone), ("scrim", .scrim),
+    ("fillPlaceholder", .fillPlaceholder), ("fillModal", .fillModal), ("fillFloating", .fillFloating),
     ("separator", .separator), ("strokeRail", .strokeRail), ("strokeStrong", .strokeStrong),
     ("strokeHighlight", .strokeHighlight), ("strokeSelected", .strokeSelected), ("strokePressed", .strokePressed),
     ("strokeControl", .strokeControl), ("strokeHover", .strokeHover), ("strokeShade", .strokeShade),
@@ -30,25 +31,27 @@ struct AppearanceTests {
   ]
 
   /// The tokens that are the same in either appearance: the brands', the black around the helper's screen, the
-  /// hand over it and the inks on the status colours.
+  /// controls and the hand over it, and the inks on the status colours.
   private static let fixed: [(name: String, colour: Color)] = [
     ("brandOpencodeTop", .brandOpencodeTop), ("brandPiCoral", .brandPiCoral), ("brandWhite", .brandWhite),
     ("letterbox", .letterbox), ("fillHand", .fillHand), ("onAccent", .onAccent), ("onSuccess", .onSuccess),
-    ("onAttention", .onAttention),
+    ("onAttention", .onAttention), ("fillOverPicture", .fillOverPicture),
+    ("fillOverPictureHover", .fillOverPictureHover), ("fillOverPictureOn", .fillOverPictureOn),
+    ("textOverPicture", .textOverPicture),
   ]
 
   /// The text tokens, which must read at WCAG AA, 4.5 to 1, on every ground they sit on.
   private static let texts: [(name: String, colour: Color)] = [
     ("textPrimary", .textPrimary), ("textSecondary", .textSecondary), ("textTertiary", .textTertiary),
     ("textLink", .textLink), ("textAttention", .textAttention), ("textSuccess", .textSuccess),
-    ("textDestructive", .textDestructive), ("textOnGlass", .textOnGlass),
+    ("textDestructive", .textDestructive), ("textOnModal", .textOnModal),
   ]
 
-  /// The grounds text sits on, each laid over the window's ground: the window, a card, a grouped list, the panel
-  /// and an alert.
+  /// The grounds text sits on, each laid over the window's ground: the window, the recessed ground and the card on
+  /// it, a card, a grouped list, the panel and an alert.
   private static let grounds: [(name: String, colour: Color)] = [
-    ("ground", .ground), ("fillCard", .fillCard), ("fillGroup", .fillGroup), ("panelGround", PanelLayout.ground),
-    ("fillGlassThick", .fillGlassThick),
+    ("ground", .ground), ("groundRecessed", .groundRecessed), ("fillContent", .fillContent), ("fillCard", .fillCard),
+    ("fillGroup", .fillGroup), ("panelGround", PanelLayout.ground), ("fillModal", .fillModal),
   ]
 
   @Test("every token on a window resolves to a different colour in the light and the dark")
@@ -82,6 +85,16 @@ struct AppearanceTests {
           #expect(ratio >= 4.5, "\(text) on \(ground) in \(window): \(ratio)")
         }
       }
+    }
+  }
+
+  @Test("a control's word over a picture reads at WCAG AA on its resting, hovered and held fills")
+  func aControlOverAPictureReads() {
+    let word = Color.textOverPicture
+      .resolve(in: .light)
+    for fill in [Color.fillOverPicture, .fillOverPictureHover, .fillOverPictureOn] {
+      let ratio = Self.contrast(word, fill.resolve(in: .light))
+      #expect(ratio >= 4.5, "\(ratio)")
     }
   }
 

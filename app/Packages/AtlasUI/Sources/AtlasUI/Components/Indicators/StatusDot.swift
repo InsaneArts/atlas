@@ -38,7 +38,7 @@ struct StatusDot: View {
   @ViewBuilder private var shape: some View {
     switch mark {
     case .square:
-      RoundedRectangle(cornerRadius: Layout.squareCorner)
+      RoundedRectangle(cornerRadius: Layout.squareCorner, style: .continuous)
         .fill(tone.color)
     case .dot, .pulsing, .small:
       Circle()

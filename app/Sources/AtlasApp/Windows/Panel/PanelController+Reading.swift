@@ -86,6 +86,7 @@ extension PanelController {
     status = latest ?? ViewerStatus()
     answered = latest != nil
     links.read(latest)
+    wantRecentIcons()
   }
 
   /// Reads the picture, under the same rule, decoding it off the main actor (``ImageDecoding``); a reading overtaken

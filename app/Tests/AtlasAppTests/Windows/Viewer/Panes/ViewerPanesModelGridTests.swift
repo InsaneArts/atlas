@@ -30,7 +30,7 @@ struct ViewerPanesModelGridTests {
       .map { index, name in Screenshot(name: name, takenAt: Date(timeIntervalSince1970: 1_792_665_150 - Double(index)))
       }
     let viewer = try await ViewerController.watching(service, shotOutlet: shotOutlet)
-    viewer.send(.selectTab(.screenshots))
+    viewer.send(.show(.screenshots))
     try await settle("the screenshots were never read") { viewer.panes.shots.shots != nil }
     viewer.send(.shotColumns(2))
     return viewer
@@ -53,7 +53,7 @@ struct ViewerPanesModelGridTests {
       }
     let viewer = try await ViewerController.watching(service, wallClock: { now })
     defer { viewer.close() }
-    viewer.send(.selectTab(.screenshots))
+    viewer.send(.show(.screenshots))
     try await settle("the screenshots were never read") { viewer.panes.shots.shots != nil }
     viewer.send(.shotColumns(2))
     #expect(ViewerPresenter.shots(viewer.snapshot).days.map { $0.shots.count } == counts)
@@ -82,7 +82,7 @@ struct ViewerPanesModelGridTests {
     ]
     let viewer = try await ViewerController.watching(service)
     defer { viewer.close() }
-    viewer.send(.selectTab(.screenshots))
+    viewer.send(.show(.screenshots))
     try await settle("the screenshots were never read") { viewer.panes.shots.shots != nil }
     viewer.send(.shotColumns(2))
     viewer.send(.shotBelow)
@@ -144,29 +144,13 @@ struct ViewerPanesModelGridTests {
     )
     let viewer = try await Self.onGrid(service, shotOutlet: outlet)
     viewer.send(.selectShot(Self.names[1]))
-    #expect(viewer.moreMenu.actsOnShot)
+    #expect(viewer.pictureMenu.actsOnShot)
     viewer.send(.copyShot)
     try await settle("the screenshot was never copied") { copies.count == 1 }
     #expect(viewer.panes.shots.large == nil)
     viewer.panesModel.saveShot()
     try await settle("the screenshot was never saved") { saves.count == 1 }
     #expect(saved == [ViewerPresenter.shotFileName(Self.names[1], viewer.snapshot)])
-    viewer.close()
-  }
-
-  @Test("Find puts the focus in the search of the tab shown, Activity's or Apps', and nowhere else")
-  func findFocusesTheShownSearch() async throws {
-    let service = ScriptedService()
-    let viewer = try await ViewerController.watching(service)
-    viewer.panesModel.find()
-    #expect(viewer.panes.activity.findRequests == 0 && viewer.panes.apps.findRequests == 0, "the Screen has none")
-    viewer.send(.selectTab(.activity))
-    viewer.panesModel.find()
-    #expect(viewer.panes.activity.findRequests == 1)
-    viewer.send(.selectTab(.apps))
-    viewer.panesModel.find()
-    #expect(viewer.panes.apps.findRequests == 1)
-    #expect(viewer.panes.activity.findRequests == 1, "a hidden tab's search is left be")
     viewer.close()
   }
 }

@@ -1,8 +1,7 @@
 import SwiftUI
 
-/// A frosted capsule floating over the helper's screen: a caption, the chip at the top, or the mini screen's Live.
-/// Under Reduce Transparency it is drawn opaque on the window's ground. It is dark in either appearance, as the
-/// helper's screen it floats over is framed in black.
+/// A solid capsule floating over the helper's screen: a caption, the chip at the top, or the mini screen's Live. It is
+/// opaque and dark in either appearance, as the helper's screen it floats over is framed in black, with a fine edge.
 struct FloatingChip<Content: View>: View {
   /// How tall the chip is.
   enum Size: Sendable {
@@ -20,9 +19,8 @@ struct FloatingChip<Content: View>: View {
   var lines = 1
   /// What the chip says: a few texts and marks, laid in a row.
   @ViewBuilder let content: Content
-  @Environment(\.accessibilityReduceTransparency) private var reduceTransparency
 
-  /// The content in a row on the frosted capsule.
+  /// The content in a row on the solid capsule.
   var body: some View {
     HStack(spacing: Spacing.s) {
       content
@@ -34,14 +32,8 @@ struct FloatingChip<Content: View>: View {
     .padding(.vertical, lines > 1 ? Spacing.xsPlus : .zero)
     .frame(minHeight: height)
     .background {
-      if reduceTransparency {
-        shape
-          .fill(Color.ground)
-      } else {
-        shape
-          .fill(Color.fillChip)
-          .background(.ultraThinMaterial, in: shape)
-      }
+      shape
+        .fill(Color.fillOverPicture)
     }
     .overlay(
       shape

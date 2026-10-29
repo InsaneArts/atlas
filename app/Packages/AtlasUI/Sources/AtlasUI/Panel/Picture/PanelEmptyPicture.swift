@@ -33,7 +33,7 @@ struct PanelEmptyPicture: View {
     .padding(.horizontal, PanelLayout.emptyInset)
     .frame(maxWidth: .infinity, maxHeight: .infinity)
     .background {
-      RoundedRectangle(cornerRadius: Radius.medium)
+      RoundedRectangle(cornerRadius: PanelLayout.pictureCorner, style: .continuous)
         .filledOutline(Color.fillPlaceholder, border: Color.separator)
     }
     .accessibilityElement(children: .combine)

@@ -8,7 +8,7 @@ extension AppContainer {
   func startSignals() {
     signals = AttentionSignals(
       notifier: .live(
-        open: { [weak coordinator] in coordinator?.openViewer(tab: .screen) },
+        open: { [weak coordinator] in coordinator?.openViewer(place: .screen) },
         recover: { [weak self] in await self?.recoverFromNotification() },
         // On screen, not merely open: a minimised or covered main window says nothing.
         viewerShows: { [weak coordinator] in
@@ -32,7 +32,7 @@ extension AppContainer {
       status: { try? await service.status() },
       holdingControl: { [weak coordinator] in coordinator?.viewerHoldsControl ?? false },
       readStatus: { [weak self] in await self?.panel?.readStatus() },
-      open: { [weak coordinator] in coordinator?.openViewer(tab: .screen) },
+      open: { [weak coordinator] in coordinator?.openViewer(place: .screen) },
       tell: { [weak self] reason in self?.signals?.tell(reason) }
     )
     await recovery.run()

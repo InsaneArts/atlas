@@ -17,7 +17,7 @@ struct ControlRim: ViewModifier {
       // shows, to soften the outer edge; out of control there is none.
       .background {
         if isInControl {
-          RoundedRectangle(cornerRadius: radius)
+          RoundedRectangle(cornerRadius: radius, style: .continuous)
             .fill(
               Color.accent
                 .opacity(Layout.glow)
@@ -30,7 +30,7 @@ struct ControlRim: ViewModifier {
         }
       }
       .overlay(
-        RoundedRectangle(cornerRadius: radius)
+        RoundedRectangle(cornerRadius: radius, style: .continuous)
           .strokeBorder(edge, lineWidth: isInControl ? Stroke.emphasis : Stroke.hairline)
       )
   }

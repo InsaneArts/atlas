@@ -9,7 +9,7 @@ struct ViewerHostContent: View {
 
   /// The window's content, its pictures painted flat.
   var body: some View {
-    ViewerView(state: state, send: { _ in }, newest: { "" }, input: { EmptyView() }) { live in
+    ViewerView(state: state, send: { _ in }, input: { EmptyView() }) { live in
       (PictureColour(rawValue: live.picture.id) ?? .stage).color
     }
     .frame(width: PreviewStates.viewerSize.width, height: PreviewStates.viewerSize.height)

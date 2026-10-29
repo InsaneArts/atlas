@@ -84,7 +84,7 @@ enum PanelRender {
     if let alert = overrides.alertSnapshot(over: snapshot.status.overview) {
       return draw(alert: alert, to: path, appearance: appearance)
     }
-    return draw(snapshot, to: path, appearance: appearance, reduceTransparency: overrides.reducesTransparency)
+    return draw(snapshot, to: path, appearance: appearance)
   }
 
   /// Draws the panel for `snapshot` on its card, under a strip of menu bar holding its glyph.
@@ -93,21 +93,17 @@ enum PanelRender {
   ///   - snapshot: What the panel's controller would hold.
   ///   - path: Where to write the PNG.
   ///   - appearance: The appearance to draw the panel, its card and the menu bar strip in, light or dark.
-  ///   - reduceTransparency: Whether to draw it as under Reduce Transparency, its glass opaque.
   /// - Returns: Whether the PNG was written.
   static func draw(
     _ snapshot: PanelSnapshot,
     to path: String,
-    appearance: NSAppearance?,
-    reduceTransparency: Bool = false
+    appearance: NSAppearance?
   ) -> Bool {
     let content = PNG.host(
       ShellRoot {
         PanelView(state: PanelPresenter.state(snapshot)) { _ in }
           .panelCard()
           .padding(margin)
-          // The setting's own value is read-only; its underscored twin is the one SwiftUI lets a render set.
-          .environment(\._accessibilityReduceTransparency, reduceTransparency)
       }
     )
     let size = content.fittingSize

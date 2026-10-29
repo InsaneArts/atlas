@@ -80,7 +80,7 @@ struct AgentConnectionRow: View {
     Button(action: connect) {
       WorkingLabel(title: "Connect", isWorking: isWorking, workingTitle: "Connecting…")
     }
-    .buttonStyle(.capsule(.glass, size: .mini, isWorking: isWorking))
+    .buttonStyle(.capsule(.secondary, size: .mini, isWorking: isWorking))
   }
 
   /// The agent's icon: its installed app's icon or its bundled original logo.

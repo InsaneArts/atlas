@@ -2,8 +2,8 @@ import AtlasUI
 import CoreGraphics
 
 extension ViewerPresenter {
-  /// The Screen tab: the picture and how it is drawn, or why there is none; its chip, the notice, the captions and a
-  /// window shown from the Apps tab.
+  /// The Screen: the picture and how it is drawn, or why there is none; a window shown from the Apps list, and what a
+  /// right click on the picture offers.
   ///
   /// - Parameter snapshot: What the controller holds.
   /// - Returns: The screen.
@@ -15,24 +15,14 @@ extension ViewerPresenter {
       picture: reading.picture,
       look: look(snapshot),
       empty: reading.picture == nil ? empty(snapshot) : nil,
-      chip: chip(snapshot),
-      notice: session.notice,
-      captions: captions(snapshot),
       actualSize: session.actualSize && reading.picture != nil
         ? display.map { CGSize(width: $0.width, height: $0.height) } : nil,
-      outline: outline(snapshot)
+      outline: outline(snapshot),
+      menu: screenMenu(snapshot)
     )
   }
 
-  /// The latest actions laid over the picture: none while this window holds control or the picture is paused.
-  ///
-  /// - Parameter snapshot: What the controller holds.
-  /// - Returns: The actions, oldest first.
-  static func captions(_ snapshot: ViewerSnapshot) -> [ActivityEntry] {
-    snapshot.holdingControl || snapshot.session.paused ? [] : snapshot.reading.statusReading.captionEntries
-  }
-
-  /// How the picture is drawn: inside control's rim, faded while paused, dimmed while the helper needs the person.
+  /// How the picture is drawn: inside control's edge, faded while paused, dimmed while the helper needs the person.
   ///
   /// - Parameter snapshot: What the controller holds.
   /// - Returns: The look.
@@ -100,20 +90,5 @@ extension ViewerPresenter {
       lastPicture: reading.lastPicture,
       showsRing: reading.waitedLong
     )
-  }
-
-  /// The chip at the top: what is being typed before control, control before a paused picture, and a paused picture
-  /// before the host session that has the helper, while sessions show and the picture does.
-  ///
-  /// - Parameter snapshot: What the controller holds.
-  /// - Returns: The chip, or nil for none.
-  static func chip(_ snapshot: ViewerSnapshot) -> ViewerScreenChip? {
-    if !snapshot.composing.isEmpty { return .typing(snapshot.composing) }
-    if snapshot.holdingControl { return .inControl }
-    guard snapshot.reading.picture != nil else { return nil }
-    if snapshot.session.paused { return .paused }
-    guard let holder = snapshot.reading.statusReading.holder else { return nil }
-    let session = resolvedSession(holder.key, snapshot)
-    return .holder(name: session.name, icon: session.icon ?? holder.host.icon)
   }
 }

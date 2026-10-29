@@ -1,7 +1,7 @@
 import SwiftUI
 
 /// A shadow drawn only outside a surface's outline, as CSS draws `box-shadow`: the outline's shadow with the
-/// outline itself cut away, so nothing darkens a glass surface or the words on it. The shadow is SwiftUI's
+/// outline itself cut away, so nothing darkens the surface or the words on it. The shadow is SwiftUI's
 /// own, cast by an opaque copy of the outline, which the design renders draw as the window does.
 struct CutoutShadow<Outline: Shape>: View {
   /// The surface's outline.
@@ -35,9 +35,9 @@ struct CutoutShadow<Outline: Shape>: View {
 
 #if DEBUG
   #Preview("Modal") {
-    let shape = RoundedRectangle(cornerRadius: Radius.extraLarge)
+    let shape = RoundedRectangle(cornerRadius: Radius.extraLarge, style: .continuous)
     shape
-      .fill(Color.fillGlassThick)
+      .fill(Color.fillModal)
       .frame(width: SampleWidth.narrow, height: SampleWidth.narrow / 2)
       .background { CutoutShadow(shape: shape, level: .modal) }
       .padding(Spacing.xxxl)

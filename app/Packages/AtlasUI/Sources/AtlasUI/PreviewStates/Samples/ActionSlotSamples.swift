@@ -1,7 +1,7 @@
 #if DEBUG
   import SwiftUI
 
-  /// The viewer's action controls: circles for symbols, glass capsules for words, one white capsule for the
+  /// The viewer's action controls: circles for symbols, secondary capsules for words, one white capsule for the
   /// main action, and Keys and Stop in slots that show only while the person has control.
   struct ActionSlotSamples: View {
     /// Whether the person has control, so Keys and Stop show.
@@ -11,7 +11,7 @@
     var body: some View {
       HStack(spacing: Spacing.s) {
         Button(String("Pause"), systemImage: SymbolName.pause.rawValue) {}
-          .buttonStyle(.capsule(.glass, size: .small, outline: .circle))
+          .buttonStyle(.capsule(.secondary, size: .small, outline: .circle))
         Button {
         } label: {
           HStack(spacing: Spacing.xsPlus) {
@@ -20,17 +20,15 @@
             Text(verbatim: "Keys")
           }
         }
-        .buttonStyle(.capsule(.glass, size: .small))
+        .buttonStyle(.capsule(.secondary, size: .small))
         .actionSlot(isInControl)
         Button(String("Stop")) {}
-          .buttonStyle(.capsule(.glass, size: .small))
+          .buttonStyle(.capsule(.secondary, size: .small))
           .actionSlot(isInControl)
         Button(String("Take Control")) {}
           .buttonStyle(.capsule(size: .small))
         Button(String("More"), systemImage: SymbolName.more.rawValue) {}
-          .buttonStyle(.capsule(.glass, size: .small, outline: .circle))
-        Button(String("Details"), systemImage: SymbolName.sidebar.rawValue) {}
-          .buttonStyle(.capsule(.glass, size: .small, outline: .circle))
+          .buttonStyle(.capsule(.secondary, size: .small, outline: .circle))
       }
       .labelStyle(.iconOnly)
       .animatesActionSlots(isInControl)

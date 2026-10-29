@@ -31,7 +31,8 @@ extension AppContainer: WindowParts {
         },
         loginTime: LoginRecords.loginTime(of:),
         shotOutlet: .live(NSWorkspace.shared),
-        openSettings: coordinator.panelLinks().openSettings
+        openSettings: coordinator.panelLinks().openSettings,
+        icons: appIcons
       )
     )
   }

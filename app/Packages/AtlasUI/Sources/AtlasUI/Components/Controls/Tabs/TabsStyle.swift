@@ -6,7 +6,4 @@ enum TabsStyle: Sendable {
   case segment
   /// Each its symbol over its word on a tile, the selected one filled.
   case symbolOverWord
-
-  /// The thumb's one identity, which it keeps as it glides from tab to tab.
-  static let thumbID = "thumb"
 }

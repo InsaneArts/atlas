@@ -13,7 +13,7 @@ extension CapsuleButtonStyle {
   var weight: Font.Weight {
     switch look {
     case .plain: .regular
-    case .primary, .glass, .pressed, .accent, .tinted, .destructive: .semibold
+    case .primary, .secondary, .pressed, .accent, .tinted, .destructive, .glyph, .overPicture: .semibold
     }
   }
 
@@ -21,8 +21,8 @@ extension CapsuleButtonStyle {
   /// an alert's buttons keep the font's own.
   var tracking: CGFloat {
     switch look {
-    case .primary, .glass, .pressed: LetterSpacing.control
-    case .plain, .accent, .tinted, .destructive: 0
+    case .primary, .secondary, .pressed, .overPicture: LetterSpacing.control
+    case .plain, .accent, .tinted, .destructive, .glyph: 0
     }
   }
 
@@ -48,31 +48,27 @@ extension CapsuleButtonStyle {
     return fill ? Spacing.sPlus : Layout.regularInset
   }
 
+  /// The space before the label: a symbol pill's 12, else ``inset``.
+  var leadingInset: CGFloat {
+    outline == .symbolPill ? Spacing.m : inset
+  }
+
+  /// The space after the label: a symbol pill's 14, else ``inset``.
+  var trailingInset: CGFloat {
+    outline == .symbolPill ? Spacing.mPlus : inset
+  }
+
   /// The label's colour.
   var foreground: Color {
     switch look {
     case .primary: .ground
-    case .glass, .pressed, .tinted: .textPrimary
+    case .secondary, .pressed, .tinted: .textPrimary
     case .plain: .textSecondary
     case .accent: .onAccent
     case .destructive: .textDestructive
+    case .glyph: isOn ? .textPrimary : .textSecondary
+    case .overPicture: .textOverPicture
     }
-  }
-
-  /// The capsule's edge: a glass hairline, a brighter one while pressed, a faint one on an alert's quiet
-  /// buttons, none otherwise.
-  var edge: Color {
-    switch look {
-    case .glass: .strokeStrong
-    case .pressed: .strokePressed
-    case .tinted, .destructive: .separator
-    case .primary, .plain, .accent: .clear
-    }
-  }
-
-  /// Whether the system's glass lies under the fill.
-  var isGlazed: Bool {
-    backing == .glass && look == .glass
   }
 }
 

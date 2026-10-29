@@ -1,7 +1,8 @@
 import SwiftUI
 
-/// The screen in the panel's picture frame, resting on the ground: letterboxed on black, greyed and darkened
-/// while dimmed, with a fine light inner edge and a soft shadow; the empty stage until the first picture arrives.
+/// The screen in the panel's picture frame of its own shape, resting on the ground: letterboxed on black only when its
+/// shape is past 4:3 or 16:9, greyed and darkened while dimmed, with a fine light inner edge and a soft shadow; the
+/// empty stage until the first picture arrives.
 struct PanelScreen: View {
   /// The screen; nil shows the empty stage.
   let picture: DesktopPicture?
@@ -23,7 +24,7 @@ struct PanelScreen: View {
         Color.fillPlaceholder
       }
     }
-    .frame(width: PanelLayout.picture.width, height: PanelLayout.picture.height)
+    .frame(width: size.width, height: size.height)
     .clipShape(shape)
     .overlay(
       shape
@@ -32,9 +33,14 @@ struct PanelScreen: View {
     .elevation(.resting)
   }
 
+  /// The frame: the screen's own shape, so it fills the frame with no black at its sides.
+  private var size: CGSize {
+    PanelLayout.pictureSize(aspect: picture?.aspectRatio)
+  }
+
   /// The frame's outline.
   private var shape: RoundedRectangle {
-    RoundedRectangle(cornerRadius: Radius.medium)
+    RoundedRectangle(cornerRadius: PanelLayout.pictureCorner, style: .continuous)
   }
 }
 

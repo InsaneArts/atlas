@@ -53,7 +53,7 @@ struct FieldRow: View {
     .overlay(alignment: .top) {
       if drawsSeparator {
         SeparatorLine()
-          .padding(.leading, Spacing.mPlus)
+          .padding(.horizontal, Spacing.mPlus)
       }
     }
     .animation(Motion.animation(Motion.state, reduceMotion: reduceMotion, reduced: Motion.reduced), value: isFlagged)
@@ -96,10 +96,10 @@ struct FieldRow: View {
 
   /// The fine accent edge and its soft halo, inset inside the row, showing while the field has the focus.
   private var focusRing: some View {
-    RoundedRectangle(cornerRadius: Radius.small)
+    RoundedRectangle(cornerRadius: Radius.small, style: .continuous)
       .strokeBorder(Color.strokeFocus, lineWidth: Stroke.regular)
       .background(
-        RoundedRectangle(cornerRadius: Radius.small)
+        RoundedRectangle(cornerRadius: Radius.small, style: .continuous)
           .stroke(Color.accentRing, lineWidth: Layout.haloWidth)
       )
       .padding(Spacing.xs)

@@ -55,7 +55,8 @@ extension ViewerPresenter {
       days: groups,
       empty: empty,
       large: largeShot(snapshot, order: order),
-      scrollRequest: facts.scrollRequest
+      scrollRequest: facts.scrollRequest,
+      heldColumns: snapshot.session.heldShotColumns
     )
   }
 
@@ -143,7 +144,7 @@ extension ViewerPresenter {
     return ViewerWords.shotFileName(clock(taken, snapshot))
   }
 
-  /// A screenshot's tile.
+  /// A screenshot's tile, with its shape as the list says it.
   ///
   /// - Parameters:
   ///   - shot: The screenshot.
@@ -152,10 +153,17 @@ extension ViewerPresenter {
   /// - Returns: The tile.
   static func shotTile(_ shot: Screenshot, selected: String?, _ snapshot: ViewerSnapshot) -> ViewerShotTile {
     let time = shot.takenAt.map { clock($0, snapshot) } ?? Words.unknown
+    let aspect: CGFloat? =
+      if let width = shot.width, let height = shot.height, width > 0, height > 0 {
+        CGFloat(width) / CGFloat(height)
+      } else {
+        nil
+      }
     return ViewerShotTile(
       id: shot.name,
       time: time,
       thumbnail: snapshot.panes.thumbnails[shot.name],
+      aspect: aspect,
       isSelected: shot.name == selected,
       label: ViewerWords.shotLabel(time)
     )

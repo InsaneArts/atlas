@@ -1,456 +1,180 @@
 #if DEBUG
   extension PreviewStates {
-    /// Claude Code's latest actions over the screen, oldest first, each led by its host's icon.
-    static let sessionCaptions = [
-      ActivityEntry(
-        id: "2",
-        line: "Clicked Ring in Opie",
-        when: "9 s ago",
-        isNewest: false,
-        icon: SessionSamples.claudeIcon
-      ),
-      ActivityEntry(
-        id: "1",
-        line: "Scrolled in Opie",
-        when: "5 s ago",
-        isNewest: false,
-        icon: SessionSamples.claudeIcon
-      ),
-      ActivityEntry(
-        id: "0",
-        line: SessionSamples.claudeDoing,
-        when: "just now",
-        isNewest: true,
-        icon: SessionSamples.claudeIcon
-      ),
-    ]
+    /// A session's row as the window draws it, with its tooltip and menu.
+    ///
+    /// - Parameters:
+    ///   - id: The session's key.
+    ///   - icon: The host's icon.
+    ///   - name: The session's name.
+    ///   - line: What it last did.
+    ///   - badge: What it does now; none by default.
+    ///   - facts: Every fact about it, one a line.
+    ///   - recover: Whether it needs the person, so its menu offers Recover…, and whether that can be chosen.
+    ///   - cleanup: Whether its menu offers Clean Up This Session's Work…, and whether that can be chosen.
+    ///   - receipt: What its last cleanup did, one step a line; none by default.
+    ///   - isCleaningUp: Whether its work is being cleaned up now; not by default.
+    /// - Returns: The row.
+    static func viewerSessionRow(
+      _ id: String,
+      icon: RowIcon,
+      name: String,
+      line: String,
+      badge: SessionBadge? = nil,
+      facts: [String],
+      recover: Bool? = nil,
+      cleanup: Bool? = nil,
+      receipt: [String] = [],
+      isCleaningUp: Bool = false
+    ) -> ViewerSessionRow {
+      ViewerSessionRow(
+        id: id,
+        icon: icon,
+        name: name,
+        line: line,
+        badge: badge,
+        isCleaningUp: isCleaningUp,
+        help: viewerSessionHelp(name, line, facts: facts, receipt: receipt),
+        menu: viewerSessionMenu(id, facts: facts, recover: recover, cleanup: cleanup)
+      )
+    }
 
     /// The live sessions in the service's order: Claude Code with the helper, Codex waiting its turn, Cursor idle since
-    /// it opened Opie and Terminal idle since a command took a screenshot 70 seconds ago.
+    /// it opened Opie and Terminal idle since a command took a screenshot 70 seconds ago. The status names each one's
+    /// host alone.
     static let sessionRows = [
-      ViewerSessionRow(
-        id: SessionSamples.claudeKey,
+      viewerSessionRow(
+        SessionSamples.claudeKey,
         icon: SessionSamples.claudeIcon,
         name: SessionSamples.claudeName,
-        state: "Acting · has the helper",
-        tone: .active
+        line: SessionSamples.claudeDoing,
+        badge: .acting,
+        facts: ["Host: Claude Code"]
       ),
-      ViewerSessionRow(
-        id: SessionSamples.codexKey,
+      viewerSessionRow(
+        SessionSamples.codexKey,
         icon: SessionSamples.codexIcon,
         name: SessionSamples.codexName,
-        state: "Waiting for the helper · 8 s"
+        line: "Waiting for the helper · 8 s",
+        badge: .waiting,
+        facts: ["Host: Codex"]
       ),
-      ViewerSessionRow(
-        id: SessionSamples.cursorKey,
+      viewerSessionRow(
+        SessionSamples.cursorKey,
         icon: SessionSamples.cursorIcon,
         name: SessionSamples.cursorName,
-        state: "Idle · 4 min ago"
+        line: "Opened Opie · 4 min ago",
+        facts: ["Host: Cursor"]
       ),
-      ViewerSessionRow(
-        id: SessionSamples.terminalKey,
+      viewerSessionRow(
+        SessionSamples.terminalKey,
         icon: SessionSamples.terminalIcon,
         name: SessionSamples.terminalName,
-        state: "Idle · 70 s ago"
+        line: "Took a screenshot · 70 s ago",
+        facts: ["Host: None named"]
       ),
     ]
 
-    /// The sessions column while every session's work shows: the three first live sessions' icons over All sessions,
-    /// then each live session.
+    /// Claude Code, whose click may not have finished, under Needs you, and Codex waiting until the person recovers.
+    static let needsYouRows = [
+      viewerSessionRow(
+        SessionSamples.claudeKey,
+        icon: SessionSamples.claudeIcon,
+        name: SessionSamples.claudeName,
+        line: "A click may not have finished",
+        badge: .needsYou,
+        facts: ["Host: Claude Code"],
+        recover: true
+      ),
+      viewerSessionRow(
+        SessionSamples.codexKey,
+        icon: SessionSamples.codexIcon,
+        name: SessionSamples.codexName,
+        line: "Waits until you recover",
+        badge: .waiting,
+        facts: ["Host: Codex"]
+      ),
+    ]
+
+    /// The sidebar's sessions while every session's work shows: the three first live sessions' icons over All sessions,
+    /// then Claude Code and Codex under Working and Cursor and Terminal under Idle.
     static let allSessions = ViewerSessionsState(
       icons: [SessionSamples.claudeIcon, SessionSamples.codexIcon, SessionSamples.cursorIcon],
-      live: sessionRows
+      liveCount: sessionRows.count,
+      groups: [
+        ViewerSessionGroup(.working, rows: Array(sessionRows.prefix(2))),
+        ViewerSessionGroup(.idle, rows: Array(sessionRows.suffix(2))),
+      ]
     )
 
     /// Pi · notes-sync, which ended 20 minutes ago.
-    static let piEndedRow = ViewerSessionRow(
-      id: SessionSamples.piKey,
+    static let piEndedRow = viewerSessionRow(
+      SessionSamples.piKey,
       icon: SessionSamples.piIcon,
       name: SessionSamples.piName,
-      state: "Ended 20 min ago"
+      line: "Ended 20 min ago",
+      facts: ["Host: Pi", "Folder: notes-sync", "Started: 09:40", "Ended: 20 min ago"]
     )
 
-    /// Claude Code, Codex, Cursor and a Terminal session live, Claude Code with the helper: the sessions column beside
-    /// the screen, the holder named on the screen, and each caption led by Claude Code's icon.
+    /// The sessions by state while the helper needs the person: Claude Code under Needs you, its click unfinished,
+    /// Codex under Working, waiting until the person recovers, Cursor and Terminal under Idle, and Ended open on Pi ·
+    /// notes-sync.
+    static let sessionsByState = ViewerSessionsState(
+      icons: [SessionSamples.claudeIcon, SessionSamples.codexIcon, SessionSamples.cursorIcon],
+      liveCount: sessionRows.count,
+      groups: [
+        ViewerSessionGroup(.needsYou, rows: [needsYouRows[0]]),
+        ViewerSessionGroup(.working, rows: [needsYouRows[1]]),
+        ViewerSessionGroup(.idle, rows: Array(sessionRows.suffix(2))),
+        ViewerSessionGroup(.ended, rows: [piEndedRow]),
+      ],
+      endedCount: 1,
+      endedShown: true
+    )
+
+    /// Claude Code, Codex, Cursor and a Terminal session live, Claude Code with the helper: the sessions in the
+    /// sidebar, the holder named in the header, and its latest action in the footer, led by its icon.
     @MainActor public static let viewerSessions: ViewerState = {
       var state = viewerWorking
-      state.sessions = allSessions
-      state.screen.chip = .holder(name: SessionSamples.claudeName, icon: SessionSamples.claudeIcon)
-      state.screen.captions = sessionCaptions
+      state.sidebar.sessions = allSessions
+      state.header = ViewerHeaderState(who: SessionSamples.claudeName, what: "has the helper")
+      state.footer.latest = ViewerLatestLine(
+        id: "0",
+        icon: SessionSamples.claudeIcon,
+        words: SessionSamples.claudeDoing,
+        age: "just now"
+      )
       return state
     }()
 
-    /// The four live sessions and Pi · notes-sync, which ended, dimmed under Ended at the column's foot.
+    /// The four live sessions and Pi · notes-sync, which ended, folded under Ended with its count.
     @MainActor public static let viewerSessionsEnded: ViewerState = {
       var state = viewerSessions
-      state.sessions?.ended = [piEndedRow]
+      state.sidebar.sessions.groups.append(ViewerSessionGroup(.ended, rows: []))
+      state.sidebar.sessions.endedCount = 1
       return state
     }()
 
-    /// Claude Code's lines while it has the helper, its newest four of six.
-    @MainActor static let claudeGroupLines = [
-      ViewerActivityLine(
-        id: "38",
-        time: "10:31:42",
-        lead: .live,
-        kind: .pointer,
-        text: SessionSamples.claudeDoing,
-        label: "10:31:42, Clicking Show Center in Opie, now"
-      ),
-      ViewerActivityLine(
-        id: "37",
-        time: "10:31:38",
-        lead: .quiet,
-        kind: .scroll,
-        text: "Scrolled in Opie",
-        label: "10:31:38, Scrolled in Opie"
-      ),
-      ViewerActivityLine(
-        id: "36",
-        time: "10:31:33",
-        lead: .quiet,
-        kind: .pointer,
-        text: "Clicked Ring in Opie",
-        label: "10:31:33, Clicked Ring in Opie"
-      ),
-      sessionShotLine,
+    /// Claude Code's facts once the sessions' list names it: where and when it started, the apps it opened, the copy
+    /// Atlas made, its plan and its screenshots.
+    static let claudeRecordFacts = [
+      "Host: Claude Code", "Folder: understudy", "Started: 09:12", "Last seen: just now", "Opie: Open · a copy",
+      "Notes: Closed", "Copy of Opie", "Environment plan: Applied · can roll back · made at 10:02", "Screenshots: 6",
     ]
 
-    /// Claude Code's screenshot, with its thumbnail.
-    @MainActor static let sessionShotLine = ViewerActivityLine(
-      id: "35",
-      time: "10:31:20",
-      lead: .quiet,
-      kind: .screenshot,
-      text: "Took a screenshot",
-      shot: ViewerActivityShot(name: shotNames[2], thumbnail: shotPicture(shotNames[2])),
-      label: "10:31:20, Took a screenshot"
-    )
-
-    /// Codex's lines: its typing refused while another app was in front, then Notes opened.
-    static let codexGroupLines = [
-      ViewerActivityLine(
-        id: "x2",
-        time: "10:30:02",
-        lead: .notSent,
-        kind: .keys,
-        text: "Didn't type in Notes",
-        reason: "Another app was in front",
-        label: "10:30:02, Didn't type in Notes, Another app was in front"
-      ),
-      ViewerActivityLine(
-        id: "x1",
-        time: "10:29:50",
-        lead: .quiet,
-        kind: .window,
-        text: "Opened Notes",
-        label: "10:29:50, Opened Notes"
-      ),
-    ]
-
-    /// The groups after Codex's while every session's work shows: Cursor's, then Terminal's in the status's place
-    /// before the person's while the status lists it, else the person's, then Terminal's.
-    ///
-    /// - Parameter terminalListed: Whether the status lists Terminal.
-    /// - Returns: The groups.
-    static func laterSessionGroups(terminalListed: Bool) -> [ViewerActivitySessionGroup] {
-      let groups = [
-        ViewerActivitySessionGroup(
-          id: "session-\(SessionSamples.cursorKey)",
-          icon: SessionSamples.cursorIcon,
-          name: SessionSamples.cursorName,
-          state: "Idle",
-          lines: [
-            ViewerActivityLine(
-              id: "u1",
-              time: "10:27:42",
-              lead: .quiet,
-              kind: .window,
-              text: "Opened Opie",
-              label: "10:27:42, Opened Opie"
-            )
-          ]
-        ),
-        ViewerActivitySessionGroup(
-          id: "you",
-          icon: nil,
-          name: "You",
-          lines: [
-            ViewerActivityLine(
-              id: "33",
-              time: "10:29:40",
-              lead: .person,
-              kind: .control,
-              text: "You gave back control",
-              label: "10:29:40, You gave back control"
-            ),
-            ViewerActivityLine(
-              id: "30",
-              time: "10:29:05",
-              lead: .person,
-              kind: .person,
-              text: "You clicked in Opie ×3",
-              label: "10:29:05, You clicked in Opie ×3"
-            ),
-          ]
-        ),
-        ViewerActivitySessionGroup(
-          id: "session-\(SessionSamples.terminalKey)",
-          icon: SessionSamples.terminalIcon,
-          name: SessionSamples.terminalName,
-          state: "Idle",
-          lines: [
-            ViewerActivityLine(
-              id: "t1",
-              time: "10:26:42",
-              lead: .quiet,
-              kind: .command,
-              text: "Ran a command",
-              label: "10:26:42, Ran a command"
-            )
-          ]
-        ),
-      ]
-      return terminalListed ? [groups[0], groups[2], groups[1]] : groups
-    }
-
-    /// Codex's group, waiting its turn or until the person recovers.
-    static let codexGroup = ViewerActivitySessionGroup(
-      id: "session-\(SessionSamples.codexKey)",
-      icon: SessionSamples.codexIcon,
-      name: SessionSamples.codexName,
-      state: "Waiting",
-      lines: codexGroupLines
-    )
-
-    /// Activity with every session's work, grouped by session in the status's order: Claude Code acting, Codex
-    /// waiting with its refused typing, Cursor and Terminal idle, then the person's own lines.
-    @MainActor public static let viewerActivityBySession: ViewerState = {
+    /// Claude Code chosen on the Screen once the sessions' list names it: its row's tooltip and menu list every fact
+    /// about it, and its menu offers Clean Up This Session's Work….
+    @MainActor public static let viewerSessionChosen: ViewerState = {
       var state = viewerSessions
-      state.top.status.line = "Claude Code · \(SessionSamples.claudeDoing)"
-      state.top.tabs = viewerTabs(.activity)
-      state.mini = SampleDesktop.picture
-        .map { MiniScreenState(picture: $0) }
-      let claude = ViewerActivitySessionGroup(
-        id: "session-\(SessionSamples.claudeKey)",
+      state.sidebar.sessions.chosen = .one(SessionSamples.claudeKey)
+      state.sidebar.library = viewerLibrary(counts: [.apps: 1])
+      state.sidebar.sessions.groups[0].rows[0] = viewerSessionRow(
+        SessionSamples.claudeKey,
         icon: SessionSamples.claudeIcon,
         name: SessionSamples.claudeName,
-        state: "Acting",
-        tone: .active,
-        lines: claudeGroupLines,
-        showAll: ViewerShowAll(
-          title: "Show all 6",
-          label: "Show all 6 from \(SessionSamples.claudeName)",
-          event: .chooseSession(.one(SessionSamples.claudeKey))
-        )
-      )
-      state.pane = .activity(
-        ViewerActivityState(
-          meta: "14 actions today",
-          query: "",
-          filters: activityFilters(),
-          groups: [],
-          sessions: [claude, codexGroup] + laterSessionGroups(terminalListed: true)
-        )
-      )
-      return state
-    }()
-
-    /// Activity while Claude Code's click may not have finished: its group first, the click flagged with Show Screen
-    /// and Recover…, every other session waiting, the recovery alert set aside.
-    @MainActor public static let viewerActivityNeedsYou: ViewerState = {
-      var state = viewerNeedsYou
-      state.alert = nil
-      state.top.status.line = "A click by Claude Code may not have finished"
-      state.sessions = ViewerSessionsState(
-        icons: [SessionSamples.claudeIcon, SessionSamples.codexIcon, SessionSamples.cursorIcon],
-        live: [
-          ViewerSessionRow(
-            id: SessionSamples.claudeKey,
-            icon: SessionSamples.claudeIcon,
-            name: SessionSamples.claudeName,
-            state: "Needs you · a click may not have finished",
-            tone: .attention
-          ),
-          ViewerSessionRow(
-            id: SessionSamples.codexKey,
-            icon: SessionSamples.codexIcon,
-            name: SessionSamples.codexName,
-            state: "Waits until you recover"
-          ),
-          sessionRows[2],
-        ]
-      )
-      state.top.tabs = viewerTabs(.activity)
-      state.screen.captions = [
-        sessionCaptions[0],
-        sessionCaptions[1],
-        ActivityEntry(
-          id: "c1",
-          line: "Clicked Show Center in Opie",
-          when: "just now",
-          mark: .failed,
-          isNewest: true,
-          icon: SessionSamples.claudeIcon
-        ),
-      ]
-      state.mini = SampleDesktop.picture
-        .map { MiniScreenState(picture: $0) }
-      let unfinished = ViewerActivityLine(
-        id: "c1",
-        time: "10:31:40",
-        lead: .failed,
-        kind: .problem,
-        text: "Clicked Show Center in Opie",
-        reason: "May not have finished. Every session waits until you recover.",
-        offersRecovery: true,
-        label: "10:31:40, Clicked Show Center in Opie, May not have finished. Every session waits until you recover."
-      )
-      let claude = ViewerActivitySessionGroup(
-        id: "session-\(SessionSamples.claudeKey)",
-        icon: SessionSamples.claudeIcon,
-        name: SessionSamples.claudeName,
-        state: "Needs you",
-        tone: .attention,
-        lines: [unfinished] + claudeGroupLines.dropFirst(),
-        showAll: ViewerShowAll(
-          title: "Show all 6",
-          label: "Show all 6 from \(SessionSamples.claudeName)",
-          event: .chooseSession(.one(SessionSamples.claudeKey))
-        )
-      )
-      state.pane = .activity(
-        ViewerActivityState(
-          meta: "14 actions today",
-          query: "",
-          filters: activityFilters(),
-          groups: [],
-          sessions: [claude, codexGroup] + laterSessionGroups(terminalListed: false)
-        )
-      )
-      return state
-    }()
-
-    /// The filters with one session chosen: All and Problems, as Agent and You mean nothing inside one session.
-    static let oneSessionFilters = CapsuleTabsState<ViewerActivityFilter>(
-      tabs: [CapsuleTab(id: .all, title: "All"), CapsuleTab(id: .problems, title: "Problems")],
-      selected: .all,
-      label: "Which actions"
-    )
-
-    /// Activity for Claude Code alone, chosen in the sessions column: its lines by time under its name and icon.
-    @MainActor public static let viewerActivityOneSession: ViewerState = {
-      var state = viewerActivityBySession
-      state.top.status.line = SessionSamples.claudeDoing
-      state.sessions?.chosen = .one(SessionSamples.claudeKey)
-      let opened = ViewerActivityLine(
-        id: "34",
-        time: "10:31:12",
-        lead: .quiet,
-        kind: .window,
-        text: "Opened Opie",
-        label: "10:31:12, Opened Opie"
-      )
-      let ran = ViewerActivityLine(
-        id: "27",
-        time: "10:25:02",
-        lead: .quiet,
-        kind: .command,
-        text: "Ran a command",
-        label: "10:25:02, Ran a command"
-      )
-      state.pane = .activity(
-        ViewerActivityState(
-          title: SessionSamples.claudeName,
-          titleIcon: SessionSamples.claudeIcon,
-          meta: "6 actions today",
-          query: "",
-          filters: oneSessionFilters,
-          groups: [
-            ViewerActivityGroup(id: "now", title: "Now", lines: claudeGroupLines + [opened]),
-            ViewerActivityGroup(id: "today", title: "Earlier today", lines: [ran]),
-          ]
-        )
-      )
-      return state
-    }()
-
-    /// Claude Code chosen, with Details open on the Screen: its detail leads, then the helper's groups, its login under
-    /// Login.
-    @MainActor public static let viewerSessionDetail: ViewerState = {
-      var state = viewerSessions
-      state.sessions?.chosen = .one(SessionSamples.claudeKey)
-      state.top.actions.details = viewerDetailsToggle(shown: true)
-      state.details = viewerDetails.details
-      state.details?.sessionDetail = ViewerSessionDetail(
-        icon: SessionSamples.claudeIcon,
-        name: SessionSamples.claudeName,
-        state: "Acting · has the helper",
-        tone: .active,
-        facts: [
-          Fact(name: "Host", value: "Claude Code"),
-          Fact(name: "Folder", value: "understudy"),
-          Fact(name: "Started", value: "09:12"),
-          Fact(name: "Last seen", value: "just now"),
-        ],
-        apps: [Fact(name: "Opie", value: "Open · a copy"), Fact(name: "Notes", value: "Closed")],
-        copies: [Fact(name: "Copy of Opie", value: "")],
-        plans: [Fact(name: "Applied · can roll back", value: "Made at 10:02")],
-        shots: zip(shotNames, ["10:31:45", "10:31:44", "10:31:20"])
-          .map { name, time in
-            ViewerActivityShot(name: name, thumbnail: shotPicture(name), label: "Screenshot taken at \(time)")
-          },
-        allShots: "See all 6",
-        cleanup: ViewerSessionCleanup(
-          session: SessionSamples.claudeKey,
-          title: "Clean Up This Session's Work…",
-          workingTitle: "Cleaning Up…"
-        )
-      )
-      return state
-    }()
-
-    /// One agent's typing refused because another app was in front: a quiet grey line, no problem, its reason in
-    /// grey, then the typing that followed.
-    @MainActor public static let viewerFocusChanged: ViewerState = {
-      var state = viewerIdle
-      state.top.tabs = viewerTabs(.activity)
-      state.mini = SampleDesktop.picture
-        .map { MiniScreenState(picture: $0) }
-      let lines = [
-        ViewerActivityLine(
-          id: "f3",
-          time: "10:31:40",
-          lead: .quiet,
-          kind: .keys,
-          text: "Typed in Notes",
-          label: "10:31:40, Typed in Notes"
-        ),
-        ViewerActivityLine(
-          id: "f2",
-          time: "10:31:38",
-          lead: .notSent,
-          kind: .keys,
-          text: "Didn't type in Notes",
-          reason: "Another app was in front",
-          label: "10:31:38, Didn't type in Notes, Another app was in front"
-        ),
-        ViewerActivityLine(
-          id: "f1",
-          time: "10:31:30",
-          lead: .quiet,
-          kind: .window,
-          text: "Opened Notes",
-          label: "10:31:30, Opened Notes"
-        ),
-      ]
-      state.pane = .activity(
-        ViewerActivityState(
-          meta: "3 actions today",
-          query: "",
-          filters: activityFilters(),
-          groups: [ViewerActivityGroup(id: "now", title: "Now", lines: lines)]
-        )
+        line: SessionSamples.claudeDoing,
+        badge: .acting,
+        facts: claudeRecordFacts,
+        cleanup: true
       )
       return state
     }()

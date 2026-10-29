@@ -21,7 +21,7 @@ struct ListRowLead: View {
         .resizable()
         .interpolation(.high)
         .frame(width: ListRow.leadWidth(lead), height: ListRow.leadWidth(lead))
-        .clipShape(RoundedRectangle(cornerRadius: Radius.extraSmall))
+        .clipShape(RoundedRectangle(cornerRadius: Radius.extraSmall, style: .continuous))
     case .picture:
       AccountPicture(side: ListRow.leadWidth(lead))
     case .mark(let kind):

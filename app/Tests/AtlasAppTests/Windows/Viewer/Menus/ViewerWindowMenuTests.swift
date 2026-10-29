@@ -22,29 +22,22 @@ struct ViewerWindowMenuTests {
     return item
   }
 
-  @Test("native tab, Details, rate and size items keep their ticks, titles and actions")
-  func tabsDetailsRateAndSizeFollowTheWindow() async throws {
+  @Test("native tab, rate and size items keep their ticks, titles and actions")
+  func tabsRateAndSizeFollowTheWindow() async throws {
     let viewer = try await ViewerController.watching(ScriptedService())
     let window = window(viewer)
     defer { window.close() }
-    for selected in ViewerTab.allCases {
-      let choice = item(#selector(ViewerMenuActions.selectTab(_:)), tag: selected.menuTag)
-      window.selectTab(choice)
-      #expect(viewer.session.tab == selected)
-      for tab in ViewerTab.allCases {
-        let candidate = item(#selector(ViewerMenuActions.selectTab(_:)), tag: tab.menuTag)
+    for selected in ViewerPlace.allCases {
+      let choice = item(#selector(ViewerMenuActions.showPlace(_:)), tag: selected.menuTag)
+      window.showPlace(choice)
+      #expect(viewer.session.place == selected)
+      for place in ViewerPlace.allCases {
+        let candidate = item(#selector(ViewerMenuActions.showPlace(_:)), tag: place.menuTag)
         #expect(window.validateMenuItem(candidate))
-        #expect(candidate.state == (tab == selected ? .on : .off))
+        #expect(candidate.state == (place == selected ? .on : .off))
       }
     }
-    #expect(!window.validateMenuItem(item(#selector(ViewerMenuActions.selectTab(_:)), tag: -1)))
-    let details = item(#selector(ViewerMenuActions.toggleDetails(_:)))
-    #expect(window.validateMenuItem(details))
-    #expect(details.title == ViewerWords.showDetailsItem)
-    window.toggleDetails(nil)
-    #expect(viewer.details.shown)
-    #expect(window.validateMenuItem(details))
-    #expect(details.title == ViewerWords.hideDetailsItem)
+    #expect(!window.validateMenuItem(item(#selector(ViewerMenuActions.showPlace(_:)), tag: -1)))
     let rate = item(#selector(ViewerMenuActions.chooseRate(_:)), tag: ViewerPictureRate.everyFiveSeconds.menuTag)
     #expect(window.validateMenuItem(rate))
     #expect(rate.state == .off)
@@ -57,6 +50,59 @@ struct ViewerWindowMenuTests {
     window.toggleActualSize(nil)
     #expect(window.validateMenuItem(size))
     #expect(size.state == .on)
+  }
+
+  @Test("Screen, Activity, Screenshots and Apps take ⌘1 to ⌘4 in the sidebar's order")
+  func placesTakeTheirNumbersInTheSidebarsOrder() throws {
+    let places = MainMenu.view().items
+      .filter { $0.action == #selector(ViewerMenuActions.showPlace(_:)) }
+    #expect(places.map(\.title) == ["Screen", "Activity", "Screenshots", "Apps"])
+    #expect(places.map(\.keyEquivalent) == ["1", "2", "3", "4"])
+    #expect(places.compactMap { ViewerPlace(menuTag: $0.tag) } == [.screen, .activity, .screenshots, .apps])
+    #expect(places.allSatisfy { $0.keyEquivalentModifierMask == .command })
+  }
+
+  @Test("Send Key is enabled only while in control")
+  func sendKeyIsEnabledOnlyInControl() async throws {
+    let service = ScriptedService()
+    let viewer = try await ViewerController.watching(service)
+    let window = window(viewer)
+    defer { window.close() }
+    let keys = HelperKey.all.indices
+      .map { item(#selector(ViewerMenuActions.sendKey(_:)), tag: $0) }
+    #expect(keys.allSatisfy { !window.validateMenuItem($0) })
+    viewer.control.gainedFocus()
+    await viewer.control.takeControl()
+    try #require(viewer.holdingControl)
+    #expect(keys.allSatisfy { window.validateMenuItem($0) })
+    #expect(!window.validateMenuItem(item(#selector(ViewerMenuActions.sendKey(_:)), tag: HelperKey.all.count)))
+    window.sendKey(keys[0])
+    try await settle("the key never reached the helper") { service.actions == [[.key("cmd+tab")]] }
+    viewer.control.releaseControl()
+    try await settle("control never went back") { !viewer.holdingControl }
+    #expect(keys.allSatisfy { !window.validateMenuItem($0) })
+  }
+
+  @Test("Picture Updates ticks the rate the picture resumes at")
+  func pictureUpdatesTicksTheRateItResumesAt() async throws {
+    let viewer = try await ViewerController.watching(ScriptedService())
+    let window = window(viewer)
+    defer { window.close() }
+    let updates = try #require(
+      MainMenu.view().items
+        .first { $0.title == ViewerWords.updatesItem }?
+        .submenu
+    )
+    #expect(updates.items.map(\.title) == ["Live", "Every 5 Seconds"])
+    #expect(updates.items.allSatisfy { $0.action == #selector(ViewerMenuActions.chooseRate(_:)) })
+    let every = try #require(updates.items.last)
+    window.chooseRate(every)
+    viewer.togglePause()
+    #expect(viewer.session.paused)
+    for choice in updates.items {
+      #expect(window.validateMenuItem(choice))
+      #expect(choice.state == (choice === every ? .on : .off), "\(choice.title) while paused")
+    }
   }
 
   @Test("native control and pause items preserve paused, alert, controlling and releasing decisions")
@@ -177,37 +223,160 @@ struct ViewerWindowMenuTests {
     #expect(viewer.session.alert == .recover)
   }
 
-  @Test("native Find follows empty and filtered Activity and Apps while Screen and Screenshots stay unsearchable")
-  func findUsesThePaneThatIsShown() async throws {
+  @Test("native Find opens the sidebar's search wherever the window is, showing a hidden sidebar first")
+  func findOpensTheSidebarSearch() async throws {
     let service = ScriptedService()
     let viewer = ViewerController.scripted(service)
     let window = window(viewer)
     defer { window.close() }
     let find = item(#selector(ViewerMenuActions.findInTab(_:)))
-    #expect(!window.validateMenuItem(find))
-    viewer.session.tab = .activity
-    #expect(!window.validateMenuItem(find))
-    await viewer.panesModel.readActivity(viewer.panesModel.work.generation)
-    #expect(!window.validateMenuItem(find))
-    service.activityLog = ActivityLog(entries: [ActivityLog.Entry(id: "one", says: "Opened a window")])
-    await viewer.panesModel.readActivity(viewer.panesModel.work.generation)
-    viewer.send(.searchActivity("unmatched"))
-    viewer.send(.filterActivity(.problems))
-    #expect(window.validateMenuItem(find), "filtering every row out keeps the search field")
+    viewer.send(.toggleSidebar)
+    #expect(window.validateMenuItem(find), "the Screen searches the sidebar")
     window.findInTab(nil)
-    #expect(viewer.panes.activity.findRequests == 1)
-    viewer.session.tab = .apps
-    #expect(!window.validateMenuItem(find))
-    await viewer.panesModel.readApps(viewer.panesModel.work.generation)
-    #expect(!window.validateMenuItem(find))
-    service.openApps = [HelperApp(pid: 42, name: "Test App")]
-    await viewer.panesModel.readApps(viewer.panesModel.work.generation)
-    viewer.send(.searchApps("unmatched"))
-    #expect(window.validateMenuItem(find))
-    window.findInTab(nil)
-    #expect(viewer.panes.apps.findRequests == 1)
-    viewer.session.tab = .screenshots
-    #expect(!window.validateMenuItem(find))
+    #expect(!viewer.session.sidebarHidden, "Find shows the hidden sidebar first")
+    #expect(viewer.session.search.isOpen && viewer.session.search.focusRequests == 1)
+    for place in ViewerPlace.keptPlaces {
+      viewer.session.place = place
+      #expect(window.validateMenuItem(find), "\(place)")
+      window.findInTab(nil)
+    }
+    #expect(viewer.session.search.focusRequests == 1 + ViewerPlace.keptPlaces.count, "every list searches the sidebar")
+  }
+
+  @Test("⌥⌘I is gone and ⌃⌘S hides the sidebar")
+  func optionCommandIIsGoneAndControlCommandSHidesTheSidebar() async throws {
+    let viewer = ViewerController.scripted(ScriptedService())
+    let window = window(viewer)
+    defer { window.close() }
+    let sidebar = item(#selector(ViewerMenuActions.toggleSidebar(_:)))
+    #expect(window.validateMenuItem(sidebar))
+    #expect(sidebar.title == ViewerWords.hideSidebarItem)
+    window.toggleSidebar(nil)
+    #expect(viewer.state.sidebar.mode == .hidden)
+    #expect(window.validateMenuItem(sidebar))
+    #expect(sidebar.title == ViewerWords.showSidebarItem)
+    window.toggleSidebar(nil)
+    #expect(viewer.state.sidebar.mode == .full)
+    let view = MainMenu.view()
+    let shortcut = try #require(view.items.first { $0.action == #selector(ViewerMenuActions.toggleSidebar(_:)) })
+    #expect(shortcut.keyEquivalent == "s" && shortcut.keyEquivalentModifierMask == [.command, .control])
+    let every = MainMenu.make(viewer: true).items
+      .compactMap(\.submenu)
+      .flatMap(\.items)
+    #expect(!every.contains { $0.keyEquivalent == "i" && $0.keyEquivalentModifierMask == [.command, .option] })
+  }
+
+  @Test("View's sidebar item shows the sidebar while the window is too narrow for it, over the card")
+  func theSidebarItemFollowsTheNarrowWindow() {
+    let viewer = ViewerController.scripted(ScriptedService())
+    let window = window(viewer)
+    defer { window.close() }
+    viewer.fitWindow(to: CGSize(width: 400, height: 600))
+    let sidebar = item(#selector(ViewerMenuActions.toggleSidebar(_:)))
+    #expect(window.validateMenuItem(sidebar))
+    #expect(sidebar.title == ViewerWords.showSidebarItem)
+    window.toggleSidebar(nil)
+    #expect(viewer.state.sidebar.overlay)
+    #expect(window.validateMenuItem(sidebar))
+    #expect(sidebar.title == ViewerWords.hideSidebarItem)
+  }
+
+  @Test("the helper line's menu offers Check Again, Open Settings, Recover, Switch and Log Out as the Helper menu does")
+  func theHelperLinesMenuFollowsTheHelperMenu() throws {
+    let viewer = ViewerController.scripted(ScriptedService())
+    let window = window(viewer)
+    defer { window.close() }
+    let pairs: [(ViewerCommand, Selector)] = [
+      (.checkAgain, #selector(ViewerMenuActions.checkAgain(_:))),
+      (.openSettings, #selector(ViewerMenuActions.openHelperSettings(_:))),
+      (.askRecover, #selector(HelperMenuActions.askRecover(_:))),
+      (.askSwitch, #selector(HelperMenuActions.askSwitch(_:))),
+      (.askLogOut, #selector(HelperMenuActions.askLogOut(_:))),
+    ]
+    let agree = { (why: String) in
+      let line = viewer.state.sidebar.helper.menu.flatMap(\.items)
+      #expect(line.map(\.command) == pairs.map(\.0), "\(why): in the Helper menu's order")
+      for (command, action) in pairs {
+        let lineItem = try #require(line.first { $0.command == command })
+        let menuItem = item(action)
+        #expect(lineItem.isEnabled == window.validateMenuItem(menuItem), "\(why): \(command)")
+        // Switch and Log Out name the helper once it is known, as the Helper menu's validation titles them.
+        if command == .askSwitch || command == .askLogOut { #expect(lineItem.title == menuItem.title, "\(why)") }
+      }
+    }
+    try agree("before the first reading")
+    viewer.readingLoop.show(
+      try status(["overview": ["mode": "observing", "accountName": "Test Helper", "account": "test-helper"]])
+    )
+    try agree("watching")
+    viewer.session.alert = .restart
+    try agree("an alert up")
+    viewer.session.alert = nil
+    viewer.readingLoop.show(try status(["overview": ["mode": "recovering", "pending": 1]]))
+    viewer.cancelAlert()
+    try agree("needing the person")
+    viewer.session.checkingAgain = true
+    try agree("checking")
+    let helper = MainMenu.helper()
+    let check = try #require(helper.items.first { $0.action == #selector(ViewerMenuActions.checkAgain(_:)) })
+    #expect(check.keyEquivalent == "r" && check.keyEquivalentModifierMask == .command)
+    #expect(viewer.state.sidebar.helper.menu.first?.items.first?.shortcut == ViewerMenuShortcut("r"))
+  }
+
+  @Test("Next Session and Previous Session follow the sidebar's order")
+  func nextAndPreviousSessionFollowTheSidebar() throws {
+    let viewer = ViewerController.scripted(ScriptedService())
+    let window = window(viewer)
+    defer { window.close() }
+    viewer.readingLoop.show(
+      try status([
+        "overview": [
+          "mode": "recovering", "state": "needsYou", "pending": 1, "sessionsShown": true,
+          "hostSessions": [SessionReplies.cursorIdle, SessionReplies.codexWaiting(), SessionReplies.claudeNeedsYou],
+        ]
+      ])
+    )
+    let next = item(#selector(ViewerMenuActions.chooseNextSession(_:)))
+    let previous = item(#selector(ViewerMenuActions.choosePreviousSession(_:)))
+    let all = item(#selector(ViewerMenuActions.chooseAllSessions(_:)))
+    #expect(!window.validateMenuItem(previous) && !window.validateMenuItem(all), "All sessions is first")
+    var visited: [ViewerSessionChoice] = []
+    while window.validateMenuItem(next) {
+      window.chooseNextSession(nil)
+      visited.append(viewer.session.chosenSession)
+    }
+    // Needs you leads, then Working, then Idle, as the sidebar draws them.
+    #expect(visited == [.one("3f9a1c07b2e4"), .one("8be20c4d1a77"), .one("5d21e9a04c3f")])
+    #expect(visited == Array(viewer.state.sidebar.sessions.choices.dropFirst()))
+    window.choosePreviousSession(nil)
+    #expect(viewer.session.chosenSession == .one("8be20c4d1a77"))
+    #expect(window.validateMenuItem(all))
+    window.chooseAllSessions(nil)
+    #expect(viewer.session.chosenSession == .all)
+    let session = MainMenu.session()
+    let keys = session.items
+      .filter { $0.action != nil && !$0.keyEquivalent.isEmpty }
+      .map { "\($0.keyEquivalent.unicodeScalars.first?.value ?? 0)" }
+    #expect(keys == ["48", "\(NSUpArrowFunctionKey)", "\(NSDownArrowFunctionKey)"])
+    #expect(
+      session.items.filter { !$0.keyEquivalent.isEmpty }.allSatisfy {
+        $0.keyEquivalentModifierMask == [.command, .option]
+      }
+    )
+  }
+
+  @Test("Show Ended Sessions is ticked while Ended is open")
+  func showEndedSessionsIsTickedWhileEndedIsOpen() throws {
+    let viewer = ViewerController.scripted(ScriptedService())
+    let window = window(viewer)
+    defer { window.close() }
+    let ended = item(#selector(ViewerMenuActions.toggleEnded(_:)))
+    #expect(window.validateMenuItem(ended))
+    #expect(ended.state == .off)
+    window.toggleEnded(nil)
+    #expect(viewer.session.endedShown)
+    #expect(window.validateMenuItem(ended))
+    #expect(ended.state == .on)
   }
 
   @Test("native Copy and Save follow the selected screenshot and fall back to the live picture after clearing")
@@ -221,7 +390,7 @@ struct ViewerWindowMenuTests {
     #expect(!window.validateMenuItem(copy))
     #expect(!window.validateMenuItem(save))
     #expect(save.title == ViewerWords.savePicture)
-    viewer.session.tab = .screenshots
+    viewer.session.place = .screenshots
     service.shots = [Screenshot(name: "one.png")]
     await viewer.panesModel.readShots(viewer.panesModel.work.generation)
     #expect(window.validateMenuItem(copy))

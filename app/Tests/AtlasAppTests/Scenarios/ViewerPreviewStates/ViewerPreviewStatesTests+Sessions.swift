@@ -34,12 +34,12 @@
         snapshot.date = Self.activityReadAt
         snapshot.timeZone = TimeZone(secondsFromGMT: 0) ?? .current
         snapshot.locale = Locale(identifier: "de_DE")
-        snapshot.detailsShown = true
-        snapshot.agents = [.claude, .codex]
-        snapshot.loggedInAt = Date(timeIntervalSince1970: 9 * 3600 + 12 * 60)
         snapshot.session.chosenSession = .one(Self.claudeKey)
         snapshot.panes.sessions.list = HostSessionList(sessions: [Self.claudeRecord])
-        snapshot.panes.apps.apps = [HelperApp(pid: 501, name: "Opie", front: true)]
+        // Opie, run from the session's copy, so the Library counts it among the session's apps.
+        snapshot.panes.apps.apps = [
+          HelperApp(pid: 501, name: "Opie", front: true, origin: HelperAppOrigin(session: Self.claudeKey, how: .copy))
+        ]
         Self.keepThumbnails(&snapshot)
       }
       return [
@@ -62,7 +62,7 @@
           Self.onSessionsActivity(Self.sessionsLog, &snapshot)
           snapshot.session.chosenSession = .one(Self.claudeKey)
         },
-        "Session detail": shown(working, detail),
+        "Session chosen": shown(working, detail),
         "Clean up": shown(working) { snapshot in
           detail(&snapshot)
           snapshot.session.alert = .cleanup(
@@ -79,6 +79,9 @@
           record.cleanup = .incomplete
           snapshot.panes.sessions.list = HostSessionList(sessions: [record])
           snapshot.session.cleanup.receipts[Self.claudeKey] = Self.cleanupApplied
+          // Said as the window's controller says it once the cleanup ran.
+          snapshot.session.notice = ViewerPresenter.cleanupNotice(Self.cleanupApplied)
+          snapshot.session.noticeAction = snapshot.reading.statusReading.activity(limit: 1).first?.id
         },
         "Activity, one session, nothing yet": shown(working) { snapshot in
           Self.onSessionsActivity(ActivityLog(), &snapshot)
@@ -104,12 +107,58 @@
           snapshot.session.chosenSession = .one("c0ffee5e5510")
           snapshot.panes.sessions.list = HostSessionList(sessions: [Self.piRecord])
         },
+        "Sidebar by state": shown(try byState()) { snapshot in
+          Self.byState(&snapshot)
+          snapshot.session.endedShown = true
+        },
+        "Sidebar, Ended folded": shown(try byState()) { snapshot in
+          Self.byState(&snapshot)
+        },
+        "Sidebar, search open": shown(working) { snapshot in
+          snapshot.session.search = ViewerSearchState(isOpen: true, query: "opie")
+        },
+        "Sidebar hidden": shown(working) { snapshot in
+          snapshot.date = Self.activityReadAt
+          snapshot.panes.sessions.list = HostSessionList(sessions: [Self.piRecord])
+          snapshot.session.sidebarHidden = true
+        },
         "Focus changed": shown(idle) { snapshot in
-          Self.onTab(.activity, at: Self.activityReadAt, &snapshot)
+          Self.onPlace(.activity, at: Self.activityReadAt, &snapshot)
           snapshot.panes.activity.log = Self.focusLog
           snapshot.panes.activity.readAt = Self.activityReadAt
+          snapshot.panes.icons = Self.icons
         },
       ]
+    }
+
+    /// The helper needing the person while four sessions are live: Claude Code's click unfinished, Codex waiting until
+    /// the person recovers, and Cursor and Terminal idle.
+    ///
+    /// - Returns: The status.
+    /// - Throws: A decoding error, which a fixed reply never gives.
+    func byState() throws -> ViewerStatus {
+      try sessionsReported(
+        "recovering",
+        state: "needsYou",
+        [
+          SessionReplies.claudeNeedsYou, SessionReplies.codexWaiting(recovery: true), SessionReplies.cursorIdle,
+          SessionReplies.terminalIdle,
+        ],
+        activity: Self.unfinished
+      )
+    }
+
+    /// The sidebar by state's own facts: Pi · notes-sync ended, and the recovery alert set aside with Not Now.
+    ///
+    /// - Parameter snapshot: The facts to change.
+    static func byState(_ snapshot: inout ViewerSnapshot) {
+      snapshot.date = activityReadAt
+      snapshot.timeZone = TimeZone(secondsFromGMT: 0) ?? .current
+      snapshot.locale = Locale(identifier: "de_DE")
+      snapshot.panes.sessions.list = HostSessionList(sessions: [piRecord])
+      if let offered = snapshot.offeredRecovery {
+        snapshot.session.recoveryLater = RecoveryKey(offered, status: snapshot.reading.status)
+      }
     }
 
     /// What cleaning up Claude Code's work takes while it still acts: quitting Opie, rolling back its plan, moving
@@ -192,108 +241,119 @@
     ///   - log: The log read.
     ///   - snapshot: The facts to change.
     static func onSessionsActivity(_ log: ActivityLog, _ snapshot: inout ViewerSnapshot) {
-      onTab(.activity, at: activityReadAt, &snapshot)
+      onPlace(.activity, at: activityReadAt, &snapshot)
       snapshot.panes.activity.log = log
       snapshot.panes.activity.readAt = activityReadAt
       snapshot.panes.shots.shots = shots
+      snapshot.panes.icons = icons
       keepThumbnails(&snapshot)
     }
 
     /// Claude Code's rows, newest first: clicking now, then what it did before, the oldest earlier today.
     static let claudeRows = [
-      ActivityLog.Entry(
-        id: "38",
-        says: "clicking Show Center in Opie",
+      row(
+        "38",
+        "clicking Show Center in Opie",
+        age: 0,
+        verb: "click",
+        app: opie,
         outcome: .running,
-        ageSeconds: 0,
-        session: Self.claudeKey
+        label: "Show Center",
+        session: claudeKey
       ),
-      ActivityLog.Entry(id: "37", says: "scrolled in Opie", ageSeconds: 4, session: Self.claudeKey),
-      ActivityLog.Entry(id: "36", says: "clicked Ring in Opie", ageSeconds: 9, session: Self.claudeKey),
-      ActivityLog.Entry(
-        id: "35",
-        says: "took a screenshot",
-        ageSeconds: 22,
+      row("37", "scrolled in Opie", age: 4, verb: "scroll", app: opie, session: claudeKey),
+      row("36", "clicked Ring in Opie", age: 9, verb: "click", app: opie, label: "Ring", session: claudeKey),
+      row(
+        "35",
+        "took a screenshot",
+        age: 22,
+        verb: "screenshot",
+        app: nil,
         operation: "screenshot",
-        session: Self.claudeKey,
-        capture: PreviewStates.shotNames[2]
+        session: claudeKey
       ),
-      ActivityLog.Entry(
-        id: "34",
-        says: "opened Opie",
-        ageSeconds: 30,
-        operation: "open",
-        session: Self.claudeKey
-      ),
+      row("34", "opened Opie", age: 30, verb: "open", app: opie, operation: "open", session: claudeKey),
     ]
 
     /// The rows of Codex, the person, Cursor and Terminal, newest first, after Claude Code's.
     static let otherRows = [
-      ActivityLog.Entry(
-        id: "x2",
-        says: "didn't type in Notes",
+      row(
+        "x2",
+        "didn't type in Notes",
+        age: 100,
+        verb: "type",
+        app: notes,
         outcome: .notSent,
-        ageSeconds: 100,
         reason: "Another app was in front",
-        session: Self.codexKey
+        session: codexKey
       ),
+      row("x1", "opened Notes", age: 112, verb: "open", app: notes, operation: "open", session: codexKey),
       ActivityLog.Entry(
-        id: "x1",
-        says: "opened Notes",
-        ageSeconds: 112,
-        operation: "open",
-        session: Self.codexKey
+        id: "33",
+        says: "gave back control",
+        actor: .you,
+        ageSeconds: 122,
+        operation: "release"
       ),
-      ActivityLog.Entry(id: "33", says: "gave back control", actor: .you, ageSeconds: 122, operation: "release"),
-      ActivityLog.Entry(id: "32", says: "clicked in Opie", actor: .you, ageSeconds: 140),
-      ActivityLog.Entry(id: "31", says: "clicked in Opie", actor: .you, ageSeconds: 150),
-      ActivityLog.Entry(id: "30", says: "clicked in Opie", actor: .you, ageSeconds: 157),
-      ActivityLog.Entry(
-        id: "u1",
-        says: "opened Opie",
-        ageSeconds: 240,
-        operation: "open",
-        session: Self.cursorKey
-      ),
-      ActivityLog.Entry(id: "t1", says: "ran a command", ageSeconds: 300, operation: "run"),
-      ActivityLog.Entry(
-        id: "27",
-        says: "ran a command",
-        ageSeconds: 400,
-        operation: "run",
-        session: Self.claudeKey
-      ),
+      persons("32", age: 140),
+      persons("31", age: 150),
+      persons("30", age: 157),
+      row("u1", "opened Opie", age: 240, verb: "open", app: opie, operation: "open", session: cursorKey),
+      row("t1", "ran a command", age: 300, verb: "run", app: nil, operation: "run"),
+      row("27", "ran a command", age: 400, verb: "run", app: nil, operation: "run", session: claudeKey),
     ]
 
-    /// The log while every session works: Claude Code's six rows, Codex's two, the person's, Cursor's and Terminal's.
+    /// One of the person's own clicks in Opie, through the viewer.
+    ///
+    /// - Parameters:
+    ///   - id: The row's id.
+    ///   - age: How long before the reading it started.
+    /// - Returns: The row.
+    static func persons(_ id: String, age: Double) -> ActivityLog.Entry {
+      ActivityLog.Entry(
+        id: id,
+        says: "clicked in Opie",
+        actor: .you,
+        ageSeconds: age,
+        verb: "click",
+        app: "Opie",
+        bundleId: SampleAppIcons.opie
+      )
+    }
+
+    /// The log while every session works: Claude Code's five rows, Codex's two, the person's, Cursor's and Terminal's.
     static let sessionsLog = ActivityLog(entries: claudeRows + otherRows)
 
     /// The log while Claude Code's click may not have finished: its click, whose outcome is unknown, in place of what
     /// it was doing.
     static let needsYouLog = ActivityLog(
       entries: [
-        ActivityLog.Entry(
-          id: "c1",
-          says: "clicked Show Center in Opie",
+        row(
+          "c1",
+          "clicked Show Center in Opie",
+          age: 2,
+          verb: "click",
+          app: opie,
           outcome: .failed,
-          ageSeconds: 2,
           reason: "Its outcome is unknown",
-          session: Self.claudeKey
+          session: claudeKey
         )
       ] + claudeRows.dropFirst() + otherRows
     )
 
     /// The log of one agent whose typing was refused because another app was in front, then typed.
     static let focusLog = ActivityLog(entries: [
-      ActivityLog.Entry(id: "f3", says: "typed in Notes", ageSeconds: 2),
-      ActivityLog.Entry(
-        id: "f2",
-        says: "didn't type in Notes",
+      row("f3", "typed in Notes", age: 2, verb: "type", app: notes),
+      row(
+        "f2",
+        "didn't type in Notes",
+        age: 4,
+        verb: "type",
+        app: notes,
         outcome: .notSent,
-        ageSeconds: 4,
         reason: "Another app was in front"
       ),
-      ActivityLog.Entry(id: "f1", says: "opened Notes", ageSeconds: 12, operation: "open"),
+      row("f1", "opened Notes", age: 12, verb: "open", app: notes, operation: "open"),
     ])
 
     /// Pi · notes-sync's record: it started at 09:40 and ended 20 minutes before Activity was read.

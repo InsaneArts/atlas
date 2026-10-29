@@ -5,8 +5,8 @@ import AtlasService
 struct ViewerShownWindow {
   /// The app's name.
   var app: String
-  /// The app's icon, by what it is known by; nil when it has none.
-  var icon: String?
+  /// The app's bundle identifier, which its icon is found by; nil when unknown.
+  var bundleId: String?
   /// The window, with its place on the helper's display.
   var window: HelperWindow
 }

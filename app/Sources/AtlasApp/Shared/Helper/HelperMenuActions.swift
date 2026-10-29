@@ -1,7 +1,7 @@
 import Foundation
 
-/// What the helper's menu items ask, wherever they stand: the main menu's Helper menu, the main window's ⋯
-/// and the panel's ⋯. The window that answers them implements each and validates its items.
+/// What the helper's menu items ask, wherever they stand: the main menu's Helper menu and the panel's ⋯. The window
+/// that answers them implements each and validates its items.
 @objc protocol HelperMenuActions {
   /// Recover…: ask before recovering the helper.
   ///

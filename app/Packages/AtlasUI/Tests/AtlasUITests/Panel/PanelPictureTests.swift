@@ -96,8 +96,8 @@ struct PanelPictureTests {
   func aFailedCaptionIsOrange() throws {
     let working = PanelCaption(text: "Clicked Save", time: "just now")
     let failed = PanelCaption(text: "Clicked Save", time: "just now", isFailed: true)
-    #expect(PanelPicture.lead(working) == GlassChip<EmptyView>.Lead.dot(.active))
-    #expect(PanelPicture.lead(failed) == GlassChip<EmptyView>.Lead.dot(.attention))
+    #expect(PanelPicture.lead(working) == PictureChip<EmptyView>.Lead.dot(.active))
+    #expect(PanelPicture.lead(failed) == PictureChip<EmptyView>.Lead.dot(.attention))
     // The chip's leading end: past the caption's corner inset, across the small chip's end inset and its dot, on the
     // chip's middle line.
     let left = Self.margin + Int(PanelLayout.captionInset)
@@ -109,11 +109,9 @@ struct PanelPictureTests {
         caption: caption,
         pause: PanelPause(isPaused: false, label: "Pause picture", help: "")
       )
-      // The system's glass draws nothing offscreen; its tint stands in, as the renders draw it.
       let drawn = try PanelPixels(
         PanelPicture(state: state) { _ in }
           .padding(Spacing.l)
-          .environment(\.drawsGlassEffect, false)
       )
       let rows = (middle - 2)...(middle + 2)
       let pixels = across.flatMap { x in rows.map { y in drawn.colour(x: x, y: y) } }
@@ -129,10 +127,33 @@ struct PanelPictureTests {
     #expect(failure.isOrange && !failure.isBlue, "a failure is orange")
   }
 
+  @Test("the pause circle's bars and its play triangle both stand centred in the circle")
+  func thePauseSymbolsStandCentred() throws {
+    let side = Int(PanelLayout.pauseButton)
+    let left = Self.margin + Int(PanelLayout.picture.width - PanelLayout.captionInset) - side
+    let top = Self.margin + Int(PanelLayout.picture.height - PanelLayout.captionInset) - side
+    for look in [PanelPictureState.Look.live, .paused] {
+      let drawn = try Self.draw(look)
+      // The symbol is drawn light on the circle's dark fill; the red picture round the circle is not light.
+      let inked = (top..<(top + side))
+        .flatMap { y in
+          (left..<(left + side))
+            .filter { x in
+              let pixel = drawn.colour(x: x, y: y)
+              return min(pixel.red, pixel.green, pixel.blue) > 0.6
+            }
+        }
+      try #require(!inked.isEmpty, "\(look): no symbol drawn")
+      // By the ink's weight rather than its box, so the triangle's point does not pull its middle.
+      let centre = Double(inked.reduce(0, +)) / Double(inked.count) + 0.5
+      #expect(abs(centre - (Double(left) + Double(side) / 2)) <= 1, "\(look): \(centre)")
+    }
+  }
+
   @Test("the control row draws Stop before the main action only when its state shows it")
   func theRowDrawsStopOnlyWhenShown() throws {
     let main = PanelMainButton(title: "Open Atlas", help: "", event: .openAtlas)
-    // A point inside the row's leading capsule: Stop's glass, or the white main action that fills the row.
+    // A point inside the row's leading capsule: Stop's quiet fill, or the white main action that fills the row.
     let lead = (x: Int(ControlHeight.sPlus) / 2, y: Int(ControlHeight.sPlus) / 2)
     for showsStop in [false, true] {
       let pixel = try PanelPixels(
@@ -158,7 +179,7 @@ struct PanelPictureTests {
         let pixel = pixels.colour(x: x, y: middle)
         return pixel.alpha > 0.9 && min(pixel.red, pixel.green, pixel.blue) > 0.9
       }
-      // The white fill, a long run of white, not the glass button's white words.
+      // The white fill, a long run of white, not the secondary button's white words.
       let run = 24
       let starts = 0..<(pixels.width - run)
       return starts.first { x in

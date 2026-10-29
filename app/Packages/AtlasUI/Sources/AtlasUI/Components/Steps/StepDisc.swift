@@ -84,7 +84,7 @@ struct StepDisc: View {
 
   /// The faint ring a waiting step's number sits in; none on a filled disc.
   private var ring: Color {
-    state == .waiting ? .strokeSelected : .clear
+    state == .waiting ? .strokeStrong : .clear
   }
 
   /// The number's colour: white on the accent, tertiary in the faint ring.

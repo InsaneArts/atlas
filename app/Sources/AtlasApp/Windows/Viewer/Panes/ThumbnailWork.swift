@@ -6,4 +6,6 @@ struct ThumbnailWork {
   var wanted: [String] = []
   /// Thumbnails being read, by name.
   var loading: [String: Task<Void, Never>] = [:]
+  /// Whether new reads wait, as while the window is being resized; those under way go on.
+  var isHeld = false
 }

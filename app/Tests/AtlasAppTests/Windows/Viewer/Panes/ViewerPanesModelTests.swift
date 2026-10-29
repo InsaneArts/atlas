@@ -62,7 +62,7 @@ struct ViewerPanesModelTests {
       shotOutlet: shotOutlet
     )
     service.holdShots = true
-    viewer.send(.selectTab(.screenshots))
+    viewer.send(.show(.screenshots))
     try await settle("the screenshots were never read") { viewer.panes.shots.shots != nil }
     return viewer
   }
@@ -71,13 +71,13 @@ struct ViewerPanesModelTests {
   func activityStopsReading() async throws {
     let service = ScriptedService()
     let viewer = try await ViewerController.watching(service)
-    viewer.send(.selectTab(.activity))
+    viewer.send(.show(.activity))
     try await settle("Activity was never read") { service.activityCalls == 1 }
     let first = viewer.panesModel.work.reading
-    viewer.send(.selectTab(.apps))
+    viewer.send(.show(.apps))
     try await Self.ended(first, "Activity's reading went on after its tab was left")
     #expect(service.activityCalls == 1)
-    viewer.send(.selectTab(.activity))
+    viewer.send(.show(.activity))
     try await settle("Activity was not read on its return") { service.activityCalls == 2 }
     let second = viewer.panesModel.work.reading
     viewer.setVisible(false)
@@ -98,7 +98,7 @@ struct ViewerPanesModelTests {
       wallClock: { now }
     )
     service.hold = ["screenshots"]
-    viewer.send(.selectTab(.activity))
+    viewer.send(.show(.activity))
     try await settle("the screenshots were never asked for") { service.held["screenshots"] != nil }
     now = Date(timeIntervalSince1970: 1_030)
     service.resume("screenshots")
@@ -115,8 +115,8 @@ struct ViewerPanesModelTests {
     viewer.send(.thumbnailNeeded(Self.newer))
     let stale = viewer.panesModel.work.thumbnails.loading[Self.newer]
     try await settle("the first thumbnail was never asked for") { service.heldShots.count == 1 }
-    viewer.send(.selectTab(.screen))
-    viewer.send(.selectTab(.screenshots))
+    viewer.send(.show(.screen))
+    viewer.send(.show(.screenshots))
     service.shot = png(width: 2, height: 2)
     viewer.send(.thumbnailNeeded(Self.newer))
     let fresh = viewer.panesModel.work.thumbnails.loading[Self.newer]
@@ -138,7 +138,7 @@ struct ViewerPanesModelTests {
     for name in ["1-capture.png", "2-capture.png", "3-capture.png"] { viewer.send(.thumbnailNeeded(name)) }
     try await settle("two thumbnails were never asked for") { service.heldShots.count == 2 }
     let first = viewer.panesModel.work.thumbnails.loading["1-capture.png"]
-    viewer.send(.selectTab(.apps))
+    viewer.send(.show(.apps))
     try await Self.answer(service, "1-capture.png", full: false)
     try await Self.ended(first, "the first thumbnail's reply never came back")
     #expect(service.shotCalls == 2, "the third thumbnail was never asked for")
@@ -146,8 +146,8 @@ struct ViewerPanesModelTests {
     viewer.close()
   }
 
-  @Test("pending thumbnails resume when the same pane shows again", arguments: [ViewerTab.screenshots, .activity])
-  func hiddenThumbnailsResume(_ tab: ViewerTab) async throws {
+  @Test("pending thumbnails resume when the same pane shows again", arguments: [ViewerPlace.screenshots, .activity])
+  func hiddenThumbnailsResume(_ place: ViewerPlace) async throws {
     let service = ScriptedService()
     let viewer = try await Self.onShots(service)
     defer {
@@ -158,11 +158,11 @@ struct ViewerPanesModelTests {
     let removed = "removed.png"
     service.shots += [Screenshot(name: queued), Screenshot(name: removed)]
     await viewer.panesModel.readShots(viewer.panesModel.work.generation)
-    if tab == .activity {
+    if place == .activity {
       service.activityLog = ActivityLog(entries: [
         ActivityLog.Entry(id: "1", says: "took a screenshot", ageSeconds: 4, operation: "screenshot")
       ])
-      viewer.send(.selectTab(.activity))
+      viewer.send(.show(.activity))
       try await settle("Activity was never read") { viewer.panes.activity.readAt != nil }
     }
     service.shot = png(width: 1, height: 1)
@@ -359,7 +359,7 @@ struct ViewerPanesModelTests {
     service.shots = Self.shots
     service.fail = ["screenshot"]
     let viewer = try await ViewerController.watching(service)
-    viewer.send(.selectTab(.screenshots))
+    viewer.send(.show(.screenshots))
     try await settle("the screenshots were never read") { viewer.panes.shots.shots != nil }
     viewer.send(.openShot(Self.newer))
     try await Self.ended(viewer.panesModel.work.large.load, "the failed read never ended")
@@ -410,9 +410,9 @@ struct ViewerPanesModelTests {
       )
     ]
     let viewer = try await ViewerController.watching(service)
-    viewer.send(.selectTab(.apps))
+    viewer.send(.show(.apps))
     try await settle("the apps were never read") { viewer.panes.apps.apps != nil }
-    viewer.send(.selectTab(.screen))
+    viewer.send(.show(.screen))
     let before = viewer.state
     viewer.send(.showWindow(app: 7, window: 3))
     try #require(viewer.state.screen.outline != nil, "the window was outlined")
@@ -427,11 +427,11 @@ struct ViewerPanesModelTests {
     service.shots = Self.shots
     service.shot = png()
     let viewer = try await ViewerController.watching(service)
-    viewer.send(.selectTab(.screenshots))
+    viewer.send(.show(.screenshots))
     try await settle("the screenshots were never read") { viewer.panes.shots.shots != nil }
-    viewer.send(.selectTab(.activity))
+    viewer.send(.show(.activity))
     viewer.send(.openShot(Self.newer))
-    #expect(viewer.state.top.tabs.selected == .screenshots)
+    #expect(viewer.state.pane.place == .screenshots)
     guard case .screenshots(let shots) = viewer.state.pane else {
       Issue.record("the Screenshots tab does not show")
       return

@@ -51,39 +51,47 @@
       #expect(Set(PreviewStates.alert.map(\.value.title)).count == 4, "Recover, Switch, Log Out, Log Out Anyway")
     }
 
-    @Test("the main window previews show every top-row state, alert, empty message, chip and tab")
+    @Test("the main window previews show every state the header says, alert, empty message, footer line and list")
     func viewerPreviewsCoverEveryPiece() {
       let states = PreviewStates.viewer
         .map(\.value)
       #expect(
-        Set(states.map(\.top.status.label)) == [
-          "Working", "Idle", "You have control", "Needs you", "Stopped", "In use elsewhere", "Not ready", "Logged out",
-          "Connecting",
-        ]
+        Set(states.map(\.header.who)).isSuperset(of: [
+          "Working", "Idle", "You", "Needs you", "Stopped", "In use elsewhere", "Not ready", "Logged out", "Connecting",
+          "Paused", SessionSamples.claudeName,
+        ])
       )
       #expect(
         Set(states.compactMap { $0.alert?.title }).count == 6,
         "Recover, Switch, Log Out, Log Out Anyway, Restart, Clean Up"
       )
       #expect(Set(states.compactMap { $0.screen.picture == nil ? $0.screen.empty?.message.headline : nil }).count == 3)
-      let chips = Set(
-        states.compactMap { state in
-          state.screen.chip.map { chip in
-            switch chip {
-            case .typing: "typing"
-            case .inControl: "inControl"
-            case .paused: "paused"
-            case .holder: "holder"
-            }
-          }
+      let lines = Set(
+        states.map { state in
+          let latest = state.footer.latest
+          if latest.caret { return "typing" }
+          if latest.announces { return latest.tone == .attention ? "refusal" : "notice" }
+          if latest.tone == .link { return "control" }
+          return latest.age.isEmpty ? "state" : latest.icon == nil ? "action" : "session action"
         }
       )
-      #expect(chips == ["typing", "inControl", "paused", "holder"])
-      #expect(states.contains { $0.sessions != nil })
-      #expect(states.contains { $0.sessions?.ended.isEmpty == false })
-      #expect(states.contains { $0.details != nil })
-      #expect(states.contains { $0.top.actions.pause?.isOn == true })
-      #expect(states.contains { $0.toast != nil })
+      #expect(lines == ["typing", "refusal", "notice", "control", "state", "action", "session action"])
+      let sections = Set(states.flatMap { $0.sidebar.sessions.groups.map(\.section) })
+      #expect(sections == Set(ViewerSessionSection.allCases), "every section, Needs you and Ended included")
+      #expect(states.contains { $0.sidebar.sessions.endedShown })
+      #expect(states.contains { $0.sidebar.sessions.endedCount > 0 && !$0.sidebar.sessions.endedShown })
+      #expect(states.contains { $0.sidebar.search.isOpen })
+      #expect(Set(states.map(\.sidebar.mode)) == [.full, .hidden])
+      let rows = states.flatMap { $0.sidebar.sessions.groups.flatMap(\.rows) }
+      #expect(rows.contains { $0.isCleaningUp }, "a session's work being cleaned up")
+      #expect(rows.contains { $0.help.contains("Last cleanup") }, "a session's last cleanup in its tooltip")
+      #expect(
+        states.contains { $0.sidebar.helper.words.hasPrefix("Helper needs setup ·") },
+        "a check that does not pass, counted on the helper's line"
+      )
+      #expect(states.contains { $0.footer.controls.pause?.isOn == true })
+      #expect(states.contains { $0.footer.controls.control?.look == .accent })
+      #expect(states.contains { $0.footer.controls.agent == .resume(isEnabled: true) })
       let panes = Set(
         states.map { state in
           switch state.pane {

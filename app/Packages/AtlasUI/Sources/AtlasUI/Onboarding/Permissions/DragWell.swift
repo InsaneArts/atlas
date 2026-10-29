@@ -13,11 +13,11 @@ struct DragWell<Icon: View>: View {
       .padding(.vertical, Spacing.s)
       .frame(maxWidth: .infinity)
       .background(
-        RoundedRectangle(cornerRadius: Radius.large)
+        RoundedRectangle(cornerRadius: Radius.large, style: .continuous)
           .fill(Color.fillGroup)
       )
       .overlay(
-        RoundedRectangle(cornerRadius: Radius.large)
+        RoundedRectangle(cornerRadius: Radius.large, style: .continuous)
           .strokeBorder(Color.separator, lineWidth: Stroke.hairline)
       )
   }

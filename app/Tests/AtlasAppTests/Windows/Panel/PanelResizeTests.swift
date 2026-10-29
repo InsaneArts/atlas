@@ -18,19 +18,19 @@ struct PanelResizeTests {
     #expect(PanelResize.change(isShown: true, reduceMotion: false, eases: false) == .instant, "the fallback")
   }
 
-  @Test("two-line session rows grow the panel, and each row past the first grows it again")
+  @Test("each session row past the first grows the panel")
   func sessionRowsGrowThePanel() throws {
     let height = { (snapshot: PanelSnapshot) in
       NSHostingView(rootView: PanelView(state: PanelPresenter.state(snapshot)) { _ in })
         .fittingSize
         .height
     }
-    let recent = try SessionReplies.snapshot([SessionReplies.claudeActing])
+    let one = try SessionReplies.snapshot([SessionReplies.claudeActing])
     let two = try SessionReplies.snapshot([SessionReplies.claudeActing, SessionReplies.cursorIdle])
     let three = try SessionReplies.snapshot([
       SessionReplies.claudeActing, SessionReplies.codexWaiting(), SessionReplies.cursorIdle,
     ])
-    #expect(height(two) > height(recent), "two session rows stand taller than one Recent row")
+    #expect(height(two) > height(one), "two session rows stand taller than one")
     #expect(height(three) > height(two))
   }
 }

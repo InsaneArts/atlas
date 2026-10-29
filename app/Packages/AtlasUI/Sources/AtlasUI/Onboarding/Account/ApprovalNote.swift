@@ -28,7 +28,7 @@ struct ApprovalNote: View {
     .padding(.horizontal, Spacing.mPlus)
     .padding(.vertical, Spacing.m)
     .background(
-      RoundedRectangle(cornerRadius: Radius.large)
+      RoundedRectangle(cornerRadius: Radius.large, style: .continuous)
         .filledOutline(Color.fillQuiet, border: Color.separator, lineWidth: Stroke.hairline)
     )
   }

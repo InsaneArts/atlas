@@ -4,7 +4,7 @@ import Foundation
 /// The host sessions `ATLAS_RENDER_SESSIONS` puts in the live status for design checks: Claude Code · understudy,
 /// Codex · atlas-landing, Cursor · opie and, past the panel's three rows, a Terminal one and Pi · notes-sync.
 enum PanelRenderSessions: String, CaseIterable, Sendable {
-  /// One at work, Claude Code: no session is named and the panel is as it always was.
+  /// One at work, Claude Code: the panel lists it in Recent's place, and no line names who has the helper.
   case one
   /// Two at work: Claude Code has the helper and Cursor is idle.
   case two

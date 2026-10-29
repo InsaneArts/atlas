@@ -3,7 +3,7 @@ import AtlasStatus
 import Foundation
 
 /// The main window's words for host sessions that depend on what it holds: a session's line in the sessions column
-/// and in Details, Activity's groups, the Screenshots count, and Details' facts. Fixed copy, such as the column's
+/// and its menu, Activity's groups, the Screenshots count, and a session's facts. Fixed copy, such as the column's
 /// headings, the groups' names and the recovery line's buttons, stays in AtlasUI's views; the words the panel shares
 /// are ``Words``'.
 extension ViewerWords {
@@ -33,7 +33,7 @@ extension ViewerWords {
   static let endedFact = "Ended"
   /// The fact's name while the sessions' list cannot be read.
   static let sessionsFact = "Sessions"
-  /// The fact's value while the sessions' list cannot be read, so what Details shows may be out of date.
+  /// The fact's value while the sessions' list cannot be read, so what its facts say may be out of date.
   static let sessionsUnread = "Couldn't read sessions; this may be out of date"
   /// The Terminal session's host, which no host named.
   static let noHost = "None named"
@@ -46,41 +46,7 @@ extension ViewerWords {
   /// A plan whose phase is not known.
   static let plan = "A plan"
 
-  /// A session's state and line as its row in the sessions column and Details say them: what it does, what it waits
-  /// for, how long it has been idle, or when it ended.
-  ///
-  /// - Parameters:
-  ///   - session: The session, as the status lists it.
-  ///   - line: Its line, as AtlasStatus decides it.
-  ///   - now: The time now.
-  /// - Returns: "Acting · has the helper", "Waiting for the helper · 8 s", "Waits until you recover", "Needs you · a
-  ///   click may not have finished", "Idle · 4 min ago", "Ended 20 min ago" or "Last seen 2 h ago".
-  static func sessionSubtitle(_ session: ViewerStatus.HostSession, line: SessionLine, now: Date) -> String {
-    switch line {
-    case .acting:
-      return stated(.acting, Words.sessionLine(.acting(says: nil), now: now))
-    case .waitingForHelper, .waitingForRecovery, .ended, .lastSeen:
-      return Words.sessionLine(line, now: now)
-    case .mayNotHaveFinished:
-      return stated(.needsYou, Words.sessionLine(line, now: now))
-    case .last(_, let age):
-      return idle(age ?? session.lastSeenAt.map { now.timeIntervalSince($0) })
-    case .none:
-      return idle(session.lastSeenAt.map { now.timeIntervalSince($0) })
-    }
-  }
-
-  /// A state's word, then its line, as one subtitle.
-  ///
-  /// - Parameters:
-  ///   - state: The session's state.
-  ///   - line: Its line, as the panel says it.
-  /// - Returns: "Needs you · a click may not have finished".
-  private static func stated(_ state: HostSessionState, _ line: String) -> String {
-    "\(Words.sessionState(state)) · \(Words.leadingLower(line))"
-  }
-
-  /// An ended session's line, as its row in the sessions column and Details say it.
+  /// An ended session's line, as its row in the sidebar says it.
   ///
   /// - Parameters:
   ///   - record: The session, as `sessions.json` lists it.
@@ -128,14 +94,6 @@ extension ViewerWords {
     count == 0 ? "None by \(name)" : "\(count) by \(name)"
   }
 
-  /// See all, under a session's newest screenshots in Details.
-  ///
-  /// - Parameter count: How many screenshots it took.
-  /// - Returns: "See all 6".
-  static func seeAll(_ count: Int) -> String {
-    "See all \(count)"
-  }
-
   /// The copies of an app Atlas made for a session, as their fact's name.
   ///
   /// - Parameters:
@@ -146,15 +104,7 @@ extension ViewerWords {
     count > 1 ? "Copies of \(app)" : "Copy of \(app)"
   }
 
-  /// When a plan was made, as its fact's value.
-  ///
-  /// - Parameter time: The time, on the person's clock.
-  /// - Returns: "Made at 10:02".
-  static func madeAt(_ time: String) -> String {
-    "Made at \(time)"
-  }
-
-  /// Where a plan stands, as its fact's name.
+  /// Where a plan stands, in its fact.
   ///
   /// - Parameter plan: The plan.
   /// - Returns: "Applied · can roll back", "Applied", "Applying", "Rolling back", or "A plan" when it is not known.

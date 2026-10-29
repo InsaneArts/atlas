@@ -99,8 +99,12 @@ final class PanelPopover: NSObject, NSPopoverDelegate {
       window?.makeKey()
       // No button is focused until the person presses Tab, as in menus.
       window?.makeFirstResponder(nil)
-      // Again after this turn, once the popover has finished opening. Unstructured, as opening is synchronous.
-      Task { window?.makeFirstResponder(nil) }
+      // Again after this turn, once the popover has finished opening, and the item stays highlighted, as an open
+      // menu's does, once the click that opened it has let the button go. Unstructured, as opening is synchronous.
+      Task { [weak self] in
+        window?.makeFirstResponder(nil)
+        if self?.popover.isShown == true { self?.item.showsPanel(true) }
+      }
       watchOutsideClicks()
       watchKeys()
       controller.watch(open: true)
@@ -202,6 +206,7 @@ final class PanelPopover: NSObject, NSPopoverDelegate {
   /// - Parameter notification: The popover's notification.
   func popoverDidClose(_ notification: Notification) {
     guard !popover.isShown else { return }
+    item.showsPanel(false)
     stopWatchingOutsideClicks()
     stopWatchingKeys()
     controller.watch(open: false)

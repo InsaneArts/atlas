@@ -32,14 +32,16 @@ struct ViewerReadingLoopTests {
     try await settle("the paused viewer never read status") { service.statusCalls > asked }
     let interval = Duration.seconds(ViewerPictureRate.live.seconds)
     try await clock.untilSleeping(for: interval, "the paused reading never waited")
-    #expect(viewer.state.top.status.label == "Idle")
-    #expect(viewer.state.top.actions.agent == nil)
+    #expect(ViewerPresenter.status(viewer.snapshot).label == "Idle")
+    #expect(viewer.state.footer.controls.agent == nil)
     #expect(service.frameCalls == frames)
 
     service.reply = ["ready": true, "canObserve": true, "overview": ["mode": "agent", "state": "working"]]
     clock.advance(by: interval)
-    try await settle("the paused viewer never showed Working") { viewer.state.top.status.label == "Working" }
-    #expect(viewer.state.top.actions.agent == .stop)
+    try await settle("the paused viewer never showed Working") {
+      ViewerPresenter.status(viewer.snapshot).label == "Working"
+    }
+    #expect(viewer.state.footer.controls.agent == .stop)
     #expect(service.frameCalls == frames)
     try await clock.untilSleeping(for: interval, "the working reading never waited")
 
@@ -49,9 +51,9 @@ struct ViewerReadingLoopTests {
     ]
     clock.advance(by: interval)
     try await settle("the paused viewer never showed Needs you") { viewer.snapshot.mode.kind == .needsYou }
-    #expect(viewer.state.top.actions.agent == nil)
-    #expect(viewer.state.top.actions.control?.event == .askRecover)
-    #expect(viewer.state.top.actions.control?.isEnabled == true)
+    #expect(viewer.state.footer.controls.agent == nil)
+    #expect(viewer.state.footer.controls.control?.event == .askRecover)
+    #expect(viewer.state.footer.controls.control?.isEnabled == true)
     #expect(service.frameCalls == frames)
     #expect(viewer.session.paused)
   }
@@ -80,7 +82,7 @@ struct ViewerReadingLoopTests {
     #expect(viewer.reading.unavailable == nil)
     #expect(viewer.state.screen.picture == shown)
     #expect(viewer.state.screen.empty == nil)
-    #expect(viewer.state.top.status.label == "Idle")
+    #expect(ViewerPresenter.status(viewer.snapshot).label == "Idle")
     #expect(service.frameCalls == frames)
 
     service.fail = []
@@ -92,7 +94,7 @@ struct ViewerReadingLoopTests {
     #expect(viewer.reading.unavailable == nil)
     #expect(viewer.state.screen.picture == shown)
     #expect(viewer.state.screen.empty == nil)
-    #expect(viewer.state.top.status.label == "Working")
+    #expect(ViewerPresenter.status(viewer.snapshot).label == "Working")
     #expect(viewer.session.paused)
     #expect(service.frameCalls == frames)
   }
@@ -125,9 +127,9 @@ struct ViewerReadingLoopTests {
     clock.advance(by: interval)
     try await clock.untilSleeping(for: interval, "the recovered reading never waited")
     #expect(viewer.reading.unavailable == nil)
-    #expect(viewer.state.top.status.label == "Working")
-    #expect(viewer.state.top.actions.control?.event == .takeControl)
-    #expect(viewer.state.top.actions.control?.isEnabled == true)
+    #expect(ViewerPresenter.status(viewer.snapshot).label == "Working")
+    #expect(viewer.state.footer.controls.control?.event == .takeControl)
+    #expect(viewer.state.footer.controls.control?.isEnabled == true)
     #expect(viewer.snapshot.canTakeControlOnceResumed)
     #expect(!viewer.snapshot.canTakeControl)
     #expect(!viewer.reading.ready)
@@ -144,8 +146,8 @@ struct ViewerReadingLoopTests {
     try await clock.untilSleeping(for: interval, "the unobservable reading never waited")
     #expect(viewer.reading.status.unobservable != nil)
     #expect(viewer.snapshot.mode.kind == .notReady)
-    #expect(viewer.state.top.status.line == "Atlas isn't answering in the helper.")
-    #expect(viewer.state.top.actions.control == nil)
+    #expect(ViewerPresenter.status(viewer.snapshot).line == "Atlas isn't answering in the helper.")
+    #expect(viewer.state.footer.controls.control == nil)
     #expect(service.frameCalls == frames)
   }
 
@@ -257,7 +259,7 @@ struct ViewerReadingLoopTests {
     let service = ScriptedService()
     let clock = ManualClock()
     let viewer = try await ViewerController.watching(service, clock: clock)
-    // Details' tick stops, so the reading's pause is the clock's one sleeper.
+    // The clock's tick stops, so the reading's pause is the clock's one sleeper.
     viewer.readingLoop.ticking?.cancel()
     let interval = Duration.seconds(ViewerPictureRate.live.seconds)
     try await clock.untilSleeping(for: interval, "the reading never paused")
@@ -270,29 +272,22 @@ struct ViewerReadingLoopTests {
     viewer.close()
   }
 
-  @Test("the clock's tick moves the picture's age in Details, and redraws nothing else")
-  func theTickRedrawsTheStatusLineAlone() async throws {
+  @Test("the clock's tick moves the picture's age without redrawing the window")
+  func theTickRedrawsNothing() async throws {
     let clock = ManualClock()
     let viewer = try await ViewerController.watching(ScriptedService(), clock: clock)
     // Readings stop, so no new picture arrives as the time passes; the tick is read by hand below.
     viewer.readingLoop.watch(false)
     let window = OSAllocatedUnfairLock(initialState: false)
-    let line = OSAllocatedUnfairLock(initialState: false)
     withObservationTracking {
       _ = viewer.state
     } onChange: {
       window.withLock { $0 = true }
     }
-    withObservationTracking {
-      _ = viewer.newestPicture
-    } onChange: {
-      line.withLock { $0 = true }
-    }
     clock.advance(by: .seconds(10))
     viewer.readingLoop.readClock()
-    #expect(line.withLock { $0 }, "the age row draws again")
-    #expect(viewer.newestPicture == "10 s ago")
-    #expect(!window.withLock { $0 }, "the rest of the window stays as it was")
+    #expect(ViewerPresenter.newest(viewer.snapshot) == "10 s ago", "the next drawing tells the new age")
+    #expect(!window.withLock { $0 }, "the window stays as it was")
     viewer.close()
   }
 

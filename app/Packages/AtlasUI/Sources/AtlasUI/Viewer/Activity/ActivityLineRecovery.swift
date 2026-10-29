@@ -10,8 +10,8 @@ struct ActivityLineRecovery: View {
   /// Show Screen, then Recover….
   var body: some View {
     HStack(spacing: Spacing.s) {
-      Button("Show Screen") { send(.selectTab(.screen)) }
-        .buttonStyle(.capsule(.glass, size: .mini))
+      Button("Show Screen") { send(.show(.screen)) }
+        .buttonStyle(.capsule(.secondary, size: .mini))
         .help("Show what the action left on the helper's screen")
         .accessibilityHint("Shows what the action left on the helper's screen")
       Button("Recover…") { send(.askRecover) }

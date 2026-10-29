@@ -29,12 +29,12 @@ struct ScreenZoom: ViewModifier {
   /// scrolls, and fades as any pane), and Reduce Motion is off.
   ///
   /// - Parameters:
-  ///   - old: The tab left.
-  ///   - new: The tab shown.
+  ///   - old: The place left.
+  ///   - new: The place shown.
   ///   - screen: What the Screen tab shows.
   ///   - reduceMotion: Whether the Reduce Motion setting is on.
   /// - Returns: Whether the picture moves.
-  static func zooms(from old: ViewerTab, to new: ViewerTab, screen: ViewerScreenState, reduceMotion: Bool) -> Bool {
+  static func zooms(from old: ViewerPlace, to new: ViewerPlace, screen: ViewerScreenState, reduceMotion: Bool) -> Bool {
     guard !reduceMotion, screen.picture != nil, screen.actualSize == nil else { return false }
     return (old == .screen && new.keepsScreenInCorner) || (new == .screen && old.keepsScreenInCorner)
   }

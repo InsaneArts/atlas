@@ -7,8 +7,6 @@ struct TrackTabStyle: ButtonStyle {
   let isSelected: Bool
   /// What the tab shows: a symbol sits closer to its edges than a word.
   let face: TabsFace
-  /// The namespace the thumb glides in.
-  let thumb: Namespace.ID
   @Environment(\.isEnabled) private var enabled
 
   /// The tab's label, on the thumb while selected.
@@ -22,9 +20,9 @@ struct TrackTabStyle: ButtonStyle {
       .background {
         if isSelected {
           TabsThumb()
-            .matchedGeometryEffect(id: TabsStyle.thumbID, in: thumb)
         }
       }
+      .transaction(value: isSelected) { $0.animation = nil }
       .contentShape(Capsule())
       .opacity(enabled ? 1 : Opacity.disabled)
       .animation(CapsuleButtonStyle.pressAnimation(isPressed: configuration.isPressed), value: configuration.isPressed)
@@ -33,12 +31,11 @@ struct TrackTabStyle: ButtonStyle {
 
 #if DEBUG
   #Preview("Selected and not") {
-    @Previewable @Namespace var thumb
     HStack(spacing: TabsLayout.trackGap) {
       Button(String("Screen")) {}
-        .buttonStyle(TrackTabStyle(isSelected: true, face: .word, thumb: thumb))
+        .buttonStyle(TrackTabStyle(isSelected: true, face: .word))
       Button(String("Activity")) {}
-        .buttonStyle(TrackTabStyle(isSelected: false, face: .word, thumb: thumb))
+        .buttonStyle(TrackTabStyle(isSelected: false, face: .word))
     }
     .padding()
     .sampleSurface()

@@ -4,13 +4,13 @@ import SwiftUI
 /// live, the host sessions, and the actions on the agent. It draws its state and sends what the person does; it decides
 /// nothing. A state change moves every piece at once on ``PanelLayout/change``: the word, the line, the picture's look
 /// and the buttons ease together, so nothing ripples down the panel on every flip. It fills the popover that holds it,
-/// whose corners, glass and shadow are the system's; `panelCard()` draws its own where no popover does.
+/// whose corners and shadow are the system's, on its own opaque ground, so nothing of the popover's material shows
+/// through; `panelCard()` draws the corners and shadow where no popover does.
 public struct PanelView: View {
   /// What the panel shows.
   private let state: PanelState
   /// Receives what the person does.
   private let send: @MainActor (PanelEvent) -> Void
-  @Environment(\.accessibilityReduceTransparency) private var reduceTransparency
 
   /// Creates the panel.
   ///
@@ -38,10 +38,7 @@ public struct PanelView: View {
     }
     .padding(PanelLayout.inset)
     .frame(width: PanelLayout.width)
-    .background(
-      PanelLayout.ground
-        .opacity(PanelLayout.groundOpacity(reduceTransparency: reduceTransparency))
-    )
+    .background(PanelLayout.ground)
     .foregroundStyle(Color.textPrimary)
     // Only a change is spoken: a poll that reads the same announcement or notice again says nothing.
     .onChange(of: state.announcement) { _, text in if let text { announce(text) } }

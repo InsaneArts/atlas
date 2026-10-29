@@ -1,32 +1,38 @@
 import SwiftUI
 
-/// Atlas's capsule buttons: the text's colour for the next step, glass beside it, plain for the quiet way out, and
-/// the accent, tinted and destructive looks an alert's buttons wear; a circle of glass for a symbol alone. A style, not
-/// a view, so the control stays a `Button` with its own label, role, shortcut and disabled state.
+/// Atlas's capsule buttons: the text's colour for the next step, a quiet fill beside it, plain for the quiet way out,
+/// the accent, tinted and destructive looks an alert's buttons wear, and a solid dark circle over a picture; a filled
+/// circle for a symbol alone. A style, not a view, so the control stays a `Button` with its own label, role, shortcut
+/// and disabled state. Each is a fill alone: nothing is glass or a material.
 ///
-/// Each answers the pointer: a glass fill steps from 0.08 at rest to 0.12 under the pointer and 0.16 while held, the
-/// main capsule steps off its colour, in the dark to pure white and then #E3E3E8, and the accent darkens a tenth while
-/// held. The held fill lands at
-/// once on mouse-down and eases back over 0.12 seconds once let go; the button never changes size.
+/// Each answers the pointer: a secondary fill steps from 0.08 at rest to 0.12 under the pointer and 0.16 while held,
+/// the main capsule steps off its colour, in the dark to pure white and then #E3E3E8, and the accent darkens a tenth
+/// while held. The held fill lands at once on mouse-down and eases back over 0.12 seconds once let go; the button never changes size.
 struct CapsuleButtonStyle: ButtonStyle {
   /// How the capsule is painted.
   enum Look: Sendable {
     /// The text's colour with the ground's words, white in the dark and near black in the light: the one thing to do
     /// next.
     case primary
-    /// A glass fill with a fine edge: the actions beside it.
-    case glass
+    /// A quiet fill: the actions beside it.
+    case secondary
     /// Text alone: the quiet way out, such as Back.
     case plain
-    /// The pressed fill with a brighter edge: a capsule whose state is on, such as Keys while in control.
+    /// The held fill: a capsule whose state is on, such as Keys while in control.
     case pressed
     /// The accent with white text: a default action, such as an alert's; brighter under the pointer.
     case accent
-    /// A raised quiet fill with plain text and a faint edge: another action beside the default, such as an alert's
-    /// Not Now; brighter under the pointer.
+    /// A raised quiet fill with plain text: another action beside the default, such as an alert's Not Now; brighter
+    /// under the pointer.
     case tinted
     /// The tinted capsule with red text: a destructive action, such as an alert's Log Out.
     case destructive
+    /// A symbol alone, unfilled at rest: a title bar's quiet toggle, such as the sidebar's. A faint fill under the pointer,
+    /// and the held fill, its symbol brightening, while held or while what it toggles is on.
+    case glyph
+    /// An opaque dark fill with a light label, the same in either appearance, for a control resting on a picture,
+    /// such as the panel picture's pause circle; a step lighter under the pointer, and again while held or on.
+    case overPicture
   }
 
   /// How large the capsule is.
@@ -47,16 +53,11 @@ struct CapsuleButtonStyle: ButtonStyle {
   enum Outline: Sendable {
     /// A capsule around a title.
     case pill
+    /// A capsule around a symbol and its title, a little tighter before the symbol, whose own room reads as part of
+    /// the inset, such as the footer's Stop and Take Control.
+    case symbolPill
     /// A circle the capsule's height across, for a button whose label is a symbol alone.
     case circle
-  }
-
-  /// What a glass look is laid on.
-  enum Backing: Sendable {
-    /// Its fill alone, for controls resting on the window's ground.
-    case fill
-    /// The system's glass under its fill, opaque under Reduce Transparency: a button floating over a picture.
-    case glass
   }
 
   /// How the capsule is painted.
@@ -67,10 +68,8 @@ struct CapsuleButtonStyle: ButtonStyle {
   var fill = false
   /// The shape around the label.
   var outline = Outline.pill
-  /// Whether what it toggles is on, which a glass button shows with the held fill.
+  /// Whether what it toggles is on, which a secondary button shows with the held fill.
   var isOn = false
-  /// What a glass look is laid on.
-  var backing = Backing.fill
   /// Whether its action runs now: it cannot be pressed, yet stays whole rather than dimming, so the spinner
   /// it holds reads as work, not as a button turned off.
   var isWorking = false
@@ -83,8 +82,10 @@ struct CapsuleButtonStyle: ButtonStyle {
     CapsuleButtonBody(configuration: configuration, style: self)
   }
 
-  /// The capsule's fill: a glass one steps 0.08 → 0.12 → 0.16 at rest, under the pointer and while held, and
-  /// shows the held fill while what it toggles is on; the white one goes pure white under the pointer and
+  /// The capsule's fill: a secondary one steps 0.08 → 0.12 → 0.16 at rest, under the pointer and while held, and
+  /// shows the held fill while what it toggles is on; a glyph one has none at rest, the secondary fill under the
+  /// pointer and the held fill while held or on; one over a picture steps from its dark fill a shade lighter at a
+  /// time; the white one goes pure white under the pointer and
   /// #E3E3E8 while held; an alert's tinted ones brighten under the pointer and while held, and its accent one
   /// brightens under the pointer and darkens while held. The other looks keep one fill. A disabled button
   /// keeps its resting fill.
@@ -109,15 +110,21 @@ struct CapsuleButtonStyle: ButtonStyle {
     case .primary:
       if pressed { return .fillPrimaryPressed }
       return hovered ? .fillPrimaryHover : .textPrimary
-    case .glass:
+    case .secondary:
       if isOn || pressed { return .fillControlOn }
       return hovered ? .fillControlHover : .fillControl
     case .pressed: return .fillControlOn
     case .tinted, .destructive: return hovered || pressed ? .fillControlOn : .fillControlRaised
     case .plain: return .clear
+    case .glyph:
+      if isOn || pressed { return .fillControlOn }
+      return hovered ? .fillControl : .clear
     case .accent:
       if pressed { return .accentPressed }
       return hovered ? .accentHover : .accent
+    case .overPicture:
+      if isOn || pressed { return .fillOverPictureOn }
+      return hovered ? .fillOverPictureHover : .fillOverPicture
     }
   }
 
@@ -171,8 +178,8 @@ struct CapsuleButtonStyle: ButtonStyle {
       Picker(String("Look"), selection: $look) {
         Text(verbatim: "Primary")
           .tag(CapsuleButtonStyle.Look.primary)
-        Text(verbatim: "Glass")
-          .tag(CapsuleButtonStyle.Look.glass)
+        Text(verbatim: "Secondary")
+          .tag(CapsuleButtonStyle.Look.secondary)
         Text(verbatim: "Plain")
           .tag(CapsuleButtonStyle.Look.plain)
         Text(verbatim: "Pressed")
@@ -183,6 +190,10 @@ struct CapsuleButtonStyle: ButtonStyle {
           .tag(CapsuleButtonStyle.Look.tinted)
         Text(verbatim: "Destructive")
           .tag(CapsuleButtonStyle.Look.destructive)
+        Text(verbatim: "Glyph")
+          .tag(CapsuleButtonStyle.Look.glyph)
+        Text(verbatim: "Over a picture")
+          .tag(CapsuleButtonStyle.Look.overPicture)
       }
       Picker(String("Size"), selection: $size) {
         Text(verbatim: "Mini")
@@ -202,7 +213,7 @@ struct CapsuleButtonStyle: ButtonStyle {
         Button(String("Continue")) {}
           .buttonStyle(.capsule(look, size: size))
         Button(String("Pause"), systemImage: SymbolName.pause.rawValue) {}
-          .buttonStyle(.capsule(.glass, size: size, outline: .circle))
+          .buttonStyle(.capsule(.secondary, size: size, outline: .circle))
       }
       .disabled(!isEnabled)
     }

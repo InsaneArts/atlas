@@ -4,8 +4,8 @@ import AtlasUI
 /// What the panel asks of the rest of the app, as closures ``WindowCoordinator`` gives it at `init`: the panel never
 /// touches another window itself.
 struct PanelLinks {
-  /// Opens the main window, on `tab` or, for nil, on the tab it shows.
-  var openViewer: @MainActor (ViewerTab?) -> Void = { _ in }
+  /// Opens the main window, on `place` or, for nil, on the place it shows.
+  var openViewer: @MainActor (ViewerPlace?) -> Void = { _ in }
   /// Opens the main window on Activity showing every host session's work or one's, which it chooses first, or, for
   /// nil, whose work it shows, with every session to choose from in its sessions column.
   var openSessions: @MainActor (ViewerSessionChoice?) -> Void = { _ in }

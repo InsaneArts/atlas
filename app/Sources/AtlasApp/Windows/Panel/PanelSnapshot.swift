@@ -26,4 +26,6 @@ struct PanelSnapshot {
   var opensAtLogin: OpenAtLogin.State?
   /// The time it was taken, which a session's age counts to.
   var date = Date()
+  /// The icons found for Recent's apps, by their key's text (``AppIconKey/text``).
+  var icons: [String: IconImage] = [:]
 }

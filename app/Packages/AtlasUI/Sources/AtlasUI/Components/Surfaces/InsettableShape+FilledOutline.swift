@@ -23,7 +23,7 @@ extension InsettableShape {
 #if DEBUG
   #Preview("Shapes") {
     HStack(spacing: Spacing.l) {
-      RoundedRectangle(cornerRadius: Radius.large)
+      RoundedRectangle(cornerRadius: Radius.large, style: .continuous)
         .filledOutline(Color.fillGroup, border: Color.separator)
         .frame(width: IconSize.xxl, height: IconSize.xxl)
       Capsule()

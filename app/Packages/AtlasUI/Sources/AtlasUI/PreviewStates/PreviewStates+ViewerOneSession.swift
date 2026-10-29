@@ -3,28 +3,28 @@
     /// Claude Code chosen before it did anything in the helper: its Activity says what will show up there.
     @MainActor public static let viewerActivityOneSessionEmpty: ViewerState = {
       var state = viewerActivityOneSession
-      state.pane = .activity(
-        ViewerActivityState(
-          title: SessionSamples.claudeName,
-          titleIcon: SessionSamples.claudeIcon,
-          meta: "",
-          query: "",
-          filters: oneSessionFilters,
-          groups: [],
-          empty: EmptyMessageState(
-            headline: "Nothing has happened yet",
-            message: "What this session does in the helper shows up here."
-          ),
-          isSearchable: false
-        )
-      )
+      state.sidebar.library = viewerLibrary(.activity, counts: [.activity: 0, .screenshots: 0])
+      state.pane = .activity(oneSessionEmptyActivity)
       return state
     }()
 
-    /// Claude Code chosen on Screenshots: only the screenshots it took, counted by its name.
+    /// Claude Code chosen on Screenshots: only the screenshots it took, counted by its name. The sessions' list names
+    /// it, so its row lists the list's facts, and its menu offers Clean Up This Session's Work….
     @MainActor public static let viewerShotsOneSession: ViewerState = {
       var state = viewerActivityOneSession
-      state.top.tabs = viewerTabs(.screenshots)
+      state.sidebar.sessions.groups[0].rows[0] = viewerSessionRow(
+        SessionSamples.claudeKey,
+        icon: SessionSamples.claudeIcon,
+        name: SessionSamples.claudeName,
+        line: SessionSamples.claudeDoing,
+        badge: .acting,
+        facts: [
+          "Host: Claude Code", "Folder: understudy", "Started: 09:12", "Last seen: 41 min ago", "Opie", "Notes",
+          "Copy of Opie", "Environment plan: Applied · can roll back · made at 10:02", "Screenshots: 6",
+        ],
+        cleanup: true
+      )
+      state.sidebar.library = viewerLibrary(.screenshots, counts: [.activity: 6, .screenshots: 6])
       state.mini = viewerShots.mini
       if case .screenshots(var shots) = viewerShots.pane {
         shots.meta = "6 by \(SessionSamples.claudeName)"
@@ -36,6 +36,8 @@
     /// Claude Code chosen on Screenshots before it took any: none by its name, and what will show up there.
     @MainActor public static let viewerShotsOneSessionEmpty: ViewerState = {
       var state = viewerShotsOneSession
+      state.sidebar.sessions = viewerActivityOneSession.sidebar.sessions
+      state.sidebar.library = viewerLibrary(.screenshots, counts: [.activity: 6, .screenshots: 0])
       state.pane = .screenshots(
         ViewerShotsState(
           meta: "None by \(SessionSamples.claudeName)",
@@ -45,34 +47,6 @@
             message: "Screenshots this session takes show up here."
           )
         )
-      )
-      return state
-    }()
-
-    /// Claude Code's cleanup being read or run from Details: its button holds a spinner.
-    @MainActor public static let viewerSessionCleaningUp: ViewerState = {
-      var state = viewerSessionDetail
-      state.details?.sessionDetail?.cleanup?.stage = .working
-      return state
-    }()
-
-    /// Pi · notes-sync chosen after it ended: Ended in Details' header with how long ago, and when it started and
-    /// ended among its facts.
-    @MainActor public static let viewerSessionEnded: ViewerState = {
-      var state = viewerSessionDetail
-      state.sessions?.chosen = .one(SessionSamples.piKey)
-      state.sessions?.ended = [piEndedRow]
-      state.details?.sessionDetail = ViewerSessionDetail(
-        icon: SessionSamples.piIcon,
-        name: SessionSamples.piName,
-        state: "Ended 20 min ago",
-        tone: .quiet,
-        facts: [
-          Fact(name: "Host", value: "Pi"),
-          Fact(name: "Folder", value: "notes-sync"),
-          Fact(name: "Started", value: "09:40"),
-          Fact(name: "Ended", value: "20 min ago"),
-        ]
       )
       return state
     }()

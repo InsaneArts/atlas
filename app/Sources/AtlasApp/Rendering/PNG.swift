@@ -39,7 +39,7 @@ enum PNG {
 
   /// The hosting view every render draws through: the shell's bare hosting view with the render switches set. A view
   /// is drawn once, before any animation runs, so arrivals are turned off and each view that plays one is drawn
-  /// settled; and AppKit draws nothing under the system glass, so glass is drawn as its material.
+  /// settled.
   ///
   /// - Parameter view: The SwiftUI view.
   /// - Returns: Its hosting view, ready to size and draw.
@@ -47,7 +47,6 @@ enum PNG {
     WindowShell.hostingView(
       view
         .environment(\.animatesArrivals, false)
-        .environment(\.drawsGlassEffect, false)
     )
   }
 

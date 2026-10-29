@@ -1,6 +1,6 @@
 import SwiftUI
 
 extension EnvironmentValues {
-  /// How far the pane a view is in keeps its scrolling content clear of the small screen (``MiniClearance``).
+  /// Where the small screen floats over the lists of the pane a view is in (``MiniClearance``).
   @Entry var miniClearance = MiniClearance()
 }

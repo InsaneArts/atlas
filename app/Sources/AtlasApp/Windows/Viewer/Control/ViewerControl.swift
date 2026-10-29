@@ -110,7 +110,7 @@ final class ViewerControl {
   /// Take Control from any tab: the Screen tab shows first, since control acts on the picture. Pressed while the
   /// picture is paused, it resumes the picture first and takes control once a fresh one arrives.
   func takeControlOnScreen() async {
-    if let viewer, viewer.session.tab != .screen { viewer.selectTab(.screen) }
+    if let viewer, viewer.session.place != .screen { viewer.show(.screen) }
     await takeControl()
   }
 
@@ -121,7 +121,7 @@ final class ViewerControl {
   /// was cancelled, or once one of the helper's commands started, is given back before that work ends, and a reply
   /// that was lost holds the barrier until a lease it may have granted can no longer be alive. A busy service is
   /// asked again every ``busyRetryAfter``, up to ``busyRetries`` times, the button saying Connecting… meanwhile; still
-  /// busy, a toast says the agent didn't finish its step and the button shakes (``ViewerController/refuse(_:)``).
+  /// busy, a toast says the agent didn't finish its step (``ViewerController/refuse(_:)``).
   /// With the picture paused, it resumes it and waits for a fresh one first (``awaitFreshPicture()``).
   func takeControl() async {
     guard let viewer else { return }
@@ -192,7 +192,7 @@ final class ViewerControl {
   private func accepts(_ generation: Int) -> Bool {
     guard let viewer else { return false }
     return generation == controlGeneration && focused && viewer.shown && !viewer.session.paused
-      && viewer.reading.ready && viewer.session.tab == .screen && !actions.isBusy && !viewer.session.alertRunning
+      && viewer.reading.ready && viewer.session.place == .screen && !actions.isBusy && !viewer.session.alertRunning
   }
 
   /// Holds `granted`: input goes, the heartbeat starts, and the next reading comes at once.

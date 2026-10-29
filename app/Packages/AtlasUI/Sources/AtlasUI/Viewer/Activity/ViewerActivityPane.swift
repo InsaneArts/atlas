@@ -1,99 +1,109 @@
 import SwiftUI
 
-/// The Activity tab, a log you can scan: what was done in the helper, newest first, under Now, Earlier today and the
-/// days before, or under each host session while it shows every session's work, their headers pinned as the list
-/// scrolls, with a search over what was done and filters once the log holds anything; or why nothing shows, on the
-/// pane's own ground. With one session chosen, its name and icon are the pane's title. A new line fades in
-/// at the top while the others move down, unless the person has scrolled down, when it comes with no motion and what
-/// they read stays where it is (``ActivityScroll``).
+/// The Activity list inside the card, with no ground of its own: the filters at the top, then what was done in the
+/// helper as moments, newest first, each an app's run of work with its steps on one line under the app's icon, older
+/// moments folded to one row, a quiet heading over each day before today; or why nothing shows. The sidebar's search
+/// narrows it and says whose work it is. A new step fades in at the top while the rest move down, unless the person
+/// has scrolled down, when it comes with no motion and what they read stays where it is (``ActivityScroll``). It scrolls in the card's one list scroll (``CardScroll``), under the small
+/// screen.
 struct ViewerActivityPane: View {
   /// What the pane shows.
   let state: ViewerActivityState
   /// Receives what the person does.
   let send: @MainActor (ViewerEvent) -> Void
-  /// The line the person last scrolled to the top of the list.
-  @State private var scrolledTo: String?
-  /// Whether the list sits at its very top.
-  @State private var isAtTop = true
   @Environment(\.accessibilityReduceMotion) private var reduceMotion
-  @Environment(\.paneSettled) private var paneSettled
+  @Environment(\.listIsAtTop) private var isAtTop
 
-  /// The header with the search and filters, over the lines or why there are none.
+  /// The list, or why there is nothing to list.
   var body: some View {
-    VStack(spacing: .zero) {
-      PaneHeader(title: state.title, meta: state.meta, icon: state.titleIcon, iconSide: ViewerLayout.groupIcon) {
-        if state.isSearchable {
-          SearchField(text: state.query, prompt: "Search activity", focusRequests: state.findRequests) {
-            send(.searchActivity($0))
+    Group {
+      if let empty = state.empty, !state.showsFilters {
+        EmptyMessage(state: empty, size: .stage, ground: .pane, symbol: .list)
+      } else {
+        CardScroll {
+          VStack(alignment: .leading, spacing: .zero) {
+            if state.showsFilters {
+              filters
+            }
+            if let empty = state.empty {
+              EmptyMessage(state: empty, size: .regular, ground: .pane, symbol: .list)
+                .frame(maxWidth: .infinity)
+                .padding(.vertical, Layout.emptyInset)
+            } else {
+              rows
+            }
           }
-          Tabs(state: state.filters, style: .segment) { send(.filterActivity($0)) }
+          .padding(.horizontal, ViewerLayout.swapInset)
         }
       }
-      content
     }
     .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
-    .clipShape(RoundedRectangle(cornerRadius: Radius.large))
-    .cardSurface()
     .accessibilityElement(children: .contain)
-    .accessibilityLabel("Activity")
+    .accessibilityLabel(state.title)
+    .accessibilityValue(state.meta)
   }
 
-  /// The lines in their groups, or why there are none.
-  @ViewBuilder private var content: some View {
-    if let empty = state.empty {
-      EmptyMessage(state: empty, size: .stage, ground: .pane, symbol: .list)
-    } else {
-      ScrollView {
-        lines
+  /// The filters, a capsule track at the list's leading edge, scrolling sideways in a pane too narrow for it; the
+  /// chosen one changes at once.
+  private var filters: some View {
+    ViewThatFits(in: .horizontal) {
+      tabs
+      ScrollView(.horizontal) {
+        tabs
       }
-      .scrollIndicators(paneSettled ? .automatic : .hidden)
-      .scrollPosition(id: anchor, anchor: .top)
-      .clearsMiniScreen()
+      .scrollIndicators(.hidden)
     }
+    .frame(maxWidth: .infinity, minHeight: ViewerLayout.filtersHeight, alignment: .leading)
+    .padding(.top, ViewerLayout.activityTop)
   }
 
-  /// The groups, by session or by time, each under its pinned header.
-  private var lines: some View {
-    LazyVStack(alignment: .leading, spacing: .zero, pinnedViews: .sectionHeaders) {
-      if state.sessions.isEmpty {
-        ForEach(state.groups) { group in
-          Section {
-            ForEach(group.lines) { line in
-              ActivityLineRow(line: line, send: send)
-                .environment(\.drawsListSeparator, line.id != group.lines.first?.id)
-                .transition(ActivityScroll.arrival(isAtTop: isAtTop))
-            }
-          } header: {
-            PinnedHeader(title: group.title)
-          }
-        }
-      } else {
-        ForEach(state.sessions) { group in
-          ActivitySessionSection(group: group, isAtTop: isAtTop, send: send)
-        }
+  /// The filters' track.
+  private var tabs: some View {
+    Tabs(state: state.filters, style: .segment) { filter in
+      withAnimation(ActivityMotion.filter(reduceMotion: reduceMotion)) {
+        send(.filterActivity(filter))
+      }
+    }
+    .fixedSize()
+  }
+
+  /// Every day's heading and moment, keyed by its identity, so a moment in two filters stays where it is, each moment
+  /// opening and folding as one (``ActivityMomentBlock``).
+  private var rows: some View {
+    LazyVStack(alignment: .leading, spacing: .zero) {
+      ForEach(ActivityListBlock.blocks(state.items)) { block in
+        self.block(block)
+          .transition(ActivityMotion.row(isAtTop: isAtTop, reduceMotion: reduceMotion))
       }
     }
     .scrollTargetLayout()
-    .onGeometryChange(for: Bool.self) { proxy in
-      proxy.frame(in: .scrollView).minY >= -Spacing.hairline
-    } action: { atTop in
-      isAtTop = atTop
+    .transaction(value: state.newest) { transaction in
+      // A change the person made keeps the animation it was made in, so a filter's rows wait for those leaving.
+      guard transaction.animation == nil else { return }
+      transaction.animation = ActivityScroll.moving(isAtTop: isAtTop, reduceMotion: reduceMotion)
     }
-    .animation(ActivityScroll.moving(isAtTop: isAtTop, reduceMotion: reduceMotion), value: newest)
   }
 
-  /// The list's scroll position: none at the top, so it stays there as lines arrive, else the line scrolled to.
-  private var anchor: Binding<String?> {
-    Binding(
-      get: { ActivityScroll.anchor(scrolledTo: scrolledTo, isAtTop: isAtTop) },
-      set: { scrolledTo = $0 }
-    )
+  /// One element: a day's heading, or a moment with its steps.
+  ///
+  /// - Parameter block: The element.
+  /// - Returns: Its view.
+  @ViewBuilder private func block(_ block: ActivityListBlock) -> some View {
+    switch block {
+    case .day(let day):
+      ListHeading(title: day.title)
+        .frame(height: ViewerLayout.dayHeight)
+        .padding(.top, ViewerLayout.dayAbove)
+    case .moment(let moment, let rows):
+      ActivityMomentBlock(moment: moment, rows: rows, send: send)
+    }
   }
+}
 
-  /// The newest line, whose change is a new line arriving: the first session's while the pane lists sessions.
-  private var newest: String? {
-    state.sessions.isEmpty ? state.groups.first?.lines.first?.id : state.sessions.first?.lines.first?.id
-  }
+/// The pane's own measures.
+private enum Layout {
+  /// 48: above and below the message when a filter or a search leaves nothing.
+  static let emptyInset: CGFloat = 48
 }
 
 #if DEBUG
@@ -105,7 +115,7 @@ struct ViewerActivityPane: View {
     }
   }
 
-  #Preview("By session") {
+  #Preview("All sessions") {
     if case .activity(let activity) = PreviewStates.viewerActivityBySession.pane {
       ViewerActivityPane(state: activity) { _ in }
         .frame(width: ViewerLayout.largeShotLargest.width, height: ViewerLayout.largeShotLargest.height)
@@ -113,8 +123,8 @@ struct ViewerActivityPane: View {
     }
   }
 
-  #Preview("One session") {
-    if case .activity(let activity) = PreviewStates.viewerActivityOneSession.pane {
+  #Preview("Folded") {
+    if case .activity(let activity) = PreviewStates.viewerActivityMany.pane {
       ViewerActivityPane(state: activity) { _ in }
         .frame(width: ViewerLayout.largeShotLargest.width, height: ViewerLayout.largeShotLargest.height)
         .sampleSurface()
@@ -132,6 +142,8 @@ struct ViewerActivityPane: View {
   #Preview("Interactive") {
     @Previewable @State var state = PreviewStates.viewerActivity
     InteractivePreview {
+      Text(verbatim: "Open or fold a moment, or pick a filter")
+    } content: {
       if case .activity(let activity) = state.pane {
         ViewerActivityPane(state: activity) { event in
           state = PreviewStates.viewer(state, applying: event)

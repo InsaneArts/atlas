@@ -45,7 +45,7 @@ struct AlertCardMessage: View {
   private func words(_ text: String) -> some View {
     Text(text)
       .textStyle(.caption)
-      .foregroundStyle(Color.textOnGlass)
+      .foregroundStyle(Color.textOnModal)
       .multilineTextAlignment(.center)
       .fixedSize(horizontal: false, vertical: true)
   }

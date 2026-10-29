@@ -3,8 +3,9 @@ import AtlasUI
 import Foundation
 
 extension PanelPresenter {
-  /// Sessions' rows while sessions show and the panel shows activity at all, at most ``PanelState/mostSessions``, in
-  /// the service's order, each with what VoiceOver reads for it; else none, and Recent shows as before.
+  /// Sessions' rows while any session is live and the panel shows activity at all, at most
+  /// ``PanelState/mostSessions``, in the service's order, each with what VoiceOver reads for it; else none, and Recent
+  /// shows as before.
   ///
   /// - Parameters:
   ///   - reading: The status, read.
@@ -12,7 +13,7 @@ extension PanelPresenter {
   ///   - now: The time the snapshot was taken, which an ended session's age counts to.
   /// - Returns: The rows.
   static func sessions(_ reading: StatusReading, mode: Mode, now: Date) -> [PanelSessionEntry] {
-    guard reading.showsSessions, !hidesRecent(mode) else { return [] }
+    guard reading.listsSessions, !hidesRecent(mode) else { return [] }
     return reading.liveSessions
       .prefix(PanelState.mostSessions)
       .map { session in

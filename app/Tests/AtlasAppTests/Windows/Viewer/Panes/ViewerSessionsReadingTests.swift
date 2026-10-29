@@ -31,8 +31,9 @@ struct ViewerSessionsReadingTests {
     ])
     await viewer.readingLoop.readStatus()
     try await settle("the list was never read") { viewer.panes.sessions.list != nil }
-    let ended = ViewerPresenter.sessions(viewer.snapshot)?
-      .ended
+    viewer.send(.toggleEnded)
+    let ended = ViewerPresenter.sessions(viewer.snapshot)
+      .rows(.ended)
       .map(\.name)
     #expect(ended == ["Pi · notes-sync"])
     viewer.close()
@@ -51,7 +52,7 @@ struct ViewerSessionsReadingTests {
     viewer.send(.chooseSession(.one("3f9a1c07b2e4")))
     await viewer.readingLoop.readStatus()
     #expect(service.sessionsCalls == 1, "it is not asked again within the minute")
-    #expect(ViewerPresenter.sessions(viewer.snapshot)?.ended.isEmpty == true)
+    #expect(ViewerPresenter.sessions(viewer.snapshot).endedCount == 0)
     #expect(viewer.panesModel.work.sessions == nil)
     // Updated meanwhile, the service offers the list, and the next status a minute on asks for it.
     service.offersSessions = true

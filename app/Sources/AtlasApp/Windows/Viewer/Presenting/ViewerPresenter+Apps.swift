@@ -4,62 +4,115 @@ import AtlasUI
 import CoreGraphics
 
 extension ViewerPresenter {
-  /// The Apps pane: how many apps and windows are open, the search once any is, and the apps front to back with their
-  /// windows, or why none shows. With no app open the header says nothing beside its title, and there is nothing to
-  /// search.
+  /// The Apps pane: how many apps and windows are open for whose work shows, and the apps as cards. While every
+  /// session's work shows, the apps agents opened come first under their own heading, then those already open; while
+  /// one session is chosen, only the apps it opened, with no heading. Each group keeps its cards in the order they
+  /// opened, so nothing moves as the front app changes. The sidebar's search narrows the cards; with none left, or
+  /// none to list, the pane says why.
   ///
   /// - Parameter snapshot: What the controller holds.
   /// - Returns: The pane.
   static func apps(_ snapshot: ViewerSnapshot) -> ViewerAppsState {
     let facts = snapshot.panes.apps
+    let query = snapshot.session.search.query
     guard let apps = facts.apps else {
       let failed = facts.failure.map {
         EmptyMessageState(headline: ViewerWords.appsFailed, message: Words.sentence($0))
       }
-      return ViewerAppsState(meta: "", query: facts.query, apps: [], empty: failed, isSearchable: false)
+      return ViewerAppsState(title: "", detail: "", groups: [], empty: failed)
     }
-    let rows = apps.compactMap { $0.matching(facts.query) }
-      .map { appRow($0, icons: facts.icons) }
-    let empty: EmptyMessageState? =
-      if !rows.isEmpty {
-        nil
-      } else if apps.isEmpty {
-        EmptyMessageState(headline: ViewerWords.noApps, message: ViewerWords.noAppsMessage)
-      } else {
-        EmptyMessageState(headline: ViewerWords.noAppsMatch(facts.query), message: ViewerWords.noAppsMatchMessage)
+    let scope = snapshot.shownSessions
+    let scoped = scopedApps(apps, scope)
+    let kept = scoped.compactMap { $0.matching(query) }
+      .sorted(by: opensBefore)
+    let card = { (app: HelperApp) in appCard(app, among: apps, showsOrigin: scope == .all, snapshot) }
+    let groups: [ViewerAppGroup] =
+      switch scope {
+      case .one:
+        kept.isEmpty ? [] : [ViewerAppGroup(id: appsSessionGroup, title: nil, cards: kept.map(card))]
+      case .all:
+        [
+          ViewerAppGroup(
+            id: appsOpenedGroup,
+            title: ViewerWords.openedByAgents,
+            cards: kept.filter { $0.origin != nil }
+              .map(card)
+          ),
+          ViewerAppGroup(
+            id: appsAlreadyOpenGroup,
+            title: ViewerWords.alreadyOpen,
+            cards: kept.filter { $0.origin == nil }
+              .map(card)
+          ),
+        ]
+        .filter { !$0.cards.isEmpty }
       }
     return ViewerAppsState(
-      meta: ViewerWords.appsMeta(apps: apps.count, windows: apps.map(\.windows.count).reduce(0, +)),
-      query: facts.query,
-      apps: rows,
-      empty: empty,
-      isSearchable: !apps.isEmpty,
-      findRequests: facts.findRequests
+      title: scoped.isEmpty ? "" : ViewerWords.appsOpen(scoped.count),
+      detail: scoped.isEmpty ? "" : ViewerWords.windowCount(scoped.map(\.windows.count).reduce(0, +)),
+      groups: groups,
+      empty: groups.isEmpty ? appsEmpty(apps: apps, scoped: scoped, scope: scope, query: query) : nil
     )
   }
 
-  /// An app's row and its windows' rows.
+  /// The single group's identity while one session's apps show.
+  static let appsSessionGroup = "session"
+  /// The identity of the group of apps agents opened.
+  static let appsOpenedGroup = "opened"
+  /// The identity of the group of apps already open.
+  static let appsAlreadyOpenGroup = "already"
+
+  /// The apps whose work shows: every one while every session's work shows; only those a session opened while it is
+  /// chosen, never one already open.
   ///
   /// - Parameters:
-  ///   - app: The app, with the windows the search keeps.
-  ///   - icons: The icons decoded so far.
-  /// - Returns: The row.
-  static func appRow(_ app: HelperApp, icons: [String: IconImage]) -> ViewerAppRow {
-    ViewerAppRow(
-      id: app.pid,
-      name: app.name.isEmpty ? ViewerWords.unnamedApp : app.name,
-      icon: icons[app.iconID],
-      isFront: app.front,
-      windows: app.windows.map { window in
-        let title = windowTitle(window)
-        return ViewerWindowRow(
-          id: window.id,
-          title: title,
-          size: windowSize(window),
-          showLabel: ViewerWords.showWindowLabel(title)
-        )
-      }
-    )
+  ///   - apps: The apps open in the helper.
+  ///   - scope: Whose work shows.
+  /// - Returns: The apps.
+  static func scopedApps(_ apps: [HelperApp], _ scope: ViewerSessionChoice) -> [HelperApp] {
+    guard case .one(let key) = scope else { return apps }
+    return apps.filter { $0.origin?.session == key }
+  }
+
+  /// Whether one app's card comes before another's: the one opened first, as agents opened them or as they launched,
+  /// so a new app's card joins at the end and the front app changing never reorders them; by process id where neither
+  /// says when.
+  ///
+  /// - Parameters:
+  ///   - one: An app.
+  ///   - other: Another.
+  /// - Returns: Whether `one` comes first.
+  static func opensBefore(_ one: HelperApp, _ other: HelperApp) -> Bool {
+    switch (one.origin?.at ?? one.launchedAt, other.origin?.at ?? other.launchedAt) {
+    case (let first?, let second?) where first != second: first < second
+    case (.some, nil): true
+    case (nil, .some): false
+    default: one.pid < other.pid
+    }
+  }
+
+  /// Why no card shows: the apps could not be read, the chosen session opened none, none is open, or the search left
+  /// none.
+  ///
+  /// - Parameters:
+  ///   - apps: The apps open in the helper.
+  ///   - scoped: Those whose work shows.
+  ///   - scope: Whose work shows.
+  ///   - query: The sidebar's search.
+  /// - Returns: The message.
+  static func appsEmpty(
+    apps: [HelperApp],
+    scoped: [HelperApp],
+    scope: ViewerSessionChoice,
+    query: String
+  ) -> EmptyMessageState {
+    if scoped.isEmpty, case .one = scope {
+      return EmptyMessageState(headline: ViewerWords.noSessionApps, message: ViewerWords.noSessionAppsMessage)
+    }
+    if apps.isEmpty {
+      return EmptyMessageState(headline: ViewerWords.noApps, message: ViewerWords.noAppsMessage)
+    }
+    return EmptyMessageState(headline: ViewerWords.noAppsMatch(query), message: ViewerWords.noAppsMatchMessage)
   }
 
   /// The window shown from the Apps tab, outlined over the picture: its edges as shares of the helper's
@@ -77,7 +130,7 @@ extension ViewerPresenter {
       frame: CGRect(x: start.x, y: start.y, width: end.x - start.x, height: end.y - start.y),
       title: ViewerWords.outlineTitle(app: shown.app, window: windowTitle(window)),
       size: windowSize(window),
-      icon: shown.icon.flatMap { snapshot.panes.apps.icons[$0] }
+      icon: appIcon(bundleId: shown.bundleId, name: shown.app, snapshot.panes.icons)
     )
   }
 

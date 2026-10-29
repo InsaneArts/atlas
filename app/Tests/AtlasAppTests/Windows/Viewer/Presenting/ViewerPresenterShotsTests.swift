@@ -96,19 +96,18 @@ struct ViewerPresenterShotsTests {
     #expect(shots.empty?.headline == ViewerWords.noShots)
   }
 
-  @Test("with nothing in the log or no app open, the header has no count and there is nothing to search")
+  @Test("with nothing in the log or no app open, there is no count and nothing to filter")
   func emptyPanesHaveNoCountAndNoSearch() {
     var snapshot = ViewerSnapshot()
     snapshot.panes.activity.log = ActivityLog()
     snapshot.panes.activity.readAt = snapshot.date
     let activity = ViewerPresenter.activity(snapshot)
     #expect(activity.meta.isEmpty)
-    #expect(!activity.isSearchable)
+    #expect(!activity.showsFilters)
     #expect(activity.empty?.headline == ViewerWords.noActivity)
     snapshot.panes.apps.apps = []
     let apps = ViewerPresenter.apps(snapshot)
     #expect(apps.meta.isEmpty)
-    #expect(!apps.isSearchable)
   }
 
   @Test("a chosen session shows only its own screenshots")

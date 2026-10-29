@@ -1,7 +1,7 @@
 #if DEBUG
   import SwiftUI
 
-  /// The empty message's samples: connecting with no button, logged out with a glass one, and not ready with
+  /// The empty message's samples: connecting with no button, logged out with a secondary one, and not ready with
   /// the next step, the last in a small window; then the main window's stage pattern, its mark ringed while
   /// connecting, and a pane's, its symbol in a tile.
   struct EmptyMessageSamples: View {

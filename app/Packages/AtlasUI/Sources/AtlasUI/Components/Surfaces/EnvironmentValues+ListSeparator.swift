@@ -1,7 +1,7 @@
 import SwiftUI
 
 extension EnvironmentValues {
-  /// Whether a row draws the separator above it, inset to its own text. ``GroupedList`` turns it on for every row
+  /// Whether a row draws the separator above it, inset to its own text and short of its trailing edge. ``GroupedList`` turns it on for every row
   /// but its first; a row on its own draws none.
   @Entry var drawsListSeparator = false
 }

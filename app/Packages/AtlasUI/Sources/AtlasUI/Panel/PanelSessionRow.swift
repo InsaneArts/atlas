@@ -2,7 +2,8 @@ import SwiftUI
 
 /// One of Sessions' rows, a button that opens the session's activity: the host's icon, the session's name over what it
 /// does or did last, orange when it asks something of the person, and its state at the trailing edge, a dot or a ring
-/// in its tone's colour. A new line or state swaps in place by opacity, the same under Reduce Motion. VoiceOver reads
+/// in its tone's colour. A new line or state swaps in place with no overlap (``LineSwap``), the same under Reduce
+/// Motion. VoiceOver reads
 /// it as one, in the words the presenter gives it.
 struct PanelSessionRow: View {
   /// The session.
@@ -23,7 +24,7 @@ struct PanelSessionRow: View {
       .padding(PanelLayout.sessionInset)
       .frame(minHeight: PanelLayout.sessionRow)
     }
-    .buttonStyle(.row)
+    .buttonStyle(.row(corner: PanelLayout.sessionCorner))
     .help("Show its activity in Atlas")
     .accessibilityElement(children: .ignore)
     .accessibilityLabel(entry.label)
@@ -34,13 +35,14 @@ struct PanelSessionRow: View {
   private var words: some View {
     VStack(alignment: .leading, spacing: .zero) {
       Text(entry.name)
-        .font(Typography.font(.callout, weight: .semibold))
+        .font(Typography.font(.body, weight: .semibold))
         .foregroundStyle(Color.textPrimary)
       if !entry.line.isEmpty {
-        Text(entry.line)
-          .font(Typography.font(.callout))
-          .foregroundStyle(entry.isUrgent ? Color.textAttention : Color.textSecondary)
-          .swapsText(on: entry.line)
+        LineSwap(entry, id: \.line) { entry in
+          Text(entry.line)
+            .font(Typography.font(.callout))
+            .foregroundStyle(entry.isUrgent ? Color.textAttention : Color.textSecondary)
+        }
       }
     }
     .lineLimit(1)
@@ -50,15 +52,16 @@ struct PanelSessionRow: View {
 
   /// The state's mark and word, in its tone's colour, kept whole.
   private var state: some View {
-    HStack(spacing: Spacing.xsPlus) {
-      StatusDot(mark: entry.mark, tone: entry.tone, size: .small)
-      Text(entry.state)
-        .font(Typography.font(.callout, weight: .medium))
-        .foregroundStyle(entry.tone.stateColor)
-        .lineLimit(1)
+    LineSwap(entry, id: \.state) { entry in
+      HStack(spacing: Spacing.xsPlus) {
+        StatusDot(mark: entry.mark, tone: entry.tone, size: .small)
+        Text(entry.state)
+          .font(Typography.font(.callout, weight: .medium))
+          .foregroundStyle(entry.tone.stateColor)
+          .lineLimit(1)
+      }
     }
     .fixedSize()
-    .swapsText(on: entry.state)
   }
 }
 

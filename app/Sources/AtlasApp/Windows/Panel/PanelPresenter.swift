@@ -1,3 +1,4 @@
+import AtlasService
 import AtlasStatus
 import AtlasUI
 import Foundation
@@ -6,8 +7,9 @@ import Foundation
 /// the snapshot, the status table (`Mode+StatusSummary`) and AtlasStatus's rules (``Mode`` and ``StatusReading``). Its
 /// buttons and ⋯ menu are in `PanelPresenter+Controls`, and its host sessions in `PanelPresenter+Sessions`.
 enum PanelPresenter {
-  /// The panel as it should look now. While sessions show they take Recent's place, and the line under the heading
-  /// names who has the helper or whose action may not have finished; a notice still wins over both.
+  /// The panel as it should look now. While any session is live the sessions take Recent's place, and while two or
+  /// more show the line under the heading names who has the helper or whose action may not have finished; a notice
+  /// still wins over both.
   ///
   /// - Parameter snapshot: What the controller holds.
   /// - Returns: Everything the panel draws.
@@ -22,7 +24,7 @@ enum PanelPresenter {
       notice: snapshot.session.notice,
       isMoreOpen: snapshot.session.moreOpen,
       picture: picture(snapshot, mode: mode, reading: reading),
-      recent: hidesRecent(mode) || !sessions.isEmpty ? [] : recent(reading, mode: mode),
+      recent: hidesRecent(mode) || !sessions.isEmpty ? [] : recent(reading, mode: mode, icons: snapshot.icons),
       sessions: sessions,
       moreSessions: moreSessions(reading, rows: sessions),
       controls: controls(snapshot, mode: mode),
@@ -81,19 +83,25 @@ enum PanelPresenter {
     return state
   }
 
-  /// Recent's rows, newest first: the newest is live only while an agent works, so only it carries the blue
-  /// dot, and only then.
+  /// 3: the most rows Recent lists.
+  static let recentRows = 3
+
+  /// Recent's rows, newest first, each led by its icon: the newest is live only while an agent works, so only it
+  /// carries the blue dot, and only then.
   ///
   /// - Parameters:
   ///   - reading: The status, read.
   ///   - mode: The helper's mode.
+  ///   - icons: The icons found for Recent's apps.
   /// - Returns: The rows.
-  static func recent(_ reading: StatusReading, mode: Mode) -> [PanelRecentEntry] {
-    reading.recentEntries
+  static func recent(_ reading: StatusReading, mode: Mode, icons: [String: IconImage]) -> [PanelRecentEntry] {
+    zip(reading.recentEntries, reading.activity(limit: recentRows))
       .enumerated()
-      .map { index, entry in
-        PanelRecentEntry(
+      .map { index, pair in
+        let (entry, item) = pair
+        return PanelRecentEntry(
           id: entry.id,
+          icon: recentIcon(item, icons: icons),
           line: entry.line,
           when: entry.when,
           isFailed: entry.mark == .failed,
@@ -101,6 +109,36 @@ enum PanelPresenter {
         )
       }
   }
+
+  /// What leads one of Recent's rows: Atlas's own mark for what Atlas did itself, recovering or logging out the
+  /// helper; the person's mark for their own input; the app's icon, or its tile while none is found, for an agent's
+  /// action in an app; and a quiet tile for one in no app, a screenshot's camera or a command's prompt.
+  ///
+  /// - Parameters:
+  ///   - item: The action.
+  ///   - icons: The icons found for Recent's apps.
+  /// - Returns: The icon.
+  static func recentIcon(_ item: ActivityItem, icons: [String: IconImage]) -> ActivityIcon {
+    if atlasOperations.contains(item.row.operation) { return .atlas }
+    if item.actor == .you { return .you }
+    guard item.row.app != nil || item.row.bundleId != nil else {
+      return .symbol(item.row.operation == ActivityGrouping.screenshotOperation ? .camera : .terminal)
+    }
+    let lastPart = item.row.bundleId?
+      .split(separator: ".")
+      .last
+      .map(String.init)
+    let name = item.row.app ?? lastPart ?? ""
+    let image = [AppIconKey(bundleId: item.row.bundleId), AppIconKey(name: name)]
+      .compactMap { $0 }
+      .lazy
+      .compactMap { icons[$0.text] }
+      .first
+    return .app(.of(image, name: name))
+  }
+
+  /// The operations Atlas itself does to the helper: recovering it, and logging it out.
+  static let atlasOperations: Set<String> = ["restart", "logout"]
 
   /// Whether Recent hides: while the helper is logged out or not ready, as its picture does.
   ///

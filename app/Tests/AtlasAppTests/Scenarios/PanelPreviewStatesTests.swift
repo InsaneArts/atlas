@@ -9,8 +9,9 @@
   /// The panel's samples are written out by hand; these keep each one what the panel would show for the same facts.
   @Suite("PreviewStates+Panel")
   struct PanelPreviewStatesTests {
-    /// What the controller holds on a set-up Mac whose helper is in `mode`: an agent's three actions in Opie, a few
-    /// seconds ago while it works and two minutes ago otherwise, and the helper's screen on show.
+    /// What the controller holds on a set-up Mac whose helper is in `mode`: an agent's action in Opie, Atlas
+    /// recovering the helper and the person's own click before it, a few seconds ago while it works and two minutes
+    /// ago otherwise, Opie's icon found, and the helper's screen on show.
     ///
     /// - Parameters:
     ///   - mode: The helper's mode, as the service names it.
@@ -20,16 +21,28 @@
     /// - Throws: A decoding error, which a fixed reply never gives.
     func snapshot(_ mode: String, state: String, holdingControl: Bool = false) throws -> PanelSnapshot {
       let working = mode == "agent"
-      let said = [
-        working ? "turning Show Center off in Opie" : "turned Show Center off", "clicked Ring in Opie", "opened Opie",
-      ]
       let ages = working ? [2, 9, 31] : [120, 129, 151]
-      let activity = zip(said, ages)
-        .map { ["operation": "input", "actor": "agent", "ok": true, "ageSeconds": $1, "says": $0] as [String: Any] }
+      let activity: [[String: Any]] = [
+        [
+          "operation": "input", "actor": "agent", "ok": true, "ageSeconds": ages[0],
+          "says": working ? "turning Show Center off in Opie" : "turned Show Center off", "app": "Opie",
+          "bundleId": SampleAppIcons.opie,
+        ],
+        ["operation": "restart", "actor": "agent", "ok": true, "ageSeconds": ages[1], "says": "recovered the helper"],
+        [
+          "operation": "input", "actor": "viewer", "ok": true, "ageSeconds": ages[2], "says": "clicked in Opie",
+          "app": "Opie", "bundleId": SampleAppIcons.opie,
+        ],
+      ]
+      var icons: [String: IconImage] = [:]
+      if let key = AppIconKey(bundleId: SampleAppIcons.opie) {
+        icons[key.text] = SampleAppIcons.icons[SampleAppIcons.opie]
+      }
       return PanelSnapshot(
         status: try status(["overview": ["mode": mode, "state": state, "reason": "", "activity": activity]]),
         picture: SampleDesktop.picture,
-        holdingControl: holdingControl
+        holdingControl: holdingControl,
+        icons: icons
       )
     }
 

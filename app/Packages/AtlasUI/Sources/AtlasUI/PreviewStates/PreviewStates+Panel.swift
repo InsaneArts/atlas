@@ -52,11 +52,12 @@
     /// Open Atlas, the main action while nothing needs the person.
     private static let openAtlas = PanelMainButton(title: "Open Atlas", help: "Open Atlas's window", event: .openAtlas)
 
-    /// An agent's actions two minutes ago, newest first, as Recent lists them.
-    private static let earlier = [
+    /// An agent's action in Opie two minutes ago, Atlas recovering the helper and the person's own click before it,
+    /// newest first, as Recent lists them.
+    @MainActor private static let earlier = [
       recent(0, "Turned Show Center off", "2 min"),
-      recent(1, "Clicked Ring in Opie", "2 min"),
-      recent(2, "Opened Opie", "2 min"),
+      recent(1, "Recovered the helper", "2 min", icon: .atlas),
+      recent(2, "You clicked in Opie", "2 min", icon: .you),
     ]
 
     /// Nothing acts in the helper; its screen shows, with what an agent did last.
@@ -84,8 +85,8 @@
       ),
       recent: [
         recent(0, "Turning Show Center off in Opie", "2 s", isLive: true),
-        recent(1, "Clicked Ring in Opie", "9 s"),
-        recent(2, "Opened Opie", "31 s"),
+        recent(1, "Recovered the helper", "9 s", icon: .atlas),
+        recent(2, "You clicked in Opie", "31 s", icon: .you),
       ],
       controls: PanelControls(agent: .stop, agentHelp: "Stop Agent (⌘.)", main: openAtlas)
     )
@@ -113,7 +114,8 @@
       controls: PanelControls(main: recover)
     )
 
-    /// The person stopped agents: Resume in glass before Open Atlas, as Stop stands before it while an agent works.
+    /// The person stopped agents: Resume as the secondary button before Open Atlas, as Stop stands before it while an
+    /// agent works.
     @MainActor static let panelStopped = PanelState(
       status: StatusSummary(label: "Stopped", tone: .attention, mark: .square, line: "Resume when you're ready"),
       picture: screen(.live),
@@ -268,16 +270,24 @@
       event: .askRecover
     )
 
-    /// One of Recent's rows: an agent's action that worked.
+    /// One of Recent's rows: an action that worked, in Opie unless it says otherwise.
     ///
     /// - Parameters:
     ///   - id: Its place, newest first.
     ///   - line: What was done.
     ///   - when: How long ago, short.
+    ///   - icon: What leads it; Opie's icon by default.
     ///   - isLive: Whether it is the action running now.
     /// - Returns: The row's entry.
-    private static func recent(_ id: Int, _ line: String, _ when: String, isLive: Bool = false) -> PanelRecentEntry {
-      PanelRecentEntry(id: String(id), line: line, when: when, isLive: isLive)
+    @MainActor private static func recent(
+      _ id: Int,
+      _ line: String,
+      _ when: String,
+      icon: ActivityIcon? = nil,
+      isLive: Bool = false
+    ) -> PanelRecentEntry {
+      let opie = ActivityIcon.app(.of(SampleAppIcons.icons[SampleAppIcons.opie], name: "Opie"))
+      return PanelRecentEntry(id: String(id), icon: icon ?? opie, line: line, when: when, isLive: isLive)
     }
   }
 #endif

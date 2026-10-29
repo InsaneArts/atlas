@@ -16,9 +16,9 @@
         content
       }
       .background(Layout.windowFill)
-      .clipShape(RoundedRectangle(cornerRadius: Layout.windowRadius))
+      .clipShape(RoundedRectangle(cornerRadius: Layout.windowRadius, style: .continuous))
       .overlay(
-        RoundedRectangle(cornerRadius: Layout.windowRadius)
+        RoundedRectangle(cornerRadius: Layout.windowRadius, style: .continuous)
           .strokeBorder(Layout.edge, lineWidth: Layout.edgeWidth)
       )
     }
@@ -27,7 +27,7 @@
     private var sidebar: some View {
       VStack(alignment: .leading, spacing: Layout.sidebarGap) {
         ForEach(0..<Layout.sidebarRows, id: \.self) { index in
-          RoundedRectangle(cornerRadius: Layout.barRadius)
+          RoundedRectangle(cornerRadius: Layout.barRadius, style: .continuous)
             .fill(index == Layout.pickedRow ? Layout.pickedBar : Layout.bar)
             .frame(width: index.isMultiple(of: 3) ? Layout.shortBar : Layout.longBar, height: Layout.barHeight)
         }
@@ -52,7 +52,7 @@
           }
         }
         .background(
-          RoundedRectangle(cornerRadius: Layout.groupRadius)
+          RoundedRectangle(cornerRadius: Layout.groupRadius, style: .continuous)
             .fill(Layout.groupFill)
         )
         Spacer()
@@ -64,10 +64,10 @@
     /// One app in the list: its icon, its name and its switch, as plain shapes.
     private var app: some View {
       HStack(spacing: Layout.appGap) {
-        RoundedRectangle(cornerRadius: Layout.iconRadius)
+        RoundedRectangle(cornerRadius: Layout.iconRadius, style: .continuous)
           .fill(Layout.icon)
           .frame(width: Layout.iconSide, height: Layout.iconSide)
-        RoundedRectangle(cornerRadius: Layout.nameRadius)
+        RoundedRectangle(cornerRadius: Layout.nameRadius, style: .continuous)
           .fill(Layout.name)
           .frame(width: Layout.nameWidth, height: Layout.nameHeight)
         Spacer()

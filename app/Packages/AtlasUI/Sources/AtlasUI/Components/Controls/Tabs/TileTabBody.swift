@@ -15,10 +15,10 @@ struct TileTabBody: View {
       .foregroundStyle(isSelected || isHovered ? Color.textPrimary : Color.textSecondary)
       .frame(width: Layout.tile.width, height: Layout.tile.height)
       .background(
-        RoundedRectangle(cornerRadius: Radius.medium)
+        RoundedRectangle(cornerRadius: Radius.medium, style: .continuous)
           .fill(fill)
       )
-      .contentShape(RoundedRectangle(cornerRadius: Radius.medium))
+      .contentShape(RoundedRectangle(cornerRadius: Radius.medium, style: .continuous))
       .opacity(enabled ? 1 : Opacity.disabled)
       .onHover { isHovered = $0 }
       .animation(Motion.hover(isHovered), value: isHovered)

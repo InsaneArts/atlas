@@ -1,5 +1,6 @@
 #if DEBUG
   import AppKit
+  import AtlasService
   import AtlasUI
   import SwiftUI
 
@@ -18,11 +19,13 @@
       // A folder that cannot be made fails the writes below, which report it.
       try? FileManager.default
         .createDirectory(at: folder, withIntermediateDirectories: true)
+      let realIcons = Self.realIcons()
       return ComponentSample.allCases
         .map { sample in
           let view = ComponentSampleView(sample)
             .environment(\.appIcon, AppIconImage.image)
             .environment(\.accountPicture, AccountPictureImage.image)
+            .environment(\.sampleAppIcons, realIcons)
           let size = PNG.host(view).fittingSize
           return PNG.write(
             view,
@@ -32,6 +35,29 @@
           )
         }
         .allSatisfy { $0 }
+    }
+
+    /// The system's own apps that every Mac has, whose icons the app glyph's samples stand beside.
+    static let realApps = [
+      "/System/Library/CoreServices/Finder.app",
+      "/Applications/Safari.app",
+      "/System/Applications/Notes.app",
+      "/System/Applications/Calendar.app",
+    ]
+
+    /// Those apps' icons, read as the viewer reads an app's, at 128 pixels.
+    ///
+    /// - Returns: The icons that read, in order.
+    static func realIcons() -> [IconImage] {
+      realApps.compactMap { path in
+        var rect = CGRect(x: 0, y: 0, width: AppIconCachePolicy.side, height: AppIconCachePolicy.side)
+        guard let bundle = AppIconLookup.drawnBundle(path, home: NSHomeDirectory()),
+          let image = NSWorkspace.shared
+            .icon(forFile: bundle)
+            .cgImage(forProposedRect: &rect, context: nil, hints: nil)
+        else { return nil }
+        return IconImage(id: path, image: image)
+      }
     }
   }
 #endif

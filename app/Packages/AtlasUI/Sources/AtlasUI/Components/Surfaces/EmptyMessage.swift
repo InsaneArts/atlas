@@ -52,7 +52,7 @@ struct EmptyMessage: View {
       }
       if let action = state.action {
         Button(action.title, action: act)
-          .buttonStyle(.capsule(action.isPrimary ? .primary : .glass, size: buttonSize))
+          .buttonStyle(.capsule(action.isPrimary ? .primary : .secondary, size: buttonSize))
           .padding(.top, markGap)
       }
     }
@@ -62,7 +62,7 @@ struct EmptyMessage: View {
     .frame(maxWidth: .infinity, maxHeight: .infinity)
     .background {
       if ground == .stage {
-        RoundedRectangle(cornerRadius: corner)
+        RoundedRectangle(cornerRadius: corner, style: .continuous)
           .filledOutline(Color.fillPlaceholder, border: Color.separator)
       }
     }
@@ -94,7 +94,7 @@ struct EmptyMessage: View {
       .foregroundStyle(Color.textSecondary)
       .frame(width: Layout.symbolTile, height: Layout.symbolTile)
       .background(
-        RoundedRectangle(cornerRadius: Layout.symbolTileRadius)
+        RoundedRectangle(cornerRadius: Layout.symbolTileRadius, style: .continuous)
           .fill(Color.fillControl)
       )
       .accessibilityHidden(true)

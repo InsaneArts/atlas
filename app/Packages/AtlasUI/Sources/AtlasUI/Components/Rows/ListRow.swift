@@ -1,8 +1,8 @@
 import SwiftUI
 
 /// The one row every list draws: something leading, a medium title over a secondary detail, and something
-/// trailing, at the height its window uses. In a ``GroupedList`` it draws the separator above it, inset to
-/// where its title starts. A row with a radio is a choice: the whole row picks it, the radio is its only
+/// trailing, at the height its window uses. In a ``GroupedList`` it draws the separator above it, from where its
+/// title starts to its trailing inset, so the line never meets the group's edge. A row with a radio is a choice: the whole row picks it, the radio is its only
 /// mark, and the row's fill answers the pointer.
 struct ListRow: View {
   /// What leads the row.
@@ -53,7 +53,7 @@ struct ListRow: View {
     case check(CheckState, String)
     /// A switch, which calls the row's action when flipped.
     case toggle(isOn: Bool)
-    /// A glass button with its title, which calls the row's action.
+    /// A secondary button with its title, which calls the row's action.
     case button(String)
     /// A radio: the row is a choice, and the whole row calls its action.
     case radio(isOn: Bool)

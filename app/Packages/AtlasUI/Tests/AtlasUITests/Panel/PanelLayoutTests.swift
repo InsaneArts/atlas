@@ -7,6 +7,16 @@ import Testing
 @Suite("PanelLayout")
 @MainActor
 struct PanelLayoutTests {
+  @Test("the picture's frame takes the screen's shape, so no black shows at its sides")
+  func thePictureFrameTakesTheScreensShape() {
+    #expect(PanelLayout.pictureSize(aspect: 1512.0 / 982.0) == CGSize(width: 328, height: 213))
+    #expect(PanelLayout.pictureSize(aspect: 16.0 / 10.0) == PanelLayout.picture)
+    #expect(PanelLayout.pictureSize(aspect: 21.0 / 9.0) == CGSize(width: 328, height: 185), "past 16:9 letterboxes")
+    #expect(PanelLayout.pictureSize(aspect: 1.0) == CGSize(width: 328, height: 246), "past 4:3 letterboxes")
+    #expect(PanelLayout.pictureSize(aspect: nil) == PanelLayout.picture, "no screen keeps 16:10")
+    #expect(PanelLayout.pictureSize(aspect: .infinity) == PanelLayout.picture)
+  }
+
   @Test("a state change moves every piece of the panel together, easing out over 0.2 seconds with no bounce")
   func aStateChangeMovesTogether() {
     #expect(PanelLayout.change == .easeOut(duration: 0.2))
@@ -29,7 +39,10 @@ struct PanelLayoutTests {
   @Test("under Reduce Motion the live row's dot only fades as it cools, its place held while the row is live")
   func theLiveDotOnlyFadesUnderReduceMotion() {
     #expect(PanelRecentRow.holdsDot(isLive: true, isCooled: false, reduceMotion: false))
-    #expect(!PanelRecentRow.holdsDot(isLive: true, isCooled: true, reduceMotion: false), "the words close the gap")
+    #expect(
+      !PanelRecentRow.holdsDot(isLive: true, isCooled: true, reduceMotion: false),
+      "the words' room opens as it cools"
+    )
     #expect(PanelRecentRow.holdsDot(isLive: true, isCooled: false, reduceMotion: true))
     #expect(PanelRecentRow.holdsDot(isLive: true, isCooled: true, reduceMotion: true), "cooling moves nothing")
     for reduceMotion in [false, true] {
@@ -42,14 +55,14 @@ struct PanelLayoutTests {
   @Test("the panel's caption chip is the small chip, and the working sample's caption fits it whole")
   @MainActor
   func theCaptionFitsItsChip() throws {
-    let size = GlassChip<EmptyView>.Size.small
+    let size = PictureChip<EmptyView>.Size.small
     #expect(size.height == 26 && size.inset == 10 && size.gap == 7)
-    let regular = GlassChip<EmptyView>.Size.regular
+    let regular = PictureChip<EmptyView>.Size.regular
     #expect(regular.height == 28 && regular.inset == 12 && regular.gap == 8, "the viewer's chip stays as it was")
     let caption = try #require(PreviewStates.panelWorking.picture.caption)
-    func width(_ size: GlassChip<Text>.Size) throws -> CGFloat {
+    func width(_ size: PictureChip<Text>.Size) throws -> CGFloat {
       let renderer = ImageRenderer(
-        content: GlassChip(lead: .dot(.active), time: caption.time, size: size) { Text(caption.text) }
+        content: PictureChip(lead: .dot(.active), time: caption.time, size: size) { Text(caption.text) }
           .fixedSize()
       )
       renderer.scale = 1
@@ -59,17 +72,15 @@ struct PanelLayoutTests {
     #expect(try width(.regular) > PanelLayout.captionWidth, "the viewer's chip would have cut it")
   }
 
-  @Test("the panel's ground is tinted over the glass, and opaque under Reduce Transparency, in either appearance")
-  func theGroundIsTintedOverTheGlass() {
-    #expect(PanelLayout.groundOpacity(reduceTransparency: false) == 0.8)
-    #expect(PanelLayout.groundOpacity(reduceTransparency: true) == 1)
+  @Test("the panel's ground is opaque in either appearance, so nothing of the popover's material shows through")
+  func theGroundIsOpaque() {
     for (environment, rgb) in [(EnvironmentValues.dark, [Float(30), 30, 33]), (.light, [0xF6, 0xF6, 0xF8])] {
       let ground = PanelLayout.ground
         .resolve(in: environment)
       for (channel, value) in zip([ground.red, ground.green, ground.blue], rgb) {
         #expect(abs(channel * 255 - value) < 0.5)
       }
-      #expect(ground.opacity == 1, "the ground itself is opaque; the tint is its opacity over the glass")
+      #expect(ground.opacity == 1)
     }
   }
 

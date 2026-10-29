@@ -1,9 +1,11 @@
-/// What kind of thing an Activity line did, which its tile's symbol shows: the kind is information, so each
-/// has its own symbol; a problem and the person's own lines take theirs whatever they did.
+/// What kind of thing a step of the Activity pane did, which its disc's glyph shows: the kind is information, so each
+/// has its own glyph; a problem and the person's own steps take theirs whatever they did.
 public enum ViewerActivityKind: Equatable, Sendable, CaseIterable {
   /// A click, a drag or the pointer moved.
   case pointer
-  /// Text typed or keys pressed.
+  /// Text typed.
+  case typing
+  /// Keys pressed.
   case keys
   /// A scroll.
   case scroll

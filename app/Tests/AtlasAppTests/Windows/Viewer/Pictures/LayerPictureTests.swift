@@ -46,6 +46,31 @@ struct LayerPictureTests {
     }
   }
 
+  @Test("the live picture's corner follows the zoom spring only while it zooms")
+  func theCornerFollowsTheZoomOnlyWhileItZooms() throws {
+    let layer = CALayer()
+    let picture = LayerPicture(layer: layer)
+    let frame = try Self.picture("one")
+    picture.show(ViewerLivePicture(picture: frame, saturation: 1, corner: 6))
+    #expect(layer.animation(forKey: LayerPicture.cornerPath) == nil, "the first corner lands at once")
+    picture.show(ViewerLivePicture(picture: frame, saturation: 1, corner: 9, zooms: true))
+    let spring = try #require(layer.animation(forKey: LayerPicture.cornerPath) as? CASpringAnimation)
+    #expect(spring.fromValue as? CGFloat == 6)
+    #expect(spring.toValue as? CGFloat == 9)
+    let zoom = Motion.LayerSpring.zoom
+    #expect(Double(spring.mass) == zoom.mass)
+    #expect(Double(spring.stiffness) == zoom.stiffness)
+    #expect(Double(spring.damping) == zoom.damping)
+    #expect(spring.duration == spring.settlingDuration)
+    #expect(layer.cornerRadius == 9, "the layer's own corner is the one the spring lands on")
+    picture.show(ViewerLivePicture(picture: frame, saturation: 1, corner: 6))
+    #expect(layer.animation(forKey: LayerPicture.cornerPath) == nil, "outside a zoom the corner lands at once")
+    #expect(layer.cornerRadius == 6)
+    let next = try Self.picture("two")
+    picture.show(ViewerLivePicture(picture: next, saturation: 1, corner: 6, zooms: true))
+    #expect(layer.animation(forKey: LayerPicture.cornerPath) == nil, "a new frame alone never moves the corner")
+  }
+
   @Test("the window's live slot shows each new frame through its layer, without building its view again")
   @MainActor
   func theLiveSlotShowsEachNewFrame() throws {

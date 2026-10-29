@@ -13,10 +13,19 @@ extension StatusReading {
     }
   }
 
+  /// The newest of the latest actions, as the main window's footer says it: led by its session's icon whenever an
+  /// agent did it and the status lists any session, one or more; nil once none is recent enough for a caption.
+  var latestEntry: ActivityEntry? {
+    guard let item = captions().last else { return nil }
+    var entry = Self.entry(item, isNewest: true)
+    if item.actor == .agent, !liveSessions.isEmpty { entry.icon = SessionIcons.icon(of: item.sessionKey, in: self) }
+    return entry
+  }
+
   /// The newest actions, newest first, as the panel's Recent lists them: at most three, each with its age in the
   /// short words a row's right edge holds.
   var recentEntries: [ActivityEntry] {
-    activity(limit: 3)
+    activity(limit: PanelPresenter.recentRows)
       .enumerated()
       .map { index, item in
         var entry = Self.entry(item, isNewest: index == 0)

@@ -23,7 +23,7 @@ struct PanelSessions: View {
           .buttonStyle(.textLink(.small))
           .help("Open every action in Atlas")
       }
-      .padding(.horizontal, Spacing.half)
+      .padding(.horizontal, PanelLayout.textInset)
       .padding(.bottom, Spacing.half)
       VStack(spacing: Spacing.half) {
         // An entry's id is the session's key, which holds as its state changes.
@@ -55,10 +55,10 @@ struct PanelSessions: View {
         .font(Typography.font(.callout))
         .foregroundStyle(Color.textSecondary)
         .lineLimit(1)
-        .frame(maxWidth: .infinity, minHeight: PanelLayout.recentRow, alignment: .leading)
+        .frame(maxWidth: .infinity, minHeight: PanelLayout.moreRow, alignment: .leading)
         .padding(.leading, PanelLayout.sessionText)
     }
-    .buttonStyle(.row)
+    .buttonStyle(.row(corner: PanelLayout.sessionCorner))
     .help("Show every session in Atlas")
     .accessibilityHint("Shows every session in Atlas")
   }

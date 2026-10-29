@@ -47,7 +47,7 @@ struct WaitingStage: View {
 
   /// The stage's outline.
   private var shape: RoundedRectangle {
-    RoundedRectangle(cornerRadius: Radius.large)
+    RoundedRectangle(cornerRadius: ViewerLayout.paneRadius, style: .continuous)
   }
 }
 

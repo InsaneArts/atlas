@@ -84,15 +84,37 @@ struct MainMenuTests {
     #expect(find.title == "Find…" && find.keyEquivalent == "f")
   }
 
-  @Test("the Helper menu offers Recover…, with Restart Helper… only while Option is held, then Switch and Log Out")
+  @Test(
+    "the Session menu sits between View and Helper, with every session, the one above and below, Ended and Clean Up"
+  )
+  func theSessionMenuOffersTheSessions() throws {
+    let bar = MainMenu.make(viewer: true).items
+      .compactMap(\.submenu?.title)
+    #expect(bar == ["Atlas", "File", "Edit", "View", "Session", "Helper", "Window"])
+    let session = try #require(Self.menus(Answerer())["Session"])
+    #expect(
+      Self.titles(session) == [
+        "All Sessions", "Previous Session", "Next Session", "—", "Show Ended Sessions", "—",
+        "Clean Up This Session's Work…",
+      ]
+    )
+    let view = try #require(Self.menus(Answerer())["View"])
+    #expect(!Self.titles(view).contains { $0.contains("Details") }, "Details is gone from View")
+  }
+
+  @Test(
+    "the Helper menu offers Send Key, Check Again and Recover…, with Restart Helper… only while Option is held, then Switch and Log Out"
+  )
   func theHelperMenuHidesRestartBehindOption() throws {
     let helper = try #require(Self.menus(Answerer())["Helper"])
     #expect(
       Self.titles(helper) == [
-        "Take Control", "Stop Agent", "—", "Recover…", "Restart Helper…", "—", "Switch to the Helper…",
-        "Log Out the Helper…",
+        "Take Control", "Stop Agent", "Send Key", "—", "Check Again", "Open Settings on Helper…", "—", "Recover…",
+        "Restart Helper…", "—", "Switch to the Helper…", "Log Out the Helper…",
       ]
     )
+    let keys = try #require(helper.items.first { $0.title == "Send Key" }?.submenu)
+    #expect(keys.items.contains { $0.action == #selector(ViewerMenuActions.sendKey(_:)) })
     let restart = try #require(helper.items.first { $0.action == #selector(HelperMenuActions.askRestart(_:)) })
     #expect(restart.isAlternate && restart.keyEquivalentModifierMask == .option)
   }

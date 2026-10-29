@@ -1,13 +1,13 @@
 import SwiftUI
 
-/// The large screenshot's one glass bar: its time and size, Copy, Show in Finder and Close.
+/// The large screenshot's one bar, an opaque floating capsule: its time and size, Copy, Show in Finder and Close.
 struct LargeShotBar: View {
   /// The screenshot shown large.
   let shot: ViewerLargeShot
   /// Receives what the person does.
   let send: @MainActor (ViewerEvent) -> Void
 
-  /// The time and size, then the three buttons, on glass.
+  /// The time and size, then the three buttons, on the bar.
   var body: some View {
     HStack(spacing: Spacing.xsPlus) {
       Text(shot.caption)
@@ -19,14 +19,14 @@ struct LargeShotBar: View {
       } label: {
         labelled(.copy, "Copy")
       }
-      .buttonStyle(.capsule(.glass, size: .mini))
+      .buttonStyle(.capsule(.secondary, size: .mini))
       .help("Copy this screenshot as taken")
       Button {
         send(.showShotInFinder)
       } label: {
         labelled(.folder, "Show in Finder")
       }
-      .buttonStyle(.capsule(.glass, size: .mini))
+      .buttonStyle(.capsule(.secondary, size: .mini))
       .disabled(!shot.canShowInFinder)
       .help("Show this screenshot's file in the Finder")
       Button(String("Close")) { send(.closeShot) }
@@ -35,7 +35,7 @@ struct LargeShotBar: View {
     }
     .padding([.vertical, .trailing], Layout.inset)
     .padding(.leading, Spacing.mPlus)
-    .glass(.regular, in: Capsule())
+    .surface(.floating, in: Capsule())
     .elevation(.floating)
   }
 

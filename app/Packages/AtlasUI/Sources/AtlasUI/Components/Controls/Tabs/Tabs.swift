@@ -1,10 +1,9 @@
 import SwiftUI
 
 /// One row of tabs. As a `track`, the tabs sit side by side in a capsule track, each its word or its symbol, the
-/// selected one on a brighter thumb that glides to it (`matchedGeometryEffect(id: "thumb")`) in 0.25 seconds with no
-/// overshoot, as a segmented control's does, and jumps there at once under Reduce Motion
-/// (``TabsLayout/thumbGlide(reduceMotion:)``). As a `segment` they
-/// sit the same way in a small rounded track, as a pane's filters. As `symbolOverWord`, each tab is its symbol over
+/// selected one on a raised white thumb, which moves to the tab chosen at once, nothing travelling between them. As a
+/// `segment` they sit the same way in a smaller capsule track, each with how many things it holds, as a pane's
+/// filters. As `symbolOverWord`, each tab is its symbol over
 /// its word, the selected one on a filled tile with its symbol in blue, as a settings window's. Each tab is a button
 /// VoiceOver reads as selected or not; anything a tab carries beside its word, such as a dot for something new, comes
 /// from `accessory`.
@@ -24,8 +23,6 @@ struct Tabs<Tab: Hashable & Sendable, Accessory: View>: View {
   private let send: @MainActor (Tab) -> Void
   /// What a tab carries beside its word, by the tab.
   private let accessory: (Tab) -> Accessory
-  @Namespace private var thumb
-  @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
   /// Creates a row of tabs.
   ///
@@ -58,7 +55,7 @@ struct Tabs<Tab: Hashable & Sendable, Accessory: View>: View {
     }
   }
 
-  /// The tabs in their capsule track.
+  /// The tabs in their capsule track, a quiet fill with no edge, the raised thumb under the tab selected.
   private var track: some View {
     HStack(spacing: TabsLayout.trackGap) {
       ForEach(state.tabs) { tab in
@@ -68,7 +65,7 @@ struct Tabs<Tab: Hashable & Sendable, Accessory: View>: View {
           trackLabel(tab)
             .modifier(hanging(tab.id, gap: face == .symbol ? Spacing.xs : Spacing.xsPlus))
         }
-        .buttonStyle(TrackTabStyle(isSelected: tab.id == state.selected, face: face, thumb: thumb))
+        .buttonStyle(TrackTabStyle(isSelected: tab.id == state.selected, face: face))
         .help(tab.help ?? (face == .symbol ? tab.title : ""))
         .accessibilityLabel(tab.title)
         .accessibilityAddTraits(tab.id == state.selected ? .isSelected : [])
@@ -79,12 +76,7 @@ struct Tabs<Tab: Hashable & Sendable, Accessory: View>: View {
       Capsule()
         .fill(Color.fillControl)
     )
-    .overlay(
-      RoundedRectangle(cornerRadius: TabsLayout.trackHeight / 2, style: .circular)
-        .strokeBorder(Color.separator, lineWidth: Stroke.hairline)
-    )
     .fixedSize()
-    .animation(TabsLayout.thumbGlide(reduceMotion: reduceMotion), value: state.selected)
     .accessibilityElement(children: .contain)
     .accessibilityLabel(state.label)
   }
@@ -102,28 +94,35 @@ struct Tabs<Tab: Hashable & Sendable, Accessory: View>: View {
     }
   }
 
-  /// The tabs in a small rounded track, each its word, as a pane's filters.
+  /// The tabs in a small capsule track, each its word and, quietly after it, how many things it holds, as a pane's
+  /// filters.
   private var segment: some View {
-    HStack(spacing: .zero) {
+    HStack(spacing: TabsLayout.trackGap) {
       ForEach(state.tabs) { tab in
         Button {
           send(tab.id)
         } label: {
-          Text(tab.title)
-            .modifier(hanging(tab.id, gap: Spacing.xs))
+          HStack(spacing: Spacing.xsPlus) {
+            Text(tab.title)
+            if let count = tab.count {
+              Text(verbatim: "\(count)")
+                .font(Typography.digits(.caption, weight: .medium))
+                .foregroundStyle(Color.textTertiary)
+            }
+          }
+          .modifier(hanging(tab.id, gap: Spacing.xs))
         }
-        .buttonStyle(SegmentTabStyle(isSelected: tab.id == state.selected, thumb: thumb))
-        .accessibilityLabel(tab.title)
+        .buttonStyle(SegmentTabStyle(isSelected: tab.id == state.selected))
+        .accessibilityLabel(tab.count.map { "\(tab.title), \($0)" } ?? tab.title)
         .accessibilityAddTraits(tab.id == state.selected ? .isSelected : [])
       }
     }
-    .padding(Spacing.half)
+    .padding(TabsLayout.trackInset)
     .background(
-      RoundedRectangle(cornerRadius: Radius.small)
+      Capsule()
         .fill(Color.fillControl)
     )
     .fixedSize()
-    .animation(TabsLayout.thumbGlide(reduceMotion: reduceMotion), value: state.selected)
     .accessibilityElement(children: .contain)
     .accessibilityLabel(state.label)
   }

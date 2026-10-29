@@ -14,8 +14,6 @@ struct ViewerSnapshot {
   var acquiring = false
   /// Text the input method is composing, not yet sent.
   var composing = ""
-  /// Whether the person asked for Details.
-  var detailsShown = false
   /// How often a picture is read while watching.
   var rate = ViewerPictureRate.live
   /// The time the window last read the clock, in seconds of uptime.
@@ -26,13 +24,13 @@ struct ViewerSnapshot {
   var agentRequests = 0
   /// Whether control work is under way anywhere in the app: an acquisition awaiting its reply, or a release.
   var controlBusy = false
-  /// The agents connected to Atlas, as last read for Details; nil when unknown.
+  /// The agents connected to Atlas, as last read for the helper's facts; nil when unknown.
   var agents: [AgentID]?
   /// When the helper's account logged in; nil when unknown.
   var loggedInAt: Date?
-  /// The time zone Details tells the login time in.
+  /// The time zone the helper's and sessions' facts tell their times in.
   var timeZone = TimeZone.current
-  /// The locale Details tells the login time in, and the tabs their times and days.
+  /// The locale the facts tell their times in, and the lists their times and days.
   var locale = Locale.current
   /// What the Activity, Apps and Screenshots tabs hold.
   var panes = ViewerPanes()

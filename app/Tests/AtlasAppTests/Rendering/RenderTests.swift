@@ -82,7 +82,7 @@
       #expect(image.pixelsHigh == Int(size.height) * PNG.scale)
     }
 
-    @Test("every narrow main window render draws at its width", arguments: await ViewerRender.narrowNames)
+    @Test("every narrow and short main window render draws at its size", arguments: await ViewerRender.narrowNames)
     func everyNarrowRenderDraws(file: String) throws {
       let render = try #require(ViewerRender.narrowRenders.first { $0.name == file })
       let directory = try Self.directory()
@@ -91,16 +91,34 @@
           .removeItem(at: directory)
       }
       let size = try #require(render.size)
-      #expect(size.height == PreviewStates.viewerSize.height)
+      #expect(size.width < PreviewStates.viewerSize.width || size.height < PreviewStates.viewerSize.height)
       #expect(ViewerRender.draw(file, render.value, to: directory, size: size, appearance: Appearance.light))
       let drawn = directory.appendingPathComponent("\(file).png")
       let image = try #require(NSBitmapImageRep(data: Data(contentsOf: drawn)), "\(file) was not drawn")
       #expect(image.pixelsWide == Int(size.width) * PNG.scale)
+      #expect(image.pixelsHigh == Int(size.height) * PNG.scale)
+    }
+
+    @Test("every list render draws at its size", arguments: await ViewerRender.listNames)
+    func everyListRenderDraws(file: String) throws {
+      let render = try #require(ViewerRender.listRenders.first { $0.name == file })
+      let directory = try Self.directory()
+      defer {
+        try? FileManager.default
+          .removeItem(at: directory)
+      }
+      let size = try #require(render.size)
+      #expect(ViewerRender.draw(file, render.value, to: directory, size: size, appearance: Appearance.dark))
+      let drawn = directory.appendingPathComponent("\(file).png")
+      let image = try #require(NSBitmapImageRep(data: Data(contentsOf: drawn)), "\(file) was not drawn")
+      #expect(image.pixelsWide == Int(size.width) * PNG.scale)
+      #expect(image.pixelsHigh == Int(size.height) * PNG.scale)
     }
 
     @Test("the main window renders have names of their own")
     func theViewerRendersHaveTheirOwnNames() {
-      let names = (ViewerRender.renders + ViewerRender.narrowRenders + ViewerRender.frameRenders)
+      let names =
+        (ViewerRender.renders + ViewerRender.narrowRenders + ViewerRender.frameRenders + ViewerRender.listRenders)
         .map(\.name)
       #expect(Set(names).count == names.count)
     }

@@ -106,20 +106,20 @@
     /// - Throws: A decoding error, which a fixed reply never gives.
     func presented() throws -> [String: ViewerState] {
       try screenSamples()
-        .merging(try activitySamples()) { _, tab in tab }
-        .merging(try appsSamples()) { _, tab in tab }
-        .merging(try shotsSamples()) { _, tab in tab }
-        .merging(try sessionsSamples()) { _, tab in tab }
+        .merging(try activitySamples()) { _, place in place }
+        .merging(try appsSamples()) { _, place in place }
+        .merging(try shotsSamples()) { _, place in place }
+        .merging(try sessionsSamples()) { _, place in place }
     }
 
-    /// Shows `tab` at `date`, on a German clock in UTC.
+    /// Shows `place` at `date`, on a German clock in UTC.
     ///
     /// - Parameters:
-    ///   - tab: The tab.
+    ///   - place: The place.
     ///   - date: The time now.
     ///   - snapshot: The facts to change.
-    static func onTab(_ tab: ViewerTab, at date: Date, _ snapshot: inout ViewerSnapshot) {
-      snapshot.session.tab = tab
+    static func onPlace(_ place: ViewerPlace, at date: Date, _ snapshot: inout ViewerSnapshot) {
+      snapshot.session.place = place
       snapshot.date = date
       snapshot.timeZone = TimeZone(secondsFromGMT: 0) ?? .current
       snapshot.locale = Locale(identifier: "de_DE")

@@ -42,7 +42,7 @@
           Button(String("Continue")) {}
             .buttonStyle(.capsule())
           Button(String("Getting Started…")) {}
-            .buttonStyle(.capsule(.glass))
+            .buttonStyle(.capsule(.secondary))
           Button(String("Back")) {}
             .buttonStyle(.capsule(.plain))
           Button(String("Keys")) {}
@@ -52,7 +52,7 @@
             .disabled(true)
         case .sizes:
           Button(String("Check Again")) {}
-            .buttonStyle(.capsule(.glass, size: .mini))
+            .buttonStyle(.capsule(.secondary, size: .mini))
           Button(String("Recover…")) {}
             .buttonStyle(.capsule(size: .small))
           Button(String("Recover")) {}
@@ -64,7 +64,7 @@
             Button(String("Open Viewer")) {}
               .buttonStyle(.capsule(fill: true))
             Button(String("Switch to Helper…")) {}
-              .buttonStyle(.capsule(.glass, fill: true))
+              .buttonStyle(.capsule(.secondary, fill: true))
           }
           .frame(width: SampleWidth.narrow)
         case .alert:
@@ -86,14 +86,18 @@
         case .circles:
           HStack(spacing: Spacing.s) {
             Button(String("Pause"), systemImage: "pause.fill") {}
-              .buttonStyle(.capsule(.glass, outline: .circle))
+              .buttonStyle(.capsule(.secondary, outline: .circle))
             Button(String("Sidebar"), systemImage: "sidebar.right") {}
-              .buttonStyle(.capsule(.glass, size: .small, outline: .circle))
+              .buttonStyle(.capsule(.secondary, size: .small, outline: .circle))
             Button(String("Sidebar"), systemImage: "sidebar.right") {}
-              .buttonStyle(.capsule(.glass, size: .small, outline: .circle, isOn: true))
+              .buttonStyle(.capsule(.secondary, size: .small, outline: .circle, isOn: true))
             Button(String("Pause"), systemImage: "pause.fill") {}
-              .buttonStyle(.capsule(.glass, outline: .circle))
+              .buttonStyle(.capsule(.secondary, outline: .circle))
               .disabled(true)
+            Button(String("More"), systemImage: "ellipsis") {}
+              .buttonStyle(.capsule(.glyph, size: .small, outline: .circle))
+            Button(String("Sidebar"), systemImage: "sidebar.right") {}
+              .buttonStyle(.capsule(.glyph, size: .small, outline: .circle, isOn: true))
           }
           .labelStyle(.iconOnly)
         }

@@ -11,7 +11,7 @@ struct ViewerPaneArrivalTests {
     var readings: [Bool] = []
     let host = NSHostingView(
       rootView: PaneArrivalProbe { readings.append($0) }
-        .modifier(KeptPaneShift(isShown: true))
+        .modifier(KeptPaneShift(isShown: true, rises: false))
     )
     host.frame = NSRect(x: 0, y: 0, width: 400, height: 300)
     host.layoutSubtreeIfNeeded()

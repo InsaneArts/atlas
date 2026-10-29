@@ -226,7 +226,7 @@ struct ViewerControlTests {
   }
 
   @Test(
-    "Take Control pressed while an agent acts asks again each second for its step to end, then says it didn't in a toast"
+    "Take Control pressed while an agent acts asks again each second for its step to end, then says it didn't in the footer"
   )
   func takeControlWaitsForTheAgentsStep() async throws {
     let service = ScriptedService()
@@ -235,21 +235,22 @@ struct ViewerControlTests {
     let viewer = try await ViewerController.watching(service, clock: clock)
     // Readings stop, so the retry is the clock's one sleeper.
     viewer.readingLoop.watch(false)
-    #expect(viewer.state.top.actions.control?.isEnabled == true, "Take Control stays offered while an agent works")
+    #expect(viewer.state.footer.controls.control?.isEnabled == true, "Take Control stays offered while an agent works")
     service.busyAcquires = ViewerControl.busyRetries + 1
     try await Self.takeControl(viewer, retryingOn: clock, retries: ViewerControl.busyRetries)
     #expect(service.log.filter { $0.hasPrefix("acquire") }.count == 5, "asked once, then each second four times")
     #expect(viewer.control.lease == nil)
-    #expect(viewer.state.toast == ViewerWords.agentMidAction)
+    #expect(viewer.state.footer.latest.words == ViewerWords.agentMidAction)
     // The picture has aged four seconds without readings; one more ask keeps it fresh enough to aim at.
     service.busyAcquires = 1
     try await Self.takeControl(viewer, retryingOn: clock, retries: 1)
     #expect(viewer.control.lease == "lease", "the step ended within the wait, so the next ask took control")
-    #expect(viewer.state.toast == nil, "control taken, the refusal is old news")
+    #expect(viewer.session.toast == nil, "control taken, the refusal is old news")
+    #expect(viewer.state.footer.latest.tone == .link, "the footer says control instead")
     viewer.close()
   }
 
-  @Test("a refused Take Control shows the reason and removes it after 2.4 seconds on the clock")
+  @Test("a refused Take Control shows its reason in the footer for 2.4 seconds")
   func aRefusalShowsItsReasonForItsTime() async throws {
     let service = ScriptedService()
     service.reply = ["ready": true, "canObserve": true, "overview": ["mode": "agent", "state": "working"]]
@@ -259,17 +260,17 @@ struct ViewerControlTests {
     viewer.readingLoop.watch(false)
     service.busyAcquires = ViewerControl.busyRetries + 1
     try await Self.takeControl(viewer, retryingOn: clock, retries: ViewerControl.busyRetries)
-    #expect(viewer.state.toast == ViewerWords.agentMidAction)
-    #expect(viewer.state.top.actions.refusals == 1, "the white capsule shakes once")
-    #expect(viewer.session.notice == nil, "the reason is the toast's, not a notice that stays")
+    #expect(viewer.state.footer.latest.words == ViewerWords.agentMidAction)
+    #expect(viewer.state.footer.latest.id == "refusal-1", "the refusal is its own line")
+    #expect(viewer.session.notice == nil, "the reason leaves by itself, not as a notice that stays")
+    #expect(viewer.state.footer.latest.tone == .attention)
     let toast = Duration.seconds(Motion.Duration.toast.seconds)
     try await clock.untilSleeping(for: toast, "the toast never waited to leave")
     clock.advance(by: toast - .milliseconds(1))
     await Task.yield()
-    #expect(viewer.state.toast == ViewerWords.agentMidAction, "it stays its whole 2.4 seconds")
+    #expect(viewer.state.footer.latest.words == ViewerWords.agentMidAction, "it stays its whole 2.4 seconds")
     clock.advance(by: .milliseconds(1))
-    try await settle("the toast never left") { viewer.state.toast == nil }
-    #expect(viewer.state.top.actions.refusals == 1, "leaving shakes nothing")
+    try await settle("the reason never left") { viewer.state.footer.latest.words != ViewerWords.agentMidAction }
     viewer.close()
   }
 
@@ -280,7 +281,7 @@ struct ViewerControlTests {
     service.hold = ["acquire"]
     let taking = Task { await viewer.control.takeControl() }
     try await settle("Take Control was never asked") { service.held["acquire"] != nil }
-    #expect(!viewer.state.top.isInControl, "nothing turns to control before the reply")
+    #expect(viewer.state.screen.look != .inControl, "nothing turns to control before the reply")
     // The first job that can run once the lease changes sees what the turn that changed it left: input and every
     // piece the window animates must already have changed hands there, never in a later step.
     let firstLook = OSAllocatedUnfairLock<[Bool]?>(initialState: nil)
@@ -293,11 +294,11 @@ struct ViewerControlTests {
           let state = viewer.state
           let seen = [
             viewer.control.canInput,
-            state.top.isInControl,
-            state.top.status.tone == .link,
+            state.header.who == ViewerWords.you,
+            state.footer.latest.tone == .link,
             state.screen.look == .inControl,
-            state.top.actions.keys == .shown(isOpen: false),
-            state.top.actions.control?.event == .giveBack,
+            state.footer.controls.pause == nil,
+            state.footer.controls.control?.event == .giveBack,
           ]
           firstLook.withLock { $0 = seen }
           // Typed in that same first job, it goes to the helper: the input queue already belongs to the lease.
@@ -309,7 +310,10 @@ struct ViewerControlTests {
     await taking.value
     try await settle("the grant was never seen") { firstLook.withLock { $0 } != nil }
     let seen = try #require(firstLook.withLock { $0 })
-    #expect(seen == [true, true, true, true, true, true], "input, the wash, the word, the rim, Keys and Give Back")
+    #expect(
+      seen == [true, true, true, true, true, true],
+      "input, the header, the footer's line, the edge, the pause gone and Give Back"
+    )
     try await settle("the text typed at once never reached the helper") { !service.actions.isEmpty }
     viewer.close()
   }
@@ -361,7 +365,7 @@ struct ViewerControlTests {
     let service = ScriptedService()
     let viewer = try await ViewerController.watching(service)
     viewer.togglePause()
-    #expect(viewer.state.top.actions.control?.isEnabled == true, "the button applies while paused")
+    #expect(viewer.state.footer.controls.control?.isEnabled == true, "the button applies while paused")
     viewer.send(.takeControl)
     try await settle("control was never taken") { viewer.control.lease == "lease" }
     #expect(!viewer.session.paused, "the picture resumed first")
@@ -420,7 +424,7 @@ struct ViewerControlTests {
     try await settle("the paused viewer never read status") { service.statusCalls > asked }
     let interval = Duration.seconds(ViewerPictureRate.live.seconds)
     try await clock.untilSleeping(for: interval, "the paused reading never waited")
-    #expect(viewer.state.top.actions.control?.isEnabled == true)
+    #expect(viewer.state.footer.controls.control?.isEnabled == true)
 
     service.reply = [
       "ready": false, "canObserve": true,
@@ -433,9 +437,11 @@ struct ViewerControlTests {
 
     service.reply = ready
     clock.advance(by: interval)
-    try await settle("the paused viewer never returned to Idle") { viewer.state.top.status.label == "Idle" }
-    try #require(viewer.state.top.actions.control?.isEnabled == true, "Take Control is offered again")
-    #expect(viewer.state.top.actions.control?.event == .takeControl)
+    try await settle("the paused viewer never returned to Idle") {
+      ViewerPresenter.status(viewer.snapshot).label == "Idle"
+    }
+    try #require(viewer.state.footer.controls.control?.isEnabled == true, "Take Control is offered again")
+    #expect(viewer.state.footer.controls.control?.event == .takeControl)
     #expect(viewer.session.paused)
     #expect(viewer.reading.frame?.id == frame.id)
     #expect(service.frameCalls == frames)
@@ -468,8 +474,8 @@ struct ViewerControlTests {
     viewer.send(.takeControl)
     try await settle("the press never waited") { viewer.control.acquiring }
     #expect(viewer.control.pictureWait != nil)
-    #expect(viewer.state.top.actions.control?.title == ViewerWords.connectingControl)
-    viewer.send(.selectTab(.activity))
+    #expect(viewer.state.footer.controls.control?.title == ViewerWords.connectingControl)
+    viewer.send(.show(.activity))
     #expect(viewer.control.pictureWait == nil)
     #expect(!viewer.control.acquiring)
     service.resume("frame")

@@ -1,7 +1,7 @@
 import SwiftUI
 
 /// A window shown from the Apps tab, as a spotlight over the picture: everything but the window dimmed, the outline
-/// round it, and its label on glass with the app's icon, the app and window's names, its size and an × that stops
+/// round it, and its label on a chip with the app's icon, the app and window's names, its size and an × that stops
 /// showing it (Escape does too), above the outline or inside it near an edge. Showing another window glides the
 /// outline and its label there; under Reduce Motion they move at once. Only the × takes clicks.
 struct ScreenOutline: View {
@@ -32,8 +32,10 @@ struct ScreenOutline: View {
       OutlineHighlight(frame: frame, dim: ViewerLayout.spotlightDim)
         .allowsHitTesting(false)
       OutlineLabelPlacement(outline: frame) {
-        GlassChip {
-          AppTile(image: outline.icon?.image, side: IconSize.s)
+        PictureChip {
+          if let icon = outline.icon {
+            AppGlyph(face: icon, side: IconSize.s)
+          }
           Text(outline.title)
             .truncationMode(.tail)
           Text(outline.size)

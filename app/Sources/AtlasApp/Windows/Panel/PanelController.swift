@@ -39,11 +39,17 @@ final class PanelController {
   var listedHelper: String?
   /// Where Open at Login stands, as last read: at launch, each time the panel opens, and after it is set here.
   var opensAtLogin: OpenAtLogin.State
+  /// The icons found for Recent's apps, by their key's text (``AppIconKey/text``).
+  var icons: [String: IconImage] = [:]
 
   /// The viewer service it reads and asks.
   @ObservationIgnored let service: any ViewerService
   /// The `atlas` command line its actions run.
   @ObservationIgnored let commands: any CommandRunning
+  /// Where Recent's apps' icons are found.
+  @ObservationIgnored let appIcons: AppIcons
+  /// The icons asked for already, found or not, by their key's text, so each is looked for once a launch.
+  @ObservationIgnored var iconsAsked: Set<String> = []
   /// The helper's own commands, shared with every window.
   @ObservationIgnored let actions: HelperActions
   /// The app's login item.
@@ -83,6 +89,7 @@ final class PanelController {
     links = dependencies.links
     clock = dependencies.clock
     wallClock = dependencies.wallClock
+    appIcons = dependencies.icons
     opensAtLogin = dependencies.loginItem.state
   }
 
@@ -99,7 +106,8 @@ final class PanelController {
       running: actions.running,
       agentRequests: actions.agentRequests,
       opensAtLogin: opensAtLogin,
-      date: wallClock()
+      date: wallClock(),
+      icons: icons
     )
   }
 

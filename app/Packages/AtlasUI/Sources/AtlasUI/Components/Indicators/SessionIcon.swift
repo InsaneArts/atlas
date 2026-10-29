@@ -1,14 +1,16 @@
 import SwiftUI
 
-/// A host session's icon at a side from ``IconSize``: its app's logo clipped to small corners with a hairline ring, so
-/// a dark logo such as Cursor's keeps its edge on dark glass, an agent's or Terminal's mark scaled to the side, or a
-/// symbol tile. One view for the panel's rows, the main window's sidebar, group headers, chip and Details, and the
+/// A host session's icon at a side from ``IconSize``: its app's icon drawn as it is, since a macOS 26 icon brings its
+/// own plate and edge, an agent's or Terminal's mark scaled to the side, or a symbol tile whose corners take a quarter
+/// of its side. One view for the panel's rows, the main window's sidebar, group headers and the footer's line, and the
 /// captions. VoiceOver hides it; the name beside it is read.
 public struct SessionIcon: View {
   /// 0.42: a tile's glyph against its side, as a symbol tile's 11-point characters sit on its 26.
   private static let glyphShare: CGFloat = 0.42
-  /// 0.25: the most a corner takes of the side.
+  /// 0.25: a tile's corner against its side, 7 on a 28-point row icon, so a tile rounds the same at any side.
   private static let cornerShare: CGFloat = 0.25
+  /// 28: the icon leading a session's two-line row, in the main window's sessions column and the panel alike.
+  nonisolated static let rowSide: CGFloat = 28
 
   /// What it draws.
   private let icon: RowIcon
@@ -39,11 +41,6 @@ public struct SessionIcon: View {
       Image(decorative: image.image, scale: 1)
         .resizable()
         .interpolation(.high)
-        .clipShape(RoundedRectangle(cornerRadius: corner, style: .continuous))
-        .overlay(
-          RoundedRectangle(cornerRadius: corner, style: .continuous)
-            .strokeBorder(Color.strokeStrong, lineWidth: Stroke.hairline)
-        )
     case .mark(let kind):
       // The mark draws at its row size; scaled, its card, glyph and rim keep their proportions.
       AgentMark(kind: kind)
@@ -77,9 +74,9 @@ public struct SessionIcon: View {
     }
   }
 
-  /// The corners: small, and smaller still on a small icon, so a caption's icon stays a rounded square.
+  /// A tile's corners, in proportion to its side.
   private var corner: CGFloat {
-    min(Radius.extraSmall, side * Self.cornerShare)
+    side * Self.cornerShare
   }
 }
 

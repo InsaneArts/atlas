@@ -1,74 +1,100 @@
 import SwiftUI
 
-/// The Apps tab: the apps open in the helper, front to back, each a group with its real icon and its windows with
-/// their sizes, with a search over their names once any is open; or why none shows, on the pane's own ground. Show on
-/// Screen shows on the window row under the pointer only.
+/// The Apps list inside the card, with no ground of its own: how many apps and windows are open, then the apps as
+/// cards, under a quiet heading per group while every session's apps show, or only the chosen session's own; or why
+/// none shows. The sidebar's search narrows it. Cards keep their order as the front app changes; an app that opens,
+/// quits or moves between groups fades in or out in place while the others close or open the gap (``AppsMotion``). It
+/// scrolls in the card's one list scroll (``CardScroll``), under the small screen.
 struct ViewerAppsPane: View {
   /// What the pane shows.
   let state: ViewerAppsState
   /// Receives what the person does.
   let send: @MainActor (ViewerEvent) -> Void
-  /// The window row under the pointer; nil for none.
-  @State private var hoveredWindow: Int?
-  @Environment(\.paneSettled) private var paneSettled
+  @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
-  /// The header with the search, over the apps or why there are none.
+  /// The apps, or why there are none.
   var body: some View {
-    VStack(spacing: .zero) {
-      PaneHeader(title: "Apps", meta: state.meta) {
-        if state.isSearchable {
-          SearchField(text: state.query, prompt: "Search apps", focusRequests: state.findRequests) {
-            send(.searchApps($0))
-          }
-        }
-      }
-      content
-    }
-    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
-    .clipShape(RoundedRectangle(cornerRadius: Radius.large))
-    .cardSurface()
-    .accessibilityElement(children: .contain)
-    .accessibilityLabel("Apps")
+    content
+      .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+      .accessibilityElement(children: .contain)
+      .accessibilityLabel("Apps")
+      .accessibilityValue(state.meta)
   }
 
-  /// The apps' groups, or why there are none.
+  /// The summary and the groups, or why there are none.
   @ViewBuilder private var content: some View {
     if let empty = state.empty {
       EmptyMessage(state: empty, size: .stage, ground: .pane, symbol: .windows)
     } else {
-      ScrollView {
-        LazyVStack(spacing: Spacing.sPlus) {
-          ForEach(state.apps) { app in
-            AppCard(app: app, hoveredWindow: hoveredWindow, hover: hover, send: send)
+      CardScroll {
+        VStack(alignment: .leading, spacing: .zero) {
+          summary
+          ForEach(state.groups) { group in
+            if let title = group.title {
+              heading(title, count: group.cards.count)
+            }
+            AppCardGrid {
+              ForEach(group.cards) { card in
+                AppCard(card: card, send: send)
+                  .transition(AppsMotion.card(reduceMotion: reduceMotion))
+              }
+            }
+            .padding(.top, group.title == nil ? ViewerLayout.appGroupBelow : .zero)
           }
         }
-        .padding(.top, ViewerLayout.appsTop)
-        .padding(.bottom, Spacing.sPlus)
         .padding(.horizontal, ViewerLayout.swapInset)
+        .animation(AppsMotion.layout(reduceMotion: reduceMotion), value: state.groups.map(\.cards).map { $0.map(\.id) })
       }
-      .scrollIndicators(paneSettled ? .automatic : .hidden)
-      .clearsMiniScreen()
     }
   }
 
-  /// Notes the window row under the pointer: the one it enters, and none once it leaves the one it is on, whichever
-  /// of the two the system reports first as it moves from row to row.
+  /// How many apps are open, and beside it how many windows they have; the words swap as a whole as they change.
+  private var summary: some View {
+    LineSwap([state.title, state.detail]) { words in
+      HStack(alignment: .firstTextBaseline, spacing: ViewerLayout.appsSummaryGap) {
+        Text(verbatim: words.first ?? "")
+          .font(Typography.digits(.title3, weight: .semibold))
+          .tracking(LetterSpacing.headline)
+          .foregroundStyle(Color.textPrimary)
+        if let detail = words.last, !detail.isEmpty {
+          Text(verbatim: "· \(detail)")
+            .font(Typography.digits(.callout))
+            .foregroundStyle(Color.textTertiary)
+        }
+      }
+      .lineLimit(1)
+    }
+    .padding(.top, ViewerLayout.appsSummaryTop)
+    .padding(.bottom, ViewerLayout.appsSummaryBottom)
+    .accessibilityElement(children: .combine)
+    .accessibilityAddTraits(.isHeader)
+  }
+
+  /// A group's quiet heading and its count.
   ///
   /// - Parameters:
-  ///   - window: The window whose row the pointer entered or left.
-  ///   - isOver: Whether it entered.
-  private func hover(_ window: Int, _ isOver: Bool) {
-    if isOver {
-      hoveredWindow = window
-    } else if hoveredWindow == window {
-      hoveredWindow = nil
-    }
+  ///   - title: The group's heading.
+  ///   - count: How many apps it holds.
+  /// - Returns: The heading.
+  private func heading(_ title: String, count: Int) -> some View {
+    ListHeading(title: title, count: count)
+      .frame(height: ViewerLayout.appGroupHeight)
+      .padding(.top, ViewerLayout.appGroupAbove)
+      .padding(.bottom, ViewerLayout.appGroupBelow)
   }
 }
 
 #if DEBUG
-  #Preview("Apps") {
+  #Preview("All sessions") {
     if case .apps(let apps) = PreviewStates.viewerApps.pane {
+      ViewerAppsPane(state: apps) { _ in }
+        .frame(width: ViewerLayout.largeShotLargest.width, height: ViewerLayout.largeShotLargest.height)
+        .sampleSurface()
+    }
+  }
+
+  #Preview("One session") {
+    if case .apps(let apps) = PreviewStates.viewerAppsOneSession.pane {
       ViewerAppsPane(state: apps) { _ in }
         .frame(width: ViewerLayout.largeShotLargest.width, height: ViewerLayout.largeShotLargest.height)
         .sampleSurface()
@@ -78,6 +104,8 @@ struct ViewerAppsPane: View {
   #Preview("Interactive") {
     @Previewable @State var state = PreviewStates.viewerApps
     InteractivePreview {
+      Text(verbatim: "Search the sidebar to narrow the cards")
+    } content: {
       if case .apps(let apps) = state.pane {
         ViewerAppsPane(state: apps) { event in
           state = PreviewStates.viewer(state, applying: event)

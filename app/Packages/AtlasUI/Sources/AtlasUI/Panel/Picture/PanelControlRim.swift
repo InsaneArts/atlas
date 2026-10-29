@@ -10,10 +10,10 @@ struct PanelControlRim: View {
   /// The rim and its ring, shown or faded away.
   var body: some View {
     ZStack {
-      RoundedRectangle(cornerRadius: PanelLayout.ringCorner)
+      RoundedRectangle(cornerRadius: PanelLayout.ringCorner, style: .continuous)
         .strokeBorder(Color.accentRing, lineWidth: PanelLayout.ringWidth)
         .padding(-PanelLayout.ringReach)
-      RoundedRectangle(cornerRadius: PanelLayout.rimCorner)
+      RoundedRectangle(cornerRadius: PanelLayout.rimCorner, style: .continuous)
         .strokeBorder(Color.accent, lineWidth: PanelLayout.rimWidth)
         .padding(-PanelLayout.rimReach)
     }

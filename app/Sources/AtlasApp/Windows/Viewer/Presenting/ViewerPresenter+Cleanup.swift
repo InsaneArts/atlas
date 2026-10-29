@@ -2,9 +2,9 @@ import AtlasService
 import AtlasUI
 
 extension ViewerPresenter {
-  /// Clean Up This Session's Work… under the chosen session in Details, while the session left something to clean
+  /// Clean Up This Session's Work… in a session's menu and the Session menu, while the session left something to clean
   /// up (a copy, a plan, an installed app, or a cleanup that did not finish) or a cleanup from this window has
-  /// something to say: it waits while one is read, runs or may still run, as one whose reply never came may, and lists
+  /// something to say: it waits while one is read, runs or may still run, as one whose reply never came may, and keeps
   /// what the last one did once it ran.
   ///
   /// - Parameters:
@@ -27,12 +27,22 @@ extension ViewerPresenter {
       }
     return ViewerSessionCleanup(
       session: record.key,
-      title: ViewerWords.cleanUpSession,
-      workingTitle: ViewerWords.cleaningUp,
       stage: stage,
-      // One cleanup runs at a time: another session's holds this button, with no spinner of its own.
+      // One cleanup runs at a time: another session's holds this one, its row with no spinner of its own.
       waitsForAnother: state.isBusy && !running
     )
+  }
+
+  /// Cleaning up the chosen session's work, as the Session menu offers it: the chosen session's cleanup while the
+  /// sessions' list names it; none while every session's work shows.
+  ///
+  /// - Parameter snapshot: What the controller holds.
+  /// - Returns: The cleanup, or nil.
+  static func chosenCleanup(_ snapshot: ViewerSnapshot) -> ViewerSessionCleanup? {
+    guard case .one(let key) = snapshot.shownSessions, let record = snapshot.panes.sessions.record(key) else {
+      return nil
+    }
+    return cleanup(record, snapshot)
   }
 
   /// The alert's lines, from what a preview says it takes: the apps it quits as one line, the environment changes it

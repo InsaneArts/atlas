@@ -67,7 +67,7 @@
           ZStack {
             OutlineHighlight(frame: CGRect(x: 150, y: 20, width: 90, height: 100), dim: 0.36)
             OutlineLabelPlacement(outline: CGRect(x: 150, y: 20, width: 90, height: 100)) {
-              GlassChip {
+              PictureChip {
                 Text(verbatim: "Opie Settings, a window near the edge")
               }
             }
@@ -85,7 +85,7 @@
         Image(decorative: desktop.image, scale: 1)
           .resizable()
           .frame(width: 160, height: 100)
-          .clipShape(RoundedRectangle(cornerRadius: Radius.large))
+          .clipShape(RoundedRectangle(cornerRadius: Radius.large, style: .continuous))
       }
     }
   }

@@ -41,7 +41,7 @@ struct HelperCommandsReleaseTests {
     let switching = Task { await panel.switchToHelper() }
     try await settle("the panel's switch never reached its wait") { actions.barrier.waiters == 1 }
     let reopened = try await ViewerController.watching(service, commands: commands, actions: actions)
-    #expect(reopened.state.top.actions.control?.isEnabled != true, "a reopened window waits for the release too")
+    #expect(reopened.state.footer.controls.control?.isEnabled != true, "a reopened window waits for the release too")
     #expect(commands.ran.isEmpty)
     service.resume("release")
     try await settle("the panel's switch never ran") { commands.ran.count == 1 && actions.running.isEmpty }
@@ -73,17 +73,17 @@ struct HelperCommandsReleaseTests {
     #expect(gone == nil, "the closed window's controller outlived it")
     #expect(actions.barrier.isBusy)
     let reopened = try await ViewerController.watching(service, actions: actions)
-    #expect(reopened.state.top.actions.control?.isEnabled != true, "Take Control did not wait for the gone window")
+    #expect(reopened.state.footer.controls.control?.isEnabled != true, "Take Control did not wait for the gone window")
     await reopened.control.takeControl()
     #expect(service.log.filter { $0.hasPrefix("acquire") }.count == 1, "control was asked for again too soon")
     // The input answered, the release still is not: still waiting.
     service.resume("input")
     try await settle("the input was never answered") { service.held["input"] == nil }
     #expect(actions.barrier.isBusy, "the unanswered release stopped counting")
-    #expect(reopened.state.top.actions.control?.isEnabled != true)
+    #expect(reopened.state.footer.controls.control?.isEnabled != true)
     // Once the release is answered too, the reopened window may take control.
     service.resume("release")
-    try await settle("Take Control never came back") { reopened.state.top.actions.control?.isEnabled == true }
+    try await settle("Take Control never came back") { reopened.state.footer.controls.control?.isEnabled == true }
     await reopened.control.takeControl()
     #expect(service.log.filter { $0.hasPrefix("acquire") }.count == 2)
     reopened.close()

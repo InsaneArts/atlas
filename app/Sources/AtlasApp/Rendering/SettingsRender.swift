@@ -43,8 +43,7 @@
       Array(zip(files, PreviewStates.settings.map(\.value)))
     }
 
-    /// Draws every Settings state to PNGs in `directory`, at Retina scale (``PNG/scale``), each at its window's size;
-    /// with `ATLAS_RENDER_REDUCE_TRANSPARENCY=1`, as Reduce Transparency draws them, the alerts' glass opaque.
+    /// Draws every Settings state to PNGs in `directory`, at Retina scale (``PNG/scale``), each at its window's size.
     ///
     /// - Parameters:
     ///   - directory: Where the PNGs go.
@@ -55,9 +54,8 @@
       // A folder that cannot be made fails the writes below, which report it.
       try? FileManager.default
         .createDirectory(at: folder, withIntermediateDirectories: true)
-      let reduceTransparency = ProcessInfo.processInfo.environment["ATLAS_RENDER_REDUCE_TRANSPARENCY"] == "1"
       let standard = renders.map {
-        draw($0.file, $0.state, to: folder, appearance: appearance, reduceTransparency: reduceTransparency)
+        draw($0.file, $0.state, to: folder, appearance: appearance)
       }
       let narrow = PreviewStates.settingsAboutSamples
         .enumerated()
@@ -67,7 +65,6 @@
             sample.value,
             to: folder,
             appearance: appearance,
-            reduceTransparency: reduceTransparency,
             width: PreviewStates.settingsNarrowWidth
           )
         }
@@ -83,7 +80,6 @@
     ///   - state: The state.
     ///   - folder: Where the PNG goes.
     ///   - appearance: The appearance to draw it in, light or dark.
-    ///   - reduceTransparency: Whether to draw it as under Reduce Transparency; not by default.
     ///   - width: The window's width; the standard Settings width by default.
     /// - Returns: Whether it was drawn.
     static func draw(
@@ -91,12 +87,10 @@
       _ state: SettingsState,
       to folder: URL,
       appearance: NSAppearance?,
-      reduceTransparency: Bool = false,
       width: CGFloat = SettingsLayout.width
     ) -> Bool {
       PNG.write(
-        view(state) { _ in }
-          .environment(\._accessibilityReduceTransparency, reduceTransparency),
+        view(state) { _ in },
         size: size(of: state, width: width),
         to: folder.appendingPathComponent("\(file).png"),
         appearance: appearance

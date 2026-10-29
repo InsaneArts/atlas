@@ -1,12 +1,12 @@
 import SwiftUI
 
-/// Rows in one group, as System Settings sets them: one quiet fill, a 0.5-point edge, and a separator above
-/// each row but the first, inset to that row's text. A long list can scroll inside its group, showing three
+/// Rows in one group, as System Settings sets them: one quiet fill with no edge, and a separator above each row
+/// but the first, inset to that row's text at its start and to the row's inset at its end. A long list can scroll inside its group, showing three
 /// and a half rows with its bottom edge fading, so the header and footer around it never move.
 struct GroupedList<Items: RandomAccessCollection, Row: View>: View where Items.Element: Identifiable {
   /// How the group is drawn.
   enum Style: Sendable {
-    /// Radius 12: setup's lists, the Apps tab and Details.
+    /// Radius 12: setup's lists and the Apps tab.
     case regular
     /// Radius 10: Settings' groups.
     case compact
@@ -48,10 +48,6 @@ struct GroupedList<Items: RandomAccessCollection, Row: View>: View where Items.E
         shape
           .fill(Color.fillGroup)
       )
-      .overlay(
-        shape
-          .strokeBorder(Color.separator, lineWidth: Stroke.hairline)
-      )
   }
 
   /// The rows, in a fading scroll view when they run past three and a half.
@@ -80,7 +76,7 @@ struct GroupedList<Items: RandomAccessCollection, Row: View>: View where Items.E
 
   /// The group's outline.
   private var shape: RoundedRectangle {
-    RoundedRectangle(cornerRadius: style == .regular ? Radius.large : Radius.medium)
+    RoundedRectangle(cornerRadius: style == .regular ? Radius.large : Radius.medium, style: .continuous)
   }
 }
 

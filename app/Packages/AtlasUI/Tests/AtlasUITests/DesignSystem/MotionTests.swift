@@ -12,7 +12,6 @@ struct MotionTests {
     ("arrive", Motion.Springs.arrive, 0.25, 0),
     ("pop", Motion.Springs.pop, 0.35, 0.15),
     ("settle", Motion.Springs.settle, 0.5, 0.2),
-    ("tab", Motion.Springs.tab, 0.25, 0),
     ("slide", Motion.Springs.slide, 0.35, 0),
     ("resize", Motion.Springs.resize, 0.25, 0),
     ("zoom", Motion.Springs.zoom, 0.35, 0),
@@ -47,6 +46,34 @@ struct MotionTests {
     let pop = Motion.LayerSpring(duration: 0.35, bounce: 0.15)
     #expect(abs(Motion.LayerSpring.pop.stiffness - pop.stiffness) < Self.tolerance)
     #expect(abs(Motion.LayerSpring.pop.damping - pop.damping) < Self.tolerance)
+  }
+
+  @Test("the zoom's layer spring is the zoom spring's duration and bounce")
+  func theZoomLayerSpringIsTheZoomSpring() {
+    let zoom = Motion.LayerSpring.zoom
+    let read = Spring(mass: zoom.mass, stiffness: zoom.stiffness, damping: zoom.damping)
+    #expect(abs(read.duration - Motion.Springs.zoom.duration) < Self.tolerance)
+    #expect(abs(read.bounce - Motion.Springs.zoom.bounce) < Self.tolerance)
+    #expect(zoom == Motion.LayerSpring(duration: 0.35, bounce: 0))
+  }
+
+  @Test("a debug build plays motion at the rate its environment asks for, and at its own speed otherwise")
+  func motionPlaysAtTheRateAsked() {
+    #expect(Motion.rate(from: [:]) == 1)
+    #expect(Motion.rate(from: [Motion.playbackRateVariable: "0.25"]) == 0.25)
+    for words in ["", "slow", "0", "-1", "inf", "nan"] {
+      #expect(Motion.rate(from: [Motion.playbackRateVariable: words]) == 1, "\(words)")
+    }
+    // Tests run at the animations' own speed, so every token is the animation it names.
+    #expect(Motion.playbackRate == 1)
+    #expect(Motion.paced(Motion.fade) == Motion.fade)
+    #expect(Motion.paced(Motion.Duration.lineHold) == 0.6)
+  }
+
+  @Test("a badge's colours crossfade in 0.2 seconds, eased out")
+  func aBadgeCrossfades() {
+    #expect(Motion.crossfade == Animation.easeOut(duration: 0.2))
+    #expect(Motion.Duration.crossfade.seconds <= Motion.Duration.reduced.seconds)
   }
 
   @Test("the slide and the indicator run on their own springs")
@@ -84,12 +111,6 @@ struct MotionTests {
   func aPressLandsAtOnce() {
     #expect(CapsuleButtonStyle.pressAnimation(isPressed: true) == nil)
     #expect(CapsuleButtonStyle.pressAnimation(isPressed: false) == Animation.easeOut(duration: 0.12))
-  }
-
-  @Test("the tab thumb glides with no overshoot, and jumps at once under Reduce Motion")
-  func theThumbGlides() {
-    #expect(TabsLayout.thumbGlide(reduceMotion: false) == Motion.tab)
-    #expect(TabsLayout.thumbGlide(reduceMotion: true) == nil)
   }
 
   @Test("a reduced animation is a fade of at most 0.2 seconds")

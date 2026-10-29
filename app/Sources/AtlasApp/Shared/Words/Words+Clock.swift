@@ -17,6 +17,20 @@ extension Words {
     return date.formatted(style)
   }
 
+  /// A time of day to the minute, on the person's own 12- or 24-hour clock, as an Activity moment says when it started.
+  ///
+  /// - Parameters:
+  ///   - date: The moment.
+  ///   - locale: The person's locale, which picks the clock.
+  ///   - timeZone: The person's time zone.
+  /// - Returns: "10:31" on a 24-hour clock, "10:31 AM" on a 12-hour one.
+  static func clockMinute(_ date: Date, locale: Locale, timeZone: TimeZone) -> String {
+    let style = Date.FormatStyle(locale: locale, timeZone: timeZone)
+      .hour(.twoDigits(amPM: .abbreviated))
+      .minute(.twoDigits)
+    return date.formatted(style)
+  }
+
   /// A day before yesterday, as a group's label.
   ///
   /// - Parameters:

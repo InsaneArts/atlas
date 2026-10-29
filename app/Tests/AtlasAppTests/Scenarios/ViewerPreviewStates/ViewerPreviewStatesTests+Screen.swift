@@ -8,6 +8,15 @@
   import AtlasUI
 
   extension ViewerPreviewStatesTests {
+    /// Reads the time at 10:31:42 on a German clock in UTC, so a paused picture's time is the same in every run.
+    ///
+    /// - Parameter snapshot: The facts to change.
+    static func onClock(_ snapshot: inout ViewerSnapshot) {
+      snapshot.date = activityReadAt
+      snapshot.timeZone = TimeZone(secondsFromGMT: 0) ?? .current
+      snapshot.locale = Locale(identifier: "de_DE")
+    }
+
     /// The Screen tab's samples' facts, by the sample's name: each top-row state, alert and empty message.
     ///
     /// - Returns: What the presenter shows for each.
@@ -30,6 +39,8 @@
               unknown: [StopOutcome.Job(id: "")]
             )
           )
+          // Said as the window's controller says it: after the newest action, which a newer one would replace.
+          $0.session.noticeAction = $0.reading.statusReading.activity(limit: 1).first?.id
         },
         "You have control, a command runs": shown(
           try reported("controlling", state: "control", overviewFields: ["commands": 1])
@@ -38,16 +49,11 @@
           try reported("controlling", state: "control", overviewFields: ["jobs": ["running": 1]])
         ) { $0.lease = "lease" },
         "In use elsewhere": shown(try reported("controlling", state: "control")),
-        "Paused": shown(idle) { $0.session.paused = true },
-        "Details": shown(idle) {
-          $0.detailsShown = true
-          $0.agents = [.claude, .codex]
-          // 09:12 in UTC, told as a German clock tells it, for deterministic timestamps.
-          $0.loggedInAt = Date(timeIntervalSince1970: 9 * 3600 + 12 * 60)
-          $0.timeZone = TimeZone(secondsFromGMT: 0) ?? .current
-          $0.locale = Locale(identifier: "de_DE")
+        "Paused": shown(idle) {
+          $0.session.paused = true
+          Self.onClock(&$0)
         },
-        "Details, some checks not passing": shown(
+        "Helper needs setup": shown(
           try reported(
             "observing",
             state: "idle",
@@ -58,8 +64,8 @@
             dialogs: ["state": "unchecked", "reason": "Not run since the helper started"]
           )
         ) {
-          $0.detailsShown = true
           $0.agents = [.claude, .codex]
+          // 09:12 in UTC, told as a German clock tells it, for deterministic timestamps.
           $0.loggedInAt = Date(timeIntervalSince1970: 9 * 3600 + 12 * 60)
           $0.timeZone = TimeZone(secondsFromGMT: 0) ?? .current
           $0.locale = Locale(identifier: "de_DE")
@@ -89,6 +95,7 @@
         "Actual size, paused": shown(idle) {
           $0.session.paused = true
           $0.session.actualSize = true
+          Self.onClock(&$0)
         },
         "Actual size, needs you": shown(try reported("recovering", state: "needsYou")) { $0.session.actualSize = true },
       ]

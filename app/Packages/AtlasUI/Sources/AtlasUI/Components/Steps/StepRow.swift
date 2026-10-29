@@ -45,6 +45,7 @@ struct StepRow: View {
       if drawsSeparator {
         SeparatorLine()
           .padding(.leading, Layout.separatorInset)
+          .padding(.trailing, Spacing.mPlus)
       }
     }
     .animation(Self.animation(for: state, reduceMotion: reduceMotion), value: state)

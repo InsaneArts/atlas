@@ -2,26 +2,27 @@ import AppKit
 import AtlasUI
 
 extension MainMenu {
-  /// The tabs, ⌘1 to ⌘4; Show Details, Pause Picture and Actual Size; and Enter Full Screen.
+  /// The Screen and the Library's lists, ⌘1 to ⌘4 in the sidebar's order; Hide Sidebar (⌃⌘S), Pause Picture, Actual
+  /// Size and Picture Updates, ticking the rate pictures arrive at; and Enter Full Screen.
   ///
   /// - Returns: The menu.
   static func view() -> NSMenu {
     let view = NSMenu(title: MenuWords.view)
-    for tab in ViewerTab.allCases {
+    for place in ViewerPlace.allCases {
       let item = view.addItem(
-        withTitle: ViewerWords.tab(tab),
-        action: #selector(ViewerMenuActions.selectTab(_:)),
-        keyEquivalent: String(tab.menuTag + 1)
+        withTitle: ViewerWords.place(place),
+        action: #selector(ViewerMenuActions.showPlace(_:)),
+        keyEquivalent: String(place.menuTag + 1)
       )
-      item.tag = tab.menuTag
+      item.tag = place.menuTag
     }
     view.addItem(.separator())
-    let details = view.addItem(
-      withTitle: ViewerWords.showDetailsItem,
-      action: #selector(ViewerMenuActions.toggleDetails(_:)),
-      keyEquivalent: "i"
+    let sidebar = view.addItem(
+      withTitle: ViewerWords.hideSidebarItem,
+      action: #selector(ViewerMenuActions.toggleSidebar(_:)),
+      keyEquivalent: "s"
     )
-    details.keyEquivalentModifierMask = [.command, .option]
+    sidebar.keyEquivalentModifierMask = [.command, .control]
     let pause = view.addItem(
       withTitle: Words.pausePictureItem,
       action: #selector(ViewerMenuActions.togglePicturePause(_:)),
@@ -33,6 +34,8 @@ extension MainMenu {
       action: #selector(ViewerMenuActions.toggleActualSize(_:)),
       keyEquivalent: "0"
     )
+    let updates = view.addItem(withTitle: ViewerWords.updatesItem, action: nil, keyEquivalent: "")
+    updates.submenu = pictureUpdates()
     view.addItem(.separator())
     let fullScreen = view.addItem(
       withTitle: ViewerWords.fullScreenItem,
@@ -41,5 +44,21 @@ extension MainMenu {
     )
     fullScreen.keyEquivalentModifierMask = [.command, .control]
     return view
+  }
+
+  /// Picture Updates: Live and Every 5 Seconds, the one the picture arrives at, or resumes at, ticked.
+  ///
+  /// - Returns: The submenu.
+  private static func pictureUpdates() -> NSMenu {
+    let updates = NSMenu(title: ViewerWords.updatesItem)
+    for rate in ViewerPictureRate.allCases {
+      let item = updates.addItem(
+        withTitle: ViewerWords.rate(rate),
+        action: #selector(ViewerMenuActions.chooseRate(_:)),
+        keyEquivalent: ""
+      )
+      item.tag = rate.menuTag
+    }
+    return updates
   }
 }

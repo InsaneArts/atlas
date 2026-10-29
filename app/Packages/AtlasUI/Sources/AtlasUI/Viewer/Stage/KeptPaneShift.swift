@@ -9,10 +9,16 @@ import SwiftUI
 struct KeptPaneShift: ViewModifier {
   /// Whether the pane shows.
   let isShown: Bool
+  /// Whether the switch that shows or hides it is a change of depth, from or to the Screen (``ListRise``).
+  let rises: Bool
+  /// What the stage does once the pane has faded out, such as forget the pictures it drew.
+  var hidden: @MainActor () -> Void = {}
   /// Whether the pane draws, faded in or out on its own animation as ``isShown`` changes; it starts clear on its first arrival.
   @State private var drawn = false
   /// Whether the pane has finished fading in, so its scroll indicators may show.
   @State private var settled = false
+  /// Whether the pane sits below its place, as it does while hidden, so a rise starts from there.
+  @State private var lowered = true
 
   /// Each switch invalidates completions from an interrupted fade.
   @State private var generation = 0
@@ -25,6 +31,7 @@ struct KeptPaneShift: ViewModifier {
       .environment(\.paneSettled, settled)
       // A view drawn once, as a render is, draws the pane shown at once rather than at the start of its fade.
       .opacity(drawn || (isShown && !animatesArrivals) ? 1 : 0)
+      .offset(y: ListRise.offset(isLowered: lowered && animatesArrivals))
       .allowsHitTesting(isShown)
       .disabled(!isShown)
       .accessibilityHidden(!isShown)
@@ -32,18 +39,37 @@ struct KeptPaneShift: ViewModifier {
       .onChange(of: isShown, initial: true) { _, shown in fade(shown) }
   }
 
-  /// Fades the pane in or out; once in, its scroll indicators may show.
+  /// Fades the pane in or out, rising in or sinking out on a change of depth; once in, its scroll indicators may show.
+  /// Once hidden, it waits lowered, so the next rise starts below its place, and the stage is told.
   ///
   /// - Parameter shown: Whether the pane shows now.
   private func fade(_ shown: Bool) {
     generation += 1
     let current = generation
     settled = false
+    if rises {
+      withAnimation(ListRise.motion) { lowered = !shown }
+    } else if shown {
+      place(lowered: false)
+    }
     withAnimation(shown ? PaneShift.arrival : PaneShift.departure) {
       drawn = shown
     } completion: {
       // A fade turned back before it ended leaves the pane hidden, and its indicators with it.
-      if generation == current { settled = drawn }
+      guard generation == current else { return }
+      settled = drawn
+      guard !drawn else { return }
+      place(lowered: true)
+      hidden()
     }
+  }
+
+  /// Moves the pane above or below its place at once, as it shows from another list or waits hidden.
+  ///
+  /// - Parameter isLowered: Whether it sits below its place.
+  private func place(lowered isLowered: Bool) {
+    var transaction = Transaction()
+    transaction.disablesAnimations = true
+    withTransaction(transaction) { lowered = isLowered }
   }
 }

@@ -10,14 +10,11 @@ import Observation
 final class ViewerReadingLoop {
   /// Between pictures while holding control: 500 ms, so the person sees what their input did at once.
   static let controlEvery: Duration = .milliseconds(500)
-  /// How often Details' age of the picture is read again while pictures arrive: 1 s, as it reads in whole seconds.
+  /// How often the time is read again while pictures arrive: 1 s, as a picture's age reads in whole seconds.
   static let tickEvery: Duration = .seconds(1)
 
   /// What the last reading showed.
   private(set) var reading = ViewerReading()
-  /// Counts the clock's readings. Only ``ViewerController/newestPicture`` reads it, so each tick redraws Details' age
-  /// row alone.
-  private(set) var ticks = 0
   /// How often a picture is read while watching.
   private(set) var rate = ViewerPictureRate.live {
     didSet {
@@ -38,8 +35,8 @@ final class ViewerReadingLoop {
   @ObservationIgnored private let clock: any Clock<Duration>
   /// Where a copied or saved picture goes.
   @ObservationIgnored private let pictures: PictureOutlet
-  /// The time Details last read, in seconds of uptime: refreshed each ``tickEvery`` while pictures arrive.
-  /// Unobserved: the window redraws with each reading, and Details' age row follows ``ticks``.
+  /// The time last read, in seconds of uptime, which a picture's age is told by: refreshed each ``tickEvery`` while
+  /// pictures arrive. Unobserved: the window redraws with each reading.
   @ObservationIgnored private(set) var now: TimeInterval = 0
   /// Whether readings run: the window is on screen.
   @ObservationIgnored private(set) var watching = false
@@ -181,8 +178,7 @@ final class ViewerReadingLoop {
     show(reply)
   }
 
-  /// Refreshes ``now`` every ``tickEvery`` while readings run, so Details' age of the picture stays current; stops
-  /// otherwise.
+  /// Refreshes ``now`` every ``tickEvery`` while readings run, so the picture's age stays current; stops otherwise.
   ///
   /// - Parameter running: Whether readings run.
   private func tick(_ running: Bool) {
@@ -199,10 +195,9 @@ final class ViewerReadingLoop {
     }
   }
 
-  /// Reads the clock into ``now``, and tells Details' age row.
+  /// Reads the clock into ``now``.
   func readClock() {
     now = uptime()
-    ticks += 1
   }
 
   /// What the panel last saw, shown while the first reading is under way. It is only a picture: control waits for a
@@ -229,8 +224,8 @@ final class ViewerReadingLoop {
     reading.status = reply
     reading.hasStatus = true
     guard let viewer else { return }
-    // Details tells when the helper logged in once its account is known, and again should it change.
-    if newAccount, viewer.details.shown { viewer.readLoginTime() }
+    // The helper's facts tell when it logged in once its account is known, and again should it change.
+    if newAccount { viewer.readLoginTime() }
     // Input not ready: control ends now, not with the next picture, saying why in the status's own words.
     let control = viewer.control
     if !reply.ready {

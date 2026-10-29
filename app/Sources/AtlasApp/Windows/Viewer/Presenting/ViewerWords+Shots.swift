@@ -36,9 +36,6 @@ extension ViewerWords {
     }
   }
 
-  /// A screenshot whose time is not known, as VoiceOver reads it.
-  static let screenshot = "Screenshot"
-
   /// What VoiceOver reads for a screenshot's tile.
   ///
   /// - Parameter time: When it was taken.

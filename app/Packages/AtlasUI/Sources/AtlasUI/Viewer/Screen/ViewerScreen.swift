@@ -1,14 +1,16 @@
 import SwiftUI
 
-/// The Screen tab: the helper's screen as the only object on the stage, fitted at the picture's own shape
-/// inside the frame every tab shares and centred there, with 12-point corners, a fine light inner edge and a
-/// short shadow on the window's ground; or at actual size in a view that scrolls; with what is happening laid
-/// over the picture and control's rim round it. With no picture, why, on the waiting stage.
+/// The Screen: the helper's screen as the only object on the stage, fitted at the picture's own shape and centred in
+/// the room the card's header and footer leave, letterboxed in the card's own colour, with corners of
+/// ``ViewerLayout/screenRadius`` and nothing round it but control's edge while this window holds control; or at actual
+/// size in a view that scrolls. With no picture, why, on the waiting stage. A right click on the picture offers what
+/// acts on it, while this window holds no control; in control the click is the helper's.
 ///
 /// The picture itself comes from `livePicture`, the app's layer that swaps each frame whole, or an image in
 /// previews and renders; the black that darkens a look is laid over it here. The shell's input surface covers
 /// exactly the picture, so a click lands where the picture shows it. Fitted, the picture is the one that
-/// shrinks into the corner as the Screen is left and grows back out of it (``ScreenZoom``).
+/// shrinks into the corner as the Screen is left and grows back out of it (``ScreenZoom``), its corners rounding from
+/// the small screen's back to its own as it grows.
 struct ViewerScreen<Input: View, LivePicture: View>: View {
   /// What the screen shows.
   let state: ViewerScreenState
@@ -20,13 +22,18 @@ struct ViewerScreen<Input: View, LivePicture: View>: View {
   let livePicture: (ViewerLivePicture) -> LivePicture
   /// The namespace the picture moves in between the stage and the corner, the window's.
   let zoom: Namespace.ID
+  /// The fitted picture's corners: ``ViewerLayout/screenRadius``, or the small screen's as it grows back out of it.
+  var corner = ViewerLayout.screenRadius
+  /// Whether the picture is moving between the stage and the corner, so its layer's corners follow the move.
+  var zooms = false
 
-  /// The picture under what lies over it, dark in either appearance, as the helper's screen is framed in black; or
-  /// why there is none.
+  /// The picture and what lies over it, with its context menu; or why there is none.
   var body: some View {
     if let picture = state.picture {
       shown(picture)
-        .environment(\.colorScheme, .dark)
+        .contextMenu {
+          CommandMenu(sections: state.menu) { send(.menu($0)) }
+        }
         .accessibilityElement(children: .contain)
         .accessibilityLabel(Text(verbatim: "The helper's screen"))
     } else if let empty = state.empty {
@@ -34,7 +41,7 @@ struct ViewerScreen<Input: View, LivePicture: View>: View {
     }
   }
 
-  /// The picture at actual size, or fitted, under what lies over it, inside control's rim.
+  /// The picture at actual size, or fitted, under what lies over it, with control's edge.
   ///
   /// - Parameter picture: The picture.
   /// - Returns: The screen.
@@ -46,35 +53,24 @@ struct ViewerScreen<Input: View, LivePicture: View>: View {
         input
         spotlight(size)
       }
-      .overlay { ScreenOverlay(state: state) }
-      .overlay { ViewerControlRim(isInControl: state.look == .inControl) }
+      .overlay { ViewerControlEdge(isInControl: state.look == .inControl) }
     } else {
       ZStack {
-        Color.letterbox
         treated(picture)
         input
         spotlight(size)
-        ScreenOverlay(state: state)
       }
       .clipShape(shape)
-      .overlay(
-        shape
-          .strokeBorder(Color.strokeHighlight, lineWidth: Stroke.hairline)
-      )
-      // The shadow falls from the screen's shape alone, never blurred from the picture.
-      .background {
-        shape
-          .fill(Color.letterbox)
-          .elevation(.resting)
-      }
-      .overlay { ViewerControlRim(isInControl: state.look == .inControl) }
+      .overlay { ViewerControlEdge(isInControl: state.look == .inControl, corner: corner) }
       .screenZoom(in: zoom)
       .aspectRatio(size, contentMode: .fit)
+      .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
   }
 
-  /// A window shown from the Apps tab, as a spotlight over the picture and its input surface, so the label's × takes
-  /// its click, fading in and out; showing another window glides it there.
+  /// A window shown from the Apps list, as a spotlight over the picture and its input surface, so the label's × takes
+  /// its click, fading in and out; showing another window glides it there. It is drawn dark in either appearance, as
+  /// it lies on the helper's screen.
   ///
   /// - Parameter picture: The picture's size in pixels.
   /// - Returns: The spotlight, or nothing.
@@ -86,6 +82,7 @@ struct ViewerScreen<Input: View, LivePicture: View>: View {
       }
     }
     .animation(Motion.fade, value: state.outline == nil)
+    .environment(\.colorScheme, .dark)
   }
 
   /// The picture through the live slot, with the colour its look keeps and the black that darkens it.
@@ -97,7 +94,8 @@ struct ViewerScreen<Input: View, LivePicture: View>: View {
       ViewerLivePicture(
         picture: picture,
         saturation: PictureTreatment.saturation(for: state.look),
-        corner: Radius.large
+        corner: corner,
+        zooms: zooms
       )
     )
     .overlay(
@@ -108,7 +106,7 @@ struct ViewerScreen<Input: View, LivePicture: View>: View {
 
   /// The screen's outline.
   private var shape: RoundedRectangle {
-    RoundedRectangle(cornerRadius: Radius.large)
+    RoundedRectangle(cornerRadius: corner, style: .continuous)
   }
 }
 

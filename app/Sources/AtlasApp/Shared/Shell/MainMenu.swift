@@ -1,9 +1,9 @@
 import AppKit
 
-/// The app's menus: Atlas · File · Edit · View · Helper · Window · Help. Edit makes typing and pasting work in fields as
-/// in any app, and Find… finds in the main window's tab; File, View and Helper ask the window in front through the
-/// responder chain (`MainMenu+File`, `+View`, `+Helper`), so with no window in front that answers them their items
-/// wait. Every shortcut here is registered once; the window's buttons carry none.
+/// The app's menus: Atlas · File · Edit · View · Session · Helper · Window · Help. Edit makes typing and pasting work in
+/// fields as in any app, and Find… opens the main window's search; File, View, Session and Helper ask the window in
+/// front through the responder chain (`MainMenu+File`, `+View`, `+Session`, `+Helper`), so with no window in front that
+/// answers them their items wait. Every shortcut here is registered once; the window's buttons carry none.
 enum MainMenu {
   /// One target and action for a menu item that the app, not the window in front, answers.
   typealias Command = (target: AnyObject, action: Selector)
@@ -17,8 +17,8 @@ enum MainMenu {
   ///   - gettingStarted: What Getting Started… does; nil leaves the Help menu out.
   ///   - openViewer: What Open Atlas (⌘O) does; nil leaves it out.
   ///   - copyDiagnostics: What Copy Diagnostics does; nil leaves it out.
-  ///   - viewer: Whether the main window can open, so View, Helper and File's Save Picture… are offered; the setup
-  ///     window on its own has none, and keeps File's Close.
+  ///   - viewer: Whether the main window can open, so View, Session, Helper and File's Save Picture… are offered; the
+  ///     setup window on its own has none, and keeps File's Close.
   /// - Returns: The main menu.
   static func make(
     quit: Command? = nil,
@@ -34,7 +34,9 @@ enum MainMenu {
     let atlas = app(quit: quit, settings: settings, checkForUpdates: checkForUpdates)
     var menus =
       viewer
-      ? [atlas, fileMenu(viewer: true, openViewer: openViewer), edit(viewer: true), view(), helper(), window]
+      ? [
+        atlas, fileMenu(viewer: true, openViewer: openViewer), edit(viewer: true), view(), session(), helper(), window,
+      ]
       : [atlas, fileMenu(viewer: false, openViewer: openViewer), edit(viewer: false), window]
     if let gettingStarted { menus.append(help(gettingStarted, copyDiagnostics: copyDiagnostics)) }
     for submenu in menus {
