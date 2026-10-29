@@ -202,10 +202,20 @@ shows this task's jobs, `atlas job log ID` the end of a job's output, and
 every job you started before you finish. `left` lists processes that
 left the job's group and still run; Atlas does not stop them, so say so in
 your report. Atlas also ends jobs when the person stops agents or the
-helper comes on screen. A job never sends keys or clicks itself; use
-Atlas's commands for that. After a lost session, `atlas job list --all`
-shows every job, and `atlas job stop ID --task KEY` stops one of an
-earlier task.
+helper comes on screen. A job whose first process is gone ends
+`how: leader-gone`: Atlas signals nothing of it, and `left` lists what
+still runs. A job never sends keys or clicks itself; use Atlas's commands
+for that. After a lost session, `atlas job list --all` shows every job,
+and `atlas job stop ID --task KEY` stops one of an earlier task
+(`atlas job log ID --task KEY` reads its output). `mismatch` on a job
+means the helper's record names another process than your task's: tell
+the person, and never stop it another way.
+
+Cleanup checks your collected copies first. When the newest copy of a
+file is missing or changed, or a collection's receipt is gone, it keeps
+every file in the helper that a later step would remove (`blocked`,
+`output-not-kept`) and still stops your jobs: collect the file again, then
+run `atlas cleanup --apply` again.
 
 ### Keeping output files
 
