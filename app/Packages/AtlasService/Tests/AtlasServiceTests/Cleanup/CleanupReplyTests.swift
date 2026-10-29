@@ -75,28 +75,29 @@ struct CleanupReplyTests {
     #expect(!applied.isUnderWay, "no step is under way once the apply replied")
   }
 
-  @Test("a trashed step keeps its name in the Trash")
-  func aTrashedStepKeepsItsNameInTheTrash() throws {
+  @Test("a held step keeps where in the helper it was moved aside to")
+  func aHeldStepKeepsWhereInTheHelperItWasMovedAsideTo() throws {
     let applied = try decoded(
       """
       {"ok": true, "preview": false, "state": "complete",
        "steps": [
-         {"n": 1, "do": "remove-install", "app": "Probe", "state": "done", "trashed": "Probe.app (atlas a7d2c0ffee12)"},
-         {"n": 2, "do": "remove-copy", "app": "TextEdit", "state": "done",
-          "trashed": "TextEdit copy (atlas 9c1e0011aabb)"},
+         {"n": 1, "do": "remove-install", "app": "Probe", "state": "done",
+          "held": "/Users/atlas/.config/atlas/installs/held/a7d2c0ffee12/Probe.app"},
+         {"n": 2, "do": "remove-install", "app": "Opie", "state": "done", "alreadyGone": true},
          {"n": 3, "do": "remove-copy", "app": "Notes", "state": "done", "alreadyGone": true},
-         {"n": 4, "do": "remove-copy", "app": "Mail", "state": "kept", "reason": "other-volume"},
-         {"n": 5, "do": "remove-copy", "state": "done", "trashed": 7}
+         {"n": 4, "do": "remove-install", "app": "Mail", "state": "kept", "reason": "other-volume"},
+         {"n": 5, "do": "remove-install", "state": "done", "held": 7}
        ]}
       """
     )
     #expect(
-      applied.steps.map(\.trashed) == [
-        "Probe.app (atlas a7d2c0ffee12)", "TextEdit copy (atlas 9c1e0011aabb)", nil, nil, nil,
+      applied.steps.map(\.held) == [
+        "/Users/atlas/.config/atlas/installs/held/a7d2c0ffee12/Probe.app", nil, nil, nil, nil,
       ]
     )
+    #expect(applied.steps.map(\.alreadyGone) == [false, true, true, false, false])
     #expect(applied.steps.map(\.reason) == [nil, nil, nil, "other-volume", nil])
-    #expect(applied.steps.map(\.state) == [.done, .done, .done, .kept, .done], "a name of the wrong type is left out")
+    #expect(applied.steps.map(\.state) == [.done, .done, .done, .kept, .done], "a path of the wrong type is left out")
   }
 
   @Test("a preview with a step started reads as under way")

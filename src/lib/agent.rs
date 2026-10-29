@@ -645,8 +645,13 @@ async fn open_in(
     let copied = handed.copied;
     let mut given = handed.paths.into_iter();
 
+    // Where the app's name or path is in `argv`, for a launch tried again
+    // from the task's own install.
+    let mut named_at = None;
     if app.is_some() {
-        argv.extend(["-a".to_owned(), given.next().unwrap_or_default()]);
+        argv.push("-a".to_owned());
+        named_at = Some(argv.len());
+        argv.push(given.next().unwrap_or_default());
     }
 
     if !targets.is_empty() {
@@ -657,13 +662,29 @@ async fn open_in(
     let mut reply = accepted(client.run_owned(&ownership, argv.clone()).await?)?;
 
     if reply["exitCode"] != 0 && cleared_stale_launch(client, &ownership, &reply).await? {
+        reply = accepted(client.run_owned(&ownership, argv.clone()).await?)?;
+    }
+
+    // An app this task installed that LaunchServices does not know by its
+    // name yet opens from where the install is.
+    let mut from_install = false;
+    if let (Some(app), Some(at)) = (app.filter(|app| !app.contains('/')), named_at)
+        && reply["exitCode"] != 0
+        && unknown_app(&reply)
+        && let Some(path) = crate::installs::installed_path(client, app).await
+    {
+        argv[at] = path;
         reply = accepted(client.run_owned(&ownership, argv).await?)?;
+        from_install = true;
     }
 
     let opened = reply["exitCode"] == 0;
     // An app opened by name is only listed for its task: which of its
-    // processes the launch started, nothing can tell.
-    if let Some(app) = app.filter(|app| opened && copied.is_empty() && !app.contains('/')) {
+    // processes the launch started, nothing can tell. One opened from the
+    // task's own install is quit by its cleanup, as the install's.
+    if let Some(app) =
+        app.filter(|app| opened && !from_install && copied.is_empty() && !app.contains('/'))
+    {
         let launch = task::Owned::Launch {
             app: crate::doing::bounded(app),
         };
@@ -702,6 +723,13 @@ async fn open_in(
     }
 
     Ok(value)
+}
+
+/// Whether a failed `open` said LaunchServices knows no app by the name
+/// it was given.
+fn unknown_app(reply: &Value) -> bool {
+    let output = run_output(reply, 4096).unwrap_or_default();
+    String::from_utf8_lossy(&output).contains("Unable to find application named")
 }
 
 /// After a failed `open`, remove the finished job launchd still holds for
@@ -4190,5 +4218,117 @@ mod tests {
             ran.is_empty(),
             "nothing was checked, copied or launched: {ran:?}"
         );
+    }
+    #[tokio::test]
+    async fn an_app_launch_services_cannot_find_opens_from_the_tasks_own_install() {
+        use crate::{
+            control::Token,
+            helper_test::{Helper, completed, exited},
+            host_session::{Host, HostSession},
+            task::{Claims, Owned, State, Task, store::Store},
+        };
+
+        let directory = tempfile::tempdir().unwrap();
+        let nobody = nix::unistd::User::from_name("nobody").unwrap().unwrap();
+        let (mut client, helper) = Helper::staging(directory.path(), nobody.uid.as_raw());
+        let session = HostSession::new(Host::Codex, "installed").unwrap();
+        let task = Task::of(session.key(), Some("probe")).unwrap();
+        client.host_session = Some(session);
+        client.task = Some(task.clone());
+        let output = client.output_dir().unwrap().to_owned();
+        let install = Token::new();
+        Claims::in_store(Store::at(&output), task.clone())
+            .claim(
+                &Owned::Install {
+                    id: install.clone(),
+                    app: "Probe".into(),
+                },
+                State::Made,
+            )
+            .unwrap();
+        let copies = directory.path().join("copies");
+        std::fs::create_dir(&copies).unwrap();
+        let path = "/Users/helper/Applications/Probe.app";
+        let mut launched: Vec<Value> = Vec::new();
+
+        let opened = helper
+            .serve(
+                open_in(&client, Some("Probe"), &[], &[], &copies),
+                |request| {
+                    if request["op"] == "apps" {
+                        return Some(json!({"ok": true, "apps": []}));
+                    }
+                    if request["argv"][1] == "environment-worker" {
+                        let listed = json!({"ok": true, "installs": [{"installId": install,
+                            "phase": "installed", "verified": true, "path": path}]});
+                        return Some(completed(&listed.to_string()));
+                    }
+                    if request["argv"][0] == "/usr/bin/open" {
+                        launched.push(request["argv"].clone());
+                        return Some(if request["argv"][2] == "Probe" {
+                            exited(1, "Unable to find application named 'Probe'\n")
+                        } else {
+                            completed("")
+                        });
+                    }
+                    Some(completed(""))
+                },
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(opened["opened"], true, "{opened}");
+        assert_eq!(
+            launched,
+            [
+                json!(["/usr/bin/open", "-a", "Probe"]),
+                json!(["/usr/bin/open", "-a", path])
+            ]
+        );
+        let claims: Vec<_> = Store::at(&output)
+            .load(task.key())
+            .unwrap()
+            .claims()
+            .collect();
+        assert!(
+            !claims
+                .iter()
+                .any(|(owned, _)| matches!(owned, Owned::Launch { .. })),
+            "the install's own cleanup quits it: {claims:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn an_app_no_task_installed_is_not_found_by_name_and_nothing_else_is_tried() {
+        use crate::helper_test::{Helper, UID, completed, exited};
+
+        let directory = tempfile::tempdir().unwrap();
+        let (client, helper) = Helper::client(directory.path(), UID);
+        let copies = directory.path().join("copies");
+        std::fs::create_dir(&copies).unwrap();
+        let mut launched = 0;
+
+        let opened = helper
+            .serve(
+                open_in(&client, Some("Probe"), &[], &[], &copies),
+                |request| {
+                    if request["op"] == "apps" {
+                        return Some(json!({"ok": true, "apps": []}));
+                    }
+                    if request["argv"][0] == "/usr/bin/open" {
+                        launched += 1;
+                        return Some(exited(1, "Unable to find application named 'Probe'\n"));
+                    }
+                    Some(completed(""))
+                },
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(
+            (&opened["opened"], &opened["code"]),
+            (&json!(false), &json!("spawn-failed"))
+        );
+        assert_eq!(launched, 1);
     }
 }

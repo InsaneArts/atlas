@@ -49,7 +49,7 @@ struct ViewerPresenterCleanupTests {
     )
   }
 
-  /// A preview of quitting Probe and Notes, rolling back a plan, moving Probe to the helper's Trash and removing two copies.
+  /// A preview of quitting Probe and Notes, rolling back a plan, moving Probe aside in the helper and removing two copies.
   ///
   /// - Parameter active: Whether the session may still be working.
   /// - Returns: The preview.
@@ -84,14 +84,14 @@ struct ViewerPresenterCleanupTests {
     #expect(try cleanup(terminal) == nil, "Terminal's session has no key a cleanup can name")
   }
 
-  @Test("the confirmation lists what will be quit and moved to the Trash")
-  func theConfirmationListsWhatWillBeQuitAndMovedToTheTrash() throws {
+  @Test("the confirmation lists what will be quit and moved aside")
+  func theConfirmationListsWhatWillBeQuitAndMovedAside() throws {
     let steps = ViewerPresenter.cleanupSteps(Self.preview(active: false))
     #expect(
       steps == [
         "Quits Probe and Notes",
         "Undoes 1 environment change",
-        "Moves Probe to the helper's Trash",
+        "Moves Probe aside in the helper; removed after 7 days",
         "Removes 2 copies",
       ]
     )
@@ -182,7 +182,7 @@ struct ViewerPresenterCleanupTests {
         Fact(name: "Remove the copy of Notes", value: "Done: it was already gone"),
         Fact(name: "Undo an environment change", value: "Not known whether it worked"),
         Fact(name: "Another step", value: "Didn't run"),
-        Fact(name: "Remove the copy of Mail", value: "Kept: it could not be moved to the Trash"),
+        Fact(name: "Remove the copy of Mail", value: "Kept: it could not be moved aside without copying"),
         Fact(name: "Remove Mail from Applications", value: "Kept: Atlas couldn't read its record of it"),
       ]
     )
@@ -197,8 +197,8 @@ struct ViewerPresenterCleanupTests {
     #expect(cleanup.isEnabled)
   }
 
-  @Test("an install moved to the helper's Trash says so in the receipt and a copy reads as done")
-  func anInstallMovedToTheHelpersTrashSaysSoInTheReceiptAndACopyReadsAsDone() {
+  @Test("an install moved aside in the helper says so in the receipt and a copy reads as done")
+  func anInstallMovedAsideInTheHelperSaysSoInTheReceiptAndACopyReadsAsDone() {
     let applied = CleanupReply(
       ok: true,
       state: .complete,
@@ -210,7 +210,7 @@ struct ViewerPresenterCleanupTests {
           kind: .removeInstall,
           app: "Probe",
           state: .done,
-          trashed: "Probe.app (atlas a7d2c0ffee12)"
+          held: "/Users/atlas/.config/atlas/installs/held/a7d2c0ffee12/Probe.app"
         ),
         CleanupStep(number: 4, kind: .removeCopy, app: "TextEdit", state: .done),
         CleanupStep(number: 5, kind: .removeCopy, app: "Notes", state: .done, alreadyGone: true),
@@ -220,7 +220,7 @@ struct ViewerPresenterCleanupTests {
       ViewerPresenter.cleanupReceipt(applied) == [
         Fact(name: "Quit Probe", value: "Done"),
         Fact(name: "Undo an environment change", value: "Done"),
-        Fact(name: "Remove Probe from Applications", value: "Moved to the helper's Trash"),
+        Fact(name: "Remove Probe from Applications", value: "Moved aside in the helper; removed after 7 days"),
         Fact(name: "Remove the copy of TextEdit", value: "Done"),
         Fact(name: "Remove the copy of Notes", value: "Done: it was already gone"),
       ]

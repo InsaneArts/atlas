@@ -56,12 +56,12 @@ extension ViewerWords {
     count == 1 ? "Undoes 1 environment change" : "Undoes \(count) environment changes"
   }
 
-  /// The alert's line for moving an installed app to the helper's Trash.
+  /// The alert's line for moving an installed app aside in the helper, which removes it after 7 days.
   ///
   /// - Parameter app: The app's name; nil when the service names none.
-  /// - Returns: "Moves Probe to the helper's Trash".
-  static func trashesInstall(_ app: String?) -> String {
-    "Moves \(app ?? "an app") to the helper's Trash"
+  /// - Returns: "Moves Probe aside in the helper; removed after 7 days".
+  static func holdsInstall(_ app: String?) -> String {
+    "Moves \(app ?? "an app") aside in the helper; removed after 7 days"
   }
 
   /// The alert's line for an installed app the cleanup leaves, as it changed since it was installed.
@@ -120,8 +120,8 @@ extension ViewerWords {
 
   /// A step that worked.
   static let stepDone = "Done"
-  /// An installed app's step that moved it to the helper's Trash.
-  static let stepTrashed = "Moved to the helper's Trash"
+  /// An installed app's step that moved it aside in the helper, which removes it after 7 days.
+  static let stepHeld = "Moved aside in the helper; removed after 7 days"
   /// A step whose app or copy was gone before it ran.
   static let stepAlreadyGone = "Done: it was already gone"
   /// A step that did not run.
@@ -179,7 +179,7 @@ extension ViewerWords {
     case "helper": "the helper couldn't do it"
     case "needs-step": "a step before it isn't done"
     case "stopped": "agents are stopped"
-    case "other-volume": "it could not be moved to the Trash"
+    case "other-volume": "it could not be moved aside without copying"
     case "unreadable": "Atlas couldn't read its record of it"
     default: nil
     }

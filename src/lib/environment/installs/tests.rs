@@ -35,9 +35,13 @@ impl Homes {
         self.home.join(APPLICATIONS).join(name)
     }
 
-    /// Where install `id` of Probe.app goes in the helper's Trash.
-    fn in_trash(&self, id: &str) -> PathBuf {
-        self.home.join(TRASH).join(trash_name("Probe.app", id))
+    /// Where install `id` of Probe.app is held once taken away.
+    fn held(&self, id: &str) -> PathBuf {
+        self.home
+            .join(INSTALLS)
+            .join(HELD)
+            .join(id)
+            .join("Probe.app")
     }
 
     fn store(&self) -> Store {
@@ -46,15 +50,15 @@ impl Homes {
 
     fn record(&self, id: &str) -> Install {
         match self.store().load(id) {
-            Held::Record(record) => *record,
-            Held::Missing | Held::Unreadable => panic!("no record of {id}"),
+            Found::Record(record) => *record,
+            Found::Missing | Found::Unreadable => panic!("no record of {id}"),
         }
     }
 
-    /// Install `name` from outside as install `id`.
+    /// Install `name` from outside as install `id`, registering nothing.
     fn install(&self, id: &str, name: &str) -> Result<Value> {
         let source = self.app(name);
-        install(&self.home, id, &source, name, &|| Ok(()))
+        install_unregistered(&self.home, id, &source, name)
     }
 
     fn remove(&self, id: &str) -> Value {
@@ -63,12 +67,19 @@ impl Homes {
 
     /// [`Homes::remove`], moving with `mover`.
     fn remove_with(&self, id: &str, mover: Mover) -> Value {
+        self.remove_on(id, mover, &volume)
+    }
+
+    /// [`Homes::remove`], moving with `mover` and telling volumes apart
+    /// by `volume`.
+    fn remove_on(&self, id: &str, mover: Mover, volume: Volume) -> Value {
         remove_moving(
             &self.home,
             id,
             &|| Ok(()),
             &looks(&|| Ok(Vec::new())),
             mover,
+            volume,
         )
         .unwrap()
     }
@@ -78,19 +89,27 @@ impl Homes {
     fn cut(&self, id: &str, phase: InstallPhase) {
         let mut record = self.record(id);
         record.phase = phase;
-        if phase == InstallPhase::Trashing {
-            record.trashed = Some(trash_name(&record.name, id));
-        }
         self.store().save(&record).unwrap();
     }
 
-    /// The helper's Trash, made as macOS makes it.
-    fn trash(&self) -> PathBuf {
-        let trash = self.home.join(TRASH);
-        fs::create_dir_all(&trash).unwrap();
-        fs::set_permissions(&trash, fs::Permissions::from_mode(0o700)).unwrap();
-        trash
+    /// Install `id`'s own folder among the held ones, made as a move aside
+    /// makes it.
+    fn hold_folder(&self, id: &str) -> PathBuf {
+        drop(self.store().hold_folder(id).unwrap());
+        self.home.join(INSTALLS).join(HELD).join(id)
     }
+
+    /// Say install `id` was held `days` days ago.
+    fn held_days_ago(&self, id: &str, days: u64) {
+        let mut record = self.record(id);
+        record.held_at = Some(now_ms() - days * 24 * 60 * 60 * 1000);
+        self.store().save(&record).unwrap();
+    }
+}
+
+/// [`install`], registering nothing with LaunchServices.
+fn install_unregistered(home: &Path, id: &str, source: &Path, name: &str) -> Result<Value> {
+    install_moving(home, id, source, name, &|| Ok(()), &move_between, &|_| true)
 }
 
 /// What macOS would say, with `processes` as the helper's process list and
@@ -184,7 +203,7 @@ fn an_app_already_in_applications_is_never_installed_over_or_taken() {
         let error = homes.install(&id, name).unwrap_err();
         assert_eq!(error.code, "input", "{name}");
         assert!(error.error.contains("already has"), "{error}");
-        assert!(matches!(homes.store().load(&id), Held::Missing), "{name}");
+        assert!(matches!(homes.store().load(&id), Found::Missing), "{name}");
         assert_eq!(homes.remove(&id)["outcome"], "alreadyGone");
     }
     assert_eq!(contents(&homes.home.join(APPLICATIONS)), before);
@@ -219,24 +238,104 @@ fn an_install_record_never_names_a_destination_that_existed_before() {
 }
 
 #[test]
-fn an_unchanged_install_goes_to_the_helpers_trash_whole_and_nothing_is_deleted() {
+fn an_unchanged_install_is_moved_aside_whole_in_the_helper_and_nothing_is_deleted() {
     let homes = Homes::new();
     let id = id();
     homes.install(&id, "Probe.app").unwrap();
     let placed = node(&fs::symlink_metadata(homes.destination("Probe.app")).unwrap());
 
     let reply = homes.remove(&id);
-    assert_eq!(reply["outcome"], "trashed");
-    assert_eq!(reply["trashName"], json!(trash_name("Probe.app", &id)));
+    assert_eq!(reply["outcome"], "held");
+    let held = homes.held(&id);
+    assert_eq!(reply["heldPath"], json!(held));
     assert!(!homes.destination("Probe.app").exists());
-    let in_trash = homes.in_trash(&id);
-    assert_eq!(node(&fs::symlink_metadata(&in_trash).unwrap()), placed);
+    assert_eq!(node(&fs::symlink_metadata(&held).unwrap()), placed);
     assert_eq!(
-        fs::read_to_string(in_trash.join("Contents/Resources/strings.txt")).unwrap(),
+        fs::read_to_string(held.join("Contents/Resources/strings.txt")).unwrap(),
         "hello"
     );
-    assert_eq!(homes.record(&id).phase, InstallPhase::Trashed);
-    assert_eq!(homes.remove(&id)["outcome"], "trashed", "the same, again");
+    for folder in [
+        held.parent().unwrap(),
+        held.parent().unwrap().parent().unwrap(),
+    ] {
+        let mode = fs::metadata(folder).unwrap().permissions().mode() & 0o7777;
+        assert_eq!(mode, 0o700, "{}", folder.display());
+    }
+    let record = homes.record(&id);
+    assert_eq!(record.phase, InstallPhase::Held);
+    assert!(record.held_at.is_some_and(|at| now_ms() - at < 60_000));
+    let again = homes.remove(&id);
+    assert_eq!(
+        (&again["outcome"], &again["heldPath"]),
+        (&json!("held"), &json!(held)),
+        "the same, again"
+    );
+}
+
+#[test]
+fn an_install_removed_by_hand_is_already_gone() {
+    let homes = Homes::new();
+    let id = id();
+    homes.install(&id, "Probe.app").unwrap();
+    fs::remove_dir_all(homes.destination("Probe.app")).unwrap();
+
+    assert_eq!(homes.remove(&id)["outcome"], "alreadyGone");
+    assert_eq!(homes.record(&id).phase, InstallPhase::Removed);
+    assert_eq!(homes.remove(&id)["outcome"], "alreadyGone", "and stays so");
+
+    // Removed by hand once it was being moved aside, before it got there.
+    let holding = Homes::new();
+    let cut = crate::control::token();
+    holding.install(&cut, "Probe.app").unwrap();
+    holding.cut(&cut, InstallPhase::Holding);
+    fs::remove_dir_all(holding.destination("Probe.app")).unwrap();
+    assert_eq!(holding.remove(&cut)["outcome"], "alreadyGone");
+    assert_eq!(holding.record(&cut).phase, InstallPhase::Removed);
+}
+
+#[test]
+fn a_placed_install_is_registered_with_launch_services() {
+    let homes = Homes::new();
+    let source = homes.app("Probe.app");
+    let asked = std::cell::RefCell::new(Vec::new());
+    let register = |path: &Path| {
+        asked.borrow_mut().push(path.to_owned());
+        false
+    };
+
+    let id = id();
+    let reply = install_moving(
+        &homes.home,
+        &id,
+        &source,
+        "Probe.app",
+        &|| Ok(()),
+        &move_between,
+        &register,
+    )
+    .unwrap();
+    assert_eq!(*asked.borrow(), [homes.destination("Probe.app")]);
+    assert_eq!(
+        (&reply["installed"], &reply["registered"]),
+        (&json!(true), &json!(false)),
+        "installed all the same, and openable by its path"
+    );
+
+    let refused = install_moving(
+        &homes.home,
+        &crate::control::token(),
+        &source,
+        "Probe.app",
+        &|| Ok(()),
+        &move_between,
+        &register,
+    );
+    assert!(refused.is_err());
+    assert_eq!(
+        asked.borrow().len(),
+        1,
+        "nothing is registered for a refusal"
+    );
 }
 
 #[test]
@@ -358,7 +457,7 @@ fn attributes_macos_adds_on_first_launch_do_not_count_as_changes() {
 
     let print = print_path(&destination, Some("Probe"), Limits::default()).unwrap();
     assert_eq!(Some(print), homes.record(&id).print);
-    assert_eq!(homes.remove(&id)["outcome"], "trashed");
+    assert_eq!(homes.remove(&id)["outcome"], "held");
     assert!(!destination.exists());
 }
 
@@ -393,33 +492,33 @@ fn an_install_cut_at_each_step_is_finished_without_deleting_it() {
     let after_move = id();
     homes.install(&after_move, "Probe.app").unwrap();
     homes.cut(&after_move, InstallPhase::Placing);
-    assert_eq!(homes.remove(&after_move)["outcome"], "trashed");
-    assert!(homes.in_trash(&after_move).exists());
+    assert_eq!(homes.remove(&after_move)["outcome"], "held");
+    assert!(homes.held(&after_move).exists());
 
-    // Cut after the move into the Trash, before it was written trashed:
-    // found there, it is done, never moved again.
-    let in_trash = id();
-    homes.install(&in_trash, "Probe.app").unwrap();
-    homes.trash();
-    fs::rename(homes.destination("Probe.app"), homes.in_trash(&in_trash)).unwrap();
-    homes.cut(&in_trash, InstallPhase::Trashing);
-    assert_eq!(homes.remove(&in_trash)["outcome"], "trashed");
+    // Cut after the move aside, before it was written held: found there,
+    // it is done, never moved again.
+    let moved_aside = id();
+    homes.install(&moved_aside, "Probe.app").unwrap();
+    homes.hold_folder(&moved_aside);
+    fs::rename(homes.destination("Probe.app"), homes.held(&moved_aside)).unwrap();
+    homes.cut(&moved_aside, InstallPhase::Holding);
+    assert_eq!(homes.remove(&moved_aside)["outcome"], "held");
     assert!(
         homes
-            .in_trash(&in_trash)
+            .held(&moved_aside)
             .join("Contents/MacOS/Probe")
             .exists()
     );
 
-    // Cut before the move into the Trash: every check runs again.
+    // Cut before the move aside: every check runs again.
     let unmoved = id();
     homes.install(&unmoved, "Probe.app").unwrap();
-    homes.cut(&unmoved, InstallPhase::Trashing);
-    assert_eq!(homes.remove(&unmoved)["outcome"], "trashed");
+    homes.cut(&unmoved, InstallPhase::Holding);
+    assert_eq!(homes.remove(&unmoved)["outcome"], "held");
 
-    for id in [&after_move, &in_trash, &unmoved] {
-        assert_eq!(homes.record(id).phase, InstallPhase::Trashed);
-        assert!(homes.in_trash(id).join("Contents/MacOS/Probe").exists());
+    for id in [&after_move, &moved_aside, &unmoved] {
+        assert_eq!(homes.record(id).phase, InstallPhase::Held);
+        assert!(homes.held(id).join("Contents/MacOS/Probe").exists());
     }
     assert!(!homes.destination("Probe.app").exists());
     assert!(homes.home.join(APPLICATIONS).is_dir(), "never removed");
@@ -427,7 +526,7 @@ fn an_install_cut_at_each_step_is_finished_without_deleting_it() {
 }
 
 #[test]
-fn a_move_into_the_trash_not_written_through_is_found_there_next_time() {
+fn a_move_aside_not_written_through_is_found_held_next_time() {
     let homes = Homes::new();
     let id = id();
     homes.install(&id, "Probe.app").unwrap();
@@ -436,31 +535,157 @@ fn a_move_into_the_trash_not_written_through_is_found_there_next_time() {
     };
 
     let first = homes.remove_with(&id, &unsynced);
-    assert_eq!(first["ok"], false, "{first}");
-    assert_eq!(homes.record(&id).phase, InstallPhase::Trashing);
-    assert!(homes.in_trash(&id).exists());
+    assert_eq!(first["ok"], false, "unfinished, never done: {first}");
+    assert_eq!(homes.record(&id).phase, InstallPhase::Holding);
+    assert!(homes.held(&id).exists());
 
     let second = homes.remove(&id);
-    assert_eq!(second["outcome"], "trashed");
-    assert_eq!(homes.record(&id).phase, InstallPhase::Trashed);
+    assert_eq!(second["outcome"], "held");
+    assert_eq!(homes.record(&id).phase, InstallPhase::Held);
 }
 
 #[test]
-fn an_install_whose_trash_is_on_another_volume_is_kept_never_copied() {
+fn an_install_whose_holding_folder_is_on_another_volume_is_kept_never_copied() {
+    // The volume says so before anything moves.
     let homes = Homes::new();
     let id = id();
     homes.install(&id, "Probe.app").unwrap();
-    let elsewhere = |_: &fs::File, _: &FileName, _: &fs::File, _: &FileName| {
+    let holding = homes.home.join(INSTALLS).join(HELD);
+    let elsewhere = |folder: &fs::File| {
+        let held = fs::metadata(&holding).map(|metadata| metadata.ino());
+        Ok(u64::from(held.ok() == Some(folder.metadata()?.ino())))
+    };
+    let nothing_moves =
+        |_: &fs::File, _: &FileName, _: &fs::File, _: &FileName| -> std::io::Result<Moved> {
+            panic!("nothing is moved to another volume")
+        };
+
+    let reply = homes.remove_on(&id, &nothing_moves, &elsewhere);
+    assert_eq!(
+        (&reply["outcome"], &reply["reason"]),
+        (&json!("kept"), &json!("other-volume"))
+    );
+    assert_eq!(homes.record(&id).phase, InstallPhase::Kept);
+    assert!(homes.destination("Probe.app/Contents/MacOS/Probe").exists());
+    assert!(!homes.held(&id).exists());
+
+    // The move says so.
+    let homes = Homes::new();
+    let id = crate::control::token();
+    homes.install(&id, "Probe.app").unwrap();
+    let crossing = |_: &fs::File, _: &FileName, _: &fs::File, _: &FileName| {
         Err(std::io::Error::from_raw_os_error(libc::EXDEV))
     };
-
-    let reply = homes.remove_with(&id, &elsewhere);
+    let reply = homes.remove_with(&id, &crossing);
     assert_eq!(
         (&reply["outcome"], &reply["reason"]),
         (&json!("kept"), &json!("other-volume"))
     );
     assert!(homes.destination("Probe.app/Contents/MacOS/Probe").exists());
-    assert!(!homes.in_trash(&id).exists());
+    assert!(!homes.held(&id).exists());
+}
+
+#[test]
+fn an_install_held_seven_days_is_deleted_and_a_newer_one_kept() {
+    let homes = Homes::new();
+    let (old, new) = (id(), id());
+    for id in [&old, &new] {
+        homes.install(id, "Probe.app").unwrap();
+        assert_eq!(homes.remove(id)["outcome"], "held");
+    }
+    homes.held_days_ago(&old, 7);
+    homes.held_days_ago(&new, 6);
+
+    homes.store().prune(now_ms());
+    assert!(!homes.held(&old).exists());
+    assert!(!homes.held(&old).parent().unwrap().exists());
+    assert_eq!(homes.record(&old).phase, InstallPhase::Removed);
+    assert_eq!(homes.remove(&old)["outcome"], "alreadyGone");
+    assert!(homes.held(&new).join("Contents/MacOS/Probe").exists());
+    assert_eq!(homes.record(&new).phase, InstallPhase::Held);
+}
+
+#[test]
+fn removing_or_installing_deletes_the_installs_held_long_enough() {
+    let homes = Homes::new();
+    let (held, other) = (id(), id());
+    homes.install(&held, "Probe.app").unwrap();
+    homes.remove(&held);
+    homes.held_days_ago(&held, 8);
+
+    assert_eq!(homes.remove(&other)["outcome"], "alreadyGone");
+    assert!(!homes.held(&held).exists(), "deleted by a removal");
+
+    let again = id();
+    homes.install(&again, "Probe.app").unwrap();
+    homes.remove(&again);
+    homes.held_days_ago(&again, 8);
+    homes.install(&id(), "Probe.app").unwrap();
+    assert!(!homes.held(&again).exists(), "deleted by an install");
+}
+
+#[test]
+fn the_prune_deletes_only_what_a_record_names_as_held_and_only_its_own_folder() {
+    let homes = Homes::new();
+    let holding = homes.home.join(INSTALLS).join(HELD);
+
+    // Not named by any record.
+    let stranger = id();
+    let foreign = bundle(&homes.hold_folder(&stranger).join("Probe.app"));
+    // Named, but another bundle took its place since.
+    let replaced = id();
+    homes.install(&replaced, "Probe.app").unwrap();
+    homes.remove(&replaced);
+    fs::rename(
+        homes.held(&replaced),
+        holding.join(&replaced).join("Kept.app"),
+    )
+    .unwrap();
+    bundle(&homes.held(&replaced));
+    homes.held_days_ago(&replaced, 30);
+    // Named, but not held: installed, with a held time it never had.
+    let installed = id();
+    homes.install(&installed, "Other.app").unwrap();
+    let mut record = homes.record(&installed);
+    record.held_at = Some(0);
+    homes.store().save(&record).unwrap();
+    bundle(&holding.join(&installed).join("Other.app"));
+    // Named and held, beside a file of someone else's in its folder.
+    let beside = id();
+    homes.install(&beside, "Probe.app").unwrap();
+    homes.remove(&beside);
+    fs::write(holding.join(&beside).join("note.txt"), "mine").unwrap();
+    homes.held_days_ago(&beside, 30);
+
+    homes.store().prune(now_ms());
+    assert!(foreign.join("Contents/MacOS/Probe").exists(), "no record");
+    assert!(homes.held(&replaced).join("Contents/MacOS/Probe").exists());
+    assert!(holding.join(&replaced).join("Kept.app").exists());
+    assert_eq!(homes.record(&replaced).phase, InstallPhase::Held);
+    assert!(homes.destination("Other.app/Contents/MacOS/Probe").exists());
+    assert!(holding.join(&installed).join("Other.app").exists());
+    assert_eq!(homes.record(&installed).phase, InstallPhase::Installed);
+    assert!(!homes.held(&beside).exists());
+    assert_eq!(
+        fs::read_to_string(holding.join(&beside).join("note.txt")).unwrap(),
+        "mine",
+        "only the bundle goes"
+    );
+}
+
+#[test]
+fn a_holding_folder_others_may_open_is_never_pruned() {
+    let homes = Homes::new();
+    let id = id();
+    homes.install(&id, "Probe.app").unwrap();
+    homes.remove(&id);
+    homes.held_days_ago(&id, 30);
+    let holding = homes.home.join(INSTALLS).join(HELD);
+    fs::set_permissions(&holding, fs::Permissions::from_mode(0o755)).unwrap();
+
+    homes.store().prune(now_ms());
+    assert!(homes.held(&id).join("Contents/MacOS/Probe").exists());
+    assert_eq!(homes.record(&id).phase, InstallPhase::Held);
 }
 
 #[test]
@@ -479,16 +704,13 @@ fn a_placement_not_written_through_stays_placing() {
         "Probe.app",
         &|| Ok(()),
         &unsynced,
+        &|_| true,
     )
     .unwrap();
     assert_eq!(reply["ok"], false, "{reply}");
     assert_eq!(homes.record(&id).phase, InstallPhase::Placing);
     assert!(homes.destination("Probe.app").exists());
-    assert_eq!(
-        homes.remove(&id)["outcome"],
-        "trashed",
-        "the print proves it"
-    );
+    assert_eq!(homes.remove(&id)["outcome"], "held", "the print proves it");
 }
 
 #[test]
@@ -588,7 +810,7 @@ fn the_bundle_identifier_alone_never_selects_anything() {
     let twin = bundle(&homes.home.join("Desktop/Probe.app"));
     let other = bundle(&homes.destination("Probe Copy.app"));
 
-    assert_eq!(homes.remove(&id)["outcome"], "trashed");
+    assert_eq!(homes.remove(&id)["outcome"], "held");
     assert!(twin.join("Contents/MacOS/Probe").exists());
     assert!(other.join("Contents/MacOS/Probe").exists());
 }
@@ -607,7 +829,7 @@ fn side_effect_files_are_reported_and_never_touched() {
     fs::write(&preferences, "written by the app").unwrap();
 
     let reply = homes.remove(&id);
-    assert_eq!(reply["outcome"], "trashed");
+    assert_eq!(reply["outcome"], "held");
     assert_eq!(
         reply["sideEffects"]["kept"],
         json!([
@@ -627,9 +849,9 @@ fn links_inside_a_bundle_are_never_followed() {
     symlink(&outside, source.join("Contents/Resources/link.txt")).unwrap();
     symlink(&homes.outside, source.join("Contents/Resources/folder")).unwrap();
     let id = id();
-    install(&homes.home, &id, &source, "Probe.app", &|| Ok(())).unwrap();
+    install_unregistered(&homes.home, &id, &source, "Probe.app").unwrap();
 
-    assert_eq!(homes.remove(&id)["outcome"], "trashed");
+    assert_eq!(homes.remove(&id)["outcome"], "held");
     assert_eq!(fs::read_to_string(&outside).unwrap(), "keep me");
     assert!(homes.outside.join("Probe.app").exists());
 }
@@ -673,7 +895,7 @@ fn an_install_that_cannot_be_copied_leaves_nothing_but_a_removed_record() {
     )
     .unwrap_err();
     assert_eq!(error.code, "input");
-    assert!(matches!(homes.store().load(&missing), Held::Missing));
+    assert!(matches!(homes.store().load(&missing), Found::Missing));
 
     let source = homes.app("Locked.app");
     let locked = source.join("Contents/Resources");

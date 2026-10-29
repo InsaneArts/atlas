@@ -102,13 +102,9 @@ impl Hands for Fake {
 
     async fn remove_install(&self, install: &Token) -> Result<Value> {
         self.log.borrow_mut().push(format!("remove {install}"));
-        Ok(self
-            .removals
-            .borrow_mut()
-            .remove(install)
-            .unwrap_or_else(|| {
-                json!({"ok": true, "outcome": "trashed", "trashName": format!("Probe.app (atlas {install})")})
-            }))
+        Ok(self.removals.borrow_mut().remove(install).unwrap_or_else(
+            || json!({"ok": true, "outcome": "held", "heldPath": held_path(install)}),
+        ))
     }
 
     async fn quit(&self, processes: &[Process], _: &[String], _: &[Token]) -> Result<Quitted> {
@@ -689,6 +685,46 @@ async fn apps_opened_by_name_are_listed_and_never_quit() {
 }
 
 #[tokio::test]
+async fn an_app_opened_by_name_that_no_longer_runs_is_not_left() {
+    let place = Place::new();
+    let key = session("quit-since");
+    let task = default_task(&key);
+    let install = Token::new();
+    for owned in [
+        Owned::Launch {
+            app: "Probe".into(),
+        },
+        Owned::Launch {
+            app: "TextEdit".into(),
+        },
+        Owned::Install {
+            id: install.clone(),
+            app: "Probe".into(),
+        },
+    ] {
+        place.claim(&task, owned);
+    }
+    let fake = Fake::at(&place.root);
+    fake.running(
+        812,
+        "textedit",
+        "/System/Applications/TextEdit.app/Contents/MacOS/TextEdit",
+    );
+    let left = json!([{"app": "TextEdit", "why": "opened by name"}]);
+
+    let scope = own(&key);
+    let preview = preview(&fake, &place.output, &scope, &place.loaded(&scope))
+        .await
+        .unwrap();
+    assert_eq!(preview["left"], left, "Probe is not running");
+    let reply = place.apply(&fake, &own(&key)).await;
+    assert_eq!(reply["left"], left);
+    let nothing = place.apply(&fake, &own(&key)).await;
+    assert_eq!(nothing["steps"], json!([]));
+    assert_eq!(nothing["left"], left, "said with nothing left to do too");
+}
+
+#[tokio::test]
 async fn processes_are_chosen_by_their_folder_never_by_name() {
     let place = Place::new();
     let key = session("folder");
@@ -1138,10 +1174,15 @@ async fn new_work_after_a_failed_quit_waits_for_every_quit() {
     assert!(!still_slow.logged().contains(&format!("undo {plan}")));
 }
 
+/// Where the helper holds install `install` once it is moved aside.
+fn held_path(install: &Token) -> String {
+    format!("/Users/atlas/.config/atlas/installs/held/{install}/Probe.app")
+}
+
 #[tokio::test]
-async fn an_install_goes_to_the_helpers_trash_by_name_and_a_copy_is_removed() {
+async fn an_install_is_moved_aside_in_the_helper_by_its_path_and_a_copy_is_removed() {
     let place = Place::new();
-    let key = session("trash");
+    let key = session("held");
     let task = default_task(&key);
     let copy = place.copy(Some(&key));
     place.claim(&task, Owned::Copy { id: copy.clone() });
@@ -1156,18 +1197,46 @@ async fn an_install_goes_to_the_helpers_trash_by_name_and_a_copy_is_removed() {
     let fake = Fake::at(&place.root);
 
     let reply = place.apply(&fake, &own(&key)).await;
-    let install_name = format!("Probe.app (atlas {install})");
-    assert_eq!(reply["steps"][1]["trashed"], json!(install_name));
+    let held = held_path(&install);
+    assert_eq!(reply["steps"][1]["held"], json!(held));
+    assert!(reply["steps"][1].get("alreadyGone").is_none());
     assert_eq!(reply["steps"][2]["state"], "done");
-    assert!(reply["steps"][2].get("trashed").is_none());
+    assert!(reply["steps"][2].get("held").is_none());
     assert!(!place.folder(&copy).exists(), "a copy is removed");
     let receipt = place.receipt(&reply);
-    let trashed: Vec<Option<&str>> = receipt
+    let kept: Vec<Option<&str>> = receipt
         .steps
         .iter()
-        .map(|entry| entry.came_to.trashed.as_deref())
+        .map(|entry| entry.came_to.held.as_deref())
         .collect();
-    assert_eq!(trashed, [None, Some(install_name.as_str()), None]);
+    assert_eq!(kept, [None, Some(held.as_str()), None]);
+}
+
+#[tokio::test]
+async fn an_install_removed_by_hand_is_reported_already_gone() {
+    let place = Place::new();
+    let key = session("by-hand");
+    let task = default_task(&key);
+    let install = Token::new();
+    place.claim(
+        &task,
+        Owned::Install {
+            id: install.clone(),
+            app: "Probe".into(),
+        },
+    );
+    let fake = Fake::at(&place.root);
+    fake.removals.borrow_mut().insert(
+        install.clone(),
+        json!({"ok": true, "installId": install, "outcome": "alreadyGone", "app": "Probe"}),
+    );
+
+    let reply = place.apply(&fake, &own(&key)).await;
+    let step = &reply["steps"][1];
+    assert_eq!(step["do"], "remove-install");
+    assert_eq!(step["alreadyGone"], true, "{step}");
+    assert!(step.get("held").is_none());
+    assert_eq!(reply["ok"], true);
 }
 
 #[tokio::test]

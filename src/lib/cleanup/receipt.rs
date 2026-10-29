@@ -174,11 +174,10 @@ pub(crate) struct CameTo {
     /// which are never removed.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub side_effects: Vec<SideEffect>,
-    /// The name an install or copy took in the Trash it was moved to: the
-    /// helper's for an install, this account's for a copy. Nothing is ever
-    /// deleted.
+    /// Where in the helper an install was moved aside to, which keeps it
+    /// for a while before deleting it.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub trashed: Option<String>,
+    pub held: Option<String>,
     /// The apps that may run from a copy macOS moved them to (App
     /// Translocation), which are never quit.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -251,8 +250,8 @@ pub(crate) enum Reason {
     LabelUnreadable,
     /// Kept: undoing a copy left files the helper changed since.
     KeptTargets,
-    /// Kept: the Trash is on another volume, and Atlas never copies
-    /// something there to delete it here.
+    /// Kept: the folder it would be moved aside to is on another volume,
+    /// and Atlas never copies something there to delete it here.
     OtherVolume,
     /// Kept: Atlas cannot read its own record of it.
     Unreadable,

@@ -1132,3 +1132,63 @@ fn a_cleanup_reads_kept_apart_from_failed_and_names_what_it_leaves() {
     );
     assert_eq!(nothing.out, "✓ Nothing to clean up in the helper");
 }
+
+#[test]
+fn a_cleanup_says_where_an_install_is_held_and_when_one_was_already_gone() {
+    let held = "/Users/atlas/.config/atlas/installs/held/9c1e/Probe.app";
+    let run = show(
+        View::Cleanup,
+        json!({"ok": true, "preview": false, "state": "complete", "steps": [
+            {"n": 1, "do": "remove-install", "app": "Probe", "state": "done", "held": held},
+            {"n": 2, "do": "remove-install", "app": "Opie", "state": "done", "alreadyGone": true},
+            {"n": 3, "do": "remove-install", "app": "Notes", "state": "kept",
+             "reason": "other-volume"}], "left": []}),
+    );
+    assert!(
+        run.out.contains(&format!(
+            "1. Move Probe from Applications aside in the helper · held at {held}; removed after 7 days"
+        )),
+        "{}",
+        run.out
+    );
+    assert!(
+        run.out
+            .contains("2. Move Opie from Applications aside in the helper · already gone"),
+        "{}",
+        run.out
+    );
+    assert!(
+        run.out
+            .contains("kept: it could not be moved aside without copying"),
+        "{}",
+        run.out
+    );
+}
+
+#[test]
+fn an_install_says_where_it_went_and_only_when_macos_has_not_registered_it() {
+    let installed = |registered: bool| {
+        show(
+            View::InstallApp,
+            json!({"ok": true, "installed": true, "app": "Probe",
+                "path": "/Users/atlas/Applications/Probe.app", "registered": registered}),
+        )
+        .out
+    };
+
+    let registered = installed(true);
+    assert!(
+        registered.contains("Installed Probe at /Users/atlas/Applications/Probe.app"),
+        "{registered}"
+    );
+    assert!(
+        registered.contains("atlas cleanup --apply moves it aside"),
+        "{registered}"
+    );
+    assert!(!registered.contains("not registered"), "{registered}");
+    let unregistered = installed(false);
+    assert!(
+        unregistered.contains("macOS has not registered it yet"),
+        "{unregistered}"
+    );
+}

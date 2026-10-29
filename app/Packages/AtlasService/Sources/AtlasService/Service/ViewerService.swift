@@ -102,8 +102,8 @@ public protocol ViewerService: Sendable {
   func sessions() async throws(ServiceError) -> HostSessionList
 
   /// Reads what cleaning up a host session's work would take, or cleans it up as the person: quits what runs from
-  /// its copies, rolls back its plans, and moves what its tasks installed and the copies Atlas made for it to the
-  /// Trash.
+  /// its copies, rolls back its plans, moves what its tasks installed aside in the helper and removes the copies
+  /// Atlas made for it.
   ///
   /// - Parameters:
   ///   - session: The session's key.

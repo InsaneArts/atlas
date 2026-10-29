@@ -50,16 +50,25 @@ pub fn cleanup(value: &Value) -> Rendered {
     }
 }
 
-/// An app installed into the helper: where it went, and what removes it.
+/// An app installed into the helper: where it went, whether it opens by
+/// its name yet, and what takes it away.
 pub fn install_app(value: &Value) -> String {
     let app = text::printable(value["app"].as_str().unwrap_or("the app")).into_owned();
     let mut line = format!("{} Installed {app}", style::ok());
     if let Some(path) = value["path"].as_str() {
         line.push_str(&format!(" at {}", text::printable(path)));
     }
+    if value["registered"] == false {
+        line.push_str(&format!(
+            "\n  {}",
+            style::dim(
+                "macOS has not registered it yet: atlas open --app NAME opens it from where it is"
+            )
+        ));
+    }
     line.push_str(&format!(
         "\n  {}",
-        style::dim("atlas cleanup --apply removes it once the task is done, unless it changed")
+        style::dim("atlas cleanup --apply moves it aside once the task is done, unless it changed")
     ));
     line
 }
@@ -106,7 +115,7 @@ fn step(step: &Value) -> String {
             }
         }
         Some("remove-install") => format!(
-            "Move {} from Applications to the helper's Trash",
+            "Move {} from Applications aside in the helper",
             text::printable(step["app"].as_str().unwrap_or("the app"))
         ),
         Some("remove-copy") => {
@@ -130,9 +139,10 @@ fn step(step: &Value) -> String {
     };
     let said = match (state, reason) {
         (Some("done"), _) if step["alreadyGone"] == true => " · already gone".to_owned(),
-        (Some("done"), _) if step["trashed"].is_string() => format!(
-            " · in the Trash as {}",
-            text::printable(step["trashed"].as_str().unwrap_or_default())
+        (Some("done"), _) if step["held"].is_string() => format!(
+            " · held at {}; removed after {} days",
+            text::printable(step["held"].as_str().unwrap_or_default()),
+            crate::environment::HELD_DAYS
         ),
         (Some("kept"), Some(reason)) => format!(" · kept: {reason}"),
         (Some("failed"), Some(reason)) if step["retry"] == true => {
@@ -154,7 +164,7 @@ fn reason(reason: &str) -> &str {
         "another-session" => "another session made it",
         "label-unreadable" => "Atlas cannot tell whose it is",
         "kept-targets" => "the helper changed some of its files since",
-        "other-volume" => "it could not be moved to the Trash without copying",
+        "other-volume" => "it could not be moved aside without copying",
         "unreadable" => "Atlas cannot read its record of it",
         "timeout" => "it did not quit in time",
         "in-use" => "still in use",

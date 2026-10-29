@@ -85,8 +85,8 @@
       ]
     }
 
-    /// What cleaning up Claude Code's work takes while it still acts: quitting Opie, rolling back its plan, and moving
-    /// Probe, which its task installed, and the copy of Opie to the Trash.
+    /// What cleaning up Claude Code's work takes while it still acts: quitting Opie, rolling back its plan, moving
+    /// Probe, which its task installed, aside in the helper and removing the copy of Opie.
     static let cleanupPreview = CleanupReply(
       ok: true,
       preview: true,

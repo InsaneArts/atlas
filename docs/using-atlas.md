@@ -51,7 +51,7 @@ atlas cleanup          # see what it would do
 atlas cleanup --apply
 ```
 
-Cleanup quits only what runs from the task's own copies and installs, never an app opened by name, moves installed apps to the helper's Trash instead of deleting them, removes its copies, and reports what it kept and why. Use the [command reference](../agents/atlas/skills/atlas/references/commands.md) for typing, key combinations, scrolling and other input options.
+Cleanup quits only what runs from the task's own copies and installs, never an app opened by name, moves installed apps aside in the helper, where they are kept for 7 days before they are removed, removes its copies, and reports what it kept and why. Use the [command reference](../agents/atlas/skills/atlas/references/commands.md) for typing, key combinations, scrolling and other input options.
 
 ## Watch the helper
 

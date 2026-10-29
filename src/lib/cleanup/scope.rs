@@ -185,8 +185,8 @@ impl Loaded {
             .unwrap_or(0)
     }
 
-    /// The apps the scope's tasks opened by name: listed, never quit.
-    pub fn left(&self) -> Vec<Value> {
+    /// The apps the scope's tasks opened by name, each once.
+    pub fn opened_by_name(&self) -> Vec<&str> {
         let mut apps: Vec<&str> = Vec::new();
         for work in &self.work {
             if let Owned::Launch { app } = &work.owned
@@ -196,7 +196,26 @@ impl Loaded {
                 apps.push(app);
             }
         }
-        apps.into_iter()
+        apps
+    }
+
+    /// The apps the scope's tasks opened by name that still run, by the
+    /// helper's app list `running`: listed, never quit. With no list, each
+    /// is listed, as it may still run.
+    pub fn left(&self, running: Option<&Value>) -> Vec<Value> {
+        let runs = |app: &str| {
+            running.is_none_or(|listed| {
+                listed["apps"]
+                    .as_array()
+                    .into_iter()
+                    .flatten()
+                    .filter_map(|listed| listed["name"].as_str())
+                    .any(|name| crate::text::same_text(name, app))
+            })
+        };
+        self.opened_by_name()
+            .into_iter()
+            .filter(|app| runs(app))
             .map(|app| json!({"app": app, "why": "opened by name"}))
             .collect()
     }

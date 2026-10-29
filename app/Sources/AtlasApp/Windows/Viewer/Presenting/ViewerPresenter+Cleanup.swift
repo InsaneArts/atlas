@@ -31,7 +31,7 @@ extension ViewerPresenter {
   }
 
   /// The alert's lines, from what a preview says it takes: the apps it quits as one line, the environment changes it
-  /// undoes and the copies it moves to the Trash counted, and each installed app it moves to the Trash, or keeps as it
+  /// undoes and the copies it removes counted, and each installed app it moves aside in the helper, or keeps as it
   /// changed. A step a cleanup that did not finish before already did, or kept, is left out.
   ///
   /// - Parameter preview: What cleaning up takes.
@@ -51,7 +51,7 @@ extension ViewerPresenter {
     if plans > 0 { lines.append(ViewerWords.undoesChanges(plans)) }
     for install in kinds(.removeInstall) {
       lines.append(
-        install.unchanged == false ? ViewerWords.keepsInstall(install.app) : ViewerWords.trashesInstall(install.app)
+        install.unchanged == false ? ViewerWords.keepsInstall(install.app) : ViewerWords.holdsInstall(install.app)
       )
     }
     let copies = kinds(.removeCopy).count
@@ -97,13 +97,13 @@ extension ViewerPresenter {
   /// How a step went, in the receipt.
   ///
   /// - Parameter step: The step.
-  /// - Returns: "Done", "Moved to the helper's Trash", "Kept: changed since it was installed" or "Couldn't: still in use. Try
-  ///   again.".
+  /// - Returns: "Done", "Moved aside in the helper; removed after 7 days", "Kept: changed since it was installed" or
+  ///   "Couldn't: still in use. Try again.".
   static func cleanupOutcome(_ step: CleanupStep) -> String {
     switch step.state {
     case .done where step.alreadyGone: ViewerWords.stepAlreadyGone
-    case .done where step.trashed != nil && step.kind == .removeInstall:
-      ViewerWords.stepTrashed
+    case .done where step.held != nil && step.kind == .removeInstall:
+      ViewerWords.stepHeld
     case .done: ViewerWords.stepDone
     case .kept: ViewerWords.stepKept(step.reason)
     case .failed: ViewerWords.stepFailed(step.reason, retry: step.retry)

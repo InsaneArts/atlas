@@ -26,6 +26,7 @@ use crate::{
 };
 use files::*;
 use fs2::FileExt;
+pub(crate) use installs::HELD_DAYS;
 pub use list::list;
 use model::*;
 pub(crate) use one_off::{install_app, installs, remove_app};

@@ -92,7 +92,14 @@ pub(crate) async fn preview(
         .unwrap_or_default();
     merge(&mut steps, &loaded.undoable());
     if steps.is_empty() {
-        return Ok(reply::nothing(output, scope, loaded, true));
+        let running = running_named(hands, loaded, None).await;
+        return Ok(reply::nothing(
+            output,
+            scope,
+            loaded,
+            true,
+            running.as_ref(),
+        ));
     }
 
     let to_run: Vec<&Entry> = steps
@@ -174,7 +181,8 @@ pub(crate) async fn preview(
         })
         .collect();
 
-    let mut left = reply::left(loaded, receipt.as_ref());
+    let running = running_named(hands, loaded, looks_at_apps.then_some(&apps)).await;
+    let mut left = reply::left(loaded, receipt.as_ref(), running.as_ref());
     for app in untraced {
         if !left.iter().any(|known| known["app"] == app.as_str()) {
             left.push(json!({"app": app, "why": "runs from a copy macOS moved it to"}));
@@ -246,7 +254,14 @@ pub(crate) async fn apply(
         .unwrap_or_else(|| Receipt::new(scope.session.clone(), scope.task.clone(), actor));
     merge(&mut receipt.steps, &loaded.undoable());
     if receipt.steps.is_empty() {
-        return Ok(reply::nothing(output, scope, loaded, false));
+        let running = running_named(hands, loaded, None).await;
+        return Ok(reply::nothing(
+            output,
+            scope,
+            loaded,
+            false,
+            running.as_ref(),
+        ));
     }
     receipt.actor = actor;
     if let Some(adopter) = &adopter {
@@ -275,19 +290,39 @@ pub(crate) async fn apply(
     receipts.save(&mut receipt)?;
     let _ = note(&tasks, &covered, &receipt, None);
 
+    let running = running_named(hands, loaded, None).await;
     Ok(reply::applied(
         hands.copies(),
         output,
         scope,
         loaded,
         &receipt,
+        running.as_ref(),
     ))
+}
+
+/// The helper's app list, read only when the scope's tasks opened an app by
+/// name, so only those still running are left to the agent: `listed` when
+/// one was just read, else a fresh one. None when there is none to read or
+/// it cannot be read, and each such app is then left, as it may still run.
+async fn running_named(
+    hands: &impl Hands,
+    loaded: &Loaded,
+    listed: Option<&Value>,
+) -> Option<Value> {
+    if loaded.opened_by_name().is_empty() {
+        return None;
+    }
+    match listed {
+        Some(listed) => Some(listed.clone()),
+        None => hands.apps().await.ok().filter(|apps| apps["ok"] == true),
+    }
 }
 
 /// Settle every step of the session's receipts that finished but whose
 /// settling was not acknowledged, as after a crash between the two, each
 /// in the records of its own receipt's scope: what a receipt says was
-/// moved to the Trash, undone or kept is never planned again, and its
+/// moved aside, removed, undone or kept is never planned again, and its
 /// claims say so too.
 fn reconcile(receipts: &Receipts, tasks: &Tasks, sessions: &Sessions, loaded: &Loaded) {
     for receipt in &loaded.receipts {
@@ -310,8 +345,8 @@ fn reconcile(receipts: &Receipts, tasks: &Tasks, sessions: &Sessions, loaded: &L
 
 /// Note what a step that ended `state` did to its thing, in the records of
 /// the receipt's own scope (`scope`: its session, and its one task when it
-/// covers one): gone wherever any record claims it, once moved to the
-/// Trash or undone; kept, in each record of that scope that claims it,
+/// covers one): gone wherever any record claims it, once moved aside,
+/// removed or undone; kept, in each record of that scope that claims it,
 /// once left on purpose. A plan undone leaves the session records too.
 /// Whether every record that must say so does, read back after writing:
 /// a step not acknowledged is settled again before anything is planned.

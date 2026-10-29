@@ -18,7 +18,7 @@ extension ViewerPresenter {
   /// One alert's words and buttons, as every window builds them
   /// (``HelperAlert/state(overview:progress:askedByPerson:)``); Restart, which only the main window asks, is a
   /// destructive alert of its own, since anything an agent is doing in the helper stops: Cancel is the default and
-  /// Restart red; so is Clean Up, which lists what it quits, undoes, moves to the helper's Trash and removes. Recover shows its refusal
+  /// Restart red; so is Clean Up, which lists what it quits, undoes, moves aside in the helper and removes. Recover shows its refusal
   /// and its success in place.
   ///
   /// - Parameters:

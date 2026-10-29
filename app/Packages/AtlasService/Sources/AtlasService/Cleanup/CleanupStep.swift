@@ -17,11 +17,12 @@ public struct CleanupStep: Decodable, Equatable, Sendable {
   public var retry: Bool
   /// Whether what it takes away was gone before it ran.
   public var alreadyGone: Bool
-  /// The name an install or a copy has in the Trash once the step moved it there, such as
-  /// "Probe.app (atlas a7d2c0ffee12)"; nil before it ran, when it was already gone, or from an older service.
-  public var trashed: String?
-  /// Whether an installed app is as it was installed, so the step moves it to the helper's Trash; false when it changed and is
-  /// kept, nil when the service does not say.
+  /// Where in the helper an installed app was moved aside to once the step held it, such as
+  /// "/Users/atlas/.config/atlas/installs/held/a7d2c0ffee12/Probe.app"; nil before it ran, when it was already gone,
+  /// or for any other step.
+  public var held: String?
+  /// Whether an installed app is as it was installed, so the step moves it aside in the helper; false when it changed
+  /// and is kept, nil when the service does not say.
   public var unchanged: Bool?
 
   /// Creates a step.
@@ -35,7 +36,7 @@ public struct CleanupStep: Decodable, Equatable, Sendable {
   ///   - reason: Why it was kept, failed or did not run; none by default.
   ///   - retry: Whether running again may get it done; not by default.
   ///   - alreadyGone: Whether what it takes away was gone before it ran; not by default.
-  ///   - trashed: Its name in the Trash once moved there; none by default.
+  ///   - held: Where in the helper it was moved aside to; none by default.
   ///   - unchanged: Whether an installed app is as it was installed; unknown by default.
   public init(
     number: Int,
@@ -46,7 +47,7 @@ public struct CleanupStep: Decodable, Equatable, Sendable {
     reason: String? = nil,
     retry: Bool = false,
     alreadyGone: Bool = false,
-    trashed: String? = nil,
+    held: String? = nil,
     unchanged: Bool? = nil
   ) {
     self.number = number
@@ -57,7 +58,7 @@ public struct CleanupStep: Decodable, Equatable, Sendable {
     self.reason = reason
     self.retry = retry
     self.alreadyGone = alreadyGone
-    self.trashed = trashed
+    self.held = held
     self.unchanged = unchanged
   }
 
@@ -68,7 +69,7 @@ public struct CleanupStep: Decodable, Equatable, Sendable {
     /// What it does, which the service writes as `do`.
     case kind = "do"
     /// Each other field by the name the service writes.
-    case apps, app, state, reason, retry, alreadyGone, trashed, unchanged
+    case apps, app, state, reason, retry, alreadyGone, held, unchanged
   }
 
   /// Decodes a step, keeping the default of anything missing or of the wrong type; a kind this app does not know
@@ -101,7 +102,7 @@ public struct CleanupStep: Decodable, Equatable, Sendable {
     reason = text(.reason)
     retry = flag(.retry) == true
     alreadyGone = flag(.alreadyGone) == true
-    trashed = text(.trashed)
+    held = text(.held)
     unchanged = flag(.unchanged)
   }
 }

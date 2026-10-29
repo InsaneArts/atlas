@@ -1,9 +1,10 @@
 //! `atlas install-app`: put an app from this Mac into the helper's
 //! `~/Applications` for the current task, never over anything already
-//! there, and record it so `atlas cleanup --apply` removes it once the
+//! there, and record it so `atlas cleanup --apply` moves it aside once the
 //! task is done, unless it changed meanwhile. The install is claimed for
 //! the task before the helper is asked, so a crash on the way leaves it
-//! findable by its ID.
+//! findable by its ID; and it is the task's own install that `open --app
+//! NAME` falls back to when LaunchServices does not know the name yet.
 use crate::{
     client::Client,
     control::Token,
@@ -124,17 +125,48 @@ fn bundle(path: &Path) -> Result<(PathBuf, String)> {
 /// The install of an app named `app` that task `task` made and has not
 /// cleaned up yet, by its ID.
 fn earlier_install(tasks: &Tasks, task: &crate::host_session::Key, app: &str) -> Option<Token> {
+    install_named(tasks, task, app, |state| {
+        matches!(state, State::Intent | State::Made)
+    })
+}
+
+/// The install of an app named `app` that task `task` claims in a state
+/// `wanted` takes, by its ID.
+fn install_named(
+    tasks: &Tasks,
+    task: &crate::host_session::Key,
+    app: &str,
+    wanted: impl Fn(State) -> bool,
+) -> Option<Token> {
     tasks
         .load(task)?
         .claims()
         .find_map(|(owned, state)| match owned {
-            Owned::Install { id, app: named }
-                if same_text(&named, app) && matches!(state, State::Intent | State::Made) =>
-            {
+            Owned::Install { id, app: named } if same_text(&named, app) && wanted(state) => {
                 Some(id)
             }
             _ => None,
         })
+}
+
+/// Where the current task's own install of the app named `app` is in the
+/// helper, while the helper says its folder there is still the one Atlas
+/// placed; none for any other app, or when that cannot be told.
+pub(crate) async fn installed_path(client: &Client, app: &str) -> Option<String> {
+    let task = client.task.as_ref()?;
+    let tasks = Tasks::at(client.output_dir().ok()?);
+    let id = install_named(&tasks, task.key(), app, |state| state == State::Made)?;
+    let answer = environment::installs(client, std::slice::from_ref(&id))
+        .await
+        .ok()?;
+    let found = answer["installs"]
+        .as_array()?
+        .iter()
+        .find(|found| found["installId"] == id.as_str())?;
+    if found["verified"] != true {
+        return None;
+    }
+    found["path"].as_str().map(str::to_owned)
 }
 
 #[cfg(test)]

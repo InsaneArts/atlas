@@ -840,7 +840,7 @@ Examples:
 ```text
 See what this task left in the helper, and clean it up with --apply.
 
-Lists the copies into the helper this task applied, the apps it installed, the copies it opened and the apps running from them. With --apply it quits those apps, rolls the copies into the helper back newest first, moves the installs to the helper's Trash (it never deletes them), removes the copies, and reports what it kept and why. Run it again to finish what is left. Apps opened by name are listed, not quit.
+Lists the copies into the helper this task applied, the apps it installed, the copies it opened and the apps running from them. With --apply it quits those apps, rolls the copies into the helper back newest first, moves the installs aside in the helper (held, and removed after 7 days), removes the copies, and reports what it kept and why. Run it again to finish what is left. Apps opened by name that still run are listed, not quit.
 
 Usage: atlas cleanup [OPTIONS]
 
@@ -1173,7 +1173,7 @@ Global options:
 ```text
 Install an app into the helper's Applications folder for this task.
 
-Copies an .app from this Mac into ~/Applications in the helper, never over anything already there, and records it, so that atlas cleanup --apply moves it to the helper's Trash once the task is done, unless it changed meanwhile. Settings and data the app writes in the helper stay.
+Copies an .app from this Mac into ~/Applications in the helper, never over anything already there, registers it so atlas open --app NAME finds it, and records it, so that atlas cleanup --apply moves it aside in the helper once the task is done, unless it changed meanwhile. Settings and data the app writes in the helper stay.
 
 Usage: atlas install-app [OPTIONS] <PATH>
 

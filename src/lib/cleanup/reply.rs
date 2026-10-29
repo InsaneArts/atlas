@@ -61,8 +61,8 @@ pub(super) fn said_state(value: &mut Value, entry: &Entry) {
     if !came_to.side_effects.is_empty() {
         value["sideEffects"] = json!({"kept": came_to.side_effects});
     }
-    if let Some(trashed) = &came_to.trashed {
-        value["trashed"] = json!(trashed);
+    if let Some(held) = &came_to.held {
+        value["held"] = json!(held);
     }
     if let Some(error) = &came_to.error {
         value["error"] = json!(error);
@@ -70,10 +70,15 @@ pub(super) fn said_state(value: &mut Value, entry: &Entry) {
 }
 
 /// What a cleanup leaves to the agent: the apps the scope's tasks opened
-/// by name, and the apps the receipt's quit steps found running from a
-/// copy macOS moved them to that Atlas cannot trace.
-pub(super) fn left(loaded: &Loaded, receipt: Option<&Receipt>) -> Vec<Value> {
-    let mut left = loaded.left();
+/// by name that still run by the helper's app list `running`, and the apps
+/// the receipt's quit steps found running from a copy macOS moved them to
+/// that Atlas cannot trace.
+pub(super) fn left(
+    loaded: &Loaded,
+    receipt: Option<&Receipt>,
+    running: Option<&Value>,
+) -> Vec<Value> {
+    let mut left = loaded.left(running);
     let untraced = receipt
         .into_iter()
         .flat_map(|receipt| &receipt.steps)
@@ -94,6 +99,7 @@ pub(super) fn applied(
     scope: &Scope,
     loaded: &Loaded,
     receipt: &Receipt,
+    running: Option<&Value>,
 ) -> Value {
     let steps: Vec<Value> = receipt
         .steps
@@ -113,7 +119,7 @@ pub(super) fn applied(
         "session": session_named(output, &scope.session),
         "task": task_named(loaded, scope),
         "steps": steps,
-        "left": left(loaded, Some(receipt)),
+        "left": left(loaded, Some(receipt), running),
     });
     if state != CleanupState::Complete {
         reply["code"] = json!("cleanup");
@@ -123,8 +129,15 @@ pub(super) fn applied(
     reply
 }
 
-/// The reply when there is nothing to clean up.
-pub(super) fn nothing(output: &Path, scope: &Scope, loaded: &Loaded, preview: bool) -> Value {
+/// The reply when there is nothing to clean up, with the apps opened by
+/// name that still run by the helper's app list `running`.
+pub(super) fn nothing(
+    output: &Path,
+    scope: &Scope,
+    loaded: &Loaded,
+    preview: bool,
+    running: Option<&Value>,
+) -> Value {
     json!({
         "ok": true,
         "preview": preview,
@@ -132,7 +145,7 @@ pub(super) fn nothing(output: &Path, scope: &Scope, loaded: &Loaded, preview: bo
         "session": session_named(output, &scope.session),
         "task": task_named(loaded, scope),
         "steps": [],
-        "left": loaded.left(),
+        "left": loaded.left(running),
         "receipt": null,
     })
 }
