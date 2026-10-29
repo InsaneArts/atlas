@@ -3,6 +3,7 @@ mod dispatch;
 mod doctor;
 mod help;
 mod output;
+mod policy;
 mod update;
 
 use atlas::{
@@ -16,6 +17,7 @@ use atlas::{
 use clap::FromArgMatches;
 use cli::{Cli, Command};
 use nix::sys::signal::Signal;
+use policy::Policy;
 use serde_json::{Value, json};
 use std::{
     io::{IsTerminal, Write},
@@ -50,9 +52,11 @@ fn main() -> ExitCode {
         return ExitCode::SUCCESS;
     };
 
+    let policy = Policy::of(&command);
+
     // Commands run by Atlas itself always answer in JSON, and their
     // failures carry no step for an agent: another Atlas process reads them.
-    let machine = machine_only(&command);
+    let machine = policy.machine_only;
     let format = if machine {
         Format::Json
     } else {
@@ -67,7 +71,7 @@ fn main() -> ExitCode {
 
     // How long a command that waits for control may wait; other commands
     // never read `ATLAS_WAIT`.
-    let wait = if dispatch::waits(&command, dispatch::actor()) {
+    let wait = if policy.waits(dispatch::actor()) {
         match cli::control_wait_given(cli.wait, std::env::var_os("ATLAS_WAIT").as_deref()) {
             Ok(wait) => wait,
             Err(error) => return help::usage(error),
@@ -116,28 +120,13 @@ fn main() -> ExitCode {
         _ => None,
     };
 
-    let view = output::view(&command);
-
     // Commands that ask questions or wait for the person stop cleanly on
     // Ctrl-C, saying what that means for each. Those that run agent tools
-    // (each in a process group of its own) stop them whenever they are
-    // stopped, a person watching or not.
-    let interrupted = match command {
-        Command::Init => Some("Stopped. Run atlas init again to continue."),
-        Command::Switch { .. }
-        | Command::Uninstall { .. }
-        | Command::Logout { .. }
-        | Command::Agents { .. } => Some("Stopped."),
-        Command::Update { check: false, .. } => Some("Stopped. Run atlas update again to finish."),
-        _ => None,
-    };
-    let runs_agents = matches!(
-        command,
-        Command::Init | Command::Uninstall { .. } | Command::Agents { .. } | Command::UpdateFinish
-    );
-    // Every other command that takes control, whoever runs it, stops on a
-    // signal by starting nothing more and letting the step under way settle.
-    let listens = dispatch::controls(&command);
+    // stop them whenever they are stopped, a person watching or not. Every
+    // other command that takes control, whoever runs it, stops on a signal
+    // by starting nothing more and letting the step under way settle.
+    let (interrupted, runs_agents, listens) =
+        (policy.interrupted, policy.runs_agents, policy.controls);
     let interrupt = Interrupt::process();
 
     // The runtime lasts until the process exits, so a signal that comes
@@ -164,7 +153,7 @@ fn main() -> ExitCode {
 
             interrupt
                 .unless_stopped(async {
-                    let result = dispatch::execute(config.clone(), command, wait).await;
+                    let result = dispatch::execute(config.clone(), command, &policy, wait).await;
 
                     // Being stopped: the stop ends Atlas in a moment and says
                     // so, so what the cut-short command gave is not reported.
@@ -181,7 +170,7 @@ fn main() -> ExitCode {
 
     match result {
         Ok(result) => {
-            output::emit(format, &view, &result, !machine);
+            output::emit(format, &policy.view, &result, !machine);
             exit_status(output::failed(&result), interrupt.asked())
         }
         Err(error) => {
@@ -362,25 +351,6 @@ fn open_app(config: &std::path::Path) -> ExitCode {
 
     eprintln!("Atlas could not open: {error}");
     ExitCode::FAILURE
-}
-
-/// Commands Atlas runs itself (in the helper, or as a step of another
-/// command), whose output another Atlas process reads.
-fn machine_only(command: &Command) -> bool {
-    matches!(
-        command,
-        Command::EnvironmentWorker { .. }
-            | Command::SessionInfo
-            | Command::PermissionsInfo
-            | Command::WindowsInfo { .. }
-            | Command::ElementsInfo { .. }
-            | Command::HelperServe { .. }
-            | Command::JobLaunch { .. }
-            | Command::InputService { .. }
-            | Command::SetupHelper { .. }
-            | Command::UpdateFinish
-            | Command::Onboarding { .. }
-    )
 }
 
 /// Ctrl-C during a question or a wait puts the cursor back and says how to

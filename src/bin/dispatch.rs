@@ -1,11 +1,12 @@
 //! Command execution, activity attribution and helper-change policy.
 use super::{
     cli::{
-        AgentsCommand, ButtonArg, Command, CursorHookEvent, EnvironmentCommand, JobCommand, OnOff,
+        AgentsCommand, Command, CursorHookEvent, EnvironmentCommand, JobCommand, OnOff,
         OnboardingCommand, WindowState,
     },
     doctor, help,
     output::print,
+    policy::Policy,
     update,
 };
 use atlas::{
@@ -90,216 +91,16 @@ fn chosen(
     .collect()
 }
 
-/// What a command does in the helper, as the activity log keeps it: its
-/// verb and the app and control it names. None for commands that act on
-/// nothing there.
-fn doing(command: &Command) -> Option<Doing> {
-    Some(match command {
-        Command::Screenshot { .. } => Doing::new("screenshot"),
-        Command::Click {
-            target,
-            name,
-            button,
-            count,
-            ..
-        } => Doing::click(matches!(button, ButtonArg::Right), *count)
-            .app(target.app.as_deref())
-            .label(name.as_deref()),
-        Command::Move { .. } => Doing::new("move"),
-        Command::Drag { target, .. } => Doing::new("drag").app(target.app.as_deref()),
-        Command::Scroll { target, .. } => Doing::new("scroll").app(target.app.as_deref()),
-        Command::Type { target, .. } => Doing::new("type").app(target.app.as_deref()),
-        Command::Key { keys, target, .. } => Doing::keys(keys).app(target.app.as_deref()),
-        Command::Open { app, targets, .. } => Doing::open(app.as_deref(), targets),
-        Command::Close { app, .. } => Doing::new("close").app(app.as_deref()),
-        Command::Cleanup { apply: true, .. } => Doing::new("cleanup"),
-        Command::InstallApp { path } => Doing::new("install").app(path.to_str()),
-        Command::Run { .. }
-        | Command::Environment {
-            command: Some(EnvironmentCommand::Run { .. }),
-            ..
-        } => Doing::new("run"),
-        Command::Job {
-            command: JobCommand::Start { .. },
-        } => Doing::new("job-start"),
-        Command::Job {
-            command: JobCommand::Stop { .. },
-        } => Doing::new("job-stop"),
-        Command::Collect { .. } => Doing::new("collect"),
-        _ => return None,
-    })
-}
-
-/// Whether a command is its host session's work: everything an agent runs
-/// but the servers and helper-side commands, which serve many sessions or
-/// none, and the person's own setup.
-fn attributed(command: &Command) -> bool {
-    !matches!(
-        command,
-        Command::Mcp { .. }
-            | Command::Watch { .. }
-            | Command::Menubar { .. }
-            | Command::Monitor { .. }
-            | Command::HelperServe { .. }
-            | Command::JobLaunch { .. }
-            | Command::InputService { .. }
-            | Command::EnvironmentWorker { .. }
-            | Command::SessionInfo
-            | Command::PermissionsInfo
-            | Command::WindowsInfo { .. }
-            | Command::ElementsInfo { .. }
-            | Command::Init
-            | Command::Uninstall { .. }
-            | Command::Update { .. }
-            | Command::UpdateFinish
-            | Command::Setup { .. }
-            | Command::SetupHelper { .. }
-            | Command::Switch { .. }
-            | Command::Onboarding { .. }
-    )
-}
-
-/// Whether `command`, run by `actor`, is labelled with the host session it
-/// comes from: an agent's own work only. What the person does from the app,
-/// the menu bar or a viewer never is.
-fn labelled(command: &Command, actor: Actor) -> bool {
-    actor == Actor::Agent && attributed(command)
-}
-
-/// What a command is, as far as its host session's record cares: nothing
-/// of its arguments.
-fn kind(command: &Command) -> Kind {
-    match command {
-        Command::Screenshot { .. } => Kind::Screenshot,
-        Command::Open { .. } => Kind::Open,
-        Command::Close { .. } => Kind::Close,
-        Command::Environment {
-            apply,
-            command: None,
-            ..
-        } => Kind::Environment { changes: *apply },
-        Command::Environment {
-            command: Some(EnvironmentCommand::Apply { .. }),
-            ..
-        } => Kind::Environment { changes: true },
-        Command::Environment {
-            command:
-                Some(
-                    EnvironmentCommand::Rollback { apply, .. }
-                    | EnvironmentCommand::Profile { apply, .. },
-                ),
-            ..
-        } => Kind::Environment { changes: *apply },
-        _ => Kind::Other,
-    }
-}
-
-/// Whether a command makes something its task's record claims (a copy, an
-/// app opened by name, an environment plan or a run in the helper) or
-/// cleans it up: told of a task by a name that is not one, a cleanup would
-/// cover the whole session instead. Only these are refused for an
-/// ATLAS_TASK that names no task; looking, Stop and recovery never depend
-/// on it.
-fn makes(command: &Command) -> bool {
-    match command {
-        Command::Open { .. }
-        | Command::Run { .. }
-        | Command::InstallApp { .. }
-        | Command::Cleanup { .. }
-        | Command::Collect { .. }
-        | Command::Job {
-            command: JobCommand::Start { .. } | JobCommand::Stop { .. },
-        } => true,
-        Command::Environment { command, .. } => matches!(
-            command,
-            None | Some(
-                EnvironmentCommand::Apply { .. }
-                    | EnvironmentCommand::Rollback { .. }
-                    | EnvironmentCommand::Profile { .. }
-                    | EnvironmentCommand::Run { .. }
-            )
-        ),
-        _ => false,
-    }
-}
-
-/// The task `command`, from host session `host`, belongs to, as `name`
+/// The task a command from host session `host` belongs to, as `name`
 /// (ATLAS_TASK's value) names it. A name that is not a plain one refuses a
-/// command that [`makes`] something, so its work is never filed under
+/// command that `makes` something, so its work is never filed under
 /// another task; any other command goes on without a task.
-fn task_of(
-    command: &Command,
-    host: Option<&HostSession>,
-    name: Option<&OsStr>,
-) -> Result<Option<Task>> {
+fn task_of(makes: bool, host: Option<&HostSession>, name: Option<&OsStr>) -> Result<Option<Task>> {
     match Task::resolve(host, name) {
-        Err(error) if makes(command) => Err(error),
+        Err(error) if makes => Err(error),
         Err(_) => Ok(None),
         resolved => resolved,
     }
-}
-
-/// Whether a command changes the helper, so an agent's is refused while
-/// the person has stopped agents. Looking, reading and recovery are not.
-fn changes_helper(command: &Command, attributed: bool) -> bool {
-    match command {
-        // Collecting only reads in the helper, and works during a Stop.
-        Command::Screenshot { .. } | Command::Collect { .. } => false,
-        // Each changes what runs in the helper, or how; a stop that moved
-        // with a migrated layout would be lost.
-        Command::Input { .. }
-        | Command::Logout { .. }
-        | Command::VerifyNative { .. }
-        | Command::Install
-        | Command::Update { check: false, .. } => true,
-        Command::Setup {
-            apply, rollback, ..
-        } => *apply || *rollback,
-        // Its preview only reads, and works during a Stop.
-        Command::Cleanup { apply, .. } => *apply,
-        Command::Environment { apply, command, .. } => match command {
-            None => *apply,
-            Some(EnvironmentCommand::Run { .. } | EnvironmentCommand::Apply { .. }) => true,
-            Some(EnvironmentCommand::Rollback { apply, .. }) => *apply,
-            Some(EnvironmentCommand::Profile { apply, .. }) => *apply,
-            Some(_) => false,
-        },
-        _ => attributed,
-    }
-}
-
-/// Whether an agent's command may take control of the helper: it waits for
-/// another command to finish first. A logout that asks first is the
-/// person's at a terminal, and answers at once. Whoever runs one, a signal
-/// stops it cleanly: nothing more starts, and the step under way settles
-/// or is cut. `logout --yes` run at a terminal is the exception: it keeps
-/// the stop every logout at a terminal has, which ends it at once.
-pub(super) fn controls(command: &Command) -> bool {
-    matches!(
-        command,
-        Command::Input { .. }
-            | Command::Click { .. }
-            | Command::Move { .. }
-            | Command::Drag { .. }
-            | Command::Scroll { .. }
-            | Command::Type { .. }
-            | Command::Key { .. }
-            | Command::Open { .. }
-            | Command::Close { .. }
-            | Command::Cleanup { apply: true, .. }
-            | Command::InstallApp { .. }
-            | Command::Run { .. }
-            | Command::Job {
-                command: JobCommand::Start { .. } | JobCommand::Stop { .. },
-            }
-            | Command::Restart
-            | Command::StartInput
-            | Command::Install
-            | Command::Readiness { .. }
-            | Command::Environment { .. }
-            | Command::VerifyNative { .. }
-            | Command::Logout { yes: true, .. }
-    )
 }
 
 /// The helper's on-screen windows and, with `dock`, where its Dock takes
@@ -364,33 +165,28 @@ pub(super) fn actor() -> Actor {
     }
 }
 
-/// Whether `command`, run by `actor`, waits for another controller to let
-/// go of the helper: only an agent's command that takes control does. What
-/// the person does from the app answers at once, and so do servers, which
-/// take no control of their own: a wait blocks the thread it runs on.
-pub(super) fn waits(command: &Command, actor: Actor) -> bool {
-    controls(command) && actor == Actor::Agent
-}
-
 /// Carry out `command`. When it [`waits`], it waits for up to `wait` in all
 /// for other controllers to let go of the helper. An agent's command is
 /// labelled with the host session it comes from, and what it left is noted
 /// in that session's record; a refusal names the other sessions it can.
-pub(super) async fn execute(config: PathBuf, command: Command, wait: Duration) -> Result<Value> {
+pub(super) async fn execute(
+    config: PathBuf,
+    command: Command,
+    policy: &Policy,
+    wait: Duration,
+) -> Result<Value> {
     let actor = actor();
 
     // Helper-side commands run inside the helper login and never read the
     // controller's configuration. A command that talks to the helper loads
     // it before anything else.
-    let doing = doing(&command);
-    let kind = kind(&command);
-    let changes = changes_helper(&command, doing.is_some());
-    let waits = waits(&command, actor);
-    let host = labelled(&command, actor)
-        .then(HostSession::from_env)
-        .flatten();
+    let doing = policy.doing.clone();
+    let kind = policy.kind;
+    let changes = policy.changes_helper;
+    let waits = policy.waits(actor);
+    let host = policy.labelled(actor).then(HostSession::from_env).flatten();
     let task = task_of(
-        &command,
+        policy.makes,
         host.as_ref(),
         std::env::var_os("ATLAS_TASK").as_deref(),
     )?;
@@ -1162,11 +958,11 @@ mod tests {
             "keptTargets": [], "retainedDirectories": []}));
 
         let preview = command(&["environment", "rollback", &plan]);
-        note_outcome(&client, None, kind(&preview), None, &rolled_back);
+        note_outcome(&client, None, Policy::of(&preview).kind, None, &rolled_back);
         assert_eq!(state(), "made", "a preview undoes nothing");
 
         let undo = command(&["environment", "rollback", &plan, "--apply"]);
-        note_outcome(&client, None, kind(&undo), None, &rolled_back);
+        note_outcome(&client, None, Policy::of(&undo).kind, None, &rolled_back);
         assert_eq!(state(), "gone");
     }
 
@@ -1177,7 +973,11 @@ mod tests {
         let host = HostSession::new(Host::Codex, "tasks").unwrap();
         let task = |args: &[&str], name: &str| {
             let command = parse(args).unwrap().command.unwrap();
-            task_of(&command, Some(&host), Some(OsStr::new(name)))
+            task_of(
+                Policy::of(&command).makes,
+                Some(&host),
+                Some(OsStr::new(name)),
+            )
         };
 
         for making in [
@@ -1221,7 +1021,7 @@ mod tests {
             .command
             .unwrap();
         assert_eq!(
-            task_of(&open, None, Some(OsStr::new("not plain"))).unwrap(),
+            task_of(Policy::of(&open).makes, None, Some(OsStr::new("not plain"))).unwrap(),
             None,
             "without a host session there is no task to name"
         );
@@ -1331,7 +1131,7 @@ mod tests {
     fn each_command_that_acts_in_the_helper_says_what_it_does() {
         let said = |args: &[&str]| {
             let command = parse(args).unwrap().command.unwrap();
-            doing(&command).map(|doing| {
+            Policy::of(&command).doing.map(|doing| {
                 let mut row = atlas::activity_log::Row {
                     ok: Some(true),
                     action_count: Some(1),
@@ -1380,7 +1180,7 @@ mod tests {
         let app = |args: &[&str]| {
             let command = parse(args).unwrap().command.unwrap();
             let mut row = atlas::activity_log::Row::default();
-            doing(&command).unwrap().fill(&mut row, true);
+            Policy::of(&command).doing.unwrap().fill(&mut row, true);
             row.app.map(|app| json!(app))
         };
 
@@ -1423,7 +1223,7 @@ mod tests {
             .unwrap()
             .command
             .unwrap();
-        client.doing = doing(&command);
+        client.doing = Policy::of(&command).doing;
         let Command::Environment {
             command: Some(EnvironmentCommand::Run { argv, timeout }),
             ..
@@ -1514,7 +1314,7 @@ mod tests {
         client.controller = atlas::control::Controller::at(60001, &dir.path().join("state"));
         client.transport.peer_uid = nix::unistd::getuid().as_raw();
         let command = parse(&["run", "--", "tool"]).unwrap().command.unwrap();
-        client.doing = doing(&command);
+        client.doing = Policy::of(&command).doing;
         let other = atlas::control::Controller::at(60001, &dir.path().join("state"));
         let listener = UnixListener::bind(&client.transport.path).unwrap();
         let helper = async {
@@ -1597,7 +1397,7 @@ mod tests {
     fn a_stop_refuses_what_changes_the_helper_and_lets_looking_and_recovery_through() {
         let changes = |args: &[&str]| {
             let command = parse(args).unwrap().command.unwrap();
-            changes_helper(&command, doing(&command).is_some())
+            Policy::of(&command).changes_helper
         };
 
         for acting in [
@@ -1648,7 +1448,9 @@ mod tests {
 
     #[test]
     fn servers_helper_commands_and_setup_carry_no_host_session() {
-        let attributed = |args: &[&str]| attributed(&parse(args).unwrap().command.unwrap());
+        let attributed = |args: &[&str]| {
+            Policy::of(&parse(args).unwrap().command.unwrap()).labelled(Actor::Agent)
+        };
 
         for unattributed in [
             &["mcp"][..],
@@ -1686,7 +1488,7 @@ mod tests {
 
     #[test]
     fn only_an_environment_request_that_changes_the_helper_can_own_a_plan() {
-        let kind = |args: &[&str]| kind(&parse(args).unwrap().command.unwrap());
+        let kind = |args: &[&str]| Policy::of(&parse(args).unwrap().command.unwrap()).kind;
 
         for changes in [
             &["environment", "profile.toml", "--apply"][..],
@@ -1731,14 +1533,14 @@ mod tests {
             &["activity"],
         ] {
             let command = parse(args).unwrap().command.unwrap();
-            assert!(labelled(&command, Actor::Agent), "{args:?}");
-            assert!(!labelled(&command, Actor::Viewer), "{args:?}");
+            assert!(Policy::of(&command).labelled(Actor::Agent), "{args:?}");
+            assert!(!Policy::of(&command).labelled(Actor::Viewer), "{args:?}");
         }
     }
 
     #[test]
     fn only_commands_that_take_control_wait_and_listen_for_signals() {
-        let waits = |args: &[&str]| controls(&parse(args).unwrap().command.unwrap());
+        let waits = |args: &[&str]| Policy::of(&parse(args).unwrap().command.unwrap()).controls;
 
         for controlling in [
             &["input", "[]"][..],
@@ -1797,7 +1599,7 @@ mod tests {
         let fields = |args: &[&str]| {
             let command = parse(args).unwrap().command.unwrap();
             let mut row = atlas::activity_log::Row::default();
-            doing(&command).unwrap().fill(&mut row, true);
+            Policy::of(&command).doing.unwrap().fill(&mut row, true);
             serde_json::to_value(row).unwrap()
         };
         for (args, verb) in [
@@ -1825,7 +1627,7 @@ mod tests {
             }
         }
         let list = parse(&["job", "list"]).unwrap().command.unwrap();
-        assert!(doing(&list).is_none());
+        assert!(Policy::of(&list).doing.is_none());
     }
 
     #[test]
@@ -1835,10 +1637,10 @@ mod tests {
             &["collect", "a.bin"],
         ] {
             let command = parse(args).unwrap().command.unwrap();
-            assert!(makes(&command), "{args:?}");
+            assert!(Policy::of(&command).makes, "{args:?}");
         }
         let list = parse(&["job", "list"]).unwrap().command.unwrap();
-        assert!(!makes(&list));
+        assert!(!Policy::of(&list).makes);
     }
 
     #[test]
@@ -1850,11 +1652,11 @@ mod tests {
             &["logout", "--yes"],
         ] {
             let command = parse(args).unwrap().command.unwrap();
-            assert!(waits(&command, Actor::Agent), "{args:?}");
-            assert!(!waits(&command, Actor::Viewer), "{args:?}");
+            assert!(Policy::of(&command).waits(Actor::Agent), "{args:?}");
+            assert!(!Policy::of(&command).waits(Actor::Viewer), "{args:?}");
         }
         let looking = parse(&["screenshot"]).unwrap().command.unwrap();
-        assert!(!waits(&looking, Actor::Agent));
+        assert!(!Policy::of(&looking).waits(Actor::Agent));
     }
 
     #[test]

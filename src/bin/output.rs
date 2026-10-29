@@ -1,130 +1,13 @@
 //! Result presentation, output streams and process result classification.
-use super::cli::{AgentsCommand, Command, EnvironmentCommand, JobCommand};
 use atlas::{
     error::{Error, Holder},
     ui::{
         Format, hints,
         render::{self, View},
-        text,
     },
 };
 use serde_json::{Value, json};
 use std::io::Write;
-
-/// How a command's result reads for a person.
-pub(super) fn view(command: &Command) -> View {
-    let at = |x: f64, y: f64| format!("{}, {}", text::number(x), text::number(y));
-
-    match command {
-        Command::Doctor {
-            login_timing: true, ..
-        } => View::LoginTiming,
-        Command::Doctor { verbose, .. } => View::Doctor { verbose: *verbose },
-        Command::Status => View::Status,
-        Command::Activity { .. } => View::Activity,
-        Command::Config => View::Config,
-        Command::Screenshot { .. } => View::Capture,
-        Command::Apps { .. } => View::Apps,
-        Command::Windows { .. } => View::Windows,
-        Command::Elements { .. } => View::Elements,
-        Command::Readiness { .. } => View::Readiness,
-        Command::Click {
-            x: Some(x),
-            y: Some(y),
-            ..
-        } => View::Action(format!("Clicked at {}", at(*x, *y))),
-        Command::Click { .. } => View::Action("Clicked".into()),
-        Command::Move { x, y } => View::Action(format!("Moved the pointer to {}", at(*x, *y))),
-        Command::Drag {
-            from_x,
-            from_y,
-            to_x,
-            to_y,
-            ..
-        } => View::Action(format!(
-            "Dragged from {} to {}",
-            at(*from_x, *from_y),
-            at(*to_x, *to_y)
-        )),
-        Command::Scroll { x, y, .. } => View::Action(format!("Scrolled at {}", at(*x, *y))),
-        Command::Key { keys, .. } => View::Action(format!("Pressed {}", keys.join(" "))),
-        Command::Input { .. } => View::Action("Performed the actions".into()),
-        Command::Type { .. } => View::Type,
-        Command::Run { .. }
-        | Command::Environment {
-            command: Some(EnvironmentCommand::Run { .. }),
-            ..
-        } => View::Run,
-        Command::Environment {
-            command:
-                None
-                | Some(
-                    EnvironmentCommand::Apply { .. }
-                    | EnvironmentCommand::Rollback { .. }
-                    | EnvironmentCommand::Profile { .. },
-                ),
-            ..
-        } => View::Environment,
-        Command::Close { .. } => View::Close,
-        Command::Cleanup { .. } => View::Cleanup,
-        Command::Job {
-            command: JobCommand::Start { .. } | JobCommand::Stop { .. },
-        } => View::Job,
-        Command::Job {
-            command: JobCommand::List { .. },
-        } => View::Jobs,
-        Command::Job {
-            command: JobCommand::Log { .. },
-        } => View::JobLog,
-        Command::Collect { .. } => View::Collect,
-        Command::InstallApp { .. } => View::InstallApp,
-        Command::Environment {
-            command: Some(EnvironmentCommand::Discover { .. }),
-            ..
-        } => View::Discover,
-        Command::Environment {
-            command: Some(EnvironmentCommand::List { .. }),
-            ..
-        } => View::Plans,
-        Command::Setup {
-            apply: false,
-            rollback: false,
-            ..
-        } => View::SetupPreview,
-        Command::Open { app, targets, .. } => View::Open(
-            app.iter()
-                .chain(targets)
-                .cloned()
-                .collect::<Vec<_>>()
-                .join(", "),
-        ),
-        Command::Wait { gone, .. } => View::Wait { gone: *gone },
-        Command::Restart => View::Restart,
-        Command::Stop => View::Action("Stopped the agent".into()),
-        Command::Resume => View::Action("Resumed the agent".into()),
-        Command::Logout { .. } => View::Logout,
-        Command::StartInput => View::StartInput,
-        Command::Install => View::Install,
-        Command::Agents {
-            action: Some(AgentsCommand::Install { .. } | AgentsCommand::Remove { .. }),
-        } => View::AgentsChange,
-        Command::Agents {
-            action: Some(AgentsCommand::Project { .. } | AgentsCommand::Forget { .. }),
-        } => View::AgentsProject,
-        Command::Agents { .. } => View::Agents,
-        Command::Switch { .. } => View::Switch,
-        Command::Update { check: true, .. } => View::Generic,
-        Command::Update { .. } => View::Update,
-        Command::Uninstall { .. } => View::Uninstall,
-        Command::Menubar { login: Some(_), .. } => View::Login,
-        Command::Init
-        | Command::Monitor { .. }
-        | Command::Watch { .. }
-        | Command::Mcp { .. }
-        | Command::Menubar { .. } => View::Quiet,
-        _ => View::Generic,
-    }
-}
 
 /// Write a result: JSON for programs, its view for a person. A failure for
 /// programs says what to do next when `advised`. A reader that went away
