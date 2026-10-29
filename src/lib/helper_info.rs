@@ -3,7 +3,10 @@
 //! took, and the pictures made from them. `atlas mcp`'s view and the menu
 //! bar's viewer service both read through here, so each shows the same
 //! things under the same rules.
-use crate::error::{Error, Result};
+use crate::{
+    error::{Error, Result},
+    files::open_plain,
+};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
@@ -298,45 +301,6 @@ pub fn capture_size(output: &Path, name: &str) -> Option<(u32, u32)> {
     let mut head = Vec::new();
     file.take(PNG_HEAD).read_to_end(&mut head).ok()?;
     crate::client::png_dimensions(&head).ok()
-}
-
-/// `path` opened to read, when it is a plain file and not a link. It never
-/// waits: a pipe in a screenshot's or the log's place does not hold the
-/// reader up.
-pub fn open_plain(path: &Path) -> Option<std::fs::File> {
-    use std::os::unix::fs::OpenOptionsExt;
-
-    let file = std::fs::OpenOptions::new()
-        .read(true)
-        .custom_flags(nix::libc::O_NOFOLLOW | nix::libc::O_NONBLOCK)
-        .open(path)
-        .ok()?;
-    file.metadata().ok()?.is_file().then_some(file)
-}
-
-/// What the plain file at `path` holds, when it is this account's and at
-/// most `limit` bytes: no link, pipe or other account's file is read.
-pub(crate) fn read_own(path: &Path, limit: u64) -> Option<Vec<u8>> {
-    use std::{io::Read, os::unix::fs::MetadataExt};
-
-    let file = open_plain(path)?;
-    if file.metadata().ok()?.uid() != nix::unistd::getuid().as_raw() {
-        return None;
-    }
-    let mut bytes = Vec::new();
-    file.take(limit + 1).read_to_end(&mut bytes).ok()?;
-    (bytes.len() as u64 <= limit).then_some(bytes)
-}
-
-/// Whether `folder` is a real folder of this account, not a link to one.
-pub(crate) fn own_folder(folder: &Path) -> bool {
-    use std::os::unix::fs::MetadataExt;
-
-    std::fs::symlink_metadata(folder).is_ok_and(|metadata| {
-        metadata.is_dir()
-            && !metadata.file_type().is_symlink()
-            && metadata.uid() == nix::unistd::getuid().as_raw()
-    })
 }
 
 /// Whether `bundle` is an app installed where apps go: the system's and

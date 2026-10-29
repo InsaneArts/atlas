@@ -8,8 +8,8 @@ use super::{
     record::{Owned, Record, State, VERSION},
 };
 use crate::{
-    control::Durability,
     error::{Error, Result},
+    files::Durability,
     host_session::{Key, store::Store as Sessions},
     record_folder::{LISTED, RecordFolder, Records},
 };

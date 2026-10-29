@@ -23,7 +23,7 @@ impl Entries for Vec<String> {
 
 /// The generations the list at `path` marks as commands.
 pub(super) fn read(path: &Path) -> Vec<String> {
-    crate::helper_info::read_own(path, LIMIT)
+    crate::files::read_own(path, LIMIT)
         .and_then(|bytes| serde_json::from_slice(&bytes).ok())
         .unwrap_or_default()
 }

@@ -11,10 +11,11 @@ use crate::{
     app_selection::Process,
     client::{Actor, Client},
     collect::{self, Intact},
-    control::{Ownership, Token},
+    control::Ownership,
     daemon::protocol::JobId,
     environment::{self, PlanState, Undone},
     error::{Error, Result},
+    files::Token,
     host_session::Key,
 };
 use serde_json::Value;

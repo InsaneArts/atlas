@@ -12,10 +12,10 @@ use super::{
 use crate::{
     app_selection::Process,
     collect::{Intact, Kept},
-    control::Token,
     daemon::{job::Left, protocol::JobId},
     environment::{PlanState, Undone},
     error::{Error, Result},
+    files::Token,
     handoff::{self, CopyRemoval, Running},
     host_session::Key,
 };

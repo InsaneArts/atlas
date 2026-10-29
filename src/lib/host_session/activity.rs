@@ -11,8 +11,9 @@ use super::{
 };
 use crate::{
     client::Client,
-    control::{Cause, Token},
+    control::Cause,
     error::{Error, Result},
+    files::Token,
     handoff,
     task::{Owned, State},
 };

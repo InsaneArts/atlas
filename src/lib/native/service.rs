@@ -106,7 +106,7 @@ fn started_from() -> (Option<String>, Option<Executable>) {
         return (None, None);
     };
 
-    let Some((file, metadata)) = crate::digest::open_regular(&path)
+    let Some((file, metadata)) = crate::files::open_plain(&path)
         .and_then(|file| file.metadata().ok().map(|metadata| (file, metadata)))
     else {
         return (None, None);

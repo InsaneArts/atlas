@@ -88,7 +88,7 @@ fn read_request(path: &Path) -> Option<Pairing> {
     let folder = fs::symlink_metadata(path.parent()?).ok()?;
 
     // Opened without following a link, and checked as opened.
-    let mut file = crate::helper_info::open_plain(path)?;
+    let mut file = crate::files::open_plain(path)?;
     let metadata = file.metadata().ok()?;
     if !metadata.is_file() || metadata.mode() & 0o022 != 0 {
         return None;
@@ -107,7 +107,7 @@ fn read_request(path: &Path) -> Option<Pairing> {
         ticket: match value.get("ticket") {
             Some(Value::String(ticket)) => ticket.clone(),
             None => setup::helper::text_sha256(&String::from_utf8_lossy(&body))
-                [..crate::control::TOKEN_BYTES * 2]
+                [..crate::files::TOKEN_BYTES * 2]
                 .to_owned(),
             _ => return None,
         },
@@ -117,7 +117,7 @@ fn read_request(path: &Path) -> Option<Pairing> {
         helper_name: value["helperName"].as_str()?.to_owned(),
         helper_identity: serde_json::from_value(value["helperIdentity"].clone()).ok()?,
     };
-    if request.ticket.len() != crate::control::TOKEN_BYTES * 2
+    if request.ticket.len() != crate::files::TOKEN_BYTES * 2
         || !request.ticket.bytes().all(|byte| byte.is_ascii_hexdigit())
         || request.helper_identity.uid != request.helper_uid
         || request.helper_identity.name != request.helper_name
@@ -671,7 +671,7 @@ fn use_helper(
     write_request(
         Path::new(REQUEST),
         &Pairing {
-            ticket: crate::control::token(),
+            ticket: crate::files::token(),
             controller_uid: uid,
             controller_name: me_name,
             helper_uid: helper.uid,
@@ -1506,7 +1506,7 @@ pub fn window_open(home: &Path) -> bool {
 /// Read only a bounded plain text file, without waiting for a pipe's writer.
 fn read_text(path: &Path, limit: u64) -> Option<String> {
     let mut text = String::new();
-    crate::helper_info::open_plain(path)?
+    crate::files::open_plain(path)?
         .take(limit + 1)
         .read_to_string(&mut text)
         .ok()?;
@@ -1846,7 +1846,7 @@ mod tests {
 
     fn pairing(controller: u32) -> Pairing {
         Pairing {
-            ticket: "a".repeat(crate::control::TOKEN_BYTES * 2),
+            ticket: "a".repeat(crate::files::TOKEN_BYTES * 2),
             controller_uid: controller,
             controller_name: "person".into(),
             helper_uid: controller + 1,
@@ -1877,7 +1877,7 @@ mod tests {
         config::write_atomic(&path, &serde_json::to_vec(&legacy).unwrap(), 0o644).unwrap();
         let read = read_request(&path).unwrap();
         assert_eq!(read.controller_uid, me);
-        assert_eq!(read.ticket.len(), crate::control::TOKEN_BYTES * 2);
+        assert_eq!(read.ticket.len(), crate::files::TOKEN_BYTES * 2);
         assert_eq!(read_request(&path), Some(read));
 
         // Written by someone else than the controller it names: ignored.

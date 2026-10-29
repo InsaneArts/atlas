@@ -4,7 +4,7 @@
 //! nothing here lists the helper's store or the plans beside the shared
 //! command for anything else.
 use super::{list::frozen, model::*, *};
-use crate::control::Token;
+use crate::files::Token;
 
 /// How far a plan got, as a cleanup reads it before it undoes anything.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]

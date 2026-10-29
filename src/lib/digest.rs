@@ -41,23 +41,7 @@ pub fn probe_executable(path: &Path) -> Option<std::path::PathBuf> {
 
 /// SHA-256 of a regular file, read without following a final symlink.
 pub fn file_sha256(path: &Path) -> Option<String> {
-    sha256(&open_regular(path)?)
-}
-
-/// `path` opened for reading if it is a regular file. A final symlink is
-/// never followed, and the check is made on the opened descriptor, so the
-/// file read is the file checked. Opening never blocks (on a FIFO, say);
-/// reads of a regular file are unaffected.
-pub(crate) fn open_regular(path: &Path) -> Option<fs::File> {
-    use std::os::unix::fs::OpenOptionsExt;
-
-    let file = fs::OpenOptions::new()
-        .read(true)
-        .custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK)
-        .open(path)
-        .ok()?;
-
-    file.metadata().ok()?.is_file().then_some(file)
+    sha256(&crate::files::open_plain(path)?)
 }
 
 /// SHA-256 of everything left to read in `file`.

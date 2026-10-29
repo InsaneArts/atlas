@@ -6,7 +6,7 @@
 //! remove its copy folders. Each step names the steps it waits for.
 use super::receipt::Entry;
 use crate::{
-    collect::ReceiptId, control::Token, daemon::protocol::JobId, host_session::Key, task::Owned,
+    collect::ReceiptId, daemon::protocol::JobId, files::Token, host_session::Key, task::Owned,
 };
 use serde::{Deserialize, Serialize};
 

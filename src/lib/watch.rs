@@ -11,8 +11,8 @@
 //! in). Otherwise the helper is read directly.
 use crate::{
     client::{Client, png_dimensions},
-    control::{Durability, write_private_with},
     error::{Error, Result},
+    files::{Durability, write_private_with},
     host_session::{HostSession, Key},
     overview::READ_DEADLINE,
 };

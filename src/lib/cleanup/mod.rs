@@ -17,9 +17,9 @@ mod tests;
 
 use crate::{
     client::{Actor, Client},
-    control::Token,
     environment::PlanState,
     error::Result,
+    files::Token,
     handoff,
     host_session::{Key, now_ms, store::Store as Sessions},
     task::{

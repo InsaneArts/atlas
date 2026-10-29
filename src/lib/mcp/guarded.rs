@@ -98,7 +98,7 @@ impl Registry {
     }
 
     fn matches(left: &str, right: &str) -> bool {
-        left.len() == crate::control::TOKEN_BYTES * 2
+        left.len() == crate::files::TOKEN_BYTES * 2
             && left.len() == right.len()
             && left
                 .bytes()
@@ -126,7 +126,7 @@ impl Registry {
                 return None;
             }
             entries.push(Entry {
-                token: crate::control::token(),
+                token: crate::files::token(),
                 child: Self::child(root),
                 used: now,
                 closing: false,
@@ -304,7 +304,7 @@ mod tests {
             )
             .await;
         let token = opened.value["result"]["_meta"][META].as_str().unwrap();
-        assert_eq!(token.len(), crate::control::TOKEN_BYTES * 2);
+        assert_eq!(token.len(), crate::files::TOKEN_BYTES * 2);
         let mut visible = opened.value.clone();
         visible["result"].as_object_mut().unwrap().remove("_meta");
         assert!(!visible.to_string().contains(token));

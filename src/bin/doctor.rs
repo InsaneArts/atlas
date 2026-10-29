@@ -147,7 +147,7 @@ mod tests {
 
     fn cause(session: &Key) -> Cause {
         Cause {
-            generation: atlas::control::token(),
+            generation: atlas::files::token(),
             running: false,
             command: false,
             session: Some(session.clone()),

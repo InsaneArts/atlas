@@ -50,7 +50,7 @@ fn shot(client: &Client, session: &HostSession, name: &str) {
 
 /// A plan `session` applied, by its id.
 fn applied(client: &Client, session: &HostSession) -> String {
-    let plan = crate::control::token();
+    let plan = crate::files::token();
     let reply = json!({"ok": true, "planId": plan, "phase": "applied"});
     note(
         client,

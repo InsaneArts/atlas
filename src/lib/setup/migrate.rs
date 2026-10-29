@@ -427,7 +427,7 @@ impl Migration {
     /// it. A crash between the two leaves only a harmless log-only claim.
     /// The claim is held while the step runs.
     fn begin(&mut self) -> Result<crate::control::Pending> {
-        let generation = crate::control::token();
+        let generation = crate::files::token();
         self.log.pending.push(generation.clone());
         save_log(&self.path, &self.log)?;
         self.old.controller.quarantine_as(&generation)

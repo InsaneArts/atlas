@@ -9,8 +9,8 @@
 use super::plan::Step;
 use crate::{
     client::Actor,
-    control::{Durability, Token},
     error::Result,
+    files::{Durability, Token},
     host_session::{Key, now_ms},
     record_folder::{LISTED, RecordFolder, Records},
     task::record::CleanupState,

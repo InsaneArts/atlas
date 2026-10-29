@@ -2,9 +2,9 @@
 //! each one waiting for it. A note is a label: control is the lock alone.
 //! Each names its process with its start time, so a note a killed command
 //! left behind is told apart from a live one.
-use super::{Durability, write_private_with};
 use crate::{
     error::Result,
+    files::{Durability, write_private_with},
     host_session::{Host, HostId, Key, Label, Process, now_ms},
 };
 use serde::{Deserialize, Serialize};
@@ -56,7 +56,7 @@ impl Note {
     /// The note at `path`, when it is a plain file of this account that
     /// parses.
     pub(super) fn read(path: &Path) -> Option<Self> {
-        serde_json::from_slice(&crate::helper_info::read_own(path, LIMIT)?).ok()
+        serde_json::from_slice(&crate::files::read_own(path, LIMIT)?).ok()
     }
 
     /// Write this note at `path`, private to this account.

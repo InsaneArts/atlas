@@ -199,7 +199,7 @@ fn accepted_at(path: &Path, pairing: &Pairing) -> bool {
         {
             return None;
         }
-        let mut file = crate::helper_info::open_plain(path)?;
+        let mut file = crate::files::open_plain(path)?;
         let metadata = file.metadata().ok()?;
         if !metadata.is_file()
             || metadata.uid() != pairing.helper_uid
@@ -505,7 +505,7 @@ mod tests {
     }
     fn pairing() -> Pairing {
         Pairing {
-            ticket: "a".repeat(crate::control::TOKEN_BYTES * 2),
+            ticket: "a".repeat(crate::files::TOKEN_BYTES * 2),
             controller_uid: nix::unistd::getuid().as_raw(),
             controller_name: "requester".into(),
             helper_uid: 7001,

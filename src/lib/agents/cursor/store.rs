@@ -627,7 +627,7 @@ fn directory(path: &Path, create: bool, private: bool) -> Result<()> {
 }
 
 fn read_file(path: &Path) -> Result<Vec<u8>> {
-    let file = crate::digest::open_regular(path)
+    let file = crate::files::open_plain(path)
         .ok_or_else(|| problem(format!("Could not read regular file {}", path.display())))?;
     let mut bytes = Vec::new();
     file.take(MAX_FILE + 1).read_to_end(&mut bytes)?;

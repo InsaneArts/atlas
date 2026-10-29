@@ -247,7 +247,7 @@ pub(crate) fn write_beside(
     let temporary = parent.join(format!(
         ".{}.{}",
         name.to_string_lossy(),
-        crate::control::token()
+        crate::files::token()
     ));
 
     let result = (|| -> Result<()> {

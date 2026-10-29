@@ -23,17 +23,18 @@ pub use notes::Note;
 use crate::{
     config::home,
     error::{Error, Holder, Result},
+    files::{open_lock, probe_write, token},
     host_session::{HostSession, Key, Label},
     interrupt::{Hold, Interrupt},
 };
 use fs2::FileExt;
-use rand::{Rng, RngCore};
+use rand::Rng;
 use sha2::{Digest, Sha256};
 use std::{
     cell::RefCell,
     fs::{self, File, OpenOptions},
     io::{Read, Seek, SeekFrom, Write},
-    os::unix::fs::{MetadataExt, OpenOptionsExt, PermissionsExt},
+    os::unix::fs::{MetadataExt, OpenOptionsExt},
     path::{Path, PathBuf},
     sync::Arc,
     time::{Duration, Instant},
@@ -49,161 +50,6 @@ pub const CONTROL_WAIT: Duration = Duration::from_secs(30);
 /// The longest a command may be told to wait for control: as long as the
 /// longest run.
 pub const CONTROL_WAIT_MAX: Duration = Duration::from_secs(600);
-
-/// Random bytes in a [`token`]; it is twice as many hexadecimal digits.
-pub const TOKEN_BYTES: usize = 24;
-
-pub fn token() -> String {
-    let mut bytes = [0; TOKEN_BYTES];
-    rand::rng().fill_bytes(&mut bytes);
-    bytes.iter().map(|b| format!("{b:02x}")).collect()
-}
-
-/// A name shaped as a [`token`] makes it: Atlas's own random name for a
-/// copy folder or an environment plan, never one a person chose.
-#[derive(
-    Clone, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, serde::Serialize, serde::Deserialize,
-)]
-#[serde(try_from = "String", into = "String")]
-pub struct Token(String);
-
-impl Token {
-    /// `text` as a token, when it is [`TOKEN_BYTES`] bytes as lowercase
-    /// hexadecimal digits.
-    pub fn parse(text: &str) -> Option<Self> {
-        crate::digest::lower_hex(text, TOKEN_BYTES * 2).then(|| Self(text.to_owned()))
-    }
-
-    /// A new random token.
-    pub fn new() -> Self {
-        Self(token())
-    }
-
-    pub fn as_str(&self) -> &str {
-        &self.0
-    }
-}
-
-impl Default for Token {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
-impl TryFrom<String> for Token {
-    type Error = String;
-
-    fn try_from(text: String) -> std::result::Result<Self, Self::Error> {
-        Self::parse(&text).ok_or_else(|| format!("{text} is not one of Atlas's tokens"))
-    }
-}
-
-impl From<Token> for String {
-    fn from(token: Token) -> Self {
-        token.0
-    }
-}
-
-impl std::fmt::Display for Token {
-    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        formatter.write_str(&self.0)
-    }
-}
-
-/// How far a private file is written before the call returns.
-#[derive(Clone, Copy, PartialEq, Eq)]
-pub enum Durability {
-    /// To the disk itself: the file outlives a power cut.
-    Disk,
-    /// To the kernel, ordered before whatever is written next: the file
-    /// outlives the process that wrote it, and a power cut leaves it whole
-    /// or absent, never half written. On macOS a write to the disk itself
-    /// takes milliseconds, too slow for a record kept up to date between
-    /// keystrokes.
-    Kernel,
-}
-
-/// Write `bytes` as a file only this account can read, all the way to the
-/// disk.
-pub fn write_private(path: &Path, bytes: &[u8]) -> Result<()> {
-    write_private_with(path, bytes, Durability::Disk)
-}
-
-/// Write `bytes` as a file only this account can read, as far as
-/// `durability` asks.
-pub fn write_private_with(path: &Path, bytes: &[u8], durability: Durability) -> Result<()> {
-    // Emptied only once it is known to be ours.
-    let mut file = OpenOptions::new()
-        .create(true)
-        .truncate(false)
-        .write(true)
-        .mode(0o600)
-        .custom_flags(libc::O_NOFOLLOW)
-        .open(path)
-        .map_err(|error| Error::writing(path, error))?;
-    own_private(&file, path)?;
-    file.set_len(0)?;
-    file.write_all(bytes)?;
-
-    match durability {
-        Durability::Disk => file.sync_all()?,
-        Durability::Kernel => {
-            nix::fcntl::fcntl(&file, nix::fcntl::FcntlArg::F_BARRIERFSYNC)
-                .map_err(std::io::Error::from)?;
-        }
-    }
-
-    Ok(())
-}
-
-/// Whether a new private file can be made in `directory` right now: one is
-/// created under a name of its own and removed again. Reopening a file that
-/// is already there would prove nothing about the next one.
-pub fn probe_write(directory: &Path) -> Result<()> {
-    fs::create_dir_all(directory).map_err(|error| Error::writing(directory, error))?;
-
-    // A probe an interrupted run left behind is litter; one of a process
-    // still running is its own, about to be removed.
-    if let Ok(entries) = fs::read_dir(directory) {
-        for entry in entries.flatten() {
-            let name = entry.file_name();
-            let name = name.to_string_lossy();
-            let Some(rest) = name.strip_prefix(".probe-") else {
-                continue;
-            };
-
-            let alive = rest
-                .split('-')
-                .next()
-                .and_then(|pid| pid.parse::<i32>().ok())
-                .is_some_and(|pid| {
-                    nix::sys::signal::kill(nix::unistd::Pid::from_raw(pid), None).is_ok()
-                });
-            if !alive {
-                let _ = fs::remove_file(entry.path());
-            }
-        }
-    }
-
-    let moment = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map_or(0, |since| since.as_nanos());
-    let path = directory.join(format!(".probe-{}-{moment}", std::process::id()));
-    OpenOptions::new()
-        .create_new(true)
-        .write(true)
-        .mode(0o600)
-        .custom_flags(libc::O_NOFOLLOW)
-        .open(&path)
-        .map_err(|error| Error::writing(&path, error))?;
-
-    match fs::remove_file(&path) {
-        Ok(()) => Ok(()),
-        // Another process's cleanup may have taken it: it was written.
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
-        Err(error) => Err(Error::writing(&path, error)),
-    }
-}
 
 /// A wait in whole seconds, rounded to the nearest, as a reply says how
 /// long Atlas waited: a full 30-second wait that ends a few milliseconds
@@ -325,39 +171,6 @@ pub(crate) fn poll(remaining: Duration) -> Duration {
 /// left of the wait if that is less.
 fn poll_with(remaining: Duration, jitter_ms: u64) -> Duration {
     Duration::from_millis(jitter_ms).min(remaining)
-}
-
-fn open_lock(path: &Path) -> Result<File> {
-    let file = OpenOptions::new()
-        .create(true)
-        .truncate(false)
-        .read(true)
-        .write(true)
-        .mode(0o600)
-        .custom_flags(libc::O_NOFOLLOW)
-        .open(path)
-        .map_err(|error| Error::writing(path, error))?;
-    own_private(&file, path)?;
-
-    Ok(file)
-}
-
-/// Refuse a file that is not a plain file of this account; one that others
-/// may touch (made with a wider mode before) is tightened to 0600.
-fn own_private(file: &File, path: &Path) -> Result<()> {
-    let metadata = file.metadata()?;
-    if !metadata.is_file() || metadata.uid() != nix::unistd::getuid().as_raw() {
-        return Err(Error::new(
-            "state",
-            format!("{} is not a plain file of this account", path.display()),
-        ));
-    }
-
-    if metadata.mode() & 0o077 != 0 {
-        file.set_permissions(fs::Permissions::from_mode(0o600))?;
-    }
-
-    Ok(())
 }
 
 /// A mutation still being carried out. For its lifetime it holds an

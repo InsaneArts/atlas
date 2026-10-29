@@ -5,7 +5,7 @@
 //! caller holds; its folder stays while its outcome is not known, as every
 //! change's does.
 use super::{installs::ASKED, model::*, *};
-use crate::control::Token;
+use crate::files::Token;
 
 /// Send `request` to the helper account `helper` through a request folder
 /// of its own, under `held` when it changes the helper. A change may copy
@@ -17,7 +17,7 @@ pub(super) async fn send(
     held: Option<&Ownership>,
     request: Request,
 ) -> Result<Value> {
-    let id = crate::control::token();
+    let id = crate::files::token();
     let stage = stage_path(client, &id)?.with_file_name(format!("environment-run-{id}"));
     create_stage(&stage, helper)?;
 

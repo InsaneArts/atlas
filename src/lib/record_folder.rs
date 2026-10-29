@@ -4,9 +4,8 @@
 //! reader never sees half of one; writers take the folder's lock, readers
 //! never do.
 use crate::{
-    control::{Durability, Token, write_private_with},
     error::{Error, Result},
-    helper_info::{own_folder, read_own},
+    files::{Durability, Token, own_folder, read_own, write_private_with},
     host_session::Key,
 };
 use fs2::FileExt;

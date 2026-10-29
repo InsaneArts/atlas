@@ -6,12 +6,12 @@
 use super::{Name, Task};
 use crate::{
     collect::ReceiptId,
-    control::Token,
     daemon::{
         job::{How, JobState},
         protocol::{Expected, JobId},
     },
     error::{Error, Result},
+    files::Token,
     host_session::Key,
 };
 use serde::{Deserialize, Serialize};

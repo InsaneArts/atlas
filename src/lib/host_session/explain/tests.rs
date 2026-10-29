@@ -135,7 +135,7 @@ fn row(seconds_ago: u64, session: &HostSession, app: &str) -> Value {
     let at = crate::client::timestamp() - u128::from(seconds_ago) * 1_000_000_000;
     json!({
         "at": at.to_string(), "operation": "input", "ok": true, "elapsedMs": 4.0,
-        "actor": "agent", "verb": "click", "command": &crate::control::token()[..12],
+        "actor": "agent", "verb": "click", "command": &crate::files::token()[..12],
         "app": app, "session": session.key,
     })
 }

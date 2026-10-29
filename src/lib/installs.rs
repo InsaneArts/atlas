@@ -7,9 +7,9 @@
 //! NAME` falls back to when LaunchServices does not know the name yet.
 use crate::{
     client::Client,
-    control::Token,
     environment,
     error::{Error, Result},
+    files::Token,
     handoff::{self, Running, Target},
     task::{Claims, Owned, State, store::Store as Tasks},
     text::same_text,

@@ -1145,7 +1145,7 @@ mod tests {
             output_dir: dir.path().join("out"),
         })
         .unwrap();
-        let (task, session, plan) = ("5be0d1a2c3f4", "3f9a1c07b2e4", atlas::control::token());
+        let (task, session, plan) = ("5be0d1a2c3f4", "3f9a1c07b2e4", atlas::files::token());
         let tasks = client.output_dir().unwrap().join("tasks");
         std::fs::create_dir(&tasks).unwrap();
         let record = tasks.join(format!("{task}.json"));

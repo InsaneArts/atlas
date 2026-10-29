@@ -11,10 +11,11 @@ use super::{
 };
 use crate::{
     client::Client,
-    control::{Cause, Controller, Durability, Token},
+    control::{Cause, Controller},
     doing::Doing,
     environment::Phase,
     error::Result,
+    files::{Durability, Token},
     handoff,
     helper_info::Capture,
     record_folder::{LISTED, RecordFolder, Records},

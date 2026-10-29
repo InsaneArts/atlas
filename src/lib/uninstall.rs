@@ -1323,7 +1323,7 @@ fn shown(name: &str) -> &str {
 fn trash(app: &Path, leftovers: &[PathBuf], removed: &mut Vec<Value>) -> Result<()> {
     let trash = config::home()?
         .join(".Trash")
-        .join(format!("Atlas-{}.app", crate::control::token()));
+        .join(format!("Atlas-{}.app", crate::files::token()));
 
     fs::rename(app, &trash).map_err(|_| {
         problem(format!(

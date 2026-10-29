@@ -30,7 +30,7 @@ impl Sandbox {
     }
 
     fn payload(&self, target: &str, bytes: &[u8]) -> Payload {
-        let source = self.root.join(crate::control::token());
+        let source = self.root.join(crate::files::token());
         fs::write(&source, bytes).unwrap();
         Payload {
             source,
@@ -44,7 +44,7 @@ impl Sandbox {
         worker::preview(
             &self.home,
             nix::unistd::getuid().as_raw(),
-            &crate::control::token(),
+            &crate::files::token(),
             files,
             &|| Ok(()),
         )
@@ -737,7 +737,7 @@ fn aliases_of_existing_managed_targets_are_rejected() {
         worker::preview(
             &sandbox.home,
             nix::unistd::getuid().as_raw(),
-            &crate::control::token(),
+            &crate::files::token(),
             vec![sandbox.payload("config", b"data")],
             &|| Ok(())
         )
@@ -920,7 +920,7 @@ fn only_a_confirmed_finish_settles_a_plan() {
 #[test]
 fn a_stage_keeps_requests_whose_outcome_is_unknown() {
     let sandbox = Sandbox::new();
-    let stage = stage_in(&sandbox.root, &crate::control::token());
+    let stage = stage_in(&sandbox.root, &crate::files::token());
     assert!(!requests(&stage));
 
     fs::write(stage.join("controller.lock"), b"").unwrap();
@@ -941,7 +941,7 @@ fn a_stage_keeps_requests_whose_outcome_is_unknown() {
 #[test]
 fn a_stage_that_cannot_be_read_counts_as_holding_a_plan_and_a_request() {
     let sandbox = Sandbox::new();
-    let stage = stage_in(&sandbox.root, &crate::control::token());
+    let stage = stage_in(&sandbox.root, &crate::files::token());
     assert!(!planned(&stage) && !requests(&stage));
     assert!(abandoned(&stage));
 
@@ -967,7 +967,7 @@ fn a_stage_being_made_is_never_swept_before_it_is_locked() {
     let account = account();
     let stage = sandbox
         .root
-        .join(format!("environment-plan-{}", crate::control::token()));
+        .join(format!("environment-plan-{}", crate::files::token()));
     let aged = |folder: &Path| {
         let then = std::time::SystemTime::now() - STARTING - Duration::from_secs(60);
         fs::File::open(folder).unwrap().set_modified(then).unwrap();
@@ -1001,7 +1001,7 @@ fn a_stage_being_made_is_never_swept_before_it_is_locked() {
 #[test]
 fn a_discarded_stage_goes_at_once_and_its_leftovers_are_cleared() {
     let sandbox = Sandbox::new();
-    let stage = stage_in(&sandbox.root, &crate::control::token());
+    let stage = stage_in(&sandbox.root, &crate::files::token());
     fs::write(stage.join("payload-0"), b"copy").unwrap();
     discard(&stage);
     assert!(!stage.exists());
@@ -1031,7 +1031,7 @@ async fn a_week_old_preview_cut_short_is_pruned() {
     let sandbox = Sandbox::new();
     let client = crate::transaction_test::client(&sandbox.root);
     let stage = |inside: &[&str]| {
-        let id = crate::control::token();
+        let id = crate::files::token();
         let stage = stage_in(&sandbox.root, &id);
         fs::write(stage.join("payload-0"), b"copy").unwrap();
         for folder in inside {
@@ -1068,7 +1068,7 @@ async fn a_week_old_preview_cut_short_is_pruned() {
 async fn a_preview_cut_short_is_swept_once_no_preview_can_still_be_making_it() {
     let sandbox = Sandbox::new();
     let stage = |inside: &[&str]| {
-        let stage = stage_in(&sandbox.root, &crate::control::token());
+        let stage = stage_in(&sandbox.root, &crate::files::token());
         fs::write(stage.join("payload-0"), b"copy").unwrap();
         for folder in inside {
             fs::create_dir(stage.join(folder)).unwrap();
@@ -1112,7 +1112,7 @@ async fn a_preview_cut_short_is_swept_once_no_preview_can_still_be_making_it() {
     let mut client = crate::transaction_test::client(&sandbox.root);
     // An account that resolves to a name, as the helper's does.
     client.config.helper_uid = nix::unistd::getuid().as_raw();
-    let missing = apply(&client, &crate::control::token()).await.unwrap_err();
+    let missing = apply(&client, &crate::files::token()).await.unwrap_err();
     assert!(missing.error.contains("There is no plan"), "{missing}");
     assert!(!locked.exists(), "swept once its lock is let go");
     assert!(unknown.exists() && planned.exists() && recent.exists());
@@ -1120,7 +1120,7 @@ async fn a_preview_cut_short_is_swept_once_no_preview_can_still_be_making_it() {
 
 #[test]
 fn only_an_apply_an_undo_with_apply_and_a_run_change_the_helper() {
-    let id = crate::control::token;
+    let id = crate::files::token;
     let plan = Plan {
         version: 1,
         id: id(),
@@ -1183,7 +1183,7 @@ fn a_preview_refuses_when_the_state_appears_while_it_reads() {
     let refused = worker::preview(
         &sandbox.home,
         nix::unistd::getuid().as_raw(),
-        &crate::control::token(),
+        &crate::files::token(),
         vec![payload.clone()],
         &other_operation,
     )
@@ -1203,7 +1203,7 @@ fn a_preview_refuses_when_the_state_appears_while_it_reads() {
 #[test]
 fn rollback_removes_its_own_folder_unless_a_request_is_unconfirmed() {
     let sandbox = Sandbox::new();
-    let stage = stage_in(&sandbox.root, &crate::control::token());
+    let stage = stage_in(&sandbox.root, &crate::files::token());
     fs::write(stage.join("controller.lock"), b"").unwrap();
     let refused: Result<Value> = Ok(json!({"ok": false, "error": worker::MISSING}));
     let finished: Result<Value> =
@@ -1270,7 +1270,7 @@ fn a_refusal_that_changed_nothing_is_not_resumable() {
 #[test]
 fn results_name_a_retained_plan_only_when_one_exists() {
     let sandbox = Sandbox::new();
-    let id = crate::control::token();
+    let id = crate::files::token();
     let stage = stage_in(&sandbox.root, &id);
     write_plan(&stage, &id, 501);
     let kept = retained(Ok(json!({"ok": true})), &id, &stage).unwrap();
@@ -1304,7 +1304,7 @@ fn results_name_a_retained_plan_only_when_one_exists() {
 #[test]
 fn a_preview_without_a_plan_discards_its_copies() {
     let sandbox = Sandbox::new();
-    let id = crate::control::token();
+    let id = crate::files::token();
     let stage = stage_in(&sandbox.root, &id);
     fs::write(stage.join("payload-0"), b"secret").unwrap();
     let refused = previewed(Ok(json!({"ok": false, "plan": null})), &id, &stage).unwrap();
@@ -1327,16 +1327,16 @@ fn a_preview_without_a_plan_discards_its_copies() {
 #[test]
 fn leftovers_are_only_atlas_folders_with_valid_ids() {
     let sandbox = Sandbox::new();
-    let id = crate::control::token();
+    let id = crate::files::token();
     let plan = stage_in(&sandbox.root, &id);
     let run = sandbox.root.join(format!("environment-run-{id}"));
     fs::create_dir(&run).unwrap();
     fs::create_dir(sandbox.root.join("environment-plan-short")).unwrap();
     fs::create_dir(sandbox.root.join(format!("other-{id}"))).unwrap();
-    let file = crate::control::token();
+    let file = crate::files::token();
     fs::write(sandbox.root.join(format!("environment-plan-{file}")), b"").unwrap();
 
-    let linked = crate::control::token();
+    let linked = crate::files::token();
     symlink(
         &plan,
         sandbox.root.join(format!("environment-plan-{linked}")),
@@ -1354,7 +1354,7 @@ fn leftovers_are_only_atlas_folders_with_valid_ids() {
 #[test]
 fn only_old_readable_plans_without_unknown_requests_are_pruned() {
     let sandbox = Sandbox::new();
-    let id = crate::control::token();
+    let id = crate::files::token();
     let stage = stage_in(&sandbox.root, &id);
 
     fs::create_dir(sandbox.root.join(format!("environment-run-{id}"))).unwrap();
@@ -1371,7 +1371,7 @@ fn only_old_readable_plans_without_unknown_requests_are_pruned() {
     write_plan(&stage, &id, 501);
     assert!(prunable(&stage, &id, 501));
     assert!(!prunable(&stage, &id, 502), "another helper's plan");
-    assert!(!prunable(&stage, &crate::control::token(), 501));
+    assert!(!prunable(&stage, &crate::files::token(), 501));
 
     fs::create_dir(stage.join("request-ab12")).unwrap();
     assert!(!prunable(&stage, &id, 501));
@@ -1382,10 +1382,10 @@ fn only_old_readable_plans_without_unknown_requests_are_pruned() {
 #[test]
 fn old_command_folders_are_pruned() {
     let sandbox = Sandbox::new();
-    let id = crate::control::token();
+    let id = crate::files::token();
     let run = sandbox.root.join(format!("environment-run-{id}"));
     fs::create_dir(&run).unwrap();
-    stage_in(&sandbox.root, &crate::control::token());
+    stage_in(&sandbox.root, &crate::files::token());
     std::thread::sleep(std::time::Duration::from_millis(20));
 
     assert_eq!(
@@ -1410,9 +1410,9 @@ async fn a_request_that_was_never_sent_leaves_nothing() {
     let mut client = Client::new(config).unwrap();
     client.controller = crate::control::Controller::at(60001, &sandbox.root.join("state"));
 
-    let stage = stage_in(&sandbox.root, &crate::control::token());
+    let stage = stage_in(&sandbox.root, &crate::files::token());
     let request = Request::Rollback {
-        id: crate::control::token(),
+        id: crate::files::token(),
         apply: true,
     };
     assert!(dispatch(&client, "nobody", &stage, request).await.is_err());
@@ -1433,9 +1433,9 @@ async fn an_environment_request_reads_the_helper_only_once_it_has_control() {
     let daemon = tokio::net::UnixListener::bind(&client.transport.path).unwrap();
     let _held = client.controller.acquire(false).unwrap();
 
-    let stage = stage_in(&sandbox.root, &crate::control::token());
+    let stage = stage_in(&sandbox.root, &crate::files::token());
     let request = Request::Rollback {
-        id: crate::control::token(),
+        id: crate::files::token(),
         apply: true,
     };
     let refused = dispatch_within(&client, "nobody", &stage, request, Duration::from_secs(1))
@@ -1493,7 +1493,7 @@ async fn a_preview_works_while_another_controller_holds_the_lock_and_leaves_no_m
     let (client, helper) = Helper::client(&sandbox.root, UID);
     let account = account();
     let _held = client.controller.acquire(false).unwrap();
-    let id = crate::control::token();
+    let id = crate::files::token();
     let stage = stage_in(&sandbox.root, &id);
     let request = Request::Preview {
         id: id.clone(),
@@ -1520,7 +1520,7 @@ async fn a_lost_preview_reply_leaves_no_marker() {
     let sandbox = Sandbox::new();
     let (client, helper) = Helper::client(&sandbox.root, UID);
     let account = account();
-    let id = crate::control::token();
+    let id = crate::files::token();
     let stage = stage_in(&sandbox.root, &id);
     let request = Request::Preview {
         id,
@@ -1544,7 +1544,7 @@ async fn an_undo_preview_takes_no_control() {
     let (client, helper) = Helper::client(&sandbox.root, UID);
     let account = account();
     let _held = client.controller.acquire(false).unwrap();
-    let stage = stage_in(&sandbox.root, &crate::control::token());
+    let stage = stage_in(&sandbox.root, &crate::files::token());
     let request = Request::Rollback {
         id: plan.id.clone(),
         apply: false,
@@ -1734,7 +1734,7 @@ fn a_target_inside_or_around_a_copied_file_is_refused_before_it_wedges_the_ledge
     let result = worker::preview(
         &sandbox.home,
         nix::unistd::getuid().as_raw(),
-        &crate::control::token(),
+        &crate::files::token(),
         vec![sandbox.payload("x", b"file")],
         &|| Ok(()),
     );
@@ -1845,7 +1845,7 @@ fn copies_of_a_preparation_that_stopped_part_way_are_removed() {
     let orphan = sandbox
         .home
         .join(STATE)
-        .join(format!("transaction-{}", crate::control::token()));
+        .join(format!("transaction-{}", crate::files::token()));
     fs::create_dir(&orphan).unwrap();
     fs::write(orphan.join("before-0"), b"secret").unwrap();
 
@@ -2181,7 +2181,7 @@ fn a_shared_folder_is_refused_before_anything_starts() {
     let refused = worker::preview(
         &sandbox.home,
         nix::unistd::getuid().as_raw(),
-        &crate::control::token(),
+        &crate::files::token(),
         vec![sandbox.payload("shared/inner/file", b"x")],
         &|| Ok(()),
     )
@@ -2549,7 +2549,7 @@ fn an_invalid_record_is_counted_not_listed() {
     let plan = sandbox.plan(vec![sandbox.payload("file", b"copied")]);
     assert_eq!(sandbox.apply(&plan)["ok"], true);
     let store = state::Store::open(&sandbox.home, true).unwrap();
-    let broken = crate::control::token();
+    let broken = crate::files::token();
     fs::create_dir(store.folder(&broken)).unwrap();
     atomic_write(
         &store.folder(&broken).join("transaction.json"),
@@ -2557,7 +2557,7 @@ fn an_invalid_record_is_counted_not_listed() {
         0o600,
     )
     .unwrap();
-    let unstarted = crate::control::token();
+    let unstarted = crate::files::token();
     fs::create_dir(store.folder(&unstarted)).unwrap();
     drop(store);
 
@@ -2573,17 +2573,17 @@ fn an_invalid_record_is_counted_not_listed() {
 fn a_frozen_plan_the_helper_never_started_is_listed_as_previewed() {
     let sandbox = Sandbox::new();
     let uid = nix::unistd::getuid().as_raw();
-    let previewed = crate::control::token();
+    let previewed = crate::files::token();
     write_plan(&stage_in(&sandbox.root, &previewed), &previewed, uid);
-    let unknown = crate::control::token();
+    let unknown = crate::files::token();
     fs::create_dir(stage_in(&sandbox.root, &unknown).join("request-ab12")).unwrap();
-    let running = crate::control::token();
+    let running = crate::files::token();
     let locked = stage_in(&sandbox.root, &running);
     write_plan(&locked, &running, uid);
     let _held = lock_stage(&locked).unwrap();
-    let elsewhere = crate::control::token();
+    let elsewhere = crate::files::token();
     write_plan(&stage_in(&sandbox.root, &elsewhere), &elsewhere, uid + 1);
-    stage_in(&sandbox.root, &crate::control::token());
+    stage_in(&sandbox.root, &crate::files::token());
 
     let here = frozen(&sandbox.root, uid);
     let nothing = json!({"ok": true, "transactions": [], "more": 0, "unreadable": 0});
@@ -2652,7 +2652,7 @@ fn rolled_back_plans_never_push_an_older_applied_one_out_of_the_list() {
     let mut undone = store.transaction(&applied.id).unwrap().unwrap();
     undone.phase = Phase::RolledBack;
     for _ in 0..210 {
-        undone.plan.id = crate::control::token();
+        undone.plan.id = crate::files::token();
         fs::create_dir(store.folder(&undone.plan.id)).unwrap();
         store.save(&undone).unwrap();
     }
@@ -2692,7 +2692,7 @@ fn a_plan_the_asker_holds_is_listed_whatever_its_phase_or_age() {
 #[test]
 fn a_plans_lock_looked_at_for_an_instant_is_waited_out() {
     let sandbox = Sandbox::new();
-    let stage = stage_in(&sandbox.root, &crate::control::token());
+    let stage = stage_in(&sandbox.root, &crate::files::token());
     atomic_write(&stage.join("controller.lock"), b"", 0o600).unwrap();
     let looking = fs::File::open(stage.join("controller.lock")).unwrap();
     FileExt::try_lock_shared(&looking).unwrap();
@@ -2720,7 +2720,7 @@ fn the_list_is_newest_first_and_bounded() {
     let mut transaction = store.transaction(&plan.id).unwrap().unwrap();
     let then = std::time::SystemTime::now() - Duration::from_secs(1000);
     for age in 0..229_u64 {
-        transaction.plan.id = crate::control::token();
+        transaction.plan.id = crate::files::token();
         fs::create_dir(store.folder(&transaction.plan.id)).unwrap();
         store.save(&transaction).unwrap();
         let record = store.folder(&transaction.plan.id).join("transaction.json");
@@ -2767,7 +2767,7 @@ async fn a_listed_plan_names_the_session_and_task_that_made_it() {
     Claims::in_store(Tasks::at(client.output_dir().unwrap()), task)
         .claim(
             &Owned::Plan {
-                id: crate::control::Token::parse(&plan.id).unwrap(),
+                id: crate::files::Token::parse(&plan.id).unwrap(),
             },
             State::Made,
         )
@@ -2814,7 +2814,7 @@ async fn a_plan_pruned_because_the_helper_never_started_it_is_settled_gone() {
 
     let sandbox = Sandbox::new();
     let (mut client, helper) = Helper::client(&sandbox.root, UID);
-    let id = crate::control::token();
+    let id = crate::files::token();
     let stage = stage_in(&sandbox.root, &id);
     write_plan(&stage, &id, UID);
     atomic_write(&stage.join("controller.lock"), b"", 0o600).unwrap();
@@ -2824,7 +2824,7 @@ async fn a_plan_pruned_because_the_helper_never_started_it_is_settled_gone() {
     let task = Task::of(&session, None).unwrap();
     client.task = Some(task.clone());
     let plan = Owned::Plan {
-        id: crate::control::Token::parse(&id).unwrap(),
+        id: crate::files::Token::parse(&id).unwrap(),
     };
     let output = client.output_dir().unwrap().to_owned();
     Claims::in_store(Tasks::at(&output), task.clone())
@@ -2907,7 +2907,7 @@ async fn a_preview_claims_its_plan_for_the_task_once_the_plan_is_written() {
         .await
         .unwrap();
 
-    let id = crate::control::Token::parse(previewed["planId"].as_str().unwrap()).unwrap();
+    let id = crate::files::Token::parse(previewed["planId"].as_str().unwrap()).unwrap();
     assert_eq!(
         task_claims(&client, &task),
         [(Owned::Plan { id }, State::Made)]
@@ -2920,10 +2920,10 @@ async fn an_apply_claims_its_plan_for_the_task_before_the_helper_is_asked() {
 
     let sandbox = Sandbox::new();
     let (client, helper, task) = tasked(&sandbox.root);
-    let id = crate::control::token();
+    let id = crate::files::token();
     write_plan(&stage_in(&sandbox.root, &id), &id, UID);
     let plan = Owned::Plan {
-        id: crate::control::Token::parse(&id).unwrap(),
+        id: crate::files::Token::parse(&id).unwrap(),
     };
 
     let mut asked = Vec::new();

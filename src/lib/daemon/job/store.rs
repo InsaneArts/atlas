@@ -3,9 +3,9 @@
 //! memory instead, so what the daemon decided is never lost with it.
 use super::record::{JobState, Record};
 use crate::{
-    control::Durability,
     daemon::protocol::JobId,
     error::Result,
+    files::Durability,
     record_folder::{LISTED, RecordFolder, Records},
 };
 use std::{

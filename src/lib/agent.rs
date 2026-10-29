@@ -4275,7 +4275,7 @@ mod tests {
     #[tokio::test]
     async fn removed_copies_are_settled_in_the_task_that_claimed_them() {
         use crate::{
-            control::Token,
+            files::Token,
             helper_test::{Helper, UID},
             host_session::{Host, HostSession},
             task::{Claims, Owned, State, Task, store::Store},
@@ -4399,7 +4399,7 @@ mod tests {
     #[tokio::test]
     async fn an_app_launch_services_cannot_find_opens_from_the_tasks_own_install() {
         use crate::{
-            control::Token,
+            files::Token,
             helper_test::{Helper, completed, exited},
             host_session::{Host, HostSession},
             task::{Claims, Owned, State, Task, store::Store},

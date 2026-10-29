@@ -5,7 +5,7 @@
 //! unreadable or stale never stops anyone from trying.
 use super::{CONTROL_WAIT_MAX, notes::Note};
 use crate::{
-    helper_info::own_folder,
+    files::{own_folder, token},
     host_session::{Label, ancestry::State, now_ms},
 };
 use std::{
@@ -46,7 +46,7 @@ impl Turn {
     /// Take a place in line in `folder`, noted as `label`'s. A note that
     /// cannot be written leaves the place unnoted, never refused.
     pub(super) fn join(folder: &Path, label: Option<&Label>) -> Self {
-        let mut name = super::token();
+        let mut name = token();
         name.truncate(NAME_LEN);
         name.push_str(".json");
         let note = Note::now(label);
@@ -189,7 +189,7 @@ mod tests {
     /// A waiting note in `folder` for `process`, begun `since`.
     fn noted(folder: &Path, process: Process, since: u64) -> PathBuf {
         make_folder(folder).unwrap();
-        let mut name = super::super::token();
+        let mut name = crate::files::token();
         name.truncate(NAME_LEN);
         let path = folder.join(format!("{name}.json"));
         let note = Note {

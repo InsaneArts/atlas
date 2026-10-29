@@ -172,7 +172,7 @@ fn write_settings(
     if let Some(before) = before
         && !kept.exists()
     {
-        crate::control::write_private(&kept, before.as_bytes())?;
+        crate::files::write_private(&kept, before.as_bytes())?;
     }
 
     let mode = fs::metadata(path).map_or(0o600, |metadata| metadata.permissions().mode() & 0o777);

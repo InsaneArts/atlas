@@ -50,7 +50,7 @@ fn link_command_in(bin: &Path, executable: &Path) -> Result<Value> {
         )));
     }
 
-    let temporary = bin.join(format!(".atlas.{}", crate::control::token()));
+    let temporary = bin.join(format!(".atlas.{}", crate::files::token()));
     std::os::unix::fs::symlink(executable, &temporary)?;
     fs::rename(&temporary, &link)?;
 

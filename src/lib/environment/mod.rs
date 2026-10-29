@@ -143,7 +143,7 @@ async fn freeze_as(
 ) -> Result<Value> {
     prune(client, helper).await;
 
-    let id = crate::control::token();
+    let id = crate::files::token();
     let stage = stage_path(client, &id)?;
     // Held while the preview is made, so no other command sweeps the stage
     // as a preview cut short before its plan is written.
@@ -291,7 +291,7 @@ async fn apply_frozen(client: &Client, helper: &str, plan_id: &str) -> Result<Va
 /// Note that the command's task made plan `plan_id`. A claim that cannot
 /// be written changes nothing: the transaction list still finds the plan.
 fn claim_plan(client: &Client, plan_id: &str) {
-    if let Some(id) = crate::control::Token::parse(plan_id) {
+    if let Some(id) = crate::files::Token::parse(plan_id) {
         let _ = Claims::of(client).claim(&task::Owned::Plan { id }, task::State::Made);
     }
 }
@@ -417,7 +417,7 @@ const STAGING: &str = ".environment-staging-";
 fn discard(stage: &Path) {
     let discarded = stage
         .parent()
-        .map(|parent| parent.join(format!("{DISCARDED}{}", crate::control::token())));
+        .map(|parent| parent.join(format!("{DISCARDED}{}", crate::files::token())));
     match discarded {
         Some(discarded) if fs::rename(stage, &discarded).is_ok() => {
             let _ = fs::remove_dir_all(discarded);
@@ -530,7 +530,7 @@ async fn prune(client: &Client, helper: &str) {
         if never && !requests(&stage) {
             discard(&stage);
             if fs::symlink_metadata(&stage).is_err()
-                && let Some(id) = crate::control::Token::parse(&id)
+                && let Some(id) = crate::files::Token::parse(&id)
             {
                 removed.push(task::Owned::Plan { id });
             }
@@ -607,7 +607,7 @@ fn prunable(stage: &Path, id: &str, uid: u32) -> bool {
 pub async fn run(client: &Client, argv: Vec<String>, timeout: Duration) -> Result<Value> {
     runner::validate_argv(&argv)?;
 
-    let id = crate::control::token();
+    let id = crate::files::token();
     let stage = stage_path(client, &id)?.with_file_name(format!("environment-run-{id}"));
     let helper = helper_name(client.config.helper_uid)?;
     tidy(client);
@@ -749,7 +749,7 @@ fn create_locked_stage_with(
     let parent = stage
         .parent()
         .ok_or_else(|| problem("Missing shared directory"))?;
-    let staging = parent.join(format!("{STAGING}{}", crate::control::token()));
+    let staging = parent.join(format!("{STAGING}{}", crate::files::token()));
     create_stage(&staging, helper)?;
     made(&staging);
 
@@ -864,7 +864,7 @@ async fn dispatch_as(
     };
 
     let kind = if mutating { CHANGE } else { READ };
-    let name = format!("{kind}{}", crate::control::token());
+    let name = format!("{kind}{}", crate::files::token());
     let invocation = stage.join(&name);
     create_stage(&invocation, helper)?;
 

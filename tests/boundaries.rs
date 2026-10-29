@@ -1051,7 +1051,7 @@ fn only_generations_nothing_will_settle_are_unresolved() {
     drop(working);
 
     // A crashed writer leaves its claim file behind, unlocked.
-    let crashed = atlas::control::token();
+    let crashed = atlas::files::token();
     let claim = controller.quarantine_as(&crashed).unwrap();
     let find = |suffix: &str| {
         std::fs::read_dir(dir.path())
@@ -1094,7 +1094,7 @@ fn only_generations_nothing_will_settle_are_unresolved() {
         .replace(".uncertain.json", "");
     let orphan = dir
         .path()
-        .join(format!("{name}.{}.live", atlas::control::token()));
+        .join(format!("{name}.{}.live", atlas::files::token()));
     std::fs::write(&orphan, b"").unwrap();
 
     let held = controller.quarantine().unwrap();

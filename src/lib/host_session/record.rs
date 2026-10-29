@@ -2,7 +2,7 @@
 //! Every name a record keeps is typed as Atlas writes it, so a record that
 //! holds anything else does not read at all.
 use super::{Host, HostId, HostSession, Key, Process};
-use crate::{control::Token, environment::Phase, helper_info::Capture};
+use crate::{environment::Phase, files::Token, helper_info::Capture};
 use serde::{Deserialize, Serialize};
 use std::{collections::BTreeMap, time::Duration};
 

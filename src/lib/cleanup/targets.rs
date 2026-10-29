@@ -8,7 +8,7 @@
 use super::plan::Bundle;
 use crate::{
     app_selection::{Process, Within},
-    control::Token,
+    files::Token,
     handoff,
     host_session::Key,
 };

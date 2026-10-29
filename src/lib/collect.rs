@@ -9,12 +9,12 @@
 //! into place, never written over anything.
 use crate::{
     client::Client,
-    control::write_private,
     daemon::protocol::{
         FileIdentity, READ, READ_PATH_MAX, READ_RANGE_MAX, READ_SIZE_MAX, SessionPin,
     },
     digest::file_sha256,
     error::{Error, Result},
+    files::write_private,
     host_session::{Key, now_ms},
     task::{record::OutputEntry, store::Store},
     transport::{OutputError, append_event},
@@ -71,7 +71,7 @@ pub struct ReceiptId(String);
 impl ReceiptId {
     /// A new receipt, made at `at`.
     fn new(at: u64) -> Self {
-        let mut random = crate::control::token();
+        let mut random = crate::files::token();
         random.truncate(6);
         Self(format!("{at}-{random}"))
     }
@@ -825,7 +825,7 @@ pub(crate) fn intact(output: &Path, task: Option<&Key>, receipt: &ReceiptId) -> 
         .join(owner)
         .join(receipt.as_str())
         .join("receipt.json");
-    let read = crate::helper_info::read_own(&path, 1024 * 1024)
+    let read = crate::files::read_own(&path, 1024 * 1024)
         .and_then(|bytes| serde_json::from_slice::<Receipt>(&bytes).ok())
         .filter(|read| read.receipt == *receipt);
     let Some(read) = read else {

@@ -130,7 +130,7 @@ mod tests {
 
     /// `session` applied an environment plan, and so left it in the helper.
     fn applied(client: &Client, session: &HostSession) {
-        let reply = json!({"ok": true, "planId": crate::control::token(), "phase": "applied"});
+        let reply = json!({"ok": true, "planId": crate::files::token(), "phase": "applied"});
         note(
             client,
             session,
@@ -207,7 +207,7 @@ mod tests {
         clicked(&client, &own);
         let task = Task::of(own.key(), None).unwrap();
         let tasks = Tasks::at(client.output_dir().unwrap());
-        let receipt = crate::control::Token::new();
+        let receipt = crate::files::Token::new();
         tasks
             .update(&task, 1, |record| {
                 record.noted_cleanup(&receipt, CleanupState::Incomplete, 1);
@@ -239,7 +239,7 @@ mod tests {
 
     fn left(copies: usize, plans: usize, uncertain: usize) -> Leftovers {
         Leftovers {
-            copies: vec![crate::control::Token::new(); copies],
+            copies: vec![crate::files::Token::new(); copies],
             plans,
             uncertain,
             running: 0,

@@ -732,7 +732,7 @@ mod tests {
     fn a_session_owns_the_unknown_only_when_every_one_is_its_own_and_none_runs() {
         let (own, other) = (Key::of(Host::Pi, "own"), Key::of(Host::Pi, "other"));
         let cause = |session: Option<&Key>, running: bool| Cause {
-            generation: crate::control::token(),
+            generation: crate::files::token(),
             running,
             command: false,
             session: session.cloned(),
@@ -769,13 +769,13 @@ mod tests {
     fn a_running_command_is_nobodys_unknown_outcome_and_recovery_waits_for_it() {
         let (own, other) = (Key::of(Host::Pi, "own"), Key::of(Host::Pi, "other"));
         let unknown = Cause {
-            generation: crate::control::token(),
+            generation: crate::files::token(),
             running: false,
             command: false,
             session: Some(own.clone()),
         };
         let command = Cause {
-            generation: crate::control::token(),
+            generation: crate::files::token(),
             running: true,
             command: true,
             session: Some(other),
@@ -829,7 +829,7 @@ mod tests {
 
         let (own, other) = (Key::of(Host::Pi, "own"), Key::of(Host::Pi, "other"));
         let cause = |session: Option<&Key>| Cause {
-            generation: crate::control::token(),
+            generation: crate::files::token(),
             running: false,
             command: false,
             session: session.cloned(),
@@ -857,7 +857,7 @@ mod tests {
     fn only_the_session_that_claimed_every_unknown_change_recovers_it_itself() {
         let (own, other) = (Key::of(Host::Pi, "own"), Key::of(Host::Pi, "other"));
         let cause = |session: Option<&Key>, running: bool| Cause {
-            generation: crate::control::token(),
+            generation: crate::files::token(),
             running,
             command: false,
             session: session.cloned(),

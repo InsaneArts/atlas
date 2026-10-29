@@ -2,8 +2,12 @@
 //! as `{"<generation>": "<key>"}`. It is read only against the marker: an
 //! entry the marker no longer has means nothing. A label for display only;
 //! what blocks and what recovery clears never depend on it.
-use super::{Durability, Entries, keep_entries, write_private_with};
-use crate::{error::Result, host_session::Key};
+use super::{Entries, keep_entries};
+use crate::{
+    error::Result,
+    files::{Durability, write_private_with},
+    host_session::Key,
+};
 use std::{collections::BTreeMap, path::Path};
 
 /// The most a causes file may hold before it is treated as missing.
@@ -12,7 +16,7 @@ const LIMIT: u64 = 64 * 1024;
 /// Each generation's host session, as the file at `path` names it; empty
 /// when it is missing, unreadable, too large or not this account's.
 pub(super) fn read(path: &Path) -> BTreeMap<String, Key> {
-    crate::helper_info::read_own(path, LIMIT)
+    crate::files::read_own(path, LIMIT)
         .and_then(|bytes| serde_json::from_slice(&bytes).ok())
         .unwrap_or_default()
 }

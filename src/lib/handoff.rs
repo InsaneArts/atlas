@@ -5,8 +5,9 @@
 //! a new folder, so a running app's files never change under it.
 use crate::{
     client::Client,
-    control::{Ownership, Token},
+    control::Ownership,
     error::{Error, Result},
+    files::Token,
     host_session::{HostSession, Key},
     task::{Claims, Owned, State},
     text::same_text,

@@ -153,7 +153,7 @@ fn bundle(path: &Path) -> PathBuf {
 }
 
 fn id() -> String {
-    crate::control::token()
+    crate::files::token()
 }
 
 /// The real move.
@@ -285,7 +285,7 @@ fn an_install_removed_by_hand_is_already_gone() {
 
     // Removed by hand once it was being moved aside, before it got there.
     let holding = Homes::new();
-    let cut = crate::control::token();
+    let cut = crate::files::token();
     holding.install(&cut, "Probe.app").unwrap();
     holding.cut(&cut, InstallPhase::Holding);
     fs::remove_dir_all(holding.destination("Probe.app")).unwrap();
@@ -323,7 +323,7 @@ fn a_placed_install_is_registered_with_launch_services() {
 
     let refused = install_moving(
         &homes.home,
-        &crate::control::token(),
+        &crate::files::token(),
         &source,
         "Probe.app",
         &|| Ok(()),
@@ -571,7 +571,7 @@ fn an_install_whose_holding_folder_is_on_another_volume_is_kept_never_copied() {
 
     // The move says so.
     let homes = Homes::new();
-    let id = crate::control::token();
+    let id = crate::files::token();
     homes.install(&id, "Probe.app").unwrap();
     let crossing = |_: &fs::File, _: &FileName, _: &fs::File, _: &FileName| {
         Err(std::io::Error::from_raw_os_error(libc::EXDEV))

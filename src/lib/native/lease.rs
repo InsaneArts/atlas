@@ -126,7 +126,7 @@ impl Gate {
         }
 
         // Owners are `control::token()`s: two hexadecimal digits a byte.
-        if owner.len() != 2 * crate::control::TOKEN_BYTES
+        if owner.len() != 2 * crate::files::TOKEN_BYTES
             || !owner.bytes().all(|b| b.is_ascii_hexdigit())
         {
             return Err(Error::new("input", "Invalid native owner token"));
@@ -243,7 +243,7 @@ mod tests {
     }
 
     fn owner(digit: char) -> String {
-        digit.to_string().repeat(2 * crate::control::TOKEN_BYTES)
+        digit.to_string().repeat(2 * crate::files::TOKEN_BYTES)
     }
 
     fn code<T>(result: Result<T>) -> &'static str {
@@ -308,7 +308,7 @@ mod tests {
     #[test]
     fn owners_are_control_tokens() {
         let gate = gate();
-        assert_eq!(owner('a').len(), crate::control::token().len());
+        assert_eq!(owner('a').len(), crate::files::token().len());
 
         for bad in [
             String::new(),
@@ -320,10 +320,7 @@ mod tests {
         }
 
         assert!(!gate.active().unwrap());
-        assert_eq!(
-            code(gate.acquire(&crate::control::token(), Who::Agent)),
-            "ok"
-        );
+        assert_eq!(code(gate.acquire(&crate::files::token(), Who::Agent)), "ok");
     }
 
     #[test]

@@ -11,8 +11,9 @@
 use crate::{
     client::{Client, timestamp},
     config::home,
-    control::{Ownership, write_private},
+    control::Ownership,
     error::{Error, Result},
+    files::write_private,
     native::windows::{Bounds, Screen, Shown, Window, frontmost_pid, unobstructed, visible_point},
     session::{Display, Epoch, require_hidden},
     transport::run_output,

@@ -9,8 +9,8 @@ pub(crate) use record::{Owned, State};
 
 use crate::{
     client::Client,
-    control::Token,
     error::{Error, Result},
+    files::Token,
     host_session::{
         HostSession, Key, now_ms,
         record::Record as SessionRecord,

@@ -505,9 +505,9 @@ const UPDATE: &str = "update-";
 /// its process ID.
 const INSTALL: [&str; 2] = ["install-", "install-previous-"];
 
-/// Whether `text` is exactly a token from [`crate::control::token`].
+/// Whether `text` is exactly a token from [`crate::files::token`].
 fn token_shaped(text: &str) -> bool {
-    text.len() == crate::control::TOKEN_BYTES * 2
+    text.len() == crate::files::TOKEN_BYTES * 2
         && text
             .bytes()
             .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
@@ -607,7 +607,7 @@ fn swap_recording(new: &Path, installed: &Path, name: &str, record: &Path) -> Re
         let _ = fs::remove_dir_all(&path);
     }
 
-    let staged = parent.join(format!("{STAGED}{UPDATE}{}", crate::control::token()));
+    let staged = parent.join(format!("{STAGED}{UPDATE}{}", crate::files::token()));
     check(
         "/usr/bin/ditto",
         &[new.as_os_str(), staged.as_os_str()],
@@ -1186,12 +1186,9 @@ mod tests {
         // person's own folders beside the app, and install.sh's, stay.
         let stale = root.join(format!(
             "Applications/.Atlas.app.update-{}",
-            crate::control::token()
+            crate::files::token()
         ));
-        let legacy = root.join(format!(
-            "Applications/.Atlas.app.{}",
-            crate::control::token()
-        ));
+        let legacy = root.join(format!("Applications/.Atlas.app.{}", crate::files::token()));
         let kept = [
             ".Atlas.app.feature",
             ".Atlas.app.previous",
@@ -1283,7 +1280,7 @@ mod tests {
         let installed = root.join("Applications/Atlas.app");
         let record = root.join("update.json");
 
-        let token = crate::control::token();
+        let token = crate::files::token();
         for previous in [
             root.join("Documents"),
             root.join("Applications/Other.app"),
@@ -1329,7 +1326,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let root = fs::canonicalize(dir.path()).unwrap();
         let installed = root.join("Atlas.app");
-        let token = crate::control::token();
+        let token = crate::files::token();
 
         let ours = [
             format!(".Atlas.app.update-{token}"),

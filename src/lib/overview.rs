@@ -557,7 +557,7 @@ pub fn activity(directory: &Path, limit: usize) -> Vec<Value> {
     }
 
     // Never through a link, and never waiting on a pipe put in its place.
-    let Some(mut file) = crate::helper_info::open_plain(&directory.join("metadata.jsonl")) else {
+    let Some(mut file) = crate::files::open_plain(&directory.join("metadata.jsonl")) else {
         return Vec::new();
     };
 

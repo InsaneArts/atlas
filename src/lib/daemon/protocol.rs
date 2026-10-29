@@ -121,7 +121,7 @@ impl JobId {
 
     /// A new random ID.
     pub fn new() -> Self {
-        let mut id = crate::control::token();
+        let mut id = crate::files::token();
         id.truncate(Self::LEN);
         Self(id)
     }

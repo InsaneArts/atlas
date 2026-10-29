@@ -1370,7 +1370,7 @@ mod tests {
         };
         fs::create_dir_all(layout.home.join("Library/LaunchAgents")).unwrap();
         // A label launchd has never seen: inspection is real and read-only.
-        let label = format!("dev.atlas.test.{}", &crate::control::token()[..12]);
+        let label = format!("dev.atlas.test.{}", &crate::files::token()[..12]);
 
         (dir, layout, label)
     }

@@ -10,9 +10,9 @@ pub use local::{fetch, local, recorded, running};
 use crate::{
     client::{Client, Frame},
     config::Config,
-    control::{self, ActionPermit, Lease, SharedLease},
+    control::{ActionPermit, Lease, SharedLease},
     error::{Error, Result},
-    helper_info,
+    files, helper_info,
     host_session::{
         Key,
         names::{name_of, names},
@@ -265,7 +265,7 @@ impl Viewer {
 
         let written = serde_json::to_vec_pretty(&record)
             .map_err(Error::from)
-            .and_then(|bytes| control::write_private(&moved, &bytes));
+            .and_then(|bytes| files::write_private(&moved, &bytes));
         if written.is_ok() {
             remove_record(&path);
             *kept = Some((moved, record));
@@ -368,7 +368,7 @@ impl Viewer {
             ));
         }
 
-        let key = control::token();
+        let key = files::token();
         let mut frames = self.frames.lock().await;
         frames.items.push_back((key.clone(), frame.clone()));
         frames.capture_revision = Some(revision);
@@ -1017,7 +1017,7 @@ pub async fn bind(
         })?;
 
     let authority = listener.local_addr()?.to_string();
-    let prefix = format!("/{}/", control::token());
+    let prefix = format!("/{}/", files::token());
     let viewer = Arc::new(Viewer {
         client: std::sync::Mutex::new(Arc::new(client)),
         settings: settings.map(Path::to_path_buf),
@@ -1195,7 +1195,7 @@ pub async fn serve(client: Client, port: u16, program: crate::menubar::Program) 
         "pid": std::process::id(),
         "startedAt": crate::client::timestamp().to_string(),
     });
-    control::write_private(&path, &serde_json::to_vec_pretty(&record)?)?;
+    files::write_private(&path, &serde_json::to_vec_pretty(&record)?)?;
     *unpoisoned(&viewer.record) = Some((path, record.clone()));
 
     // The URL is a bearer capability: it stays in the private record and
@@ -1808,7 +1808,7 @@ mod tests {
     fn client(dir: &Path) -> Client {
         let config = Config::parse(SETTINGS.as_bytes(), &dir.join("u.toml")).unwrap();
         let mut client = Client::new(config).unwrap();
-        client.controller = control::Controller::at(60001, &dir.join("state"));
+        client.controller = crate::control::Controller::at(60001, &dir.join("state"));
         client
     }
 
@@ -2166,7 +2166,7 @@ mod tests {
         let socket = base.join("a.sock");
         let (mut asked, _never) = input_service(&socket, "none");
         let client = client_with_input(&base, &socket);
-        let owner = control::token();
+        let owner = files::token();
 
         release_native(&client, &owner, false).await.unwrap();
         assert_eq!(asked.recv().await.as_deref(), Some("release"));
@@ -2410,7 +2410,7 @@ mod tests {
         std::fs::write(&settings, SETTINGS).unwrap();
 
         let mut client = Client::new(Config::load(&settings).unwrap()).unwrap();
-        let controller = control::Controller::at(60001, &base.join("state"));
+        let controller = crate::control::Controller::at(60001, &base.join("state"));
         client.controller = controller.clone();
         let (_, viewer) = bind(client, 0, Some(&settings)).await.unwrap();
 
@@ -2559,7 +2559,7 @@ mod tests {
         *viewer.lease_client.lock().unwrap() = Some(taken.clone());
 
         let mut other = client(dir.path());
-        other.controller = control::Controller::at(60001, &dir.path().join("other"));
+        other.controller = crate::control::Controller::at(60001, &dir.path().join("other"));
         *viewer.client.lock().unwrap() = Arc::new(other);
 
         let error = viewer.release(None).await.unwrap_err();
@@ -3203,7 +3203,7 @@ mod tests {
             (crate::environment::Phase::Applied, 2),
             (crate::environment::Phase::Applying, 1),
         ] {
-            working.planned(crate::control::Token::new(), phase, at);
+            working.planned(crate::files::Token::new(), phase, at);
         }
         let records = [
             working,

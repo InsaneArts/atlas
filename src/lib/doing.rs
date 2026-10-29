@@ -48,7 +48,7 @@ pub struct Doing {
 impl Doing {
     /// A command doing `verb`, naming nothing yet.
     pub fn new(verb: &'static str) -> Self {
-        let mut command = crate::control::token();
+        let mut command = crate::files::token();
         command.truncate(COMMAND_ID);
         Self {
             verb,

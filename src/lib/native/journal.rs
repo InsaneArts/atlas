@@ -2,8 +2,8 @@
 //! release an interrupted press before accepting another controller.
 use crate::{
     actions::Button,
-    control::{Durability, write_private_with},
     error::{Error, Result},
+    files::{Durability, write_private_with},
     session::InputEpoch,
 };
 use serde::{Deserialize, Serialize};

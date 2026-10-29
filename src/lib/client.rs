@@ -399,7 +399,7 @@ impl Client {
                 ));
             }
 
-            let temporary = target.with_extension(format!("{}.new", crate::control::token()));
+            let temporary = target.with_extension(format!("{}.new", crate::files::token()));
             let linked = std::os::unix::fs::symlink(&source, &temporary)
                 .and_then(|()| fs::rename(&temporary, target));
             if linked.is_err() {
@@ -1196,7 +1196,7 @@ impl Client {
         session: &Session,
     ) -> Result<Value> {
         self.controller.interrupt().check()?;
-        let standalone = crate::control::token();
+        let standalone = crate::files::token();
         let owner = lease.map(|(_, token)| token).unwrap_or(&standalone);
         if lease.is_none()
             && let Err(error) = self.acquire_input_waiting(owner, &session.epoch).await
@@ -2141,7 +2141,7 @@ impl Client {
     /// helper itself is fine.
     pub fn writable(&self) -> Result<()> {
         self.controller.writable()?;
-        crate::control::probe_write(self.output_dir()?)?;
+        crate::files::probe_write(self.output_dir()?)?;
 
         // Builds and environment plans are staged beside the shared Atlas
         // command for the helper to read; a missing folder is setup's
@@ -2149,7 +2149,7 @@ impl Client {
         if let Some(shared) = self.config.identity_probe.parent()
             && shared.is_dir()
         {
-            crate::control::probe_write(shared)?;
+            crate::files::probe_write(shared)?;
         }
 
         Ok(())

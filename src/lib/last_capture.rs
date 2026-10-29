@@ -9,10 +9,10 @@
 use crate::{
     client::{Frame, Size, timestamp},
     config::write_atomic,
-    control::write_private,
     daemon::protocol::{Crop, Region},
     digest,
     error::Result,
+    files::write_private,
     helper_info::capture_time,
     session::Epoch,
 };
@@ -209,7 +209,7 @@ fn verified(output: &Path, file: &str, hash: &str) -> Option<PathBuf> {
 /// counts as empty, and an entry that cannot be read or does not name a
 /// screenshot file is left out.
 fn read(output: &Path) -> BTreeMap<String, Entry> {
-    let Some(file) = digest::open_regular(&output.join(RECORD)) else {
+    let Some(file) = crate::files::open_plain(&output.join(RECORD)) else {
         return BTreeMap::new();
     };
     let mut bytes = Vec::new();
