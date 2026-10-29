@@ -16,7 +16,7 @@ use crate::{
     error::{Code, Error, Result},
     files::Token,
     handoff,
-    task::{Owned, State},
+    task::Owned,
 };
 use serde_json::{Value, json};
 use std::{collections::BTreeMap, path::Path};
@@ -137,17 +137,7 @@ impl Reading<'_> {
     /// The apps `key`'s tasks installed into the helper that may still be
     /// there, by name, never by path.
     fn installs(&self, key: &Key) -> Vec<String> {
-        self.tasks
-            .iter()
-            .filter(|task| task.session == *key)
-            .flat_map(|task| task.claims())
-            .filter_map(|(owned, state)| match owned {
-                Owned::Install { app, .. } if matches!(state, State::Intent | State::Made) => {
-                    Some(app)
-                }
-                _ => None,
-            })
-            .collect()
+        crate::task::record::installs_of(&self.tasks, key)
     }
 
     /// The background jobs `key`'s tasks started, as their records last
@@ -177,12 +167,7 @@ impl Reading<'_> {
     /// How far the newest unfinished cleanup of `key`'s work got, when one
     /// has not finished.
     fn cleanup(&self, key: &Key) -> Option<crate::task::record::CleanupState> {
-        self.tasks
-            .iter()
-            .filter(|task| task.session == *key)
-            .filter_map(|task| task.unfinished_cleanup())
-            .max_by_key(|note| note.updated)
-            .map(|note| note.state)
+        crate::task::record::unfinished_cleanup_of(&self.tasks, key)
     }
 
     /// The session object a reply names: who it is and when it acted, and
@@ -376,7 +361,7 @@ impl Reading<'_> {
             .map(|task| {
                 let (mut copies, mut plans, mut installs) = (0, 0, 0);
                 for (owned, state) in task.claims() {
-                    let live = matches!(state, State::Intent | State::Made);
+                    let live = state.live();
                     match owned {
                         Owned::Copy { id }
                             if live && handoff::copy_exists(self.store.copies(), &id) =>

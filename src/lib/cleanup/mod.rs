@@ -438,7 +438,7 @@ fn settle(
                 && tasks
                     .all()
                     .iter()
-                    .all(|record| !matches!(state_of(record), Some(State::Intent | State::Made)))
+                    .all(|record| !state_of(record).is_some_and(State::live))
         }
         StepState::Kept => {
             for record in claiming(tasks.of_session(session)) {

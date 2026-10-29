@@ -194,9 +194,7 @@ impl Record {
             || self.jobs.iter().any(|job| !job.ended())
             || self.owned.iter().any(|entry| match entry {
                 Entry::Known(claim) => {
-                    !claim.later.is_empty()
-                        || claim.owned().is_none()
-                        || matches!(claim.state, State::Intent | State::Made)
+                    !claim.later.is_empty() || claim.owned().is_none() || claim.state.live()
                 }
                 Entry::Later(_) => true,
             })
@@ -293,6 +291,39 @@ pub(crate) enum State {
     Gone,
     /// Left on purpose by whatever undid the rest.
     Kept,
+}
+
+impl State {
+    /// Whether what was claimed may still be in the helper: it is about to
+    /// be made, or was made and not yet removed.
+    pub(crate) fn live(self) -> bool {
+        matches!(self, Self::Intent | Self::Made)
+    }
+}
+
+/// The apps the tasks of session `key` among `tasks` installed into the
+/// helper that may still be there, by name, never by path.
+pub(crate) fn installs_of(tasks: &[Record], key: &Key) -> Vec<String> {
+    tasks
+        .iter()
+        .filter(|task| task.session == *key)
+        .flat_map(Record::claims)
+        .filter_map(|(owned, state)| match owned {
+            Owned::Install { app, .. } if state.live() => Some(app),
+            _ => None,
+        })
+        .collect()
+}
+
+/// How far the newest unfinished cleanup of the work of session `key`
+/// among `tasks` got, when one has not finished.
+pub(crate) fn unfinished_cleanup_of(tasks: &[Record], key: &Key) -> Option<CleanupState> {
+    tasks
+        .iter()
+        .filter(|task| task.session == *key)
+        .filter_map(Record::unfinished_cleanup)
+        .max_by_key(|note| note.updated)
+        .map(|note| note.state)
 }
 
 /// One entry of `owned`: one this build reads, or one a later build wrote

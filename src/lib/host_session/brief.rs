@@ -7,11 +7,7 @@ use super::{
     record::{Leftovers, Record},
     store::Store,
 };
-use crate::{
-    client::Client,
-    task::{Owned, State},
-    ui::text,
-};
+use crate::{client::Client, ui::text};
 
 /// The sentence a session start adds when `session`, or the session before
 /// its `/clear` in the same host process, left something in the helper.
@@ -22,14 +18,8 @@ pub(crate) fn leftovers(client: &Client, session: &HostSession) -> Option<String
     let own = records.iter().find(|record| record.key == *session.key());
 
     let tasks = crate::task::store::Store::at(client.output_dir().ok()?).of_session(session.key());
-    let unfinished = tasks.iter().any(|task| task.unfinished_cleanup().is_some());
-    let installed = tasks
-        .iter()
-        .flat_map(|task| task.claims())
-        .filter(|(owned, state)| {
-            matches!(owned, Owned::Install { .. }) && matches!(state, State::Intent | State::Made)
-        })
-        .count();
+    let unfinished = crate::task::record::unfinished_cleanup_of(&tasks, session.key()).is_some();
+    let installed = crate::task::record::installs_of(&tasks, session.key()).len();
     let cleanup = if unfinished {
         " Its cleanup is unfinished: atlas cleanup shows what is left."
     } else {

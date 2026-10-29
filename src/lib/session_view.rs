@@ -15,10 +15,7 @@ use crate::{
         record::Record,
         store::IDLE_FOR,
     },
-    task::{
-        Owned, State as Claimed,
-        record::{CleanupState, Record as TaskRecord},
-    },
+    task::record::{CleanupState, Record as TaskRecord},
 };
 use serde::Serialize;
 use serde_json::{Value, json};
@@ -447,27 +444,12 @@ impl Records<'_> {
 
     /// The apps `key`'s tasks installed that may still be there, by name.
     fn installs(&self, key: &Key) -> Vec<String> {
-        self.tasks
-            .iter()
-            .filter(|task| task.session == *key)
-            .flat_map(TaskRecord::claims)
-            .filter_map(|(owned, state)| match owned {
-                Owned::Install { app, .. } if matches!(state, Claimed::Intent | Claimed::Made) => {
-                    Some(app)
-                }
-                _ => None,
-            })
-            .collect()
+        crate::task::record::installs_of(self.tasks, key)
     }
 
     /// How far the newest unfinished cleanup of `key`'s work got.
     fn cleanup(&self, key: &Key) -> Option<CleanupState> {
-        self.tasks
-            .iter()
-            .filter(|task| task.session == *key)
-            .filter_map(TaskRecord::unfinished_cleanup)
-            .max_by_key(|note| note.updated)
-            .map(|note| note.state)
+        crate::task::record::unfinished_cleanup_of(self.tasks, key)
     }
 
     /// The apps `record`'s session opened, as its rows still say, newest

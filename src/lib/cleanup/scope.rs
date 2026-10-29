@@ -182,7 +182,7 @@ impl Loaded {
     pub fn undoable(&self) -> Vec<Undoable> {
         self.work
             .iter()
-            .filter(|work| matches!(work.state, State::Intent | State::Made))
+            .filter(|work| work.state.live())
             .filter(|work| !self.finished(&work.owned))
             .map(|work| Undoable {
                 owned: work.owned.clone(),

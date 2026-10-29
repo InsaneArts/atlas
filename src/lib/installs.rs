@@ -121,9 +121,7 @@ fn bundle(path: &Path) -> Result<(PathBuf, String)> {
 /// The install of an app named `app` that task `task` made and has not
 /// cleaned up yet, by its ID.
 fn earlier_install(tasks: &Tasks, task: &crate::host_session::Key, app: &str) -> Option<Token> {
-    install_named(tasks, task, app, |state| {
-        matches!(state, State::Intent | State::Made)
-    })
+    install_named(tasks, task, app, State::live)
 }
 
 /// The install of an app named `app` that task `task` claims in a state
