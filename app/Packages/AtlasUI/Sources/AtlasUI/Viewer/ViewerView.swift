@@ -22,6 +22,8 @@ public struct ViewerView<Input: View, LivePicture: View>: View {
   /// Activity, Screenshots and Apps as each last showed, kept built once shown, so a switch back fades the pane
   /// already there instead of building it again (``KeptPaneShift``).
   @State private var kept: [ViewerPlace: ViewerPane] = [:]
+  /// Sequences list departures and arrivals, cancelling superseded destinations.
+  @State private var paneHandoff: PaneHandoff
   /// The corner the small screen keeps to: where the person last let go of it, as the window remembers it.
   @State private var miniCorner: MiniCorner
   /// How far the small screen is being dragged from its corner; zero while it rests.
@@ -55,6 +57,7 @@ public struct ViewerView<Input: View, LivePicture: View>: View {
     self.send = send
     self.input = input()
     self.livePicture = livePicture
+    _paneHandoff = State(initialValue: PaneHandoff(state.pane.place))
     _settledPlace = State(initialValue: state.pane.place)
     _miniCorner = State(initialValue: state.miniCorner)
     _pictureInCorner = State(initialValue: state.pane.place.keepsScreenInCorner)
@@ -159,16 +162,16 @@ public struct ViewerView<Input: View, LivePicture: View>: View {
           KeptPane(pane: pane, zoom: zoom, send: send)
             .frame(width: listWidth)
             .frame(minWidth: .zero, maxWidth: .infinity, alignment: .trailing)
-            .modifier(KeptPaneShift(isShown: place == state.pane.place, rises: listRises) { forgetPictures(of: place) })
-            .transition(
-              .asymmetric(
-                insertion: PaneShift.transition(isScreen: false),
-                removal: .identity
-              )
+            .modifier(
+              KeptPaneShift(isShown: paneHandoff.shown == place, rises: listRises) {
+                forgetPictures(of: place)
+                paneHandoff.departed(place)
+              }
             )
         }
       }
     }
+    .onChange(of: state.pane.place) { _, place in paneHandoff.request(place) }
     .environment(\.miniClearance, miniClearance(pip))
     .frame(maxWidth: .infinity, maxHeight: .infinity)
     .clipped()

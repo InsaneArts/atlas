@@ -2,9 +2,9 @@ import SwiftUI
 
 /// How Activity, Apps and Screenshots show and hide as the tab changes once each has been shown: the pane is kept, so
 /// a switch back fades the one already built instead of building it again, which took the main thread 15 to 45
-/// milliseconds a switch. It fades as ``PaneShift`` fades a pane: in over the old one on ``PaneShift/arrival``, out on
-/// ``PaneShift/departure``, turned back from where it is when the switch is reversed mid-way. Its scroll indicators
-/// wait until it has faded in (``EnvironmentValues/paneSettled``), so none flashes over the crossfade. Hidden, it takes
+/// milliseconds a switch. The shared ``PaneHandoff`` waits for the outgoing pane to disappear before admitting
+/// the latest destination. Each pane fades on ``PaneShift/arrival`` and ``PaneShift/departure``.
+/// Its scroll indicators wait until it has faded in (``EnvironmentValues/paneSettled``). Hidden, it takes
 /// no clicks, keyboard focus or VoiceOver, and tells its views it is not showing (``EnvironmentValues/paneShows``).
 struct KeptPaneShift: ViewModifier {
   /// Whether the pane shows.
@@ -52,7 +52,7 @@ struct KeptPaneShift: ViewModifier {
     } else if shown {
       place(lowered: false)
     }
-    withAnimation(shown ? PaneShift.arrival : PaneShift.departure) {
+    withAnimation(shown ? PaneShift.arrival : PaneShift.departure, completionCriteria: .removed) {
       drawn = shown
     } completion: {
       // A fade turned back before it ended leaves the pane hidden, and its indicators with it.
