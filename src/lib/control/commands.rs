@@ -4,7 +4,7 @@
 //! and one whose claim no live process holds is an outcome nothing will
 //! settle, like any other. A list that is missing, unreadable, malformed or
 //! too large reads as empty, so its commands count as unknown outcomes.
-use super::{by_generation, replace_private};
+use super::{by_generation, marker::replace_private};
 use crate::error::Result;
 use std::path::Path;
 

@@ -8,40 +8,48 @@
 //! Beside the lock and the marker it keeps labels for people and agents:
 //! which host session holds control, which waits, and which claimed each
 //! pending change. Nothing here decides anything by them.
+mod busy;
 mod by_generation;
 mod commands;
 #[cfg(test)]
 mod commands_tests;
+mod executor;
+mod lease;
+mod marker;
 mod notes;
 #[cfg(test)]
 mod notes_tests;
 mod turns;
+mod wait;
 
+pub(crate) use busy::seconds;
+pub(crate) use executor::{ExecutorClaims, record_executor};
+pub use lease::{ActionPermit, Lease, SharedLease};
 pub use notes::Note;
+pub(crate) use wait::poll;
+pub use wait::{WaitEvent, WaitHook};
 
+use busy::busy_command;
 use by_generation::ByGeneration;
+use executor::claim_executor_running;
+use marker::{Unsettled, pending};
 
 use crate::{
     config::home,
-    error::{Error, Holder, Result},
-    files::{open_lock, probe_write, token},
+    error::{Error, Result},
+    files::{open_lock, probe_write},
     host_session::{HostSession, Key, Label},
     interrupt::{Hold, Interrupt},
-    process::Start,
 };
 use fs2::FileExt;
-use rand::Rng;
 use sha2::{Digest, Sha256};
 use std::{
-    cell::RefCell,
-    fs::{self, File, OpenOptions},
-    io::{Read, Seek, SeekFrom, Write},
-    os::unix::fs::{MetadataExt, OpenOptionsExt},
+    fs::{self, File},
+    os::unix::fs::MetadataExt,
     path::{Path, PathBuf},
     sync::Arc,
     time::{Duration, Instant},
 };
-use tokio::sync::Mutex;
 
 /// How long an agent's command that changes the helper waits for another
 /// Atlas command to let go of it, unless told otherwise: long enough for the
@@ -53,73 +61,9 @@ pub const CONTROL_WAIT: Duration = Duration::from_secs(30);
 /// longest run.
 pub const CONTROL_WAIT_MAX: Duration = Duration::from_secs(600);
 
-/// A wait in whole seconds, rounded to the nearest, as a reply says how
-/// long Atlas waited: a full 30-second wait that ends a few milliseconds
-/// short of it is 30, as its message says.
-pub(crate) fn seconds(waited: Duration) -> u64 {
-    waited.saturating_add(Duration::from_millis(500)).as_secs()
-}
-
-/// Busy because the person has control through a viewer: never waited for.
-/// `waited` is how long a controller given a wait had waited by then.
-fn busy_person(waited: Option<Duration>) -> Error {
-    let error = Error::new("busy", crate::error::PERSON_HAS_CONTROL).held_by(Holder::Person);
-    match waited {
-        Some(waited) => error.with("waited", seconds(waited)),
-        None => error,
-    }
-}
-
-/// Busy because another Atlas command kept control for all of `wait`, after
-/// this try `waited` that long; a controller given no wait answers at once.
-/// A command Atlas.app runs takes the lock too, so "agent" is another Atlas
-/// command, usually another agent's.
-fn busy_agent(waited: Option<Duration>, wait: Duration) -> Error {
-    let message = match waited {
-        Some(_) => format!(
-            "Another Atlas command, often another agent's, kept control for all of the {} seconds Atlas could wait.",
-            seconds(wait)
-        ),
-        None => "Another Atlas controller is active: wait for it to finish, or release it in the viewer."
-            .to_owned(),
-    };
-
-    let error = Error::new("busy", message).held_by(Holder::Agent);
-    match waited {
-        Some(waited) => error
-            .with("waited", seconds(waited))
-            .with("next", crate::ui::hints::WAITED),
-        None => error,
-    }
-}
-
 /// The most commands agents started with `run` that may run at once, so
 /// the helper keeps connections free for reads and other actions.
 pub const RUNNING_COMMANDS_MAX: usize = 8;
-
-/// Busy because `message` names commands agents started with `run` that
-/// still run: held by an agent, so nobody is told to recover them, and
-/// marked as a running command for programs to tell from a held lock.
-fn busy_running(message: impl Into<String>) -> Error {
-    Error::new("busy", message)
-        .held_by(Holder::Agent)
-        .with("running", "command")
-        .with("next", crate::ui::hints::COMMAND_RUNNING)
-}
-
-/// Busy because a command an agent started with `run` still runs, for
-/// control taken for `purpose`: setup, removal and recovery hear that
-/// stopping agents ends it at once.
-fn busy_command(purpose: Purpose) -> Error {
-    busy_running(match purpose {
-        Purpose::Recovery => {
-            "A command an agent started is still running in the helper. Wait for it to end, or stop agents to end it now."
-        }
-        Purpose::Change(_) => {
-            "A command an agent started is still running in the helper. Wait for it to end."
-        }
-    })
-}
 
 /// What an acquisition may go on beside.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -139,40 +83,6 @@ enum Purpose {
     Recovery,
     /// A change, going on beside what it names.
     Change(Beside),
-}
-
-/// How a pending change is recorded beside the marker.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum Mark {
-    /// A change carried out under control until its outcome is known.
-    Change,
-    /// A command an agent started with `run`, which others act beside.
-    Command,
-}
-
-/// What is pending, as one read under the marker lock finds it.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum Unsettled {
-    /// Nothing: there is no marker.
-    Nothing,
-    /// Only commands agents started with `run`, each still running under
-    /// its own claim.
-    Commands,
-    /// An outcome nothing may settle yet, or one not known to be a command.
-    Unknown,
-}
-
-/// How long to sleep before trying the lock again: about a tenth of a
-/// second, spread by 25 ms either way so waiters do not try in step, and
-/// never past the end of the wait.
-pub(crate) fn poll(remaining: Duration) -> Duration {
-    poll_with(remaining, rand::rng().random_range(75..=125))
-}
-
-/// [`poll`] with its spread chosen: `jitter_ms` milliseconds, or what is
-/// left of the wait if that is less.
-fn poll_with(remaining: Duration, jitter_ms: u64) -> Duration {
-    Duration::from_millis(jitter_ms).min(remaining)
 }
 
 /// A mutation still being carried out. For its lifetime it holds an
@@ -222,118 +132,6 @@ impl Drop for Pending {
     }
 }
 
-thread_local! {
-    /// Claims for the synchronous privileged dispatch on this thread.
-    static EXECUTOR_CLAIMS: RefCell<Vec<(PathBuf, File)>> = const { RefCell::new(Vec::new()) };
-}
-
-/// Bind durable claims to every executor dispatched in this scope. Before
-/// acknowledging an executor, its PID, boot and start time are synced into
-/// a record alongside each claim. If the caller dies, recovery refuses while
-/// that process instance can act.
-pub(crate) struct ExecutorClaims(Vec<(PathBuf, File)>);
-
-impl ExecutorClaims {
-    pub(crate) fn new(claims: &[Pending]) -> Result<Self> {
-        let files = claims
-            .iter()
-            .map(|claim| {
-                claim
-                    .lock
-                    .try_clone()
-                    .map(|file| (claim.live.clone(), file))
-            })
-            .collect::<std::io::Result<Vec<_>>>()?;
-        Ok(Self(EXECUTOR_CLAIMS.with(|bound| bound.replace(files))))
-    }
-}
-
-impl Drop for ExecutorClaims {
-    fn drop(&mut self) {
-        EXECUTOR_CLAIMS.with(|bound| bound.replace(std::mem::take(&mut self.0)));
-    }
-}
-
-/// Persist the executor before allowing it past its initial handshake.
-pub(crate) fn record_executor(pid: nix::unistd::Pid) -> Result<()> {
-    record_executor_with(pid, executor_boot, executor_start)
-}
-
-fn record_executor_with(
-    pid: nix::unistd::Pid,
-    boot: impl FnOnce() -> Result<String>,
-    start: impl FnOnce(i32) -> Result<Start>,
-) -> Result<()> {
-    EXECUTOR_CLAIMS.with(|claims| {
-        let claims = claims.borrow();
-        if claims.is_empty() {
-            return Ok(());
-        }
-        let executor = Executor {
-            pid: pid.as_raw(),
-            boot: boot()?,
-            start: start(pid.as_raw())?,
-        };
-        let record = serde_json::to_vec(&executor)?;
-        for (live, file) in claims.iter() {
-            publish_executor_with(live, &record, |file, record| file.write_all(record))?;
-            let mut file = file;
-            file.set_len(0)?;
-            file.seek(SeekFrom::Start(0))?;
-            file.write_all(&record)?;
-            file.sync_all()?;
-        }
-        Ok(())
-    })
-}
-
-/// The extension an executor record is written under before it is renamed
-/// over the claim's executor record; a random token follows it.
-const EXECUTOR_WRITING: &str = "executor-";
-
-/// Publish identity separately from the stable claim inode: a failed write
-/// cannot destroy the previous executor's identity or release its flock.
-/// Only the holder of the claim writes it, so a record still being written
-/// is never swept while its claim is held.
-fn publish_executor_with(
-    live: &Path,
-    record: &[u8],
-    write: impl FnOnce(&mut File, &[u8]) -> std::io::Result<()>,
-) -> Result<()> {
-    let Some(directory) = live.parent() else {
-        return Err(Error::new("state", "A claim needs a folder"));
-    };
-    let path = live.with_extension("executor.live");
-    let temporary = live.with_extension(format!("{EXECUTOR_WRITING}{}", token()));
-    let mut file = OpenOptions::new()
-        .create_new(true)
-        .write(true)
-        .mode(0o600)
-        .custom_flags(libc::O_NOFOLLOW)
-        .open(&temporary)?;
-    let result = (|| {
-        write(&mut file, record)?;
-        file.sync_all()?;
-        fs::rename(&temporary, &path)?;
-        File::open(directory)?.sync_all()?;
-        Ok(())
-    })();
-    let _ = fs::remove_file(temporary);
-    result
-}
-
-fn claim_executor_running(file: &File, live: &Path) -> bool {
-    match OpenOptions::new()
-        .read(true)
-        .custom_flags(libc::O_NOFOLLOW)
-        .open(live.with_extension("executor.live"))
-    {
-        Ok(record) => executor_running(&record),
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => executor_running(file),
-        Err(_) => true,
-    }
-}
-
 fn remove_claim(live: &Path) {
     match fs::remove_file(live) {
         Err(error) if error.kind() != std::io::ErrorKind::NotFound => return,
@@ -344,81 +142,6 @@ fn remove_claim(live: &Path) {
         assert!(!interrupt.replace(false), "interrupted cleanup");
     });
     let _ = fs::remove_file(live.with_extension("executor.live"));
-}
-
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
-#[serde(deny_unknown_fields)]
-struct Executor {
-    pid: i32,
-    boot: String,
-    start: Start,
-}
-
-/// The immutable identity of this boot, unaffected by wall-clock changes.
-fn executor_boot() -> Result<String> {
-    crate::process::boot()
-}
-
-#[cfg(test)]
-fn executor_boot_with(read: impl FnOnce(&std::ffi::CStr) -> Result<String>) -> Result<String> {
-    read(c"kern.bootsessionuuid")
-}
-
-/// The exact start time of the executor, whichever account it runs as:
-/// `proc_pidinfo` refuses another user's process, the root executor
-/// included, and the kernel's process sysctl does not.
-fn executor_start(pid: i32) -> Result<Start> {
-    crate::process::start(pid)
-}
-
-/// A different boot or process instance cannot be the dispatched executor.
-/// Unreadable identities and legacy PID-only records remain conservative.
-fn executor_running(file: &File) -> bool {
-    executor_running_with(file, executor_boot, executor_start)
-}
-
-fn executor_running_with(
-    mut file: &File,
-    boot: impl FnOnce() -> Result<String>,
-    start: impl FnOnce(i32) -> Result<Start>,
-) -> bool {
-    let mut text = String::new();
-    if file
-        .seek(SeekFrom::Start(0))
-        .and_then(|_| file.read_to_string(&mut text))
-        .is_err()
-    {
-        return true;
-    }
-    if text.is_empty() {
-        return false;
-    }
-    let executor = serde_json::from_str::<Executor>(&text)
-        .ok()
-        .filter(|executor| executor.pid > 0);
-    let pid = match &executor {
-        Some(executor) => executor.pid,
-        None => match text.trim().parse::<i32>().ok().filter(|pid| *pid > 0) {
-            Some(pid) => pid,
-            None => return true,
-        },
-    };
-    // An exited process has no start time to read. Only ESRCH proves absence;
-    // permission errors and unavailable identities still retain the claim.
-    if nix::sys::signal::kill(nix::unistd::Pid::from_raw(pid), None)
-        == Err(nix::errno::Errno::ESRCH)
-    {
-        return false;
-    }
-    if let Some(executor) = executor {
-        let (Ok(boot), Ok(start)) = (boot(), start(pid)) else {
-            return true;
-        };
-        if boot != executor.boot || start != executor.start {
-            return false;
-        }
-    }
-    true
 }
 
 /// Exclusive control of one helper, held until dropped.
@@ -453,40 +176,6 @@ pub struct Cause {
     pub command: bool,
     /// The host session that claimed it, when one is recorded.
     pub session: Option<Key>,
-}
-
-/// Where a wait for another controller has got to.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum WaitEvent {
-    /// The first try found the lock held, and the controller waits.
-    Began,
-    /// The wait is over: control was taken, or the answer is a refusal.
-    Ended,
-}
-
-/// What [`Controller::acquire`] tells about its wait; it runs on the
-/// waiting thread.
-pub type WaitHook = Arc<dyn Fn(WaitEvent) + Send + Sync>;
-
-/// A wait under way: its hook hears [`WaitEvent::Began`] when it is made
-/// and [`WaitEvent::Ended`] when it is dropped.
-struct WaitNotice<'a>(Option<&'a WaitHook>);
-
-impl<'a> WaitNotice<'a> {
-    fn begin(hook: Option<&'a WaitHook>) -> Self {
-        if let Some(hook) = hook {
-            hook(WaitEvent::Began);
-        }
-        Self(hook)
-    }
-}
-
-impl Drop for WaitNotice<'_> {
-    fn drop(&mut self) {
-        if let Some(hook) = self.0 {
-            hook(WaitEvent::Ended);
-        }
-    }
 }
 
 /// Controller exclusion and pending-mutation state for one helper account,
@@ -788,60 +477,6 @@ impl Controller {
         &self.holder
     }
 
-    /// Lock `lock`, trying again for what is left of [`Controller::wait`]
-    /// while another controller holds it. A controller given a wait lets
-    /// those already waiting go first.
-    fn take(&self, lock: &File) -> Result<()> {
-        let started = Instant::now();
-        let first = self.wait.is_zero() || !turns::queued(&self.waiting);
-        if self.try_take(lock, started, first)? {
-            return Ok(());
-        }
-
-        self.wait_for_lock(lock, started)
-    }
-
-    /// Try `lock` again about ten times a second, between telling the hook
-    /// that the wait began and that it ended, whenever no command that began
-    /// waiting earlier is still waiting. A signal's stop ends the wait
-    /// within one poll.
-    fn wait_for_lock(&self, lock: &File, started: Instant) -> Result<()> {
-        let _notice = WaitNotice::begin(self.on_wait.as_ref());
-        let turn = turns::Turn::join(&self.waiting, self.label.as_ref());
-        loop {
-            std::thread::sleep(poll(self.remaining()));
-            self.interrupt.check_waiting(started.elapsed())?;
-            if self.try_take(lock, started, turn.first())? {
-                return Ok(());
-            }
-        }
-    }
-
-    /// One try at `lock`, `started` being when the first was made, unless it
-    /// is not this command's `turn`: true once it is held, false while
-    /// another controller holds it (or goes first) and some of the wait is
-    /// left, else why not. The person's note and a Stop are looked at on
-    /// every try, so either ends a wait within one poll, and the person is
-    /// never waited for. A refused lock is let go when the caller drops it.
-    fn try_take(&self, lock: &File, started: Instant, turn: bool) -> Result<bool> {
-        let taken = turn && FileExt::try_lock_exclusive(lock).is_ok();
-        let waited = (!self.wait.is_zero()).then(|| started.elapsed());
-        if !taken && self.person.exists() {
-            return Err(busy_person(waited));
-        }
-        if self.heeds_stop && waited.is_some() && self.stop_noted() {
-            return Err(Error::new("stopped", crate::error::STOPPED));
-        }
-        if taken {
-            return Ok(true);
-        }
-        if self.remaining().is_zero() {
-            return Err(busy_agent(waited, self.wait));
-        }
-
-        Ok(false)
-    }
-
     /// Whether the person stopped agents, as noted on their side.
     pub fn stop_noted(&self) -> bool {
         self.stopped.exists()
@@ -903,24 +538,6 @@ impl Controller {
         }
     }
 
-    /// What is pending, from one read under the marker lock. A marker with
-    /// no entries is an unknown outcome, as an unreadable one is.
-    fn unsettled(&self) -> Result<Unsettled> {
-        let _lock = self.lock_marker()?;
-        if !self.marker.try_exists()? {
-            return Ok(Unsettled::Nothing);
-        }
-
-        let pending = pending(&self.marker)?;
-        let marked = self.commands();
-        let running = |generation: &String| self.running_command(&marked, generation);
-        Ok(if !pending.is_empty() && pending.iter().all(running) {
-            Unsettled::Commands
-        } else {
-            Unsettled::Unknown
-        })
-    }
-
     /// Refuse recovery while a pending change is still being carried out:
     /// a command an agent started, or an executor that outlived its caller.
     /// Recovery never settles either.
@@ -946,369 +563,6 @@ impl Controller {
 
         Ok(())
     }
-
-    fn lock_marker(&self) -> Result<File> {
-        self.make_directory()?;
-        let file = open_lock(&self.marker_lock)?;
-        FileExt::lock_exclusive(&file)?;
-
-        Ok(file)
-    }
-
-    /// Every pending generation, whether a live process is still carrying
-    /// it out, and the host session that claimed it when one is recorded;
-    /// from one locked read of the marker, or none when there is no marker.
-    pub fn pending_causes(&self) -> Result<Vec<Cause>> {
-        if !self.marker.try_exists()? {
-            return Ok(Vec::new());
-        }
-
-        let _lock = self.lock_marker()?;
-        let mut claimed: ByGeneration<Key> = by_generation::read(&self.causes);
-        let marked = self.commands();
-        Ok(pending(&self.marker)?
-            .into_iter()
-            .map(|generation| Cause {
-                running: self.in_progress(&generation),
-                command: self.running_command(&marked, &generation),
-                session: claimed.remove(&generation),
-                generation,
-            })
-            .collect())
-    }
-
-    /// Generations of mutations whose outcome is still unknown.
-    pub fn pending(&self) -> Result<Vec<String>> {
-        let _lock = self.lock_marker()?;
-        pending(&self.marker)
-    }
-
-    /// Generations no mutation in progress will settle: their writer
-    /// dropped or lost its claim (an uncertain failure or a crash), or the
-    /// entry is not one of ours. For display only; every pending generation
-    /// still blocks control until verified recovery.
-    pub fn unresolved(&self) -> Result<Vec<String>> {
-        self.pending_snapshot().map(|snapshot| snapshot.unresolved)
-    }
-
-    /// Unresolved generations, the total and the commands still running,
-    /// from one locked marker read.
-    pub(crate) fn pending_snapshot(&self) -> Result<Snapshot> {
-        // Under the marker lock a finishing mutation cannot clear its entry
-        // between reading the marker and probing its claim.
-        let _lock = self.lock_marker()?;
-        let pending = pending(&self.marker)?;
-        let marked = self.commands();
-        let total = pending.len();
-        let commands = pending
-            .iter()
-            .filter(|generation| self.running_command(&marked, generation))
-            .count();
-        let unresolved = pending
-            .into_iter()
-            .filter(|generation| !self.in_progress(generation))
-            .collect();
-
-        Ok(Snapshot {
-            unresolved,
-            total,
-            commands,
-        })
-    }
-
-    /// The claim file for a generation; only plain tokens name one.
-    fn live(&self, generation: &str) -> Option<PathBuf> {
-        (!generation.is_empty() && generation.bytes().all(|b| b.is_ascii_hexdigit())).then(|| {
-            self.directory
-                .join(format!("{}.{generation}.live", self.name))
-        })
-    }
-
-    /// Whether a live process holds this generation's claim file locked: a
-    /// plain lock test, never an executor's record, so a claim kept only by
-    /// an executor that outlived its caller is not held.
-    fn held(&self, generation: &str) -> bool {
-        self.open_claim(generation).is_some_and(|(_, file)| {
-            FileExt::try_lock_shared(&file)
-                .is_err_and(|error| error.kind() == std::io::ErrorKind::WouldBlock)
-        })
-    }
-
-    /// Whether `generation` is a command an agent started with `run` that
-    /// still runs: `marked` as one, and its claim held by a live process.
-    fn running_command(&self, marked: &[String], generation: &str) -> bool {
-        marked.iter().any(|entry| entry == generation) && self.held(generation)
-    }
-
-    /// The claim file for `generation`, and where it is, when there is one
-    /// that opens without following a link.
-    fn open_claim(&self, generation: &str) -> Option<(PathBuf, File)> {
-        let live = self.live(generation)?;
-        let file = OpenOptions::new()
-            .read(true)
-            .custom_flags(libc::O_NOFOLLOW)
-            .open(&live)
-            .ok()?;
-        Some((live, file))
-    }
-
-    /// The generations marked as commands agents started with `run`, as
-    /// the list beside the marker names them; whether each still runs is
-    /// the reader's to check.
-    fn commands(&self) -> Vec<String> {
-        commands::read(&self.commands)
-    }
-
-    /// Whether some live mutation, in any process, still holds the claim.
-    fn in_progress(&self, generation: &str) -> bool {
-        self.open_claim(generation).is_some_and(|(live, file)| {
-            FileExt::try_lock_shared(&file).is_err() || claim_executor_running(&file, &live)
-        })
-    }
-
-    /// Record a pending mutation this process is carrying out.
-    pub fn quarantine(&self) -> Result<Pending> {
-        self.quarantine_as(&token())
-    }
-
-    /// Record a command an agent started with `run`: its claim, its marker
-    /// entry and its mark as a running command, so other agents may act
-    /// beside it while it runs and recovery waits for it.
-    pub(crate) fn quarantine_command(&self) -> Result<Pending> {
-        self.quarantine_marked(&token(), Mark::Command)
-    }
-
-    /// Record a pending mutation under a generation the caller chose, so it
-    /// can persist its own claim on that generation first. The claim is
-    /// taken before the marker is written, so a marked generation is never
-    /// briefly mistaken for an abandoned one. It is never refused after a
-    /// signal: what settles or cleans up a change under way still records.
-    pub fn quarantine_as(&self, generation: &str) -> Result<Pending> {
-        self.quarantine_marked(generation, Mark::Change)
-    }
-
-    /// [`Controller::quarantine_as`], recorded as `mark` says.
-    fn quarantine_marked(&self, generation: &str, mark: Mark) -> Result<Pending> {
-        let hold = self.interrupt.claim();
-        let live = self
-            .live(generation)
-            .ok_or_else(|| Error::new("state", "Pending generations are hexadecimal tokens"))?;
-
-        self.make_directory()?;
-        let file = open_lock(&live)?;
-        FileExt::try_lock_exclusive(&file)
-            .map_err(|_| Error::new("busy", "That generation is already being carried out"))?;
-
-        let claim = Pending {
-            generation: generation.to_owned(),
-            live,
-            lock: file,
-            _hold: hold,
-        };
-
-        // Claim files are only unlinked under the marker lock or by their
-        // holder, so if the path still names the locked file here, it will
-        // until the claim is dropped.
-        let _lock = self.lock_marker()?;
-        if !claim.names_own_file() {
-            return Err(Error::new(
-                "busy",
-                "That generation's claim changed while it was taken",
-            ));
-        }
-
-        let mut pending = pending(&self.marker)?;
-        if !pending.iter().any(|entry| entry == generation) {
-            pending.push(generation.to_owned());
-        }
-
-        // Marked before the marker names it: a mark the marker does not
-        // name means nothing, and a command that cannot be marked never
-        // starts. So many already run that another is refused.
-        if mark == Mark::Command {
-            let marked = self.commands();
-            let running = pending
-                .iter()
-                .filter(|entry| self.running_command(&marked, entry))
-                .count();
-            if running >= RUNNING_COMMANDS_MAX {
-                return Err(busy_running(format!(
-                    "{RUNNING_COMMANDS_MAX} commands agents started are already running in the helper. Wait for one to end."
-                )));
-            }
-            commands::mark(&self.commands, generation, &pending)?;
-        }
-        replace_private(&self.marker, &serde_json::to_vec(&pending)?)?;
-        if let Some(label) = &self.label {
-            // Whose change it is, for display only; a lost note loses a label.
-            let _ = by_generation::note(&self.causes, generation, &label.key, &pending);
-            if mark == Mark::Command
-                && let Some(note) = Note::now(Some(label))
-            {
-                let _ = by_generation::note(&self.running, generation, &note, &pending);
-            }
-        }
-        Ok(claim)
-    }
-
-    /// Leave a command an agent started with `run` whose outcome became
-    /// unknown as any other unknown outcome: its mark goes, then its claim,
-    /// while its marker entry stays for recovery, and its note with it, to
-    /// name its session. It is never settled here.
-    pub(crate) fn abandon_command(&self, claim: Pending) {
-        if let Ok(_lock) = self.lock_marker() {
-            let kept: Vec<String> = pending(&self.marker)
-                .unwrap_or_default()
-                .into_iter()
-                .filter(|entry| entry != claim.generation())
-                .collect();
-            let _ = commands::keep(&self.commands, &kept);
-        }
-        drop(claim);
-    }
-
-    /// Settle one acknowledged mutation; others stay pending.
-    pub fn clear_if(&self, generation: &str) -> Result<()> {
-        let _lock = self.lock_marker()?;
-
-        if let Some(live) = self.live(generation)
-            && !self.in_progress(generation)
-        {
-            remove_claim(&live);
-        }
-
-        let mut pending = pending(&self.marker)?;
-        pending.retain(|entry| entry != generation);
-        let _ = by_generation::keep::<Key>(&self.causes, &pending);
-        let _ = commands::keep(&self.commands, &pending);
-        let _ = by_generation::keep::<Note>(&self.running, &pending);
-
-        if pending.is_empty() {
-            remove_marker(&self.marker)
-        } else {
-            replace_private(&self.marker, &serde_json::to_vec(&pending)?)
-        }
-    }
-
-    /// Verified recovery settles every pending mutation no live claim holds
-    /// and removes every claim file no live mutation holds, listed or not. A
-    /// mutation still being carried out (an approved root run among them)
-    /// stays pending: only its own end settles it.
-    pub fn clear(&self) -> Result<()> {
-        let _lock = self.lock_marker()?;
-        let running: Vec<String> = pending(&self.marker)?
-            .into_iter()
-            .filter(|generation| self.in_progress(generation))
-            .collect();
-        let prefix = format!("{}.", self.name);
-        let replacing = format!(".{prefix}");
-
-        for entry in fs::read_dir(&self.directory)?.flatten() {
-            let name = entry.file_name();
-            // Only a writer holding the marker lock has a replacement under
-            // way, so one found now was left by a writer that was killed.
-            if name
-                .to_str()
-                .is_some_and(|name| name.starts_with(&replacing) && name.ends_with(REPLACING))
-            {
-                let _ = fs::remove_file(entry.path());
-                continue;
-            }
-            let generation = name
-                .to_str()
-                .and_then(|name| name.strip_prefix(&prefix)?.strip_suffix(".live"));
-            if let Some(generation) = generation
-                && self.live(generation).is_some()
-                && !self.in_progress(generation)
-            {
-                remove_claim(&entry.path());
-                continue;
-            }
-            // An executor record still unnamed when its claim is no longer
-            // held was left by a writer that was killed.
-            let writing = name.to_str().and_then(|name| {
-                let (generation, _) = name
-                    .strip_prefix(&prefix)?
-                    .split_once(&format!(".{EXECUTOR_WRITING}"))?;
-                Some(generation)
-            });
-            if let Some(generation) = writing
-                && self.live(generation).is_some()
-                && !self.in_progress(generation)
-            {
-                let _ = fs::remove_file(entry.path());
-            }
-        }
-        let _ = by_generation::keep::<Key>(&self.causes, &running);
-        let _ = commands::keep(&self.commands, &running);
-        let _ = by_generation::keep::<Note>(&self.running, &running);
-
-        if running.is_empty() {
-            remove_marker(&self.marker)
-        } else {
-            replace_private(&self.marker, &serde_json::to_vec(&running)?)
-        }
-    }
-}
-
-/// The end of the name a replacement is written under before it is renamed
-/// over the file it replaces.
-const REPLACING: &str = ".replacing";
-
-/// Replace the file at `path` with `bytes`, private to this account, so a
-/// reader only ever sees the old file or the new one whole, and a writer
-/// killed partway leaves the old one: the new one is written beside it,
-/// synced, renamed over it, and the folder synced. Only one writer at a
-/// time may replace a file, as the marker lock keeps them.
-fn replace_private(path: &Path, bytes: &[u8]) -> Result<()> {
-    let (Some(directory), Some(name)) = (path.parent(), path.file_name()) else {
-        return Err(Error::new("state", "A record needs a folder and a name"));
-    };
-    let temporary = directory.join(format!(
-        ".{}.{}{REPLACING}",
-        name.to_string_lossy(),
-        token()
-    ));
-    let mut file = OpenOptions::new()
-        .create_new(true)
-        .write(true)
-        .mode(0o600)
-        .custom_flags(libc::O_NOFOLLOW)
-        .open(&temporary)
-        .map_err(|error| Error::writing(&temporary, error))?;
-
-    let written = file.write_all(bytes).and_then(|()| file.sync_all());
-    #[cfg(test)]
-    if commands_tests::INTERRUPT_REPLACE.with(|interrupt| {
-        let stops = interrupt
-            .get()
-            .is_some_and(|ending| name.to_string_lossy().ends_with(ending));
-        if stops {
-            interrupt.set(None);
-        }
-        stops
-    }) {
-        // As a writer killed here would, it leaves the replacement unnamed.
-        return Err(Error::new("state", "interrupted before the rename"));
-    }
-    let replaced = written
-        .and_then(|()| fs::rename(&temporary, path))
-        .and_then(|()| File::open(directory)?.sync_all());
-    if replaced.is_err() {
-        let _ = fs::remove_file(&temporary);
-    }
-    replaced.map_err(|error| Error::writing(path, error))
-}
-
-/// The pending changes, as one locked read of the marker counts them.
-#[derive(Clone, Debug)]
-pub(crate) struct Snapshot {
-    /// Generations no mutation in progress will settle.
-    pub unresolved: Vec<String>,
-    /// How many are pending in all.
-    pub total: usize,
-    /// How many are commands agents started with `run`, still running.
-    pub commands: usize,
 }
 
 /// Refuse `directory` unless it is a real folder of this account, not a
@@ -1332,204 +586,20 @@ fn real_directory(directory: &Path) -> Result<()> {
     Ok(())
 }
 
-/// Pending generations in a marker; an unreadable one stays pending as unknown.
-fn pending(marker: &Path) -> Result<Vec<String>> {
-    match fs::read_to_string(marker) {
-        Ok(text) => {
-            Ok(serde_json::from_str(&text).unwrap_or_else(|_| vec!["legacy-unknown".into()]))
-        }
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(Vec::new()),
-        Err(error) => Err(error.into()),
-    }
-}
-
-fn remove_marker(path: &Path) -> Result<()> {
-    match fs::remove_file(path) {
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
-        other => Ok(other?),
-    }
-}
-
-pub struct Lease {
-    pub owner: Option<String>,
-    pub retired: Option<String>,
-    descriptor: Option<Ownership>,
-    expires: Instant,
-    inflight: bool,
-    cleaning: bool,
-    ttl: Duration,
-}
-
-impl Default for Lease {
-    fn default() -> Self {
-        Self::new(Duration::from_secs(10))
-    }
-}
-
-impl Lease {
-    pub fn new(ttl: Duration) -> Self {
-        Self {
-            owner: None,
-            retired: None,
-            descriptor: None,
-            expires: Instant::now(),
-            inflight: false,
-            cleaning: false,
-            ttl,
-        }
-    }
-
-    pub fn expire(&mut self) {
-        if self.owner.is_some() && Instant::now() >= self.expires {
-            self.retired = self.owner.take();
-            self.cleaning = true;
-        }
-
-        if self.owner.is_none() && !self.inflight && !self.cleaning {
-            self.descriptor = None;
-        }
-    }
-
-    pub fn acquire(&mut self, controller: &Controller) -> Result<String> {
-        self.expire();
-
-        if self.descriptor.is_some() {
-            return Err(Error::new("busy", "Another viewer has control"));
-        }
-
-        self.descriptor = Some(controller.acquire_for_person()?);
-        let token = token();
-        self.owner = Some(token.clone());
-        self.expires = Instant::now() + self.ttl;
-
-        Ok(token)
-    }
-
-    pub fn require(&mut self, token: &str) -> Result<()> {
-        self.expire();
-
-        // Tokens are fixed-length random strings; compare without an early byte exit.
-        let matches = self.owner.as_ref().is_some_and(|owner| {
-            owner.len() == token.len()
-                && owner
-                    .bytes()
-                    .zip(token.bytes())
-                    .fold(0u8, |v, (a, b)| v | (a ^ b))
-                    == 0
-        });
-        if !matches {
-            return Err(Error::new(
-                "lease-lost",
-                "Control was released or expired. Take control again.",
-            ));
-        }
-
-        Ok(())
-    }
-
-    pub fn renew(&mut self, token: &str) -> Result<()> {
-        self.require(token)?;
-        self.expires = Instant::now() + self.ttl;
-        Ok(())
-    }
-
-    pub fn release(&mut self) {
-        self.owner = None;
-        self.retired = None;
-        self.cleaning = false;
-        self.expire();
-    }
-
-    pub fn abandon_acquire(&mut self, owner: &str) {
-        if self.require(owner).is_ok() && !self.inflight && !self.cleaning {
-            self.release();
-        }
-    }
-
-    pub fn begin_release(&mut self, requested: Option<&str>) -> Result<Option<String>> {
-        self.expire();
-        let current = self.owner.as_ref().or(self.retired.as_ref());
-
-        // Releasing a lease that already ended is a no-op; a token can
-        // never end a different controller's lease.
-        if requested.is_some() && current.is_none() {
-            return Ok(None);
-        }
-
-        if requested.is_some() && requested != current.map(String::as_str) {
-            return Err(Error::new(
-                "lease-lost",
-                "This token cannot release another controller",
-            ));
-        }
-
-        // Both the live and any retired token end here.
-        let retired = self.retired.take();
-        let previous = self.owner.take().or(retired);
-        if previous.is_some() {
-            self.cleaning = true;
-        }
-
-        Ok(previous)
-    }
-
-    pub fn end_release(&mut self) {
-        self.cleaning = false;
-        self.expire();
-    }
-
-    pub fn active(&mut self) -> bool {
-        self.expire();
-        self.descriptor.is_some()
-    }
-}
-
-pub type SharedLease = Arc<Mutex<Lease>>;
-
-/// Holds the controller flock until an acknowledged or uncertain operation settles.
-pub struct ActionPermit {
-    lease: SharedLease,
-}
-
-impl ActionPermit {
-    pub async fn begin(lease: SharedLease, token: &str) -> Result<Self> {
-        {
-            let mut state = lease.lock().await;
-            state.require(token)?;
-
-            if state.inflight {
-                return Err(Error::new("busy", "Wait for the current input to finish"));
-            }
-
-            state.inflight = true;
-        }
-
-        Ok(Self { lease })
-    }
-}
-
-impl Drop for ActionPermit {
-    fn drop(&mut self) {
-        let finish = |state: &mut Lease| {
-            state.inflight = false;
-            state.expire();
-        };
-
-        if let Ok(mut state) = self.lease.try_lock() {
-            finish(&mut state);
-        } else if let Ok(runtime) = tokio::runtime::Handle::try_current() {
-            let lease = self.lease.clone();
-            runtime.spawn(async move { finish(&mut *lease.lock().await) });
-        } else {
-            // Outside any runtime, waiting here blocks no async task.
-            finish(&mut self.lease.blocking_lock());
-        }
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
+    use super::{
+        busy::{busy_agent, busy_person},
+        executor::{
+            EXECUTOR_WRITING, Executor, executor_boot, executor_boot_with, executor_running,
+            executor_running_with, executor_start, publish_executor_with, record_executor_with,
+        },
+        wait::poll_with,
+    };
+    use crate::{error::Holder, files::token};
+    use std::io::{Seek, SeekFrom, Write};
+    use tokio::sync::Mutex;
 
     /// What agents and people read gives the default wait the code uses.
     #[test]

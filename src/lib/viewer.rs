@@ -1223,7 +1223,7 @@ pub async fn serve(client: Client, port: u16, program: crate::menubar::Program) 
             let expired = {
                 let mut lease = timer_view.lease.lock().await;
                 lease.expire();
-                lease.retired.is_some()
+                lease.expired()
             };
             if expired {
                 let _ = timer_view.release(None).await;

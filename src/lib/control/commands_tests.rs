@@ -1,7 +1,9 @@
 //! Commands agents started with `run`: other agents act beside one while it
 //! runs, recovery and everything strict wait for it, and one that died
 //! blocks everyone as any unknown outcome does.
+use super::marker::REPLACING;
 use super::*;
+use crate::error::Holder;
 
 thread_local! {
     /// Set to the end of a record's name, the next replacement of that
