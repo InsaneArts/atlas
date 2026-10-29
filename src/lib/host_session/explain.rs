@@ -11,7 +11,7 @@ use super::{
 use crate::{
     client::Client,
     error::{Holder, Result},
-    text::same_text,
+    ui::text::same_text,
 };
 use serde_json::{Value, json};
 use std::{collections::BTreeMap, time::Duration};

@@ -228,7 +228,9 @@ impl Loaded {
         for work in &self.work {
             if let Owned::Launch { app } = &work.owned
                 && work.state == State::Made
-                && !apps.iter().any(|known| crate::text::same_text(known, app))
+                && !apps
+                    .iter()
+                    .any(|known| crate::ui::text::same_text(known, app))
             {
                 apps.push(app);
             }
@@ -247,7 +249,7 @@ impl Loaded {
                     .into_iter()
                     .flatten()
                     .filter_map(|listed| listed["name"].as_str())
-                    .any(|name| crate::text::same_text(name, app))
+                    .any(|name| crate::ui::text::same_text(name, app))
             })
         };
         self.opened_by_name()

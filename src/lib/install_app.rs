@@ -12,7 +12,7 @@ use crate::{
     files::Token,
     handoff::{self, Running, Target},
     task::{Claims, Owned, State, store::Store as Tasks},
-    text::same_text,
+    ui::text::same_text,
 };
 use serde_json::Value;
 use std::{

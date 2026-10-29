@@ -126,6 +126,16 @@ pub fn duration(ms: f64) -> String {
     }
 }
 
+/// Whether two names people or apps give things name the same thing:
+/// compared case-insensitively, so `textedit` and `TextEdit` (or `ÉDITEUR`
+/// and `Éditeur`) agree. App names and element names are both matched so.
+pub(crate) fn same_text(a: &str, b: &str) -> bool {
+    a == b
+        || a.chars()
+            .flat_map(char::to_lowercase)
+            .eq(b.chars().flat_map(char::to_lowercase))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

@@ -272,7 +272,7 @@ impl Owned {
             (Self::Plan { id }, Self::Plan { id: other }) => id == other,
             (Self::Install { id, .. }, Self::Install { id: other, .. }) => id == other,
             (Self::Launch { app }, Self::Launch { app: other }) => {
-                crate::text::same_text(app, other)
+                crate::ui::text::same_text(app, other)
             }
             _ => false,
         }

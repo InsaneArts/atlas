@@ -5,7 +5,7 @@ use crate::{
     client::{Client, Verified},
     error::{Code, Error, Result},
     native::windows::{MENU_LAYER, Window},
-    text::same_text,
+    ui::text::same_text,
 };
 use serde_json::Value;
 

@@ -10,8 +10,8 @@ use crate::{
     files::Token,
     host_session::{HostSession, Key},
     task::{Claims, Owned, State},
-    text::same_text,
     transport::run_output,
+    ui::text::same_text,
 };
 use serde::Serialize;
 use serde_json::Value;

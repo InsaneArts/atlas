@@ -1,5 +1,5 @@
 //! Shared application-selection policy for close-all and held logout.
-use crate::text::same_text;
+use crate::ui::text::same_text;
 use serde_json::Value;
 
 /// Whether a running app (as `apps` lists it) belongs to macOS or to Atlas
