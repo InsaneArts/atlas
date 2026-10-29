@@ -64,6 +64,18 @@ struct StatusReadingSessionsTests {
     #expect(try reading([:]).liveSessions.isEmpty)
   }
 
+  @Test("the panel lists its sessions while one is live, and names who has the helper only from two")
+  func thePanelListsOneLiveSession() throws {
+    let one = try reading(["sessionsShown": false, "holder": "claude", "hostSessions": [Self.three[0]]])
+    #expect(one.listsSessions)
+    #expect(!one.showsSessions && one.holder == nil)
+    let ended = try reading([
+      "hostSessions": [hostSession("pi", host: "pi", name: "Pi · notes-sync", state: "ended")]
+    ])
+    #expect(!ended.listsSessions, "an ended session is not live")
+    #expect(try !reading([:]).listsSessions)
+  }
+
   @Test("the causer is the session whose action is unknown")
   func theCauserIsTheSessionWhoseActionIsUnknown() throws {
     let needing = try reading([

@@ -7,6 +7,12 @@ extension StatusReading {
     status.overview.sessionsShown
   }
 
+  /// Whether the panel lists its sessions in Recent's place: one or more are live. The panel lists a lone session
+  /// too, so its icon and state show, while every other surface names sessions only from two (``showsSessions``).
+  public var listsSessions: Bool {
+    !liveSessions.isEmpty
+  }
+
   /// The live sessions in the service's order: needing the person, acting, waiting, idle.
   public var liveSessions: [ViewerStatus.HostSession] {
     status.overview.hostSessions.filter { $0.isLive && $0.state != .ended }
