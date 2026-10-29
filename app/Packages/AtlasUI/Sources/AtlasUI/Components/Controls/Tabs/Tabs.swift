@@ -1,12 +1,7 @@
 import SwiftUI
 
-/// One row of tabs. As a `track`, the tabs sit side by side in a capsule track, each its word or its symbol, the
-/// selected one on a raised white thumb, which moves to the tab chosen at once, nothing travelling between them. As a
-/// `segment` they sit the same way in a smaller capsule track, each with how many things it holds, as a pane's
-/// filters. As `symbolOverWord`, each tab is its symbol over
-/// its word, the selected one on a filled tile with its symbol in blue, as a settings window's. Each tab is a button
-/// VoiceOver reads as selected or not; anything a tab carries beside its word, such as a dot for something new, comes
-/// from `accessory`.
+/// A row of choices: both capsule styles share one interruptible, draggable thumb; settings tiles keep their
+/// symbol-over-word layout. Labels retain their size and accessories hang outside their measured frames.
 struct Tabs<Tab: Hashable & Sendable, Accessory: View>: View {
   /// How the tabs are drawn.
   typealias Style = TabsStyle
@@ -49,82 +44,14 @@ struct Tabs<Tab: Hashable & Sendable, Accessory: View>: View {
   /// The tabs in their track, or as tiles.
   var body: some View {
     switch style {
-    case .track: track
-    case .segment: segment
+    case .track, .segment: capsule
     case .symbolOverWord: tiles
     }
   }
 
-  /// The tabs in their capsule track, a quiet fill with no edge, the raised thumb under the tab selected.
-  private var track: some View {
-    HStack(spacing: TabsLayout.trackGap) {
-      ForEach(state.tabs) { tab in
-        Button {
-          send(tab.id)
-        } label: {
-          trackLabel(tab)
-            .modifier(hanging(tab.id, gap: face == .symbol ? Spacing.xs : Spacing.xsPlus))
-        }
-        .buttonStyle(TrackTabStyle(isSelected: tab.id == state.selected, face: face))
-        .help(tab.help ?? (face == .symbol ? tab.title : ""))
-        .accessibilityLabel(tab.title)
-        .accessibilityAddTraits(tab.id == state.selected ? .isSelected : [])
-      }
-    }
-    .padding(TabsLayout.trackInset)
-    .background(
-      Capsule()
-        .fill(Color.fillControl)
-    )
-    .fixedSize()
-    .accessibilityElement(children: .contain)
-    .accessibilityLabel(state.label)
-  }
-
-  /// A track tab's word, or its symbol.
-  ///
-  /// - Parameter tab: The tab.
-  /// - Returns: The label.
-  @ViewBuilder private func trackLabel(_ tab: CapsuleTab<Tab>) -> some View {
-    if face == .symbol, let symbol = tab.symbol {
-      Image(systemName: symbol.rawValue)
-        .font(Typography.symbol(.control, weight: .medium))
-    } else {
-      Text(tab.title)
-    }
-  }
-
-  /// The tabs in a small capsule track, each its word and, quietly after it, how many things it holds, as a pane's
-  /// filters.
-  private var segment: some View {
-    HStack(spacing: TabsLayout.trackGap) {
-      ForEach(state.tabs) { tab in
-        Button {
-          send(tab.id)
-        } label: {
-          HStack(spacing: Spacing.xsPlus) {
-            Text(tab.title)
-            if let count = tab.count {
-              Text(verbatim: "\(count)")
-                .font(Typography.digits(.caption, weight: .medium))
-                .foregroundStyle(Color.textTertiary)
-            }
-          }
-          .modifier(hanging(tab.id, gap: Spacing.xs))
-        }
-        .buttonStyle(SegmentTabStyle(isSelected: tab.id == state.selected))
-        .accessibilityLabel(tab.count.map { "\(tab.title), \($0)" } ?? tab.title)
-        .accessibilityAddTraits(tab.id == state.selected ? .isSelected : [])
-      }
-    }
-    .padding(TabsLayout.trackInset)
-    .background(
-      Capsule()
-        .fill(Color.fillControl)
-    )
-    .fixedSize()
-    .accessibilityElement(children: .contain)
-    .accessibilityLabel(state.label)
+  /// The shared interaction for either capsule finish.
+  private var capsule: some View {
+    TabsCapsule(state: state, style: style, face: face, send: send, accessory: accessory)
   }
 
   /// The tabs as tiles, each its symbol over its word.

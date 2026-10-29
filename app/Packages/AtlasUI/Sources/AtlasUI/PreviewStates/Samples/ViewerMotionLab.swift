@@ -22,6 +22,12 @@
     /// The buttons over the window.
     var body: some View {
       InteractivePreview {
+        DisclosureGroup(String("Segmented control motion and key frames")) {
+          ScrollView {
+            TabsMotionLab()
+          }
+          .frame(maxHeight: PreviewStates.viewerSize.height)
+        }
         ForEach(Self.rows, id: \.self) { row in
           HStack(spacing: Spacing.s) {
             ForEach(row) { move in

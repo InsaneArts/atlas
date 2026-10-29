@@ -141,6 +141,8 @@ extension Color {
   static let fillGroup = Color(light: .white(1), dark: .white(0.05))
   /// A chosen row's or thumb's raised fill, such as the selected session's or tab's: white, or white at 0.12.
   static let fillSelection = Color(light: .white(1), dark: .white(0.12))
+  /// A slight darkening of a held segmented thumb, without changing its rim or elevation.
+  static let fillSelectionPressed = Color(light: .black(0.045), dark: .black(0.08))
   /// The raised selection as one opaque colour over the recessed ground, for a ring that cuts a badge out of an icon
   /// resting on it: white, or white at 0.12 laid over rgb(24, 24, 26).
   static let groundSelected = Color(light: .white(1), dark: .rgb(0x343436))
