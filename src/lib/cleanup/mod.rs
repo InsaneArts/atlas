@@ -173,11 +173,12 @@ pub(crate) async fn preview(
                 }
                 Step::RemoveInstall { install, .. } => {
                     if let Some(found) = install_in(&installs, install) {
-                        value["installPhase"] = found["phase"].clone();
-                        value["present"] = json!(found["verified"] == true);
-                        value["unchanged"] = found["unchanged"].clone();
-                        if !found["path"].is_null() {
-                            value["path"] = found["path"].clone();
+                        let placed = found.placed.as_ref();
+                        value["installPhase"] = json!(found.phase);
+                        value["present"] = json!(found.verified());
+                        value["unchanged"] = json!(placed.and_then(|placed| placed.unchanged));
+                        if let Some(placed) = placed {
+                            value["path"] = json!(placed.path);
                         }
                     }
                 }

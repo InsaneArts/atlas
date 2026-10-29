@@ -944,3 +944,138 @@ fn an_install_read_says_where_it_is_only_while_its_own_folder_is_there() {
         "{entry}"
     );
 }
+
+/// `reply` as text, with what differs between runs named: the homes'
+/// folders, install `id` and the node of the folder it placed.
+fn shape(
+    reply: &Value,
+    homes: &Homes,
+    id: &str,
+    root: Option<&super::super::model::Node>,
+) -> String {
+    let mut text = serde_json::to_string(reply).unwrap();
+    if let Some(root) = root {
+        text = text.replace(&serde_json::to_string(root).unwrap(), "\"ROOT\"");
+    }
+    text.replace(&homes.home.display().to_string(), "HOME")
+        .replace(id, "ID")
+}
+
+#[test]
+fn the_install_replies_keep_their_wire_shape() {
+    let mut said = Vec::new();
+
+    let homes = Homes::new();
+    let id = id();
+    let installed = homes.install(&id, "Probe.app").unwrap();
+    said.push(shape(&installed, &homes, &id, None));
+    let root = homes.record(&id).print.unwrap().root;
+    let executable = homes.destination("Probe.app/Contents/MacOS/Probe");
+    let running = executable.to_string_lossy().into_owned();
+    let translocated =
+        "/private/var/folders/x/T/AppTranslocation/1F2E/d/Probe.app/Contents/MacOS/Probe";
+    let processes = move || Ok(vec![(812, running.clone()), (900, translocated.to_owned())]);
+    let ours = |_: &Path| Some(BUNDLE_ID.to_owned());
+    let seen = Looks {
+        processes: &processes,
+        original: &|_| None,
+        bundle_id: &ours,
+    };
+    let missing = crate::files::token();
+    let read = installs(
+        &homes.home,
+        &[id.clone(), missing.clone()],
+        &|| Ok(()),
+        &seen,
+    )
+    .unwrap();
+    said.push(shape(&read, &homes, &id, Some(&root)).replace(&missing, "MISSING"));
+    let in_use = remove(&homes.home, &id, &|| Ok(()), &seen).unwrap();
+    said.push(shape(&in_use, &homes, &id, None));
+    let preferences = homes
+        .home
+        .join(format!("Library/Preferences/{BUNDLE_ID}.plist"));
+    fs::create_dir_all(preferences.parent().unwrap()).unwrap();
+    fs::write(&preferences, "written by the app").unwrap();
+    said.push(shape(&homes.remove(&id), &homes, &id, None));
+    let read = installs(&homes.home, std::slice::from_ref(&id), &|| Ok(()), &seen).unwrap();
+    said.push(shape(&read, &homes, &id, None));
+    said.push(shape(&homes.remove(&missing), &homes, &missing, None));
+
+    let homes = Homes::new();
+    let id = crate::files::token();
+    homes.install(&id, "Probe.app").unwrap();
+    fs::write(
+        homes.destination("Probe.app/Contents/Resources/strings.txt"),
+        "changed!",
+    )
+    .unwrap();
+    said.push(shape(&homes.remove(&id), &homes, &id, None));
+
+    let homes = Homes::new();
+    let id = crate::files::token();
+    homes.install(&id, "Probe.app").unwrap();
+    let destination = homes.destination("Probe.app");
+    fs::rename(&destination, homes.destination("Probe.app.original")).unwrap();
+    bundle(&destination);
+    said.push(shape(&homes.remove(&id), &homes, &id, None));
+
+    let homes = Homes::new();
+    let id = crate::files::token();
+    homes.install(&id, "Probe.app").unwrap();
+    let crossing = |_: &fs::File, _: &FileName, _: &fs::File, _: &FileName| {
+        Err(std::io::Error::from_raw_os_error(libc::EXDEV))
+    };
+    said.push(shape(&homes.remove_with(&id, &crossing), &homes, &id, None));
+    fs::remove_dir_all(homes.destination("Probe.app")).unwrap();
+    said.push(shape(&homes.remove(&id), &homes, &id, None));
+
+    let homes = Homes::new();
+    let id = crate::files::token();
+    homes.install(&id, "Probe.app").unwrap();
+    fs::remove_dir_all(homes.destination("Probe.app")).unwrap();
+    said.push(shape(&homes.remove(&id), &homes, &id, None));
+    let path = homes.store().folder(&id).join("record.json");
+    fs::write(&path, b"{\"version\": 2}").unwrap();
+    said.push(shape(&homes.remove(&id), &homes, &id, None));
+    let read = installs(&homes.home, std::slice::from_ref(&id), &|| Ok(()), &seen).unwrap();
+    said.push(shape(&read, &homes, &id, None));
+
+    let homes = Homes::new();
+    let id = crate::files::token();
+    let source = homes.app("Probe.app");
+    let unsynced = |from: &fs::File, a: &FileName, to: &fs::File, b: &FileName| {
+        moved(from, a, to, b).map(|_| Moved::Unsynced(std::io::Error::other("no sync")))
+    };
+    let cut = install_moving(
+        &homes.home,
+        &id,
+        &source,
+        "Probe.app",
+        &|| Ok(()),
+        &unsynced,
+        &|_| false,
+    )
+    .unwrap();
+    said.push(shape(&cut, &homes, &id, None));
+
+    assert_eq!(
+        said,
+        [
+            r#"{"app":"Probe","bundleId":"test.atlas.install-probe","installId":"ID","installed":true,"ok":true,"path":"HOME/Applications/Probe.app","registered":true,"version":"1.0 (1)"}"#,
+            r#"{"installs":[{"app":"Probe","bundleId":"test.atlas.install-probe","installId":"ID","path":"HOME/Applications/Probe.app","phase":"installed","present":true,"processes":[{"executable":"HOME/Applications/Probe.app/Contents/MacOS/Probe","pid":812}],"root":"ROOT","unchanged":true,"unproven":[{"executable":"/private/var/folders/x/T/AppTranslocation/1F2E/d/Probe.app/Contents/MacOS/Probe","pid":900}],"verified":true},{"installId":"MISSING","phase":"missing"}],"ok":true}"#,
+            r#"{"app":"Probe","installId":"ID","ok":true,"outcome":"inUse","sideEffects":{"kept":[]}}"#,
+            r#"{"app":"Probe","heldPath":"HOME/.config/atlas/installs/held/ID/Probe.app","installId":"ID","ok":true,"outcome":"held","sideEffects":{"kept":[{"existedBefore":false,"path":"Library/Preferences/test.atlas.install-probe.plist"}]}}"#,
+            r#"{"installs":[{"app":"Probe","bundleId":"test.atlas.install-probe","installId":"ID","phase":"held","verified":false}],"ok":true}"#,
+            r#"{"installId":"ID","ok":true,"outcome":"alreadyGone"}"#,
+            r#"{"app":"Probe","installId":"ID","ok":true,"outcome":"kept","reason":"changed","sideEffects":{"kept":[]}}"#,
+            r#"{"app":"Probe","installId":"ID","ok":true,"outcome":"kept","reason":"replaced","sideEffects":{"kept":[]}}"#,
+            r#"{"app":"Probe","installId":"ID","ok":true,"outcome":"kept","reason":"other-volume","sideEffects":{"kept":[]}}"#,
+            r#"{"app":"Probe","installId":"ID","ok":true,"outcome":"kept","reason":"other-volume","sideEffects":{"kept":[]}}"#,
+            r#"{"app":"Probe","installId":"ID","ok":true,"outcome":"alreadyGone","sideEffects":{"kept":[]}}"#,
+            r#"{"installId":"ID","ok":true,"outcome":"kept","reason":"unreadable"}"#,
+            r#"{"installs":[{"installId":"ID","phase":"unreadable","verified":false}],"ok":true}"#,
+            r#"{"error":"no sync","installId":"ID","ok":false,"phase":"placing"}"#,
+        ]
+    );
+}

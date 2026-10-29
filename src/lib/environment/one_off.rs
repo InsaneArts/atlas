@@ -4,7 +4,7 @@
 //! one or asking how installs stand. A change runs under the control its
 //! caller holds; its folder stays while its outcome is not known, as every
 //! change's does.
-use super::{installs::ASKED, model::*, *};
+use super::{installs::ASKED, model::*, reply::InstallState, *};
 use crate::files::Token;
 
 /// Send `request` to the helper account `helper` through a request folder
@@ -79,8 +79,9 @@ pub(crate) async fn remove_app(
 }
 
 /// How each of `ids` stands, read without control: each asked once, in as
-/// many reads as the worker's limit needs, their answers in one list.
-pub(crate) async fn installs(client: &Client, ids: &[Token]) -> Result<Value> {
+/// many reads as the worker's limit needs, their answers in one list. An
+/// answer this build cannot read is left out, as one never given.
+pub(crate) async fn installs(client: &Client, ids: &[Token]) -> Result<Vec<InstallState>> {
     let mut unique: Vec<String> = Vec::new();
     for id in ids {
         if !unique.iter().any(|known| known == id.as_str()) {
@@ -88,7 +89,7 @@ pub(crate) async fn installs(client: &Client, ids: &[Token]) -> Result<Value> {
         }
     }
     if unique.is_empty() {
-        return Ok(json!({"ok": true, "installs": []}));
+        return Ok(Vec::new());
     }
 
     let helper = helper_name(client.config.helper_uid)?;
@@ -102,9 +103,15 @@ pub(crate) async fn installs(client: &Client, ids: &[Token]) -> Result<Value> {
             "installs",
             "The helper's word on its installs was malformed",
         )?;
-        listed.extend(answer["installs"].as_array().cloned().unwrap_or_default());
+        listed.extend(
+            answer["installs"]
+                .as_array()
+                .into_iter()
+                .flatten()
+                .filter_map(|install| serde_json::from_value(install.clone()).ok()),
+        );
     }
-    Ok(json!({"ok": true, "installs": listed}))
+    Ok(listed)
 }
 
 #[cfg(test)]
@@ -139,6 +146,6 @@ mod tests {
             .unwrap();
 
         assert_eq!(asked, [ASKED, 1]);
-        assert_eq!(answer["installs"].as_array().unwrap().len(), 65);
+        assert_eq!(answer.len(), 65);
     }
 }

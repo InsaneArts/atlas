@@ -4437,7 +4437,8 @@ mod tests {
                     }
                     if request["argv"][1] == "environment-worker" {
                         let listed = json!({"ok": true, "installs": [{"installId": install,
-                            "phase": "installed", "verified": true, "path": path}]});
+                            "phase": "installed", "verified": true, "path": path,
+                            "root": {"device": 1, "inode": 2}}]});
                         return Some(completed(&listed.to_string()));
                     }
                     if request["argv"][0] == "/usr/bin/open" {

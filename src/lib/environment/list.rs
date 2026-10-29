@@ -1,7 +1,13 @@
 //! `environment list`: every copy into the helper Atlas knows of, from the
 //! helper's transactions and the frozen plans here, labelled with the session
 //! and task that made each one. It only reads.
-use super::{model::*, *};
+use super::{
+    model::*,
+    reply::{ShownFile, Transactions},
+    undo::PlanPhase,
+    *,
+};
+use crate::task::record::Lenient;
 
 /// The most plans `list` shows; `more` counts the rest.
 pub(super) const SHOWN: usize = 50;
@@ -35,7 +41,12 @@ pub(super) const ASKED: usize = 200;
 /// The helper's own list of its transactions, with those rolled back when
 /// `all`, and whatever it has of the newest frozen plans in `here`; asked
 /// through a request folder of its own that goes once the answer is in.
-async fn transactions(client: &Client, helper: &str, all: bool, here: &[Frozen]) -> Result<Value> {
+async fn transactions(
+    client: &Client,
+    helper: &str,
+    all: bool,
+    here: &[Frozen],
+) -> Result<Transactions> {
     let mut newest: Vec<&Frozen> = here.iter().collect();
     newest.sort_by_key(|plan| std::cmp::Reverse(plan.updated));
     let ids = newest
@@ -53,23 +64,21 @@ pub(super) async fn ask(
     helper: &str,
     all: bool,
     ids: Vec<String>,
-) -> Result<Value> {
+) -> Result<Transactions> {
     if ids.len() > ASKED {
         return Err(problem("Too many plans were asked about"));
     }
+    let malformed = "The helper's list of its copies was malformed";
     let answer = one_off::send(client, helper, None, Request::Transactions { all, ids }).await?;
-    one_off::read(
-        answer,
-        "transactions",
-        "The helper's list of its copies was malformed",
-    )
+    let answer = one_off::read(answer, "transactions", malformed)?;
+    serde_json::from_value(answer).map_err(|_| Error::new("protocol", malformed))
 }
 
 /// A plan folder beside the shared command, as `list` reports it.
 pub(super) struct Frozen {
     id: String,
     /// The plan's files, when it holds a plan for this helper.
-    files: Option<Vec<Value>>,
+    files: Option<Vec<ShownFile>>,
     /// Whether it keeps a request whose outcome is not known.
     request: bool,
     /// Whether a command holds its lock right now.
@@ -96,7 +105,7 @@ impl Frozen {
         self.files
             .iter()
             .flatten()
-            .filter_map(|file| file["target"].as_str().map(str::to_owned))
+            .map(|file| file.target.to_string_lossy().into_owned())
             .collect()
     }
 }
@@ -113,7 +122,7 @@ pub(super) fn frozen(shared: &Path, uid: u32) -> Vec<Frozen> {
                 .ok()
                 .and_then(|bytes| decode::<Plan>(&bytes).ok())
                 .filter(|plan| plan.id == id && plan.uid == uid)
-                .map(|plan| shown_files(&Value::from(file_report(&plan))));
+                .map(|plan| file_report(&plan).iter().map(ShownFile::from).collect());
             let request = requests(&stage);
             if files.is_none() && !request {
                 return None;
@@ -187,9 +196,6 @@ impl<'a> Labels<'a> {
     }
 }
 
-/// The phases a helper transaction may be in, as it names them.
-const PHASES: [&str; 4] = ["applying", "applied", "rollingBack", "rolledBack"];
-
 /// What `list` replies: the helper's transactions, `there`, each in the
 /// state its phase (or a command holding its folder) says, then the frozen
 /// plans `here` the helper never started, newest first and labelled. Plans
@@ -197,41 +203,36 @@ const PHASES: [&str; 4] = ["applying", "applied", "rollingBack", "rolledBack"];
 /// `all`; `more` counts those not shown or not looked at, and `unreadable`
 /// those the helper or this side could not read, so an empty list is
 /// never taken for proof that nothing was copied.
-pub(super) fn listing(here: &[Frozen], there: &Value, labels: &Labels, all: bool) -> Value {
+pub(super) fn listing(here: &[Frozen], there: &Transactions, labels: &Labels, all: bool) -> Value {
     let running = |id: &str| here.iter().any(|plan| plan.id == id && plan.running);
-    let count = |field: &str| there[field].as_u64().unwrap_or(0);
-    let (mut hidden, mut unreadable) = (count("hidden"), count("unreadable"));
+    let (mut hidden, mut unreadable) = (there.hidden, there.unreadable);
     let mut plans: Vec<(u64, Value)> = Vec::new();
     let mut started = Vec::new();
 
-    let transactions = there["transactions"]
-        .as_array()
-        .map_or(&[][..], Vec::as_slice);
-    for transaction in transactions {
-        let (Some(id), Some(phase)) = (
-            transaction["planId"]
-                .as_str()
-                .filter(|id| validate_id(id).is_ok()),
-            transaction["phase"]
-                .as_str()
-                .filter(|phase| PHASES.contains(phase)),
-        ) else {
+    for transaction in &there.transactions {
+        let Lenient::Known(transaction) = transaction else {
+            unreadable += 1;
+            continue;
+        };
+        let id = transaction.plan_id.as_str();
+        let (Ok(()), Some(phase)) = (validate_id(id), PlanPhase::started(&transaction.phase))
+        else {
             unreadable += 1;
             continue;
         };
         started.push(id);
         let state = match phase {
-            _ if running(id) => "running",
-            "rolledBack" if !all => {
+            _ if running(id) => PlanPhase::Running,
+            PlanPhase::RolledBack if !all => {
                 hidden += 1;
                 continue;
             }
             phase => phase,
         };
-        let updated = transaction["updatedAt"].as_u64().unwrap_or(0);
-        let entry = json!({"planId": id, "state": state, "updatedAt": updated,
-            "files": shown_files(&transaction["files"])});
-        plans.push((updated, labels.label(entry, id)));
+        let files: Vec<ShownFile> = transaction.files.iter().map(ShownFile::from).collect();
+        let entry = json!({"planId": id, "state": state, "updatedAt": transaction.updated_at,
+            "files": files});
+        plans.push((transaction.updated_at, labels.label(entry, id)));
     }
 
     for plan in here
@@ -239,11 +240,11 @@ pub(super) fn listing(here: &[Frozen], there: &Value, labels: &Labels, all: bool
         .filter(|plan| !started.contains(&plan.id.as_str()))
     {
         let state = if plan.running {
-            "running"
+            PlanPhase::Running
         } else if plan.request {
-            "unknown"
+            PlanPhase::Unknown
         } else {
-            "previewed"
+            PlanPhase::Previewed
         };
         let entry = json!({"planId": plan.id, "state": state, "updatedAt": plan.updated,
             "files": plan.files.clone().unwrap_or_default()});
@@ -251,7 +252,7 @@ pub(super) fn listing(here: &[Frozen], there: &Value, labels: &Labels, all: bool
     }
 
     plans.sort_by_key(|(updated, _)| std::cmp::Reverse(*updated));
-    let more = u64::try_from(plans.len().saturating_sub(SHOWN)).unwrap_or(u64::MAX) + count("more");
+    let more = u64::try_from(plans.len().saturating_sub(SHOWN)).unwrap_or(u64::MAX) + there.more;
     json!({
         "ok": true,
         "plans": plans.into_iter().take(SHOWN).map(|(_, plan)| plan).collect::<Vec<_>>(),
@@ -259,15 +260,4 @@ pub(super) fn listing(here: &[Frozen], there: &Value, labels: &Labels, all: bool
         "hidden": hidden,
         "unreadable": unreadable,
     })
-}
-
-/// Each of `files` (a helper's file report) by its target and operation
-/// only: nothing else the helper sends is passed on.
-fn shown_files(files: &Value) -> Vec<Value> {
-    files
-        .as_array()
-        .into_iter()
-        .flatten()
-        .map(|file| json!({"target": file["target"], "operation": file["operation"]}))
-        .collect()
 }

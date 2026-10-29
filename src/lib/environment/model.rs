@@ -1,5 +1,5 @@
 //! Versioned, private records. File contents live in separate bounded blobs.
-use super::*;
+use super::{reply::FileReport, *};
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -112,7 +112,7 @@ pub(super) struct Payload {
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
-pub(super) struct Node {
+pub(crate) struct Node {
     pub device: u64,
     pub inode: u64,
 }
@@ -205,7 +205,7 @@ pub(super) struct PlannedFile {
 /// What a plan does to one destination, stored by its lowercase name.
 #[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "lowercase")]
-pub(super) enum Operation {
+pub(crate) enum Operation {
     Create,
     Update,
     Permissions,
@@ -272,15 +272,13 @@ pub(super) fn decode<T: serde::de::DeserializeOwned>(bytes: &[u8]) -> Result<T> 
     serde_json::from_slice(bytes).map_err(|_| problem("Invalid environment record or schema"))
 }
 
-pub(super) fn file_report(plan: &Plan) -> Vec<Value> {
+pub(super) fn file_report(plan: &Plan) -> Vec<FileReport> {
     plan.files
         .iter()
-        .map(|file| {
-            json!({
-                "target": file.payload.target,
-                "operation": file.operation,
-                "legacyPrevious": matches!(file.previous, Some(Entry::Legacy(_))),
-            })
+        .map(|file| FileReport {
+            target: file.payload.target.clone(),
+            operation: file.operation.into(),
+            legacy_previous: matches!(file.previous, Some(Entry::Legacy(_))),
         })
         .collect()
 }

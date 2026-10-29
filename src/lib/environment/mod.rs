@@ -9,6 +9,7 @@ mod model;
 pub(crate) use model::Phase;
 mod one_off;
 pub mod profile;
+mod reply;
 mod runner;
 mod state;
 #[cfg(test)]
@@ -30,6 +31,7 @@ pub(crate) use installs::HELD_DAYS;
 pub use list::list;
 use model::*;
 pub(crate) use one_off::{install_app, installs, remove_app};
+pub(crate) use reply::{InstallState, KeptReason, Outcome, Removal, RunningFrom, SideEffect};
 pub use runner::NO_PROFILE;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};

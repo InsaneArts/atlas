@@ -65,11 +65,7 @@ pub async fn install(client: &Client, path: &Path) -> Result<Value> {
             }
         };
     let source = PathBuf::from(handed.paths.first().cloned().unwrap_or_default());
-    let transport = handed
-        .copied
-        .first()
-        .and_then(|copied| copied["to"].as_str())
-        .and_then(handoff::token_of);
+    let transport = handed.copied.first().map(|copied| copied.token.clone());
 
     let result = environment::install_app(client, &ownership, &id, &source, &name).await;
     let made = match &result {
@@ -159,14 +155,13 @@ pub(crate) async fn installed_path(client: &Client, app: &str) -> Option<String>
     let answer = environment::installs(client, std::slice::from_ref(&id))
         .await
         .ok()?;
-    let found = answer["installs"]
-        .as_array()?
-        .iter()
-        .find(|found| found["installId"] == id.as_str())?;
-    if found["verified"] != true {
+    let found = answer
+        .into_iter()
+        .find(|found| found.install_id == id.as_str())?;
+    if !found.verified() {
         return None;
     }
-    found["path"].as_str().map(str::to_owned)
+    Some(found.placed?.path.to_string_lossy().into_owned())
 }
 
 #[cfg(test)]

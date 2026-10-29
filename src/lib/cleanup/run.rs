@@ -6,20 +6,20 @@
 //! helper's stores.
 use super::{
     plan::{Bundle, Collection, Job, Step},
-    receipt::{CameTo, NotKept, Reason, Receipt, SideEffect, StepState},
+    receipt::{CameTo, NotKept, Reason, Receipt, StepState},
     targets::{install_in, installs_of, targets},
 };
 use crate::{
     app_selection::Process,
     collect::{Intact, Kept},
     daemon::protocol::{JobId, JobRefusal, JobState, Left, Shown},
-    environment::{PlanState, Undone},
+    environment::{InstallState, KeptReason, Outcome as Removed, PlanState, Removal, Undone},
     error::{Error, Result},
     files::Token,
     handoff::{self, CopyRemoval, Running},
     host_session::Key,
 };
-use serde_json::{Value, json};
+use serde_json::Value;
 use std::path::Path;
 
 /// How waiting for a quit step's processes ended.
@@ -41,7 +41,7 @@ pub(crate) trait Hands {
     /// How each of `ids` stands in the helper, read without control: where
     /// it is while its folder is the one Atlas placed, whether it is
     /// unchanged, and what runs from it.
-    async fn installs(&self, ids: &[Token]) -> Result<Value>;
+    async fn installs(&self, ids: &[Token]) -> Result<Vec<InstallState>>;
     /// Signal `processes`, each only while it runs from the folder it was
     /// proven to, and wait until no app in a fresh list runs from any of
     /// `folders`, nor any process from `installs`.
@@ -261,12 +261,12 @@ async fn removes_any(hands: &impl Hands, step: &Step, not_kept: &[NotKept]) -> b
             let Ok(answer) = hands.installs(std::slice::from_ref(install)).await else {
                 return true;
             };
-            let Some(folder) =
-                install_in(&answer, install).and_then(|found| found["path"].as_str())
+            let Some(placed) = install_in(&answer, install).and_then(|found| found.placed.as_ref())
             else {
                 return unknown;
             };
-            unknown || not_kept.iter().any(|file| within(&file.source, folder))
+            let folder = placed.path.to_string_lossy();
+            unknown || not_kept.iter().any(|file| within(&file.source, &folder))
         }
         _ => false,
     }
@@ -553,10 +553,13 @@ fn job_failed(error: &Error) -> Outcome {
 
 /// What the helper says of the installs among `bundles`; nothing to ask
 /// when there are none.
-pub(crate) async fn installs_answer(hands: &impl Hands, bundles: &[Bundle]) -> Result<Value> {
+pub(crate) async fn installs_answer(
+    hands: &impl Hands,
+    bundles: &[Bundle],
+) -> Result<Vec<InstallState>> {
     let ids = installs_of(bundles);
     if ids.is_empty() {
-        return Ok(json!({"ok": true, "installs": []}));
+        return Ok(Vec::new());
     }
     hands.installs(&ids).await
 }
@@ -596,44 +599,35 @@ async fn remove_install(hands: &impl Hands, install: &Token) -> Outcome {
         Ok(reply) => reply,
         Err(error) => return Outcome::erred(&error, Reason::Helper),
     };
-    let came_to = CameTo {
-        side_effects: side_effects(&reply),
-        held: reply["heldPath"].as_str().map(str::to_owned),
-        ..CameTo::default()
-    };
     if reply["ok"] != true {
         let said = reply["error"]
             .as_str()
             .unwrap_or("The helper did not finish moving the app aside");
         return Outcome::failed(Reason::Helper).with(CameTo::failed(said));
     }
-    let outcome = match (reply["outcome"].as_str(), reply["reason"].as_str()) {
-        (Some("held"), _) if came_to.held.is_some() => Outcome::done(),
-        (Some("alreadyGone"), _) => Outcome::gone(),
-        (Some("kept"), Some("replaced")) => Outcome::kept(Reason::Replaced),
-        (Some("kept"), Some("other-volume")) => Outcome::kept(Reason::OtherVolume),
-        (Some("kept"), Some("unreadable")) => Outcome::kept(Reason::Unreadable),
-        (Some("kept"), _) => Outcome::kept(Reason::Changed),
-        (Some("inUse"), _) => Outcome::failed(Reason::InUse),
-        _ => Outcome::failed(Reason::Helper),
+    let Ok(removal) = serde_json::from_value::<Removal>(reply) else {
+        return Outcome::failed(Reason::Helper);
+    };
+    let came_to = CameTo {
+        side_effects: removal.side_effects.unwrap_or_default().kept,
+        held: match &removal.outcome {
+            Removed::Held { held_path } => Some(held_path.to_string_lossy().into_owned()),
+            _ => None,
+        },
+        ..CameTo::default()
+    };
+    let outcome = match removal.outcome {
+        Removed::Held { .. } => Outcome::done(),
+        Removed::AlreadyGone => Outcome::gone(),
+        Removed::Kept { reason } => Outcome::kept(match reason {
+            KeptReason::Replaced => Reason::Replaced,
+            KeptReason::OtherVolume => Reason::OtherVolume,
+            KeptReason::Unreadable => Reason::Unreadable,
+            KeptReason::Changed => Reason::Changed,
+        }),
+        Removed::InUse => Outcome::failed(Reason::InUse),
     };
     outcome.with(came_to)
-}
-
-/// The files an installed app keeps outside its bundle that a removal's
-/// `reply` says exist now.
-fn side_effects(reply: &Value) -> Vec<SideEffect> {
-    reply["sideEffects"]["kept"]
-        .as_array()
-        .into_iter()
-        .flatten()
-        .filter_map(|effect| {
-            Some(SideEffect {
-                path: effect["path"].as_str()?.to_owned(),
-                existed_before: effect["existedBefore"] == true,
-            })
-        })
-        .collect()
 }
 
 async fn remove_copy(hands: &impl Hands, copy: &Token, session: &Key) -> Outcome {

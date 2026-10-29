@@ -13,7 +13,7 @@ use crate::{
     collect::{self, Intact},
     control::Ownership,
     daemon::protocol::{JobId, Shown},
-    environment::{self, PlanState, Undone},
+    environment::{self, InstallState, PlanState, Undone},
     error::{Error, Result},
     files::Token,
     host_session::Key,
@@ -77,7 +77,7 @@ impl Hands for Live<'_> {
         environment::plan_states(self.client, ids).await
     }
 
-    async fn installs(&self, ids: &[Token]) -> Result<Value> {
+    async fn installs(&self, ids: &[Token]) -> Result<Vec<InstallState>> {
         environment::installs(self.client, ids).await
     }
 

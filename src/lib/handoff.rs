@@ -13,7 +13,8 @@ use crate::{
     text::same_text,
     transport::run_output,
 };
-use serde_json::{Value, json};
+use serde::Serialize;
+use serde_json::Value;
 use std::{
     fs,
     io::Write,
@@ -242,8 +243,18 @@ const SESSION: &str = ".session";
 pub(crate) struct Handed {
     /// The targets as the helper can open them, in order.
     pub paths: Vec<String>,
-    /// The copies made for it, each `{"from", "to"}`.
-    pub copied: Vec<Value>,
+    /// The copies made for it.
+    pub copied: Vec<Copied>,
+}
+
+/// One copy made for the helper: what was copied, where to, and the token
+/// its folder is named with. Replies name only where from and to.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+pub(crate) struct Copied {
+    pub from: PathBuf,
+    pub to: PathBuf,
+    #[serde(skip)]
+    pub token: Token,
 }
 
 /// The paths among `targets` as the helper can open them: unchanged when it
@@ -409,7 +420,11 @@ fn handed_in(
                         break;
                     }
                 };
-                made.push((path.clone(), copied.clone()));
+                made.push(Copied {
+                    from: path.clone(),
+                    to: copied.clone(),
+                    token,
+                });
                 if let Err(error) = owner.mark(&path, &copied) {
                     failure = Some(error);
                     break;
@@ -421,7 +436,7 @@ fn handed_in(
 
     if failure.is_some() {
         // Nothing has opened these copies yet: they go with the failure.
-        for folder in made.iter().filter_map(|(_, copy)| copy.parent()) {
+        for folder in made.iter().filter_map(|copy| copy.to.parent()) {
             let _ = fs::remove_dir_all(folder);
         }
     }
@@ -441,10 +456,7 @@ fn handed_in(
     match failure {
         None => Ok(Handed {
             paths,
-            copied: made
-                .into_iter()
-                .map(|(from, to)| json!({"from": from, "to": to}))
-                .collect(),
+            copied: made,
         }),
         Some(error) if leftover.is_empty() => Err(error),
         Some(mut error) => {
@@ -1509,6 +1521,32 @@ mod tests {
             "{record}"
         );
         assert!(record.contains(token_of_copy(&handed.paths[0]).as_str()));
+    }
+
+    #[test]
+    fn a_copy_is_said_by_where_it_came_from_and_went_and_knows_its_folder() {
+        let dir = tempfile::tempdir().unwrap();
+        let (root, _output, claims, _task) = claiming(dir.path());
+        let owner = Owner {
+            session: None,
+            claims: &claims,
+            opened_with: &[],
+        };
+        let source = dir.path().join("plan.rtf");
+        fs::write(&source, "hello").unwrap();
+
+        let handed = handed_in(&root, to_copy(&[&source]), &owner, copy).unwrap();
+
+        let copied = &handed.copied[0];
+        assert_eq!(copied.token, token_of_copy(&handed.paths[0]));
+        assert_eq!(
+            serde_json::to_string(&handed.copied).unwrap(),
+            format!(
+                r#"[{{"from":"{}","to":"{}"}}]"#,
+                source.display(),
+                handed.paths[0]
+            )
+        );
     }
 
     /// The token of the copy folder `copied` lies in, wherever the root is.

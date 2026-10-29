@@ -2466,6 +2466,11 @@ fn tree(root: &Path) -> Vec<PathBuf> {
     paths
 }
 
+/// The helper's list of its transactions `there`, as `list` reads it.
+fn as_listed(there: &Value) -> reply::Transactions {
+    serde_json::from_value(there.clone()).unwrap()
+}
+
 /// The labels of a command with no task, from no records.
 fn unlabelled() -> Labels<'static> {
     Labels {
@@ -2483,7 +2488,7 @@ fn the_transaction_list_carries_no_digest_source_or_contents() {
     assert_eq!(sandbox.apply(&plan)["ok"], true);
 
     let listed = sandbox.transactions();
-    let shown = listing(&[], &listed, &unlabelled(), false);
+    let shown = listing(&[], &as_listed(&listed), &unlabelled(), false);
 
     assert_eq!(listed["transactions"][0]["planId"], plan.id);
     assert_eq!(listed["transactions"][0]["phase"], "applied");
@@ -2532,7 +2537,7 @@ fn a_stopped_apply_is_listed_as_one_to_finish() {
     drop(store);
 
     let listed = sandbox.transactions();
-    let shown = listing(&[], &listed, &unlabelled(), false);
+    let shown = listing(&[], &as_listed(&listed), &unlabelled(), false);
 
     assert_eq!(listed["transactions"][0]["active"], true);
     assert_eq!(shown["plans"][0]["state"], "applying");
@@ -2582,7 +2587,7 @@ fn a_frozen_plan_the_helper_never_started_is_listed_as_previewed() {
 
     let here = frozen(&sandbox.root, uid);
     let nothing = json!({"ok": true, "transactions": [], "more": 0, "unreadable": 0});
-    let shown = listing(&here, &nothing, &unlabelled(), false);
+    let shown = listing(&here, &as_listed(&nothing), &unlabelled(), false);
 
     let mut states: Vec<(String, String)> = shown["plans"]
         .as_array()
@@ -2615,7 +2620,14 @@ fn rolled_back_plans_are_listed_only_when_asked() {
     assert_eq!(sandbox.apply(&undone)["ok"], true);
     assert_eq!(sandbox.rollback(&undone, true)["rolledBack"], true);
 
-    let shown = |all: bool| listing(&[], &sandbox.transactions_of(all, &[]), &unlabelled(), all);
+    let shown = |all: bool| {
+        listing(
+            &[],
+            &as_listed(&sandbox.transactions_of(all, &[])),
+            &unlabelled(),
+            all,
+        )
+    };
     let ids = |all: bool| -> Vec<Value> {
         shown(all)["plans"]
             .as_array()
@@ -2654,7 +2666,7 @@ fn rolled_back_plans_never_push_an_older_applied_one_out_of_the_list() {
     drop(store);
 
     let listed = sandbox.transactions();
-    let shown = listing(&[], &listed, &unlabelled(), false);
+    let shown = listing(&[], &as_listed(&listed), &unlabelled(), false);
 
     assert_eq!(listed["hidden"], 210);
     assert_eq!(listed["more"], 0);
@@ -2674,7 +2686,7 @@ fn a_plan_the_asker_holds_is_listed_whatever_its_phase_or_age() {
 
     let here = frozen(&sandbox.root, uid);
     let listed = sandbox.transactions_of(false, std::slice::from_ref(&plan.id));
-    let shown = listing(&here, &listed, &unlabelled(), false);
+    let shown = listing(&here, &as_listed(&listed), &unlabelled(), false);
 
     assert_eq!(listed["transactions"][0]["phase"], "rolledBack");
     assert!(
@@ -2732,7 +2744,7 @@ fn the_list_is_newest_first_and_bounded() {
     drop(store);
 
     let listed = sandbox.transactions();
-    let shown = listing(&[], &listed, &unlabelled(), false);
+    let shown = listing(&[], &as_listed(&listed), &unlabelled(), false);
 
     assert_eq!(listed["transactions"].as_array().unwrap().len(), 200);
     assert_eq!(listed["more"], 30);
@@ -2941,4 +2953,85 @@ async fn an_apply_claims_its_plan_for_the_task_before_the_helper_is_asked() {
     assert_eq!(applied["phase"], "applied");
     assert_eq!(asked, [vec![(plan.clone(), State::Made)]]);
     assert_eq!(task_claims(&client, &task), [(plan, State::Made)]);
+}
+
+/// `reply` as text, with what differs between runs named: each of `plans`
+/// by its place, and every time.
+fn shaped(reply: &Value, plans: &[&str]) -> String {
+    let mut text = serde_json::to_string(reply).unwrap();
+    for (place, plan) in plans.iter().enumerate() {
+        text = text.replace(plan, &format!("PLAN{place}"));
+    }
+    let mut out = String::new();
+    let mut rest = text.as_str();
+    while let Some(at) = rest.find("\"updatedAt\":") {
+        let (before, after) = rest.split_at(at + "\"updatedAt\":".len());
+        out.push_str(before);
+        out.push_str("TIME");
+        rest = after.trim_start_matches(|c: char| c.is_ascii_digit());
+    }
+    out.push_str(rest);
+    out
+}
+
+#[test]
+fn the_transaction_replies_keep_their_wire_shape() {
+    let sandbox = Sandbox::new();
+    let kept = sandbox.plan(vec![sandbox.payload(".config/probe/a.toml", b"one")]);
+    let undone = sandbox.plan(vec![
+        sandbox.payload("undone", b"two"),
+        sandbox.payload(".local/bin/tool", b"three"),
+    ]);
+    let plans = [kept.id.as_str(), undone.id.as_str()];
+    let mut said = vec![
+        shaped(&sandbox.apply(&kept), &plans),
+        shaped(&sandbox.apply(&undone), &plans),
+    ];
+    fs::write(sandbox.home.join("undone"), b"changed in the helper").unwrap();
+    said.push(shaped(&sandbox.rollback(&undone, false), &plans));
+    said.push(shaped(&sandbox.rollback(&undone, true), &plans));
+    said.push(shaped(&sandbox.rollback(&undone, true), &plans));
+    let store = state::Store::open(&sandbox.home, true).unwrap();
+    fs::File::open(store.folder(&kept.id).join("transaction.json"))
+        .unwrap()
+        .set_modified(std::time::SystemTime::now() - Duration::from_secs(10_000))
+        .unwrap();
+    drop(store);
+    let listed = sandbox.transactions();
+    said.push(shaped(&listed, &plans));
+    said.push(shaped(
+        &listing(&[], &as_listed(&listed), &unlabelled(), false),
+        &plans,
+    ));
+    let every = sandbox.transactions_of(true, &[]);
+    said.push(shaped(&every, &plans));
+    said.push(shaped(
+        &listing(&[], &as_listed(&every), &unlabelled(), true),
+        &plans,
+    ));
+    let odd = json!({"ok": true, "more": 2, "hidden": 1, "unreadable": 1, "transactions": [
+        {"planId": kept.id, "phase": "sideways", "updatedAt": 5, "files": []},
+        {"planId": "not-a-plan", "phase": "applied"},
+        {"planId": undone.id, "phase": "applied", "files": [{"target": "x", "operation": "create", "legacyPrevious": true}]},
+    ]});
+    said.push(shaped(
+        &listing(&[], &as_listed(&odd), &unlabelled(), false),
+        &plans,
+    ));
+
+    assert_eq!(
+        said,
+        [
+            r#"{"applied":true,"completedTargets":[".config/probe/a.toml"],"files":[{"legacyPrevious":false,"operation":"create","target":".config/probe/a.toml"}],"ok":true,"pendingTargets":[],"phase":"applied","planId":"PLAN0","resumeRequired":false,"retainedDirectories":[],"rolledBack":false}"#,
+            r#"{"applied":true,"completedTargets":["undone",".local/bin/tool"],"files":[{"legacyPrevious":false,"operation":"create","target":"undone"},{"legacyPrevious":false,"operation":"create","target":".local/bin/tool"}],"ok":true,"pendingTargets":[],"phase":"applied","planId":"PLAN1","resumeRequired":false,"retainedDirectories":[],"rolledBack":false}"#,
+            r#"{"applied":true,"completedTargets":[],"files":[{"legacyPrevious":false,"operation":"create","target":"undone"},{"legacyPrevious":false,"operation":"create","target":".local/bin/tool"}],"keptTargets":["undone"],"ok":true,"pendingTargets":[".local/bin/tool"],"phase":"applied","planId":"PLAN1","preview":true,"resumeRequired":false,"retainedDirectories":[],"rolledBack":false}"#,
+            r#"{"applied":false,"completedTargets":[".local/bin/tool"],"files":[{"legacyPrevious":false,"operation":"create","target":"undone"},{"legacyPrevious":false,"operation":"create","target":".local/bin/tool"}],"keptTargets":["undone"],"ok":true,"pendingTargets":[],"phase":"rolledBack","planId":"PLAN1","preview":false,"resumeRequired":false,"retainedDirectories":[],"rolledBack":true}"#,
+            r#"{"applied":false,"completedTargets":[".local/bin/tool"],"files":[{"legacyPrevious":false,"operation":"create","target":"undone"},{"legacyPrevious":false,"operation":"create","target":".local/bin/tool"}],"keptTargets":["undone"],"ok":true,"pendingTargets":[],"phase":"rolledBack","planId":"PLAN1","resumeRequired":false,"retainedDirectories":[],"rolledBack":true}"#,
+            r#"{"hidden":1,"more":0,"ok":true,"transactions":[{"active":false,"files":[{"legacyPrevious":false,"operation":"create","target":".config/probe/a.toml"}],"phase":"applied","planId":"PLAN0","retainedDirectories":0,"updatedAt":TIME}],"unreadable":0}"#,
+            r#"{"hidden":1,"more":0,"ok":true,"plans":[{"files":[{"operation":"create","target":".config/probe/a.toml"}],"planId":"PLAN0","session":null,"state":"applied","thisTask":false,"updatedAt":TIME}],"unreadable":0}"#,
+            r#"{"hidden":0,"more":0,"ok":true,"transactions":[{"active":false,"files":[{"legacyPrevious":false,"operation":"create","target":"undone"},{"legacyPrevious":false,"operation":"create","target":".local/bin/tool"}],"phase":"rolledBack","planId":"PLAN1","retainedDirectories":0,"updatedAt":TIME},{"active":false,"files":[{"legacyPrevious":false,"operation":"create","target":".config/probe/a.toml"}],"phase":"applied","planId":"PLAN0","retainedDirectories":0,"updatedAt":TIME}],"unreadable":0}"#,
+            r#"{"hidden":0,"more":0,"ok":true,"plans":[{"files":[{"operation":"create","target":"undone"},{"operation":"create","target":".local/bin/tool"}],"planId":"PLAN1","session":null,"state":"rolledBack","thisTask":false,"updatedAt":TIME},{"files":[{"operation":"create","target":".config/probe/a.toml"}],"planId":"PLAN0","session":null,"state":"applied","thisTask":false,"updatedAt":TIME}],"unreadable":0}"#,
+            r#"{"hidden":1,"more":2,"ok":true,"plans":[{"files":[{"operation":"create","target":"x"}],"planId":"PLAN1","session":null,"state":"applied","thisTask":false,"updatedAt":TIME}],"unreadable":3}"#,
+        ]
+    );
 }

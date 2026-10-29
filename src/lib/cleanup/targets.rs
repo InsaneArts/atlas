@@ -8,6 +8,7 @@
 use super::plan::Bundle;
 use crate::{
     app_selection::{Process, Within},
+    environment::{InstallState, RunningFrom},
     files::Token,
     handoff,
     host_session::Key,
@@ -40,11 +41,10 @@ pub(crate) fn installs_of(bundles: &[Bundle]) -> Vec<Token> {
 }
 
 /// What the helper said of install `id` in `installs`, its answer.
-pub(crate) fn install_in<'a>(installs: &'a Value, id: &Token) -> Option<&'a Value> {
-    installs["installs"]
-        .as_array()?
+pub(crate) fn install_in<'a>(installs: &'a [InstallState], id: &Token) -> Option<&'a InstallState> {
+    installs
         .iter()
-        .find(|install| install["installId"] == id.as_str())
+        .find(|install| install.install_id == id.as_str())
 }
 
 /// What the quit step signals for `bundles` of `session`'s work: the apps
@@ -55,7 +55,7 @@ pub(crate) fn targets(
     copies: &Path,
     session: &Key,
     bundles: &[Bundle],
-    installs: &Value,
+    installs: &[InstallState],
     apps: &Value,
 ) -> Targets {
     let mut proven: Vec<Within> = Vec::new();
@@ -76,17 +76,19 @@ pub(crate) fn targets(
 
         if let Bundle::Install(id) = bundle
             && let Some(install) = install_in(installs, id)
+            && let Some(placed) = &install.placed
         {
-            for process in install["processes"].as_array().into_iter().flatten() {
+            for process in &placed.processes {
                 if let Some(process) = helper_process(process, &within) {
                     targets.processes.push(process);
                 }
             }
-            for process in install["unproven"].as_array().into_iter().flatten() {
-                let app = install["app"].as_str().unwrap_or("an app").to_owned();
-                if process["pid"].is_u64() && !targets.untraced.contains(&app) {
-                    targets.untraced.push(app);
-                }
+            let app = install
+                .recorded
+                .as_ref()
+                .map_or("an app", |recorded| recorded.app.as_str());
+            if !placed.unproven.is_empty() && !targets.untraced.iter().any(|known| known == app) {
+                targets.untraced.push(app.to_owned());
             }
         }
         proven.push(within);
@@ -119,25 +121,23 @@ pub(crate) fn targets(
 
 /// An install's folder and node, when the helper verified that its
 /// destination holds the exact folder Atlas placed.
-fn proven_install(install: &Value) -> Option<Within> {
-    if install["verified"] != true {
+fn proven_install(install: &InstallState) -> Option<Within> {
+    if !install.verified() {
         return None;
     }
-    let folder = install["path"].as_str()?.to_owned();
-    let node = format!(
-        "{}:{}",
-        install["root"]["device"].as_u64()?,
-        install["root"]["inode"].as_u64()?
-    );
-    Some(Within { folder, node })
+    let placed = install.placed.as_ref()?;
+    Some(Within {
+        folder: placed.path.to_string_lossy().into_owned(),
+        node: format!("{}:{}", placed.root.device, placed.root.inode),
+    })
 }
 
 /// A process the helper listed as running from an install, to signal only
 /// while that install is still the one proven.
-fn helper_process(process: &Value, within: &Within) -> Option<Process> {
-    let executable = process["executable"].as_str()?;
+fn helper_process(process: &RunningFrom, within: &Within) -> Option<Process> {
+    let executable = process.executable.as_str();
     Some(Process {
-        pid: process["pid"].as_u64().filter(|pid| *pid > 0)?,
+        pid: Some(u64::from(process.pid)).filter(|pid| *pid > 0)?,
         executable: executable.to_owned(),
         name: Path::new(executable)
             .file_name()
@@ -168,12 +168,11 @@ pub(crate) fn still_running(apps: &Value, folders: &[String]) -> Vec<Value> {
 
 /// The processes `installs` (the helper's word on them) says still run
 /// from a verified install.
-pub(crate) fn still_in_installs(installs: &Value) -> usize {
-    installs["installs"]
-        .as_array()
-        .into_iter()
-        .flatten()
-        .filter(|install| install["verified"] == true)
-        .map(|install| install["processes"].as_array().map_or(0, Vec::len))
+pub(crate) fn still_in_installs(installs: &[InstallState]) -> usize {
+    installs
+        .iter()
+        .filter(|install| install.verified())
+        .filter_map(|install| install.placed.as_ref())
+        .map(|placed| placed.processes.len())
         .sum()
 }

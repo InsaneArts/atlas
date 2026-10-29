@@ -24,7 +24,13 @@ mod tests;
 )]
 mod translocate;
 
-use super::*;
+use super::{
+    reply::{
+        InstallSeen, InstallState, Installed, InstalledApp, KeptReason, Outcome, Placed, Removal,
+        RunningFrom, SideEffect, SideEffects, Unfinished,
+    },
+    *,
+};
 use crate::{
     files::{Lock, lock_within},
     fs_move::{FileName, Moved, move_between},
@@ -98,10 +104,9 @@ pub(super) struct Install {
     pub made_folder: bool,
     /// Which files keyed by the bundle identifier existed at install time.
     pub before: BTreeMap<String, bool>,
-    /// Why it was kept, once it was: `changed`, `replaced` or
-    /// `other-volume`.
+    /// Why it was kept, once it was.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub kept: Option<String>,
+    pub kept: Option<KeptReason>,
     /// When it was held, in milliseconds since 1970, once it was.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub held_at: Option<u64>,
@@ -110,7 +115,7 @@ pub(super) struct Install {
 /// How far an install, or taking it away, got.
 #[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
-pub(super) enum InstallPhase {
+pub(crate) enum InstallPhase {
     /// Being copied into the store's staging folder.
     Copying,
     /// Printed, and being moved into place.
@@ -428,17 +433,17 @@ fn install_moving(
     match placed {
         // Registered so `open --app NAME` finds it; one LaunchServices did
         // not take is still installed, and opens by its path.
-        Ok(Placed::Installed) => Ok(json!({
-            "ok": true,
-            "installed": true,
-            "installId": id,
-            "app": name.trim_end_matches(".app"),
-            "path": destination,
-            "bundleId": record.bundle_id,
-            "version": record.version_string,
-            "registered": registrar(&destination),
+        Ok(Placing::Installed) => Ok(json!(Installed {
+            ok: true,
+            installed: true,
+            install_id: id.to_owned(),
+            app: record.name.trim_end_matches(".app").to_owned(),
+            registered: registrar(&destination),
+            path: destination,
+            bundle_id: record.bundle_id,
+            version: record.version_string,
         })),
-        Ok(Placed::Refused(error)) => Err(error),
+        Ok(Placing::Refused(error)) => Err(error),
         Err(error) => Ok(unfinished(id, &record, &error)),
     }
 }
@@ -446,16 +451,16 @@ fn install_moving(
 /// The reply to a request that changed the helper and then failed: one to
 /// finish, never a refusal.
 fn unfinished(id: &str, record: &Install, error: &Error) -> Value {
-    json!({
-        "ok": false,
-        "installId": id,
-        "phase": record.phase,
-        "error": error.error,
+    json!(Unfinished {
+        ok: false,
+        install_id: id.to_owned(),
+        phase: record.phase,
+        error: error.error.clone(),
     })
 }
 
 /// How placing an install ended.
-enum Placed {
+enum Placing {
     Installed,
     /// Refused, with nothing left of it but its record, which says removed.
     Refused(Error),
@@ -468,14 +473,14 @@ fn place(
     source: &Path,
     guard: &impl Fn() -> Result<()>,
     mover: Mover,
-) -> Result<Placed> {
+) -> Result<Placing> {
     let (staging, staging_folder) = store.staging(&record.id)?;
     let staged = staging.join(&record.name);
-    let give_up = |record: &mut Install, error: Error| -> Result<Placed> {
+    let give_up = |record: &mut Install, error: Error| -> Result<Placing> {
         delete(&staging)?;
         record.phase = InstallPhase::Removed;
         store.save(record)?;
-        Ok(Placed::Refused(error))
+        Ok(Placing::Refused(error))
     };
 
     guard()?;
@@ -568,7 +573,7 @@ fn place(
     record.phase = InstallPhase::Installed;
     store.save(record)?;
     delete(&staging)?;
-    Ok(Placed::Installed)
+    Ok(Placing::Installed)
 }
 
 /// Whether `id` is a bundle identifier of `A-Z a-z 0-9 . -` only, as files
@@ -608,16 +613,6 @@ fn side_effects(home: &Path, id: &str) -> Vec<(String, bool)> {
             (path, exists)
         })
         .collect()
-}
-
-/// What taking an install away came to, as its reply names it.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub(super) enum Outcome {
-    /// Moved aside among the held installs, to this path.
-    Held(PathBuf),
-    AlreadyGone,
-    Kept(&'static str),
-    InUse,
 }
 
 /// Take install `id` away, into its own folder among the held installs,
@@ -696,7 +691,10 @@ impl<G: Fn() -> Result<()>> Removing<'_, G> {
         let mut record = match self.store.load(id) {
             Found::Missing => return Ok(removal(id, &Outcome::AlreadyGone, None, self.home)),
             Found::Unreadable => {
-                return Ok(removal(id, &Outcome::Kept("unreadable"), None, self.home));
+                let unreadable = Outcome::Kept {
+                    reason: KeptReason::Unreadable,
+                };
+                return Ok(removal(id, &unreadable, None, self.home));
             }
             Found::Record(record) => *record,
         };
@@ -722,12 +720,15 @@ impl<G: Fn() -> Result<()>> Removing<'_, G> {
     fn recorded(&self, record: &mut Install) -> Result<Outcome> {
         match record.phase {
             InstallPhase::Removed => Ok(Outcome::AlreadyGone),
-            InstallPhase::Held => Ok(Outcome::Held(self.store.held_path(record))),
-            InstallPhase::Kept => Ok(Outcome::Kept(match record.kept.as_deref() {
-                Some("replaced") => "replaced",
-                Some("other-volume") => "other-volume",
-                _ => "changed",
-            })),
+            InstallPhase::Held => Ok(Outcome::Held {
+                held_path: self.store.held_path(record),
+            }),
+            InstallPhase::Kept => Ok(Outcome::Kept {
+                reason: match record.kept {
+                    Some(reason @ (KeptReason::Replaced | KeptReason::OtherVolume)) => reason,
+                    _ => KeptReason::Changed,
+                },
+            }),
             InstallPhase::Copying => self.unplaced(record),
             InstallPhase::Placing if !self.placed(record) => self.unplaced(record),
             InstallPhase::Holding => self.finish_holding(record),
@@ -750,7 +751,7 @@ impl<G: Fn() -> Result<()>> Removing<'_, G> {
     fn in_place(&self, record: &mut Install) -> Result<Outcome> {
         let destination = self.destination(record);
         let Some(print) = record.print.clone() else {
-            return self.keep(record, "changed");
+            return self.keep(record, KeptReason::Changed);
         };
         let metadata = match fs::symlink_metadata(&destination) {
             Ok(metadata) => metadata,
@@ -762,10 +763,10 @@ impl<G: Fn() -> Result<()>> Removing<'_, G> {
             Err(error) => return Err(error.into()),
         };
         if !metadata.is_dir() || node(&metadata) != print.root {
-            return self.keep(record, "replaced");
+            return self.keep(record, KeptReason::Replaced);
         }
         if !self.same_print(&destination, record, &print) {
-            return self.keep(record, "changed");
+            return self.keep(record, KeptReason::Changed);
         }
         let processes = (self.looks.processes)()?;
         if !running_from(
@@ -781,7 +782,7 @@ impl<G: Fn() -> Result<()>> Removing<'_, G> {
 
         let applications = self.applications()?;
         if (self.volume)(&self.store.holding()?)? != (self.volume)(&applications)? {
-            return self.keep(record, "other-volume");
+            return self.keep(record, KeptReason::OtherVolume);
         }
         record.phase = InstallPhase::Holding;
         self.store.save(record)?;
@@ -798,7 +799,7 @@ impl<G: Fn() -> Result<()>> Removing<'_, G> {
                 record.phase = InstallPhase::Installed;
                 self.store.save(record)?;
                 if error.raw_os_error() == Some(libc::EXDEV) {
-                    return self.keep(record, "other-volume");
+                    return self.keep(record, KeptReason::OtherVolume);
                 }
                 Err(error.into())
             }
@@ -826,7 +827,9 @@ impl<G: Fn() -> Result<()>> Removing<'_, G> {
         record.phase = InstallPhase::Held;
         record.held_at = Some(now_ms());
         self.store.save(record)?;
-        Ok(Outcome::Held(self.store.held_path(record)))
+        Ok(Outcome::Held {
+            held_path: self.store.held_path(record),
+        })
     }
 
     /// Whether the bundle at `path` prints as `print`; one that cannot be
@@ -849,11 +852,11 @@ impl<G: Fn() -> Result<()>> Removing<'_, G> {
     }
 
     /// Keep the install for `reason`, and say so from now on.
-    fn keep(&self, record: &mut Install, reason: &'static str) -> Result<Outcome> {
+    fn keep(&self, record: &mut Install, reason: KeptReason) -> Result<Outcome> {
         record.phase = InstallPhase::Kept;
-        record.kept = Some(reason.to_owned());
+        record.kept = Some(reason);
         self.store.save(record)?;
-        Ok(Outcome::Kept(reason))
+        Ok(Outcome::Kept { reason })
     }
 }
 
@@ -861,34 +864,26 @@ impl<G: Fn() -> Result<()>> Removing<'_, G> {
 /// apart from it, which files keyed by its identifier exist now and
 /// whether each existed when it was installed. Those are never touched.
 fn removal(id: &str, outcome: &Outcome, record: Option<&Install>, home: &Path) -> Value {
-    let mut reply = json!({"ok": true, "installId": id});
-    match outcome {
-        Outcome::Held(path) => {
-            reply["outcome"] = json!("held");
-            reply["heldPath"] = json!(path);
-        }
-        Outcome::AlreadyGone => reply["outcome"] = json!("alreadyGone"),
-        Outcome::Kept(reason) => {
-            reply["outcome"] = json!("kept");
-            reply["reason"] = json!(reason);
-        }
-        Outcome::InUse => reply["outcome"] = json!("inUse"),
-    }
-    if let Some(record) = record {
-        reply["app"] = json!(record.name.trim_end_matches(".app"));
-        if let Some(bundle_id) = &record.bundle_id {
-            let kept: Vec<Value> = side_effects(home, bundle_id)
-                .into_iter()
-                .filter(|(_, exists)| *exists)
-                .map(|(path, _)| {
-                    let before = record.before.get(&path).copied().unwrap_or(false);
-                    json!({"path": path, "existedBefore": before})
-                })
-                .collect();
-            reply["sideEffects"] = json!({"kept": kept});
-        }
-    }
-    reply
+    let side_effects = record.and_then(|record| {
+        let bundle_id = record.bundle_id.as_ref()?;
+        let kept = side_effects(home, bundle_id)
+            .into_iter()
+            .filter(|(_, exists)| *exists)
+            .map(|(path, _)| SideEffect {
+                existed_before: record.before.get(&path).copied().unwrap_or(false),
+                path,
+            })
+            .collect();
+        Some(SideEffects { kept })
+    });
+    let removal = Removal {
+        ok: true,
+        install_id: id.to_owned(),
+        outcome: outcome.clone(),
+        app: record.map(|record| record.name.trim_end_matches(".app").to_owned()),
+        side_effects,
+    };
+    json!(removal)
 }
 
 /// How each of `ids` stands, read only. Where an install is, and what
@@ -918,25 +913,25 @@ pub(super) fn installs(
     };
     let until = Instant::now() + READ_PRINTS;
 
-    let listed: Vec<Value> = ids
+    let listed: Vec<InstallState> = ids
         .iter()
         .map(|id| {
             let record = match store.as_ref().map(|store| store.load(id)) {
                 None | Some(Found::Missing) => {
-                    return json!({"installId": id, "phase": "missing"});
+                    return InstallState::of(id, InstallSeen::Missing, None);
                 }
                 Some(Found::Unreadable) => {
-                    return json!({"installId": id, "phase": "unreadable", "verified": false});
+                    return InstallState::of(id, InstallSeen::Unreadable, Some(false));
                 }
                 Some(Found::Record(record)) => *record,
             };
-            let mut said = json!({
-                "installId": id,
-                "phase": record.phase,
-                "app": record.name.trim_end_matches(".app"),
-                "bundleId": record.bundle_id,
-                "verified": false,
-            });
+            let mut said = InstallState {
+                recorded: Some(InstalledApp {
+                    app: record.name.trim_end_matches(".app").to_owned(),
+                    bundle_id: record.bundle_id.clone(),
+                }),
+                ..InstallState::of(id, InstallSeen::Recorded(record.phase), Some(false))
+            };
             let placed_phase = matches!(
                 record.phase,
                 InstallPhase::Placing | InstallPhase::Installed | InstallPhase::Holding
@@ -957,26 +952,31 @@ pub(super) fn installs(
             };
             let unchanged = match directory(&destination, false) {
                 Ok(Some(folder)) => match print_at(&folder, record.executable.as_deref(), limits) {
-                    Ok(now) => json!(now == *print),
-                    Err(Unprinted::TooSlow) => Value::Null,
-                    Err(_) => json!(false),
+                    Ok(now) => Some(now == *print),
+                    Err(Unprinted::TooSlow) => None,
+                    Err(_) => Some(false),
                 },
-                _ => json!(false),
+                _ => Some(false),
             };
             let runs = running_from(looks, &running, &destination, record.bundle_id.as_deref());
-            let listed = |which: Runs| -> Vec<Value> {
+            let listed = |which: Runs| -> Vec<RunningFrom> {
                 runs.iter()
                     .filter(|(.., runs)| *runs == which)
-                    .map(|(pid, executable, _)| json!({"pid": pid, "executable": executable}))
+                    .map(|(pid, executable, _)| RunningFrom {
+                        pid: *pid,
+                        executable: executable.clone(),
+                    })
                     .collect()
             };
-            said["verified"] = json!(true);
-            said["path"] = json!(destination);
-            said["root"] = json!(print.root);
-            said["present"] = json!(true);
-            said["unchanged"] = unchanged;
-            said["processes"] = json!(listed(Runs::From));
-            said["unproven"] = json!(listed(Runs::Maybe));
+            said.verified = Some(true);
+            said.placed = Some(Placed {
+                path: destination.clone(),
+                root: print.root.clone(),
+                present: true,
+                unchanged,
+                processes: listed(Runs::From),
+                unproven: listed(Runs::Maybe),
+            });
             said
         })
         .collect();

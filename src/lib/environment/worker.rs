@@ -1,5 +1,11 @@
 //! Runs inside the selected login. Every mutation is guarded and journaled.
-use super::{model::*, state::Store, *};
+use super::{
+    model::*,
+    reply::{TransactionSummary, Transactions},
+    state::Store,
+    *,
+};
+use crate::task::record::Lenient;
 
 /// The helper's answer for a plan it never applied.
 pub(super) const MISSING: &str =
@@ -96,25 +102,25 @@ pub(super) fn transactions(
             {
                 hidden += 1;
             }
-            Ok(Some(transaction)) => listed.push(json!({
-                "planId": id,
-                "phase": transaction.phase,
-                "active": active.as_deref() == Some(id.as_str()),
-                "updatedAt": updated,
-                "files": file_report(&transaction.plan),
-                "retainedDirectories": transaction.retained_directories.len(),
+            Ok(Some(transaction)) => listed.push(Lenient::Known(TransactionSummary {
+                plan_id: id.clone(),
+                phase: transaction.phase.into(),
+                active: active.as_deref() == Some(id.as_str()),
+                updated_at: *updated,
+                files: file_report(&transaction.plan),
+                retained_directories: transaction.retained_directories.len(),
             })),
             Ok(None) | Err(_) => unreadable += 1,
         }
     }
 
-    Ok(json!({
-        "ok": true,
-        "transactions": listed,
-        "hidden": hidden,
-        "more": more,
-        "unreadable": unreadable,
-    }))
+    Ok(serde_json::to_value(Transactions {
+        ok: true,
+        transactions: listed,
+        hidden,
+        more,
+        unreadable,
+    })?)
 }
 
 /// The transactions whose record is in the store at `path`, by ID, with

@@ -3,8 +3,13 @@
 //! control the cleanup holds. Every plan is looked at by its own ID only;
 //! nothing here lists the helper's store or the plans beside the shared
 //! command for anything else.
-use super::{list::frozen, model::*, *};
-use crate::files::Token;
+use super::{
+    list::frozen,
+    model::*,
+    reply::{TransactionSummary, Transactions},
+    *,
+};
+use crate::{files::Token, task::record::Lenient};
 
 /// How far a plan got, as a cleanup reads it before it undoes anything.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
@@ -23,6 +28,20 @@ pub(crate) enum PlanPhase {
     Unknown,
     /// Nothing of it, here or in the helper.
     Gone,
+}
+
+impl PlanPhase {
+    /// How far a plan the helper started got, as its transaction's phase
+    /// says; none for a phase this build does not know.
+    pub(super) fn started(phase: &Lenient<Phase>) -> Option<Self> {
+        match phase {
+            Lenient::Known(Phase::Applying) => Some(Self::Applying),
+            Lenient::Known(Phase::Applied) => Some(Self::Applied),
+            Lenient::Known(Phase::RollingBack) => Some(Self::RollingBack),
+            Lenient::Known(Phase::RolledBack) => Some(Self::RolledBack),
+            Lenient::Later(_) => None,
+        }
+    }
 }
 
 /// How far a plan got, and what it copies.
@@ -48,16 +67,11 @@ pub(crate) async fn plan_states(client: &Client, ids: &[Token]) -> Result<Vec<Pl
         .parent()
         .ok_or_else(|| problem("Missing shared directory"))?;
     let here = frozen(shared, client.config.helper_uid);
-    let mut transactions: Vec<Value> = Vec::new();
+    let mut transactions: Vec<TransactionSummary> = Vec::new();
     for batch in ids.chunks(list::ASKED) {
         let asked: Vec<String> = batch.iter().map(|id| id.as_str().to_owned()).collect();
-        let there = list::ask(client, &helper, true, asked).await?;
-        transactions.extend(
-            there["transactions"]
-                .as_array()
-                .cloned()
-                .unwrap_or_default(),
-        );
+        let there: Transactions = list::ask(client, &helper, true, asked).await?;
+        transactions.extend(there.known().cloned());
     }
 
     Ok(ids
@@ -67,15 +81,19 @@ pub(crate) async fn plan_states(client: &Client, ids: &[Token]) -> Result<Vec<Pl
             let running = plan.is_some_and(list::Frozen::running);
             let started = transactions
                 .iter()
-                .find(|transaction| transaction["planId"] == id.as_str());
+                .find(|transaction| transaction.plan_id == id.as_str());
             match (started, plan) {
                 (Some(transaction), _) => PlanState {
                     phase: if running {
                         PlanPhase::Running
                     } else {
-                        phase_of(&transaction["phase"])
+                        PlanPhase::started(&transaction.phase).unwrap_or(PlanPhase::Unknown)
                     },
-                    targets: targets(&transaction["files"]),
+                    targets: transaction
+                        .files
+                        .iter()
+                        .map(|file| file.target.to_string_lossy().into_owned())
+                        .collect(),
                 },
                 (None, Some(plan)) => PlanState {
                     phase: if running {
@@ -94,28 +112,6 @@ pub(crate) async fn plan_states(client: &Client, ids: &[Token]) -> Result<Vec<Pl
             }
         })
         .collect())
-}
-
-/// A helper phase as a cleanup reads it; one it does not know reads as
-/// unknown, never as finished.
-fn phase_of(phase: &Value) -> PlanPhase {
-    match phase.as_str() {
-        Some("applying") => PlanPhase::Applying,
-        Some("applied") => PlanPhase::Applied,
-        Some("rollingBack") => PlanPhase::RollingBack,
-        Some("rolledBack") => PlanPhase::RolledBack,
-        _ => PlanPhase::Unknown,
-    }
-}
-
-/// The targets a helper's file report names.
-fn targets(files: &Value) -> Vec<String> {
-    files
-        .as_array()
-        .into_iter()
-        .flatten()
-        .filter_map(|file| file["target"].as_str().map(str::to_owned))
-        .collect()
 }
 
 /// What undoing one plan for a cleanup came to.

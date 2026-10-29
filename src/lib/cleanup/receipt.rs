@@ -7,6 +7,7 @@
 //! keeps tokens, IDs, app names and paths inside the helper's home, never
 //! the name or path of a file on this Mac.
 use super::plan::Step;
+pub(crate) use crate::environment::SideEffect;
 use crate::{
     client::Actor,
     error::Result,
@@ -222,15 +223,6 @@ impl CameTo {
 
 fn is_zero(count: &usize) -> bool {
     *count == 0
-}
-
-/// A file an installed app keeps outside its bundle, by its path in the
-/// helper's home, and whether it was there before the install.
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub(crate) struct SideEffect {
-    pub path: String,
-    pub existed_before: bool,
 }
 
 /// How far one step got.

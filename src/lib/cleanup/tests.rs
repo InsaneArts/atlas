@@ -1,7 +1,7 @@
 use super::*;
 use crate::{
     app_selection::Process,
-    environment::{PlanState, Undone},
+    environment::{InstallState, PlanState, Undone},
     host_session::{Host, HostSession},
     task::{Claims, store::Store as Tasks},
 };
@@ -99,18 +99,19 @@ impl Hands for Fake {
             .collect())
     }
 
-    async fn installs(&self, ids: &[Token]) -> Result<Value> {
-        let installs: Vec<Value> = ids
+    async fn installs(&self, ids: &[Token]) -> Result<Vec<InstallState>> {
+        Ok(ids
             .iter()
             .map(|id| {
-                self.installed
+                let said = self
+                    .installed
                     .borrow()
                     .get(id)
                     .cloned()
-                    .unwrap_or_else(|| json!({"installId": id, "phase": "missing"}))
+                    .unwrap_or_else(|| json!({"installId": id, "phase": "missing"}));
+                serde_json::from_value(said).unwrap()
             })
-            .collect();
-        Ok(json!({"ok": true, "installs": installs}))
+            .collect())
     }
 
     async fn remove_install(&self, install: &Token) -> Result<Value> {
