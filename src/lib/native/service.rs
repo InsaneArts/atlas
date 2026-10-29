@@ -15,6 +15,7 @@ use crate::{
 use serde::Deserialize;
 use serde_json::{Value, json};
 use std::{
+    collections::BTreeSet,
     path::PathBuf,
     sync::{Arc, RwLock},
     time::{Duration, Instant},
@@ -362,31 +363,42 @@ impl Service {
         drop(grant.authorize()?);
         engine.grant = Some(grant);
 
-        if let Err(reply) = run(&mut *engine, &self.gate, actions, expect.as_ref()).await {
-            return Ok(reply);
-        }
+        let field = match run(&mut *engine, &self.gate, actions, expect.as_ref()).await {
+            Ok(field) => field,
+            Err(reply) => return Ok(reply),
+        };
 
         // The app the input landed in, for an agent's activity log (only
         // when asked, so a person's own control pays nothing): the owner of
-        // the frontmost ordinary window, read once the engine is free.
+        // the frontmost ordinary window and its bundle identifier, read once
+        // the engine is free.
         drop(engine);
-        let app = if request["app"] == true {
-            tokio::task::spawn_blocking(frontmost_app)
-                .await
-                .ok()
-                .flatten()
+        let landed = if request["app"] == true {
+            tokio::task::spawn_blocking(|| {
+                frontmost_app().map(|(app, pid)| (app, super::apps::bundle_id(pid)))
+            })
+            .await
+            .ok()
+            .flatten()
         } else {
             None
         };
+        let (app, bundle_id) = landed.map_or((None, None), |(app, id)| (Some(app), id));
 
         let mut reply = json!({
             "ok": true,
             "performed": request["actions"].as_array().map(Vec::len),
             "app": app,
+            "bundleId": bundle_id,
         });
         // Echoed, so the controller knows each action was checked.
         if let Some(expect) = expect {
             reply["expect"] = json!(expect);
+        }
+        // The role of the field it named, so an agent's activity may name
+        // the field by the name it gave: never the field's own text.
+        if let Some(role) = field {
+            reply["field"] = json!({ "role": role });
         }
 
         Ok(reply)
@@ -396,8 +408,14 @@ impl Service {
 /// What the input loop needs of the event engine; tests stand in for it.
 trait Perform {
     /// Refuse unless `expect` holds for `need` now, before anything is
-    /// posted, taking at most `budget` to tell.
-    async fn require(&mut self, expect: &Expect, need: Need, budget: Duration) -> Result<()>;
+    /// posted, taking at most `budget` to tell; once it does, the role of
+    /// the field it names, when it names one.
+    async fn require(
+        &mut self,
+        expect: &Expect,
+        need: Need,
+        budget: Duration,
+    ) -> Result<Option<&'static str>>;
     /// Carry out one action, posting its events.
     async fn perform(&mut self, action: Action) -> Result<()>;
     /// Events posted so far.
@@ -409,7 +427,12 @@ trait Perform {
 impl Perform for Engine {
     /// The reads block, so they run on a blocking thread; the engine stays
     /// locked by the caller meanwhile, so nothing posts in between.
-    async fn require(&mut self, expect: &Expect, need: Need, budget: Duration) -> Result<()> {
+    async fn require(
+        &mut self,
+        expect: &Expect,
+        need: Need,
+        budget: Duration,
+    ) -> Result<Option<&'static str>> {
         let display = Bounds::display(self.epoch.width, self.epoch.height);
         let deadline = Instant::now() + budget;
         let expect = expect.clone();
@@ -437,16 +460,18 @@ impl Perform for Engine {
 /// (tab, return, cmd+w) may move the window or field on purpose. On the
 /// first failure, revoke `gate`, release what is held and return the
 /// failure reply: what was performed, whether the failing action had posted
-/// anything, and whether the outcome is unknown.
+/// anything, and whether the outcome is unknown. Once all are done, the
+/// role of the field `expect` names, when every check of it found the same.
 async fn run(
     engine: &mut impl Perform,
     gate: &Gate,
     actions: Vec<Action>,
     expect: Option<&Expect>,
-) -> std::result::Result<(), Value> {
+) -> std::result::Result<Option<&'static str>, Value> {
     let mut budget = focus::CHECK_BUDGET;
     let later = expect.map(Expect::app_only);
     let mut pressed = false;
+    let mut roles = BTreeSet::new();
 
     for (performed, action) in actions.into_iter().enumerate() {
         let before = engine.posted();
@@ -461,10 +486,13 @@ async fn run(
             Some(expected) => {
                 require_within(engine, expected, Need::of(&action), &mut budget).await
             }
-            None => Ok(()),
+            None => Ok(None),
         };
         let step = match checked {
-            Ok(()) => engine.perform(action).await,
+            Ok(role) => {
+                roles.extend(role);
+                engine.perform(action).await
+            }
             Err(error) => Err(error),
         };
 
@@ -474,7 +502,11 @@ async fn run(
         }
     }
 
-    Ok(())
+    let mut roles = roles.into_iter();
+    Ok(match (roles.next(), roles.next()) {
+        (Some(role), None) => Some(role),
+        _ => None,
+    })
 }
 
 /// [`Perform::require`], spending what it takes of `budget`: the time one
@@ -484,7 +516,7 @@ async fn require_within(
     expect: &Expect,
     need: Need,
     budget: &mut Duration,
-) -> Result<()> {
+) -> Result<Option<&'static str>> {
     let started = Instant::now();
     let outcome = engine.require(expect, need, *budget).await;
     *budget = budget.saturating_sub(started.elapsed());
@@ -517,13 +549,14 @@ fn failed(engine: &mut impl Perform, error: Error, performed: usize, before: u64
     reply
 }
 
-/// The name of the app owning the frontmost ordinary window, if any.
-fn frontmost_app() -> Option<String> {
+/// The name and process of the app owning the frontmost ordinary window,
+/// if any.
+fn frontmost_app() -> Option<(String, i64)> {
     super::windows::windows()
         .ok()?
         .into_iter()
         .find(|window| window.layer == 0)
-        .and_then(|window| window.owner)
+        .and_then(|window| Some((window.owner?, window.pid)))
 }
 
 /// How often the service looks for its desktop, and how many looks in a
@@ -752,6 +785,9 @@ mod tests {
         log: Vec<String>,
         /// What each check was asked to find.
         asked: Vec<Expect>,
+        /// The role each check of a field finds it of, a text field's past
+        /// the list.
+        roles: Vec<&'static str>,
         posted: u64,
         releases: usize,
         lock: Weak<Mutex<Stand>>,
@@ -764,6 +800,7 @@ mod tests {
                     script: script.to_vec(),
                     log: Vec::new(),
                     asked: Vec::new(),
+                    roles: Vec::new(),
                     posted: 0,
                     releases: 0,
                     lock: lock.clone(),
@@ -786,7 +823,12 @@ mod tests {
     }
 
     impl Perform for Stand {
-        async fn require(&mut self, expect: &Expect, _: Need, _: Duration) -> Result<()> {
+        async fn require(
+            &mut self,
+            expect: &Expect,
+            _: Need,
+            _: Duration,
+        ) -> Result<Option<&'static str>> {
             self.assert_locked();
             self.asked.push(expect.clone());
             let index = self.logged("check");
@@ -798,7 +840,9 @@ mod tests {
                         .with("found", json!({"app": "Calculator", "pid": 812})),
                 );
             }
-            Ok(())
+            Ok(expect
+                .field()
+                .map(|_| self.roles.get(index).copied().unwrap_or("AXTextField")))
         }
 
         async fn perform(&mut self, _: Action) -> Result<()> {
@@ -834,7 +878,10 @@ mod tests {
         script: &[Step],
         count: usize,
         expect: Option<Expect>,
-    ) -> (std::result::Result<(), Value>, Arc<Mutex<Stand>>) {
+    ) -> (
+        std::result::Result<Option<&'static str>, Value>,
+        Arc<Mutex<Stand>>,
+    ) {
         let stand = Stand::locked(script);
         let gate = Arc::new(Gate::default());
         let outcome = {
@@ -954,6 +1001,46 @@ mod tests {
             asked_for(&*stand.lock().await),
             vec![(None, Some("Email".to_owned())); 3]
         );
+    }
+
+    /// Type `parts` on a stand-in whose checks find the field of each of
+    /// `roles` in turn, expecting the field named Email.
+    async fn typed_into(parts: &[&str], roles: &[&'static str]) -> Option<&'static str> {
+        let stand = Stand::locked(&[]);
+        stand.lock().await.roles = roles.to_vec();
+        let gate = Arc::new(Gate::default());
+        let expect = Expect::new(812).unwrap().in_field("Email").unwrap();
+        let actions = parts
+            .iter()
+            .map(|text| serde_json::from_value(json!({"type": "type", "text": text})).unwrap())
+            .collect();
+        let mut engine = stand.lock().await;
+        run(&mut *engine, &gate, actions, Some(&expect))
+            .await
+            .unwrap()
+    }
+
+    #[tokio::test]
+    async fn typing_into_a_named_field_says_the_role_every_check_found_it_of() {
+        assert_eq!(
+            typed_into(&["sam@", "example"], &["AXSearchField", "AXSearchField"]).await,
+            Some("AXSearchField")
+        );
+        assert_eq!(
+            typed_into(&["sam@", "example"], &["AXTextField", "AXTextArea"]).await,
+            None,
+            "checks that disagree name no role"
+        );
+
+        let (unnamed, _) = ran(&[Step::Post], 1, app()).await;
+        assert_eq!(unnamed.unwrap(), None, "a check of no field says none");
+        let (refused, _) = ran(
+            &[Step::Refuse],
+            1,
+            Some(Expect::new(812).unwrap().in_field("Email").unwrap()),
+        )
+        .await;
+        assert!(refused.is_err(), "a refusal is a reply of its own");
     }
 
     #[tokio::test]

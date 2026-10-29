@@ -71,6 +71,8 @@ pub(crate) struct Shown {
     pub(crate) started: bool,
     pub(crate) verb: Option<String>,
     pub(crate) app: Option<String>,
+    /// The bundle identifier of the app it acted in, as the row keeps it.
+    pub(crate) bundle_id: Option<String>,
     pub(crate) label: Option<String>,
     /// The host session's key and the screenshot's file name, as the row
     /// keeps them; apps name the session from their own list.
@@ -99,6 +101,7 @@ pub(crate) fn shown(row: &Row, now: u128) -> Shown {
         started: row.started == Some(true),
         verb: row.verb.clone(),
         app: row.app.clone(),
+        bundle_id: row.bundle_id.clone(),
         label: row.label.clone(),
         session: row.session.clone(),
         capture: row.capture.clone(),

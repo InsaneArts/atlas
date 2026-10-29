@@ -91,7 +91,9 @@ fn doing(command: &Command) -> Option<Doing> {
         Command::Move { .. } => Doing::new("move"),
         Command::Drag { target, .. } => Doing::new("drag").app(target.app.as_deref()),
         Command::Scroll { target, .. } => Doing::new("scroll").app(target.app.as_deref()),
-        Command::Type { target, .. } => Doing::new("type").app(target.app.as_deref()),
+        Command::Type { target, field, .. } => Doing::new("type")
+            .app(target.app.as_deref())
+            .field(field.as_deref()),
         Command::Key { keys, target, .. } => Doing::keys(keys).app(target.app.as_deref()),
         Command::Open { app, targets, .. } => Doing::open(app.as_deref(), targets),
         Command::Close { app, .. } => Doing::new("close").app(app.as_deref()),

@@ -2358,6 +2358,137 @@ fn input_names_the_app_it_landed_in_and_a_command_its_start() {
     assert_eq!(rows.len(), 2, "one row per command");
 }
 
+#[test]
+fn input_names_the_bundle_of_the_app_it_landed_in_as_the_helper_saw_it() {
+    let dir = tempfile::tempdir().unwrap();
+    let client = client_in(dir.path()).doing(Doing::new("click"));
+    let clicked = json!({"op": "input", "actions": [{"type": "click", "x": 1, "y": 2}]});
+    let landed = |reply: Value| {
+        client
+            .record_blocking(&clicked, &reply, Duration::ZERO)
+            .unwrap();
+        activity_log::recent(client.output_dir().unwrap(), 1).remove(0)
+    };
+
+    let row = landed(json!({"ok": true, "app": "TextEdit", "bundleId": "com.apple.TextEdit"}));
+    assert_eq!(row.app.as_deref(), Some("TextEdit"));
+    assert_eq!(row.bundle_id.as_deref(), Some("com.apple.TextEdit"));
+
+    for odd in [
+        json!("/Applications/TextEdit.app"),
+        json!("com.apple TextEdit"),
+        json!(7),
+    ] {
+        let row = landed(json!({"ok": true, "app": "TextEdit", "bundleId": odd}));
+        assert_eq!(row.bundle_id, None, "{odd}");
+    }
+    let row = landed(json!({"ok": true, "bundleId": "com.apple.TextEdit"}));
+    assert_eq!(
+        (row.app, row.bundle_id),
+        (None, None),
+        "an identifier for no app named"
+    );
+}
+
+#[test]
+fn typed_text_names_its_field_only_by_the_role_the_helper_found_it_of() {
+    let dir = tempfile::tempdir().unwrap();
+    let client =
+        client_in(dir.path()).doing(Doing::new("type").app(Some("Notes")).field(Some("Email")));
+    let typed = json!({"op": "input", "actions": [{"type": "type", "text": "sam@example.com"}]});
+    let landed = |reply: Value| {
+        client
+            .record_blocking(&typed, &reply, Duration::ZERO)
+            .unwrap();
+        activity_log::recent(client.output_dir().unwrap(), 1).remove(0)
+    };
+
+    let row = landed(json!({"ok": true, "app": "Notes", "field": {"role": "AXTextField"}}));
+    assert_eq!(row.label.as_deref(), Some("Email"));
+    assert_eq!(crate::doing::says(&row), "typed into Email in Notes");
+
+    for unchecked in [
+        json!({"ok": true, "app": "Notes"}),
+        json!({"ok": true, "app": "Notes", "field": {"role": "AXTextArea"}}),
+        json!({"ok": true, "app": "Notes", "field": {"role": 7}}),
+        json!({"ok": true, "app": "Notes", "field": "AXTextField"}),
+        json!({"ok": false, "code": "focus-changed", "reason": "field",
+            "field": {"role": "AXTextField"}}),
+    ] {
+        let row = landed(unchecked.clone());
+        assert_eq!(row.label, None, "{unchecked}");
+    }
+    let written =
+        fs::read_to_string(client.output_dir().unwrap().join(activity_log::FILE)).unwrap();
+    assert!(
+        !written.contains("sam@example.com"),
+        "typed text is never kept"
+    );
+}
+
+#[test]
+fn a_bundle_id_seen_for_another_app_than_the_one_named_is_not_kept() {
+    let dir = tempfile::tempdir().unwrap();
+    let typed = json!({"op": "input", "actions": [{"type": "type", "text": "x"}]});
+    let landed = |named: &str, seen: &str| {
+        let client = client_in(dir.path()).doing(Doing::new("type").app(Some(named)));
+        let reply = json!({"ok": true, "app": seen, "bundleId": "com.apple.calculator"});
+        client
+            .record_blocking(&typed, &reply, Duration::ZERO)
+            .unwrap();
+        activity_log::recent(client.output_dir().unwrap(), 1).remove(0)
+    };
+
+    let other = landed("TextEdit", "Calculator");
+    assert_eq!(other.app.as_deref(), Some("TextEdit"));
+    assert_eq!(other.bundle_id, None);
+    let same = landed("calculator", "Calculator");
+    assert_eq!(same.bundle_id.as_deref(), Some("com.apple.calculator"));
+}
+
+#[test]
+fn an_install_row_keeps_the_installed_apps_bundle_id() {
+    use base64::{Engine, engine::general_purpose::STANDARD};
+
+    let dir = tempfile::tempdir().unwrap();
+    let client =
+        client_in(dir.path()).doing(Doing::new("install").app(Some("/tmp/Secret/Probe.app")));
+    let run = json!({"op": "run", "argv": ["atlas", "environment-worker"]});
+    let answered = |answer: Value| {
+        let output = STANDARD.encode(answer.to_string());
+        let reply = json!({"ok": true, "exitCode": 0, "timedOut": false, "signal": null,
+            "events": [{"event": "output", "data": output}]});
+        client
+            .record_blocking(&run, &reply, Duration::ZERO)
+            .unwrap();
+        activity_log::recent(client.output_dir().unwrap(), 1).remove(0)
+    };
+    let installed = |app: &str, id: Value| {
+        json!({"ok": true, "installed": true, "installId": "ID", "app": app,
+            "path": "/Users/helper/Applications/Probe.app", "bundleId": id,
+            "version": "1.0 (1)", "registered": true})
+    };
+
+    let row = answered(installed("Probe", json!("test.atlas.install-probe")));
+    assert_eq!(crate::doing::says(&row), "installed Probe");
+    assert_eq!(row.bundle_id.as_deref(), Some("test.atlas.install-probe"));
+    let text =
+        std::fs::read_to_string(client.output_dir().unwrap().join(activity_log::FILE)).unwrap();
+    assert!(
+        !text.contains("/Users/helper") && !text.contains("Secret"),
+        "{text}"
+    );
+
+    assert_eq!(
+        answered(installed("Other", json!("test.other"))).bundle_id,
+        None
+    );
+    assert_eq!(answered(installed("Probe", json!(null))).bundle_id, None);
+    assert_eq!(answered(installed("Probe", json!("a b"))).bundle_id, None);
+    let refused = json!({"ok": false, "installId": "ID", "phase": "held", "error": "x"});
+    assert_eq!(answered(refused).bundle_id, None);
+}
+
 /// A viewer's client for `dir`, gathering the person's input as a viewer
 /// does.
 fn persons_client(dir: &Path) -> Client {

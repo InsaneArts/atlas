@@ -5,6 +5,7 @@ use super::{Actor, Client, timestamp};
 use crate::{
     activity_log::{self, Failure, Op, Row, Step},
     error::{Code, Error, Result},
+    ui::text::same_text,
 };
 use serde_json::{Value, json};
 use std::{
@@ -132,6 +133,20 @@ fn focus_reason(reply: &Value) -> Option<&'static str> {
         "unreadable" => Some("unreadable"),
         _ => None,
     }
+}
+
+/// The app `reply` says a command acted in, by its name, with its bundle
+/// identifier when that is one: the app input landed in, as the helper saw
+/// it, or the app an install placed.
+fn bundle_seen(reply: &Value, installs: bool) -> Option<(String, String)> {
+    let (app, id) = if installs {
+        let installed = crate::environment::installed_app(reply)?;
+        (installed.app, installed.bundle_id?)
+    } else {
+        let app = reply["app"].as_str()?;
+        (app.to_owned(), reply["bundleId"].as_str()?.to_owned())
+    };
+    Some((app, crate::doing::bundle_id(&id)?))
 }
 
 /// Whether a mutation did what it was for: the helper accepted it and, for
@@ -305,7 +320,9 @@ impl Client {
         }
 
         if let Some(doing) = &self.doing {
-            doing.fill(&mut row, ok);
+            // Typed text names its field only by the role the helper found
+            // it of, checking it had keyboard focus.
+            doing.fill(&mut row, ok, reply["field"]["role"].as_str());
             if start {
                 row.started = Some(true);
             }
@@ -314,6 +331,17 @@ impl Client {
                 && let Some(app) = reply["app"].as_str()
             {
                 row.app = Some(crate::doing::bounded(app));
+            }
+            // So does its bundle identifier, as an install's does the app it
+            // placed: only an identifier, and only the one of the app the
+            // row names, never another's.
+            if let Some((app, id)) = bundle_seen(reply, doing.verb() == "install")
+                && row
+                    .app
+                    .as_deref()
+                    .is_some_and(|named| same_text(named, &crate::doing::bounded(&app)))
+            {
+                row.bundle_id = Some(id);
             }
         }
 

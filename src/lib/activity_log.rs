@@ -252,6 +252,15 @@ pub struct Row {
         skip_serializing_if = "Option::is_none"
     )]
     pub app: Option<String>,
+    /// The bundle identifier of the app it acted in, such as
+    /// `com.apple.TextEdit`, as [`crate::doing::bundle_id`] keeps it: never
+    /// a path.
+    #[serde(
+        default,
+        deserialize_with = "lenient",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub bundle_id: Option<String>,
     #[serde(
         default,
         deserialize_with = "lenient",
@@ -853,6 +862,25 @@ mod tests {
         let line = r#"{"actionCount":2,"actor":"agent","app":"TextEdit","at":"5","code":"focus-changed","command":"c","elapsedMs":1.5,"ok":false,"operation":"input","partial":true,"reason":"window","session":"0123456789ab","started":true,"task":"ba9876543210","verb":"type"}"#;
         let row = Row::parse(&serde_json::from_str(line).unwrap()).unwrap();
         assert_eq!(serde_json::to_value(&row).unwrap().to_string(), line);
+    }
+
+    #[test]
+    fn a_rows_bundle_id_reads_back_as_written_and_a_row_without_one_still_reads() {
+        let line = r#"{"actionCount":1,"actor":"agent","app":"TextEdit","at":"5","bundleId":"com.apple.TextEdit","elapsedMs":2.0,"ok":true,"operation":"input","verb":"click"}"#;
+        let row = Row::parse(&serde_json::from_str(line).unwrap()).unwrap();
+        assert_eq!(row.bundle_id.as_deref(), Some("com.apple.TextEdit"));
+        assert_eq!(serde_json::to_value(&row).unwrap().to_string(), line);
+
+        let older = r#"{"actionCount":1,"actor":"agent","app":"TextEdit","at":"5","elapsedMs":2.0,"ok":true,"operation":"input","verb":"click"}"#;
+        let row = Row::parse(&serde_json::from_str(older).unwrap()).unwrap();
+        assert_eq!(row.bundle_id, None);
+        assert_eq!(
+            serde_json::to_value(&row).unwrap().to_string(),
+            older,
+            "a row with none is written as before"
+        );
+        let odd = Row::parse(&json!({"operation": "input", "bundleId": 7})).unwrap();
+        assert_eq!(odd.bundle_id, None);
     }
 
     #[test]

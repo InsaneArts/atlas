@@ -122,7 +122,7 @@ fn expect() -> Expect {
 }
 
 /// The refusal's code, reason and what it found, as an agent reads them.
-fn refusal(outcome: Result<()>) -> serde_json::Value {
+fn refusal(outcome: Result<Option<&str>>) -> serde_json::Value {
     let error = outcome.unwrap_err();
     assert_eq!(error.code, "focus-changed");
     assert!(!error.uncertain);
@@ -130,11 +130,11 @@ fn refusal(outcome: Result<()>) -> serde_json::Value {
     json!({"reason": error.details["reason"], "found": error.details.get("found")})
 }
 
-fn keys_with(look: &mut Seen) -> Result<()> {
+fn keys_with(look: &mut Seen) -> Result<Option<&'static str>> {
     require(&expect(), Need::Keys, &display(), look, later())
 }
 
-fn point_with(look: &mut Seen, x: f64, y: f64) -> Result<()> {
+fn point_with(look: &mut Seen, x: f64, y: f64) -> Result<Option<&'static str>> {
     require(&expect(), Need::Point(x, y), &display(), look, later())
 }
 
@@ -284,7 +284,7 @@ fn under_the_dock() -> Vec<Window> {
 }
 
 /// A check of `need` for `pid` with the Dock as `dock`.
-fn docked_need(pid: i64, dock: &Dock, need: Need) -> Result<()> {
+fn docked_need(pid: i64, dock: &Dock, need: Need) -> Result<Option<&'static str>> {
     let mut look = Seen::focused(Some(pid))
         .showing(under_the_dock())
         .docked(dock.clone());
@@ -587,7 +587,7 @@ fn inside_with(keyboard: Keyboard, listed: Vec<Window>) -> Seen {
 }
 
 /// What `expect` says of keys sent with `look`.
-fn expecting(expect: &Expect, look: &mut Seen) -> Result<()> {
+fn expecting(expect: &Expect, look: &mut Seen) -> Result<Option<&'static str>> {
     require(expect, Need::Keys, &display(), look, later())
 }
 
@@ -1030,8 +1030,34 @@ fn only_a_control_that_takes_text_is_the_field() {
             ..field("Email")
         };
         let mut look = inside_with(typing(named), vec![document()]);
-        assert!(expecting(&in_field("Email"), &mut look).is_ok(), "{role}");
+        assert_eq!(
+            expecting(&in_field("Email"), &mut look).unwrap(),
+            Some(role),
+            "the check says the role of the field it passed"
+        );
     }
+}
+
+#[test]
+fn only_a_check_that_names_a_field_says_its_role() {
+    let look = || inside_with(typing(field("Email")), vec![document()]);
+    let both = in_document().in_field("Email").unwrap();
+
+    assert_eq!(expecting(&both, &mut look()).unwrap(), Some("AXTextField"));
+    assert_eq!(expecting(&in_document(), &mut look()).unwrap(), None);
+    assert_eq!(keys_with(&mut look()).unwrap(), None);
+    assert_eq!(
+        require(
+            &in_field("Email"),
+            Need::Point(200.0, 200.0),
+            &display(),
+            &mut look(),
+            later()
+        )
+        .unwrap(),
+        None,
+        "a pointer action types into no field"
+    );
 }
 
 #[test]

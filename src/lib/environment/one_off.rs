@@ -4,8 +4,17 @@
 //! one or asking how installs stand. A change runs under the control its
 //! caller holds; its folder stays while its outcome is not known, as every
 //! change's does.
-use super::{installs::ASKED, model::*, reply::InstallState, *};
+use super::{
+    installs::ASKED,
+    model::*,
+    reply::{InstallState, Installed, InstalledApp},
+    *,
+};
 use crate::files::Token;
+
+/// The most of an install's output read for the app it placed: an install's
+/// answer is a few hundred bytes.
+const INSTALLED_OUTPUT: usize = 64 * 1024;
 
 /// Send `request` to the helper account `helper` through a request folder
 /// of its own, under `held` when it changes the helper. A change may copy
@@ -62,6 +71,18 @@ pub(crate) async fn install_app(
         name: name.to_owned(),
     };
     send(client, &helper, Some(ownership), request).await
+}
+
+/// The app the install whose run answered `reply` placed, as its worker's
+/// answer names it; none for any other run, and for an install that did
+/// not place one.
+pub(crate) fn installed_app(reply: &Value) -> Option<InstalledApp> {
+    let output = run_output(reply, INSTALLED_OUTPUT).ok()?;
+    let installed: Installed = serde_json::from_slice(&output).ok()?;
+    (installed.ok && installed.installed).then_some(InstalledApp {
+        app: installed.app,
+        bundle_id: installed.bundle_id,
+    })
 }
 
 /// Remove install `id`, when it is unchanged and nothing runs from it,

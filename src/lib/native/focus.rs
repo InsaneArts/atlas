@@ -301,26 +301,29 @@ pub(super) fn check(
     need: Need,
     display: &Bounds,
     deadline: Instant,
-) -> Result<()> {
+) -> Result<Option<&'static str>> {
     require(expect, need, display, &mut Live::until(deadline), deadline)
 }
 
 /// Refuse with `focus-changed` unless `expect` holds for `need` as `look`
-/// sees it now. A look that ends after `deadline` proves nothing: a read
-/// that stalled may describe a helper that has moved on since.
+/// sees it now; once it does, the role of the field it names, one of
+/// [`FIELDS`], when it names one. A look that ends after `deadline` proves
+/// nothing: a read that stalled may describe a helper that has moved on
+/// since.
 fn require(
     expect: &Expect,
     need: Need,
     display: &Bounds,
     look: &mut impl Look,
     deadline: Instant,
-) -> Result<()> {
+) -> Result<Option<&'static str>> {
     let outcome = match need {
-        Need::Nothing => return Ok(()),
+        Need::Nothing => return Ok(None),
         Need::Keys => keys(expect, look),
-        Need::Point(x, y) => point(expect, (x, y), Spot::At, display, look),
+        Need::Point(x, y) => point(expect, (x, y), Spot::At, display, look).map(|()| None),
         Need::Drag { from, to } => point(expect, from, Spot::At, display, look)
-            .and_then(|()| point(expect, to, Spot::Drop, display, look)),
+            .and_then(|()| point(expect, to, Spot::Drop, display, look))
+            .map(|()| None),
     };
     if outcome.is_ok() && Instant::now() >= deadline {
         return Err(unreadable());
@@ -330,9 +333,10 @@ fn require(
 }
 
 /// Keys go ahead only while the app has keyboard focus and, when named,
-/// the window and the field. The window list is read only to name another
-/// app that has it, or to tell which window has it.
-fn keys(expect: &Expect, look: &mut impl Look) -> Result<()> {
+/// the window and the field, whose role is then said. The window list is
+/// read only to name another app that has it, or to tell which window has
+/// it.
+fn keys(expect: &Expect, look: &mut impl Look) -> Result<Option<&'static str>> {
     let focused = look.focused().map_err(|_| unreadable())?;
     let Some(pid) = focused else {
         return Err(refused(
@@ -354,10 +358,11 @@ fn keys(expect: &Expect, look: &mut impl Look) -> Result<()> {
 }
 
 /// With the app in focus, the window and the field it names, judged from
-/// one read of where the app's focus is.
-fn inside(expect: &Expect, look: &mut impl Look) -> Result<()> {
+/// one read of where the app's focus is; once they pass, the named field's
+/// role.
+fn inside(expect: &Expect, look: &mut impl Look) -> Result<Option<&'static str>> {
     if expect.window().is_none() && expect.field().is_none() {
-        return Ok(());
+        return Ok(None);
     }
 
     let judged = Judged {
@@ -378,7 +383,8 @@ fn inside(expect: &Expect, look: &mut impl Look) -> Result<()> {
     });
 
     let (reason, message) = match verdict {
-        Verdict::Pass => return Ok(()),
+        Verdict::Pass if expect.field().is_some() => return Ok(field_role(&keyboard)),
+        Verdict::Pass => return Ok(None),
         Verdict::Unknown(why) => return Err(unread_by(why.error())),
         Verdict::Refused(reason, message) => (reason, message),
     };
@@ -401,6 +407,13 @@ fn inside(expect: &Expect, look: &mut impl Look) -> Result<()> {
         format!("{message}, {NOT_SENT}"),
         Some(found),
     ))
+}
+
+/// The role of the field with keyboard focus, as [`FIELDS`] spells it,
+/// when it is one of them.
+fn field_role(keyboard: &Keyboard) -> Option<&'static str> {
+    let role = keyboard.focused.as_ref()?.element.role.as_deref()?;
+    FIELDS.into_iter().find(|field| *field == role)
 }
 
 /// What one part of a check found.

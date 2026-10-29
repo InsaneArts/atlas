@@ -10,6 +10,16 @@ const NAME_LIMIT: usize = 40;
 const CHORD_LIMIT: usize = 3;
 /// How many characters of a random token tell one command's rows apart.
 const COMMAND_ID: usize = 12;
+/// The most characters a bundle identifier keeps; a longer one is no
+/// identifier.
+const BUNDLE_ID_LIMIT: usize = 155;
+/// The signs of the modifiers a key press's label shows before its key,
+/// each a keycap of its own.
+const MODIFIER_SIGNS: [char; 4] = ['⌃', '⌥', '⇧', '⌘'];
+/// fn's sign in a label: a word, set apart from the key it holds.
+const FN_SIGN: &str = "fn";
+/// Keys whose name is two words, kept as one keycap.
+const TWO_WORD_KEYS: [&str; 2] = ["Page Up", "Page Down"];
 /// Roles whose name is a control's own caption, such as a button's title.
 /// Others may show a document's data: menu items name windows and recent
 /// files, tabs and radio buttons name pages, pop-ups name folders.
@@ -19,6 +29,11 @@ const CONTROL_ROLES: [&str; 4] = [
     "AXMenuBarItem",
     "AXDisclosureTriangle",
 ];
+/// Roles of a field whose name is its own caption, such as "Email" or
+/// "Search": a typed row names the field by it once the helper confirmed
+/// the text went there. A text area's name may be a document's, and so is
+/// left out, as is every other role.
+pub(crate) const FIELD_ROLES: [&str; 3] = ["AXTextField", "AXSearchField", "AXComboBox"];
 /// Verbs worded as their operation is.
 const PLAIN_VERBS: [&str; 2] = ["run", "screenshot"];
 /// Modifier names as `atlas key` takes them, in the order macOS menus show
@@ -42,6 +57,9 @@ pub struct Doing {
     /// Whether the label names what was asked for whatever happened (a
     /// shortcut), not a name that matched something (a control's caption).
     asked: bool,
+    /// The field text was meant for, by its name; a row names it only once
+    /// the helper confirmed the text went to a field of [`FIELD_ROLES`].
+    field: Option<String>,
     command: String,
 }
 
@@ -55,6 +73,7 @@ impl Doing {
             app: None,
             label: None,
             asked: false,
+            field: None,
             command,
         }
     }
@@ -70,6 +89,15 @@ impl Doing {
         self.label = label
             .map(str::trim)
             .filter(|label| !label.is_empty())
+            .map(bounded);
+        self
+    }
+
+    /// The field it typed into, by the name the helper checks it has.
+    pub fn field(mut self, field: Option<&str>) -> Self {
+        self.field = field
+            .map(str::trim)
+            .filter(|field| !field.is_empty())
             .map(bounded);
         self
     }
@@ -129,8 +157,10 @@ impl Doing {
 
     /// Fill in `row`'s fields for these facts. A control is named only
     /// when the action worked: a name that matched nothing may be
-    /// anything. A shortcut is named either way.
-    pub fn fill(&self, row: &mut Row, ok: bool) {
+    /// anything. A shortcut is named either way. The field typed text went
+    /// to is named only when it worked and the helper, checking that field
+    /// had keyboard focus, found it of `field_role`, one of [`FIELD_ROLES`].
+    pub fn fill(&self, row: &mut Row, ok: bool, field_role: Option<&str>) {
         row.verb = Some(self.verb.to_owned());
         row.command = Some(self.command.clone());
         if let Some(app) = &self.app {
@@ -138,6 +168,13 @@ impl Doing {
         }
         if let Some(label) = self.label.as_ref().filter(|_| ok || self.asked) {
             row.label = Some(label.clone());
+        }
+        if ok
+            && self.verb == "type"
+            && let Some(field) = &self.field
+            && field_role.is_some_and(|role| FIELD_ROLES.contains(&role))
+        {
+            row.label = Some(field.clone());
         }
     }
 }
@@ -160,6 +197,55 @@ fn app_name(app: &str) -> Option<&str> {
     };
 
     (!name.is_empty()).then_some(name)
+}
+
+/// `text` as an app's bundle identifier (`com.apple.TextEdit`), when it is
+/// one: 1 to [`BUNDLE_ID_LIMIT`] letters, digits, dots and hyphens, with
+/// no empty part. Anything else, free text or a path, is none.
+pub(crate) fn bundle_id(text: &str) -> Option<String> {
+    let identifier = !text.is_empty()
+        && text.len() <= BUNDLE_ID_LIMIT
+        && text
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'-'))
+        && text.split('.').all(|part| !part.is_empty());
+
+    identifier.then(|| text.to_owned())
+}
+
+/// A key press's label (`⇧⌘Z ⌃⇥`, `fn F5`, `Page Up`) as keycaps, one list
+/// per chord: each modifier's sign, then its key.
+pub fn chords(label: &str) -> Vec<Vec<String>> {
+    let mut words = label.split(' ').filter(|word| !word.is_empty()).peekable();
+    let mut chords = Vec::new();
+
+    while let Some(word) = words.next() {
+        let mut caps = Vec::new();
+        let mut word = word.to_owned();
+        if word == FN_SIGN {
+            caps.push(word);
+            let Some(next) = words.next() else {
+                chords.push(caps);
+                break;
+            };
+            word = next.to_owned();
+        }
+        if let Some(next) = words.peek()
+            && TWO_WORD_KEYS.contains(&format!("{word} {next}").as_str())
+        {
+            word = format!("{word} {next}");
+            words.next();
+        }
+
+        let key = word.trim_start_matches(MODIFIER_SIGNS);
+        caps.extend(word[..word.len() - key.len()].chars().map(String::from));
+        if !key.is_empty() {
+            caps.push(key.to_owned());
+        }
+        chords.push(caps);
+    }
+
+    chords
 }
 
 /// At most [`NAME_LIMIT`] characters, cut with an ellipsis.
@@ -282,10 +368,16 @@ pub fn says(row: &Row) -> String {
             };
             (on_label(past), format!("couldn't {}", on_label(verb)))
         }
-        Some("type") => (
-            app.map_or("typed text".into(), |app| format!("typed in {app}")),
-            within("couldn't type"),
-        ),
+        Some("type") => match label {
+            Some(field) => (
+                within(&format!("typed into {field}")),
+                within(&format!("couldn't type into {field}")),
+            ),
+            None => (
+                app.map_or("typed text".into(), |app| format!("typed in {app}")),
+                within("couldn't type"),
+            ),
+        },
         Some("key") => match (label, row.action_count) {
             (Some(label), _) => (
                 within(&format!("pressed {label}")),
@@ -458,7 +550,7 @@ mod tests {
             ok: Some(ok),
             ..Row::default()
         };
-        doing.fill(&mut row, ok);
+        doing.fill(&mut row, ok, None);
         row
     }
 
@@ -732,6 +824,158 @@ mod tests {
             )),
             "couldn't type in Notes",
             "other refusals still say what could not be done"
+        );
+    }
+
+    #[test]
+    fn a_bundle_id_is_kept_only_when_it_is_an_identifier() {
+        for kept in ["com.apple.TextEdit", "test.atlas.install-probe", "Opie"] {
+            assert_eq!(bundle_id(kept).as_deref(), Some(kept), "{kept}");
+        }
+        let long = format!("com.{}", "x".repeat(BUNDLE_ID_LIMIT));
+        for refused in [
+            "",
+            "com.apple Text",
+            "/Applications/Opie.app",
+            "com/apple",
+            "com..apple",
+            ".com.apple",
+            "com.apple.",
+            "com.apple_text",
+            "com.äpple",
+            long.as_str(),
+        ] {
+            assert_eq!(bundle_id(refused), None, "{refused}");
+        }
+        let longest = "x".repeat(BUNDLE_ID_LIMIT);
+        assert_eq!(bundle_id(&longest), Some(longest.clone()));
+    }
+
+    #[test]
+    fn a_key_rows_chords_split_into_caps_and_page_up_stays_one_key() {
+        let caps = |label: &str| chords(label);
+        assert_eq!(caps("⌘S"), [["⌘", "S"]]);
+        assert_eq!(caps("⇧⌘Z ⌃⇥"), vec![vec!["⇧", "⌘", "Z"], vec!["⌃", "⇥"]]);
+        assert_eq!(caps("⌘+"), [["⌘", "+"]]);
+        assert_eq!(caps("Page Up"), [["Page Up"]]);
+        assert_eq!(
+            caps("↓ Page Down Return"),
+            [vec!["↓"], vec!["Page Down"], vec!["Return"]]
+        );
+        assert_eq!(caps("fn F5"), [["fn", "F5"]]);
+        assert_eq!(caps("fn ⌘S"), [["fn", "⌘", "S"]]);
+        assert_eq!(caps("Escape"), [["Escape"]]);
+        assert!(caps("").is_empty());
+
+        let pressed = |keys: &[&str]| {
+            let keys = keys.iter().map(|k| (*k).to_owned()).collect::<Vec<_>>();
+            chords(&row(&Doing::keys(&keys), true).label.unwrap())
+        };
+        assert_eq!(
+            pressed(&["cmd+shift+z", "pageup"]),
+            vec![vec!["⇧", "⌘", "Z"], vec!["Page Up"]]
+        );
+        assert_eq!(pressed(&["fn+f5"]), [["fn", "F5"]]);
+    }
+
+    /// A typed row's label and words, once its text went to a field the
+    /// helper found of `role`, as `ok` says.
+    fn typed_into(doing: &Doing, ok: bool, role: Option<&str>) -> (Option<String>, String) {
+        let mut row = Row {
+            operation: Some(Op::Input),
+            ok: Some(ok),
+            ..Row::default()
+        };
+        doing.fill(&mut row, ok, role);
+        let words = says(&row);
+        (row.label, words)
+    }
+
+    #[test]
+    fn a_typed_row_names_its_field_only_when_the_field_was_checked_and_is_a_text_field() {
+        let email = Doing::new("type").app(Some("Notes")).field(Some(" Email "));
+        let named = |role: &str| typed_into(&email, true, Some(role));
+        for role in FIELD_ROLES {
+            assert_eq!(
+                named(role),
+                (
+                    Some("Email".to_owned()),
+                    "typed into Email in Notes".to_owned()
+                ),
+                "{role}"
+            );
+        }
+        assert_eq!(
+            typed_into(
+                &Doing::new("type").field(Some("Search")),
+                true,
+                Some("AXSearchField")
+            )
+            .1,
+            "typed into Search"
+        );
+
+        let unnamed = (None, "typed in Notes".to_owned());
+        assert_eq!(
+            typed_into(&email, true, None),
+            unnamed,
+            "a field the helper did not check is not named"
+        );
+        assert_eq!(
+            typed_into(&email, false, Some("AXTextField")),
+            (None, "couldn't type in Notes".to_owned()),
+            "nor one text did not reach"
+        );
+        assert_eq!(
+            typed_into(
+                &Doing::new("type").app(Some("Notes")),
+                true,
+                Some("AXTextField")
+            ),
+            unnamed,
+            "nor one the command did not name"
+        );
+        assert_eq!(
+            typed_into(
+                &Doing::new("type").field(Some("  ")),
+                true,
+                Some("AXTextField")
+            )
+            .0,
+            None,
+            "a blank name is no name"
+        );
+        let long = "x".repeat(100);
+        let bounded = typed_into(
+            &Doing::new("type").field(Some(&long)),
+            true,
+            Some("AXTextField"),
+        );
+        assert_eq!(bounded.0.unwrap().chars().count(), NAME_LIMIT);
+    }
+
+    #[test]
+    fn a_text_areas_name_is_never_kept() {
+        let body = Doing::new("type").app(Some("Notes")).field(Some("Body"));
+        for role in [
+            "AXTextArea",
+            "AXSecureTextField",
+            "AXStaticText",
+            "AXWebArea",
+            "AXButton",
+            "",
+        ] {
+            assert_eq!(
+                typed_into(&body, true, Some(role)),
+                (None, "typed in Notes".to_owned()),
+                "{role}"
+            );
+        }
+        let tab = Doing::keys(&["tab".into()]).field(Some("Email"));
+        assert_eq!(
+            typed_into(&tab, true, Some("AXTextField")).0.as_deref(),
+            Some("Tab"),
+            "only typed text names its field; a key names its keys"
         );
     }
 

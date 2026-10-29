@@ -1090,7 +1090,7 @@ mod tests {
                     action_count: Some(1),
                     ..Default::default()
                 };
-                doing.fill(&mut row, true);
+                doing.fill(&mut row, true, None);
                 atlas::doing::says(&row)
             })
         };
@@ -1133,7 +1133,10 @@ mod tests {
         let app = |args: &[&str]| {
             let command = parse(args).unwrap().command.unwrap();
             let mut row = atlas::activity_log::Row::default();
-            Policy::of(&command).doing.unwrap().fill(&mut row, true);
+            Policy::of(&command)
+                .doing
+                .unwrap()
+                .fill(&mut row, true, None);
             row.app.map(|app| json!(app))
         };
 
@@ -1150,6 +1153,40 @@ mod tests {
             app(&["type", "--pid", "42", "hi"]),
             None,
             "a pid names no app"
+        );
+    }
+
+    #[test]
+    fn typed_text_names_the_field_it_was_sent_to_once_the_helper_checked_it() {
+        let said = |args: &[&str], role: Option<&str>| {
+            let command = parse(args).unwrap().command.unwrap();
+            let mut row = atlas::activity_log::Row {
+                ok: Some(true),
+                ..Default::default()
+            };
+            Policy::of(&command)
+                .doing
+                .unwrap()
+                .fill(&mut row, true, role);
+            atlas::doing::says(&row)
+        };
+        let typed = ["type", "--app", "Notes", "--field", "Email", "secret"];
+
+        assert_eq!(
+            said(&typed, Some("AXTextField")),
+            "typed into Email in Notes"
+        );
+        assert_eq!(said(&typed, None), "typed in Notes");
+        assert_eq!(
+            said(&["type", "--app", "Notes", "secret"], Some("AXTextField")),
+            "typed in Notes"
+        );
+        assert_eq!(
+            said(
+                &["key", "--app", "Notes", "--field", "Email", "tab"],
+                Some("AXTextField")
+            ),
+            "pressed Tab in Notes"
         );
     }
 
@@ -1552,7 +1589,10 @@ mod tests {
         let fields = |args: &[&str]| {
             let command = parse(args).unwrap().command.unwrap();
             let mut row = atlas::activity_log::Row::default();
-            Policy::of(&command).doing.unwrap().fill(&mut row, true);
+            Policy::of(&command)
+                .doing
+                .unwrap()
+                .fill(&mut row, true, None);
             serde_json::to_value(row).unwrap()
         };
         for (args, verb) in [
