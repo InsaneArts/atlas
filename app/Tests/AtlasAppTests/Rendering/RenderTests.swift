@@ -99,6 +99,25 @@
       #expect(image.pixelsHigh == Int(size.height) * PNG.scale)
     }
 
+    @Test(
+      "every transition's key frame draws at its window's size",
+      arguments: await ViewerRender.motionPoseNames
+    )
+    func everyMotionKeyFrameDraws(name: String) throws {
+      let pose = try #require(PreviewStates.viewerMotion.first { $0.name == name })
+      let directory = try Self.directory()
+      defer {
+        try? FileManager.default
+          .removeItem(at: directory)
+      }
+      let step = pose.steps[pose.steps.count / 2]
+      #expect(ViewerRender.draw(pose, at: step, to: directory, appearance: Appearance.light))
+      let drawn = directory.appendingPathComponent("\(pose.file(at: step)).png")
+      let image = try #require(NSBitmapImageRep(data: Data(contentsOf: drawn)), "\(name) was not drawn")
+      #expect(image.pixelsWide == Int(pose.size.width) * PNG.scale)
+      #expect(image.pixelsHigh == Int(pose.size.height) * PNG.scale)
+    }
+
     @Test("every list render draws at its size", arguments: await ViewerRender.listNames)
     func everyListRenderDraws(file: String) throws {
       let render = try #require(ViewerRender.listRenders.first { $0.name == file })
@@ -119,7 +138,7 @@
     func theViewerRendersHaveTheirOwnNames() {
       let names =
         (ViewerRender.renders + ViewerRender.narrowRenders + ViewerRender.frameRenders + ViewerRender.listRenders)
-        .map(\.name)
+        .map(\.name) + ViewerRender.motionNames
       #expect(Set(names).count == names.count)
     }
 

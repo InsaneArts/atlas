@@ -3,13 +3,16 @@ import SwiftUI
 extension Motion {
   /// An animation at the rate motion plays: itself, unless a debug build was launched with `ATLAS_MOTION_RATE`, which
   /// plays it at that rate (``playbackRate``), such as 0.25 for a quarter of its speed, so a transition can be watched
-  /// frame by frame. A release build never reads the variable and never changes an animation.
+  /// frame by frame; and while a debug render holds a moment (``Pose``), it stands still there. A release build never
+  /// reads the variable and never changes an animation.
   ///
   /// - Parameter animation: The animation, as its token defines it.
   /// - Returns: `animation`, at the playback rate.
   static func paced(_ animation: Animation) -> Animation {
     #if DEBUG
-      playbackRate == 1 ? animation : animation.speed(playbackRate)
+      let rated = playbackRate == 1 ? animation : animation.speed(playbackRate)
+      guard Pose.moment != nil else { return rated }
+      return Animation(PosedAnimation(base: rated))
     #else
       animation
     #endif

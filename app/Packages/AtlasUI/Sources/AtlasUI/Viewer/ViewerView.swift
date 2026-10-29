@@ -411,6 +411,10 @@ extension ViewerView where Input == EmptyView, LivePicture == StillPicture {
       .frame(width: PreviewStates.viewerSize.width, height: PreviewStates.viewerSize.height)
   }
 
+  #Preview("Motion") {
+    ViewerMotionLab()
+  }
+
   #Preview("Interactive") {
     @Previewable @State var state = PreviewStates.viewerWorking
     InteractivePreview {

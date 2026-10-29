@@ -246,7 +246,8 @@
     }
 
     /// Draws every main window state to PNGs in `directory`, at Retina scale (``PNG/scale``): the standard
-    /// renders, the narrow ones, the frames and the lists, each at its size.
+    /// renders, the narrow ones, the frames and the lists, each at its size, and the transitions' key frames
+    /// (``drawMotion(to:appearance:)``).
     ///
     /// - Parameters:
     ///   - directory: Where the PNGs go.
@@ -254,11 +255,12 @@
     /// - Returns: Whether every state was drawn.
     static func draw(to directory: String, appearance: NSAppearance?) -> Bool {
       let folder = URL(fileURLWithPath: directory)
-      return (renders + narrowRenders + frameRenders + listRenders)
+      let drawn = (renders + narrowRenders + frameRenders + listRenders)
         .map {
           draw($0.name, $0.value, to: folder, size: $0.size ?? PreviewStates.viewerSize, appearance: appearance)
         }
         .allSatisfy { $0 }
+      return drawMotion(to: folder, appearance: appearance) && drawn
     }
 
     /// Draws one main window state to `file`.png in `folder`, at Retina scale.
