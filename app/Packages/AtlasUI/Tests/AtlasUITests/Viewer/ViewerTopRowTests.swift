@@ -19,34 +19,6 @@ struct ViewerTopRowTests {
     #expect(try Self.same(Self.bar(state, width: 860), Self.bar(bare, width: 860)), "the line drew at 860")
   }
 
-  @Test("the sessions picker keeps the bar's height and loses its words first")
-  func theSessionsPickerKeepsTheBarsHeight() throws {
-    let state = PreviewStates.viewerSessions.top
-    var bare = state
-    bare.sessions = nil
-    #expect(try Self.height(state) == Self.height(bare), "the picker makes the bar no taller")
-    var renamed = state
-    renamed.sessions?.title = "Another title"
-    // 1,440 across draws the picker's words; 1,040, where the tabs show symbols, draws its icons and chevron alone.
-    #expect(try !Self.same(Self.bar(state, width: 1440), Self.bar(renamed, width: 1440)), "the words never drew")
-    #expect(try Self.same(Self.bar(state, width: 1040), Self.bar(renamed, width: 1040)), "the words drew at 1,040")
-    #expect(ViewerLayout.barLayouts.map(\.sessionWords) == [true, true, false, false, false])
-  }
-
-  /// The bar's own height, 1,440 across.
-  ///
-  /// - Parameter state: What the bar shows.
-  /// - Returns: Its height in points.
-  /// - Throws: When nothing was drawn.
-  static func height(_ state: ViewerTopRowState) throws -> Int {
-    try PanelPixels(
-      ViewerTopRow(state: state) { _ in }
-        .frame(width: PreviewStates.viewerSize.width)
-        .fixedSize(horizontal: false, vertical: true)
-    )
-    .height
-  }
-
   /// The bar `width` across, drawn.
   ///
   /// - Parameters:

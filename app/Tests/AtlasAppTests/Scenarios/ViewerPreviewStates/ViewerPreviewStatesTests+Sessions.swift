@@ -44,7 +44,10 @@
       }
       return [
         "Sessions": shown(working),
-        "Sessions, menu open": shown(working) { $0.session.openMenu = .sessions },
+        "Sessions, one ended": shown(working) { snapshot in
+          snapshot.date = Self.activityReadAt
+          snapshot.panes.sessions.list = HostSessionList(sessions: [Self.piRecord])
+        },
         "Activity by session": shown(working) { snapshot in
           Self.onSessionsActivity(Self.sessionsLog, &snapshot)
         },

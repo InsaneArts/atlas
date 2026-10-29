@@ -114,7 +114,7 @@ struct PanelPresenterSessionsTests {
     #expect(Words.actionNoun("right-click") == "A click" && Words.actionNoun(nil) == "An action")
   }
 
-  @Test("a row opens its session, All activity every session's, and the row for the rest the sessions menu")
+  @Test("a row opens its session, All activity every session's, and the row for the rest the window's own choice")
   @MainActor
   func rowsOpenTheirSessions() {
     var opened: [ViewerSessionChoice?] = []

@@ -87,9 +87,6 @@ final class ViewerController {
   /// The ⋯ menu as it should read now.
   var moreMenu: ViewerMoreMenu { ViewerPresenter.moreMenu(snapshot) }
 
-  /// The sessions menu as it should read now.
-  var sessionsMenu: ViewerSessionsMenu { ViewerPresenter.sessionsMenu(snapshot) }
-
   /// How old the newest picture is, read again with every tick of the clock: Details' row reads it as it draws, so
   /// the picture's age redraws that row alone.
   var newestPicture: String {
@@ -116,8 +113,7 @@ final class ViewerController {
   /// Whether this window holds control.
   var holdingControl: Bool { control.lease != nil }
 
-  /// Applies one of the window's events. Keys, ⋯ and the sessions button open their menus in the window's shell, which
-  /// owns AppKit.
+  /// Applies one of the window's events. Keys and ⋯ open their menus in the window's shell, which owns AppKit.
   ///
   /// - Parameter event: What the person did.
   func send(_ event: ViewerEvent) {
@@ -129,7 +125,7 @@ final class ViewerController {
     case .giveBack: control.releaseControl()
     case .stopAgent: Task { await setStopped(true) }
     case .resumeAgent: Task { await setStopped(false) }
-    case .showKeys, .showMore, .showSessions, .placeSessions: break
+    case .showKeys, .showMore: break
     case .chooseSession(let choice): chooseSession(choice)
     case .toggleDetails: toggleDetails()
     case .checkAgain: Task { await checkAgain() }
@@ -286,8 +282,6 @@ final class ViewerController {
   /// - Parameter menu: The menu open, or nil once it closed.
   func setOpenMenu(_ menu: ViewerMenu?) {
     session.openMenu = menu
-    // The sessions menu asked for has opened, once.
-    if menu == .sessions { session.sessionsMenuWanted = false }
   }
 
   /// Shows every host session's work, or one's, in Activity and Screenshots and at the top of Details; the list of
@@ -301,11 +295,6 @@ final class ViewerController {
     panesModel.followSessions(readNow: true)
   }
 
-  /// Asks for the sessions menu to open once its button shows, as the panel's row for more sessions does.
-  func askForSessionsMenu() {
-    session.sessionsMenuWanted = true
-  }
-
   /// The screen took the keyboard, or gave it up.
   ///
   /// - Parameter connected: Whether the screen takes the keyboard now.
@@ -313,10 +302,9 @@ final class ViewerController {
     session.keyboardConnected = connected
   }
 
-  /// The window is closing: give control back and stop reading; a sessions menu asked for is forgotten.
+  /// The window is closing: give control back and stop reading.
   func close() {
     shown = false
-    session.sessionsMenuWanted = false
     control.releaseControl()
     readingLoop.watch(false)
     panesModel.followPane()

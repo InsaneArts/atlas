@@ -1,10 +1,11 @@
 import SwiftUI
 
-/// The main window: one quiet bar at the top, the helper's screen under it, the Details column beside it on request,
-/// a toast when Take Control is refused, and an alert over everything when one is asked. It draws its state and sends
-/// what the person does; it decides nothing. The shell supplies `input`, the surface over the screen that takes the
-/// mouse and keyboard while in control, and `livePicture`, which draws the newest picture through a layer, so this
-/// view never sees AppKit; previews pass no input and an image.
+/// The main window: one quiet bar at the top, the helper's screen under it, the sessions column to its left while two
+/// or more host sessions are live or one is chosen, the Details column beside it on request, a toast when Take Control
+/// is refused, and an alert over everything when one is asked. It draws its state and sends what the person does; it
+/// decides nothing. The shell supplies `input`, the surface over the screen that takes the mouse and keyboard while in
+/// control, and `livePicture`, which draws the newest picture through a layer, so this view never sees AppKit;
+/// previews pass no input and an image.
 public struct ViewerView<Input: View, LivePicture: View>: View {
   /// What the window shows.
   private let state: ViewerState
@@ -60,30 +61,38 @@ public struct ViewerView<Input: View, LivePicture: View>: View {
     _miniCorner = State(initialValue: state.miniCorner)
   }
 
-  /// The top row in the title bar, the stage under it with Details beside it or, in a narrow window, floating over
-  /// its edge, a screenshot shown large over all of it, and the alert over that.
+  /// The top row in the title bar, under it the sessions column while it shows, then the stage with Details beside
+  /// it or, in a narrow window, floating over its edge, a screenshot shown large over all of it, and the alert over
+  /// that.
   public var body: some View {
     GeometryReader { proxy in
-      let floats = ViewerLayout.detailsFloats(windowWidth: proxy.size.width)
+      let floats = ViewerLayout.detailsFloats(windowWidth: proxy.size.width, showsSessions: state.sessions != nil)
       VStack(spacing: .zero) {
         // The top row fills the title bar, whatever its height.
         ViewerTopRow(state: state.top, send: send)
           .frame(height: max(proxy.safeAreaInsets.top, ViewerLayout.topRowHeight))
-        // On the Screen the stage gives Details its room on Details' own slide, so the picture shrinks and recentres
-        // in step with the column coming in, and turns back with it; the other tabs, and Reduce Motion, take it at once
-        // as Details fades in over them.
-        stage
-          .padding(.trailing, ViewerLayout.stageTrailing(showsDetails: showsDetails, floats: floats))
-          .animation(ViewerLayout.stageSlide(tab: state.pane.tab, reduceMotion: reduceMotion), value: showsDetails)
-          .overlay(alignment: .trailing) {
-            ViewerInspector(
-              details: state.details,
-              slides: ViewerLayout.detailsSlides(tab: state.pane.tab, reduceMotion: reduceMotion),
-              floats: floats,
-              newest: newest,
-              send: send
-            )
+        HStack(spacing: .zero) {
+          // The column keeps the window's inset to its left; the stage's own inset keeps the two apart.
+          if let sessions = state.sessions {
+            ViewerSidebar(state: sessions, send: send)
+              .padding(.leading, Spacing.m)
           }
+          // On the Screen the stage gives Details its room on Details' own slide, so the picture shrinks and
+          // recentres in step with the column coming in, and turns back with it; the other tabs, and Reduce Motion,
+          // take it at once as Details fades in over them.
+          stage
+            .padding(.trailing, ViewerLayout.stageTrailing(showsDetails: showsDetails, floats: floats))
+            .animation(ViewerLayout.stageSlide(tab: state.pane.tab, reduceMotion: reduceMotion), value: showsDetails)
+            .overlay(alignment: .trailing) {
+              ViewerInspector(
+                details: state.details,
+                slides: ViewerLayout.detailsSlides(tab: state.pane.tab, reduceMotion: reduceMotion),
+                floats: floats,
+                newest: newest,
+                send: send
+              )
+            }
+        }
       }
       .overlay {
         LargeShotLayer(shot: largeShot, zoom: zoom, send: send)
@@ -315,6 +324,16 @@ extension ViewerView where Input == EmptyView, LivePicture == StillPicture {
 
   #Preview("Details") {
     ViewerView(state: PreviewStates.viewerDetails) { _ in }
+      .frame(width: PreviewStates.viewerSize.width, height: PreviewStates.viewerSize.height)
+  }
+
+  #Preview("Sessions") {
+    ViewerView(state: PreviewStates.viewerSessionsEnded) { _ in }
+      .frame(width: PreviewStates.viewerSize.width, height: PreviewStates.viewerSize.height)
+  }
+
+  #Preview("Activity, one session") {
+    ViewerView(state: PreviewStates.viewerActivityOneSession) { _ in }
       .frame(width: PreviewStates.viewerSize.width, height: PreviewStates.viewerSize.height)
   }
 

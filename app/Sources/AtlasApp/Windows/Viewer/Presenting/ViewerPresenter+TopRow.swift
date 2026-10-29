@@ -2,8 +2,8 @@ import AtlasStatus
 import AtlasUI
 
 extension ViewerPresenter {
-  /// The top row: the status, the sessions button while it shows, the tabs with Activity's unseen dot, the buttons,
-  /// and the accent wash while this window holds control.
+  /// The top row: the status, the tabs with Activity's unseen dot, the buttons, and the accent wash while this window
+  /// holds control.
   ///
   /// - Parameter snapshot: What the controller holds.
   /// - Returns: The top row.
@@ -11,7 +11,6 @@ extension ViewerPresenter {
     let session = snapshot.session
     return ViewerTopRowState(
       status: status(snapshot),
-      sessions: sessionsButton(snapshot),
       tabs: CapsuleTabsState(
         tabs: ViewerTab.allCases.map {
           CapsuleTab(id: $0, title: ViewerWords.tab($0), symbol: $0.symbol, help: ShortcutWords.tab($0))

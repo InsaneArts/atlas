@@ -4,10 +4,44 @@ import SwiftUI
 enum ViewerLayout {
   /// 52: the top row's height, the title bar's with its empty toolbar.
   static let topRowHeight: CGFloat = 52
-  /// 16: a host session's icon in the sessions menu's button and the screen's chip, as large as in the menu itself.
+  /// 16: a host session's icon on the screen's chip, and each of those All sessions stacks in the sessions column.
   static let sessionIcon = IconSize.s
-  /// -2: between the icons the sessions button stacks, each just over the one before, with room to tell them apart.
+  /// -2: between the icons All sessions stacks, each just over the one before, with room to tell them apart.
   static let sessionStackSpacing = -Spacing.half
+  /// 224: the sessions column's width: a row's 4-point selection inset and 6-point content inset on each side, a
+  /// session's 28-point icon and the 8 after it, and 168 for its name, which holds "Claude Code · understudy".
+  static let sidebarWidth: CGFloat = 224
+  /// 236: the room the sessions column takes from the stage while it shows: its own width and the window's inset to
+  /// its left, the stage's own inset after it keeping the two apart.
+  static let sidebarColumn = sidebarWidth + Spacing.m
+  /// 28: a host session's icon on its row in the sessions column.
+  static let sidebarIcon: CGFloat = 28
+  /// 40: a row's least height in the sessions column, its 28-point icon and the content inset above and below it.
+  static let sidebarRowHeight = sidebarIcon + sidebarRowInset * 2
+  /// 4: how far a row's selection and hover fills sit in from the column's sides, so the selection is an inset,
+  /// rounded highlight rather than a band from edge to edge.
+  static let sidebarSelectionInset = Spacing.xs
+  /// 6: a row's content inset inside its selection and hover fills.
+  static let sidebarRowInset = Spacing.xsPlus
+  /// 12: the selection's and hover's corner: the session icon's 6-point corner and the 6 of content inset between
+  /// them, so the two corners are concentric.
+  static let sidebarSelectionRadius = Radius.extraSmall + sidebarRowInset
+  /// 8: between a row's icon or icons and its words.
+  static let sidebarIconGap = Spacing.s
+  /// 0: between a session's name and its state under it.
+  static let sidebarLineGap: CGFloat = .zero
+  /// 2: between the rows of the sessions column.
+  static let sidebarRowGap = Spacing.half
+  /// A heading's inset in the sessions column: in line with the rows' content at its sides, 4 above the rows under
+  /// it.
+  static let sidebarHeadingInset = EdgeInsets(
+    top: .zero,
+    leading: sidebarSelectionInset + sidebarRowInset,
+    bottom: Spacing.xs,
+    trailing: sidebarSelectionInset + sidebarRowInset
+  )
+  /// 12: above Ended, apart from the live sessions over it.
+  static let sidebarSectionGap = Spacing.m
   /// 20: a host session's icon heading its group in Activity, and before the Activity title of one session.
   static let groupIcon: CGFloat = 20
 
@@ -138,13 +172,23 @@ enum ViewerLayout {
     return rimArrival
   }
 
-  /// Whether Details floats over the stage's trailing edge rather than taking its room: in a window narrower than
-  /// ``detailsFloatsBelow``.
+  /// Whether Details floats over the stage's trailing edge rather than taking its room: while the window, less the
+  /// sessions column when it shows, is narrower than ``detailsFloatsBelow``.
   ///
-  /// - Parameter windowWidth: The window's width.
+  /// - Parameters:
+  ///   - windowWidth: The window's width.
+  ///   - showsSessions: Whether the sessions column shows; it does not by default.
   /// - Returns: Whether Details floats.
-  static func detailsFloats(windowWidth: CGFloat) -> Bool {
-    windowWidth < detailsFloatsBelow
+  static func detailsFloats(windowWidth: CGFloat, showsSessions: Bool = false) -> Bool {
+    windowWidth - sidebarLeading(showsSessions: showsSessions) < detailsFloatsBelow
+  }
+
+  /// The room the sessions column takes at the window's leading edge: its column while it shows, else none.
+  ///
+  /// - Parameter showsSessions: Whether the sessions column shows.
+  /// - Returns: The leading room.
+  static func sidebarLeading(showsSessions: Bool) -> CGFloat {
+    showsSessions ? sidebarColumn : .zero
   }
 
   /// The room the stage leaves at its trailing edge: Details' column while Details shows and takes its room, else

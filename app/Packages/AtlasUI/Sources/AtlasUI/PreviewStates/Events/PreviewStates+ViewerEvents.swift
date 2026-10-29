@@ -33,10 +33,8 @@
       case .askCleanup:
         return viewerCleanUp
       case .showKeys, .showMore, .copyShot, .showShotInFinder, .thumbnailNeeded, .shotColumns, .moveCorner,
-        .openSettings, .placeSessions:
+        .openSettings:
         return state
-      case .showSessions:
-        return viewerSessionsMenuOpen
       case .chooseSession(.all):
         return viewerActivityBySession
       case .chooseSession(.one):

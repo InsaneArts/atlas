@@ -2,19 +2,11 @@ import AtlasService
 import AtlasStatus
 import Foundation
 
-/// The main window's words for host sessions that depend on what it holds: the sessions button and its menu, a
-/// session's line there and in Details, Activity's groups, the Screenshots count, and Details' facts. Fixed copy, such
-/// as the groups' names and the recovery line's buttons, stays in AtlasUI's views; the words the panel shares are
-/// ``Words``'.
+/// The main window's words for host sessions that depend on what it holds: a session's line in the sessions column
+/// and in Details, Activity's groups, the Screenshots count, and Details' facts. Fixed copy, such as the column's
+/// headings, the groups' names and the recovery line's buttons, stays in AtlasUI's views; the words the panel shares
+/// are ``Words``'.
 extension ViewerWords {
-  /// The sessions button while every session's work shows.
-  static let allSessionsButton = "All sessions"
-  /// The sessions button's tooltip.
-  static let sessionsHelp = "Choose whose work to show"
-  /// The menu's first item, which shows every session's work.
-  static let allSessionsItem = "All Sessions"
-  /// The header over the ended sessions in the menu.
-  static let endedHeader = "Ended"
   /// The person's own lines' group in Activity.
   static let youGroup = "You"
   /// The commands no host named, gathered as one session.
@@ -54,8 +46,8 @@ extension ViewerWords {
   /// A plan whose phase is not known.
   static let plan = "A plan"
 
-  /// A session's state and line as its menu item and Details say them: what it does, what it waits for, how long it
-  /// has been idle, or when it ended.
+  /// A session's state and line as its row in the sessions column and Details say them: what it does, what it waits
+  /// for, how long it has been idle, or when it ended.
   ///
   /// - Parameters:
   ///   - session: The session, as the status lists it.
@@ -88,7 +80,7 @@ extension ViewerWords {
     "\(Words.sessionState(state)) · \(Words.leadingLower(line))"
   }
 
-  /// An ended session's line, as its menu item and Details say it.
+  /// An ended session's line, as its row in the sessions column and Details say it.
   ///
   /// - Parameters:
   ///   - record: The session, as `sessions.json` lists it.

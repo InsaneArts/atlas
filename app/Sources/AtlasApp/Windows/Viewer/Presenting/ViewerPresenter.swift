@@ -5,8 +5,8 @@ import AtlasUI
 /// Builds the main window's state from what its controller holds. Pure: every choice the window shows is made here,
 /// from the snapshot, its rules (`ViewerSnapshot+Rules`, which the controller's guards follow too), the status table
 /// (`Mode+StatusSummary`), the shared ``Words`` and the domain packages' (``Mode``, ``StatusReading``,
-/// ``ActivityGrouping``, ``ShotGrouping``). Its parts are in `ViewerPresenter+TopRow`, `+Screen`, `+Details`,
-/// `+Alert`, `+MoreMenu`, `+Activity`, `+Apps` and `+Shots`.
+/// ``ActivityGrouping``, ``ShotGrouping``). Its parts are in `ViewerPresenter+TopRow`, `+Screen`, `+Sessions`,
+/// `+Details`, `+Alert`, `+MoreMenu`, `+Activity`, `+Apps` and `+Shots`.
 enum ViewerPresenter {
   /// The window as it should look now.
   ///
@@ -17,6 +17,7 @@ enum ViewerPresenter {
     return ViewerState(
       top: top(snapshot),
       screen: screen(snapshot),
+      sessions: sessions(snapshot),
       details: snapshot.detailsShown ? details(snapshot) : nil,
       alert: alert(snapshot),
       // The screen keeps the corner over Activity and Apps, faded while paused; the Screenshots grid has pictures of

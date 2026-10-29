@@ -9,9 +9,6 @@ struct ViewerSession {
   var tab = ViewerTab.screen
   /// Whose work Activity and Screenshots show, and Details leads with: every host session's, or one's.
   var chosenSession = ViewerSessionChoice.all
-  /// Whether the sessions menu should open once its button shows, as the panel's row for more sessions asks; it
-  /// opens once, and closing the window forgets it.
-  var sessionsMenuWanted = false
   /// Whether the picture is paused.
   var paused = false
   /// Whether the screen is drawn at actual size, one view point a display point.

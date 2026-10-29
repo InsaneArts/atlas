@@ -16,7 +16,7 @@ extension WindowCoordinator {
       },
       openSessions: { [weak self] choice in
         self?.parts?.closePanel()
-        self?.openViewer(tab: .activity, session: choice, showsSessionsMenu: choice == nil)
+        self?.openViewer(tab: .activity, session: choice)
       },
       openSettings: { [weak self] in
         self?.parts?.closePanel()

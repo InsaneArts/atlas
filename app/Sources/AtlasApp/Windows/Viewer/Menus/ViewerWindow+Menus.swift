@@ -86,14 +86,6 @@ extension ViewerWindow: ViewerMenuActions, HelperMenuActions {
   /// - Parameter sender: The menu item.
   func findInTab(_ sender: Any?) { controller.panesModel.find() }
 
-  /// All Sessions, or the session whose key the item represents: whose work the window shows.
-  ///
-  /// - Parameter sender: The menu item.
-  func chooseSession(_ sender: Any?) {
-    let key = (sender as? NSMenuItem)?.representedObject as? String
-    controller.send(.chooseSession(key.map(ViewerSessionChoice.one) ?? .all))
-  }
-
   /// Asks before recovering the helper.
   ///
   /// - Parameter sender: The menu item.
@@ -153,8 +145,6 @@ extension ViewerWindow: ViewerMenuActions, HelperMenuActions {
       return menu.actsOnShot || menu.hasPicture
     case #selector(ViewerMenuActions.findInTab(_:)):
       return searchable(ViewerPresenter.pane(snapshot))
-    case #selector(ViewerMenuActions.chooseSession(_:)):
-      return true
     default:
       return validateHelper(item, snapshot: snapshot) ?? super.validateMenuItem(item)
     }

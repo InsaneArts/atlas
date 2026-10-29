@@ -13,32 +13,49 @@ struct ViewerPresenterSessionsTests {
     [SessionReplies.claudeActing, SessionReplies.codexWaiting(), SessionReplies.cursorIdle]
   }
 
-  @Test("the menu button shows only while two sessions are live or one is chosen")
-  func theButtonShowsOnlyWithTwoLiveOrOneChosen() throws {
-    // A status that names no session, and one with a single live session, read as today: no button, no session words.
-    #expect(ViewerPresenter.top(try .listing([])).sessions == nil)
+  @Test("the sessions column shows only while two sessions are live or one is chosen")
+  func theColumnShowsOnlyWithTwoLiveOrOneChosen() throws {
+    // A status that names no session, and one with a single live session, read as today: no column, no session words.
+    #expect(ViewerPresenter.state(try .listing([])).sessions == nil)
     var one = try ViewerSnapshot.listing([SessionReplies.claudeActing])
-    #expect(ViewerPresenter.top(one).sessions == nil)
+    #expect(ViewerPresenter.state(one).sessions == nil)
     #expect(ViewerPresenter.screen(one).chip == nil, "one session has the helper, but no one is told apart")
     #expect(ViewerPresenter.screen(one).captions.allSatisfy { $0.icon == nil })
     one.session.chosenSession = .one("3f9a1c07b2e4")
-    #expect(ViewerPresenter.top(one).sessions?.title == "Claude Code · understudy", "a chosen session keeps it")
-    let button = try #require(ViewerPresenter.top(try .listing(Self.three)).sessions)
-    #expect(button.title == "All sessions")
-    #expect(button.icons.count == 3)
+    let chosen = try #require(ViewerPresenter.sessions(one), "a chosen session keeps it")
+    #expect(chosen.chosen == .one("3f9a1c07b2e4"))
+    #expect(chosen.live.map(\.name) == ["Claude Code · understudy"])
+    let column = try #require(ViewerPresenter.sessions(try .listing(Self.three)))
+    #expect(column.chosen == .all)
+    #expect(column.icons.count == 3)
   }
 
-  @Test("the menu lists every live session however many there are")
-  func theMenuListsEveryLiveSession() throws {
+  @Test("each row says its session's state and line, in the tone of its state")
+  func eachRowSaysItsState() throws {
+    let column = try #require(ViewerPresenter.sessions(try .listing(Self.three)))
+    let rows = column.live.map { [$0.name, $0.state] }
+    #expect(
+      rows == [
+        ["Claude Code · understudy", "Acting · has the helper"],
+        ["Codex · atlas-landing", "Waiting for the helper · 8 s"],
+        ["Cursor · opie", "Idle · 4 min ago"],
+      ]
+    )
+    #expect(column.live.map(\.tone) == [.active, .quiet, .quiet])
+    #expect(column.live.first?.icon == SessionHost.claude.icon)
+  }
+
+  @Test("the column lists every live session however many there are")
+  func theColumnListsEveryLiveSession() throws {
     let many = (0..<12)
       .map { hostSession(String(format: "%012x", $0), host: "codex", name: "Codex · project \($0)") }
-    let menu = ViewerPresenter.sessionsMenu(try .listing(many))
-    #expect(menu.live.count == 12)
-    #expect(ViewerPresenter.top(try .listing(many)).sessions?.icons.count == 3, "the button stacks three icons")
+    let column = try #require(ViewerPresenter.sessions(try .listing(many)))
+    #expect(column.live.count == 12)
+    #expect(column.icons.count == 3, "All sessions stacks three icons")
   }
 
-  @Test("the menu lists the status's eight, then the list's other live sessions, first commands included, then Ended")
-  func theMenuJoinsTheStatusAndTheList() throws {
+  @Test("the column lists the status's eight, then the list's other live sessions, first commands included, then Ended")
+  func theColumnJoinsTheStatusAndTheList() throws {
     let listed = (0..<8)
       .map { hostSession(String(format: "%012x", $0), host: "codex", name: "Codex · project \($0)") }
     var snapshot = try ViewerSnapshot.listing(listed, more: 3)
@@ -57,12 +74,12 @@ struct ViewerPresenterSessionsTests {
       ],
       live: statusOnes + past
     )
-    let menu = ViewerPresenter.sessionsMenu(snapshot)
-    let live = menu.live.map(\.key)
+    let column = try #require(ViewerPresenter.sessions(snapshot))
+    let live = column.live.map(\.id)
     #expect(live == statusOnes.map(\.key) + ["aaaa00000001", "aaaa00000002", "aaaa00000003"])
-    let ended = menu.ended.map(\.key)
+    let ended = column.ended.map(\.id)
     #expect(ended == ["c0ffee5e5510"])
-    #expect(menu.live.last?.icon == SessionHost.pi.icon, "a first command's session has its host's icon")
+    #expect(column.live.last?.icon == SessionHost.pi.icon, "a first command's session has its host's icon")
     #expect(ViewerPresenter.resolvedSession("aaaa00000003", snapshot).name == "Pi · first")
   }
 
@@ -228,13 +245,13 @@ struct ViewerPresenterSessionsTests {
     #expect(ViewerPresenter.status(needsYou).line == "A click by Claude Code may not have finished")
   }
 
-  @Test("an older service with no list leaves the menu without Ended and Details without the session")
+  @Test("an older service with no list leaves the column without Ended and Details without the session")
   func noListLeavesNoEndedAndNoDetail() throws {
     var snapshot = try ViewerSnapshot.listing(Self.three)
     snapshot.session.chosenSession = .one("3f9a1c07b2e4")
     snapshot.detailsShown = true
     snapshot.panes.sessions.notOfferedAt = snapshot.date
-    #expect(ViewerPresenter.sessionsMenu(snapshot).ended.isEmpty)
+    #expect(ViewerPresenter.sessions(snapshot)?.ended.isEmpty == true)
     #expect(ViewerPresenter.details(snapshot).sessionDetail == nil)
   }
 }

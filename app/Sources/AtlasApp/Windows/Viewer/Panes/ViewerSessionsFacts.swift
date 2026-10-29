@@ -2,7 +2,7 @@ import AtlasService
 import Foundation
 
 /// What the window last read of the host sessions' list, `sessions.json`: the sessions live or ended within the last
-/// seven days and what each made, which the sessions menu's Ended part, Details and the Screenshots filter read. The
+/// seven days and what each made, which the sessions column's Ended part, Details and the Screenshots filter read. The
 /// live sessions' state always comes from the status, which is fresher.
 struct ViewerSessionsFacts {
   /// The list, newest last seen first; nil before the first reading.

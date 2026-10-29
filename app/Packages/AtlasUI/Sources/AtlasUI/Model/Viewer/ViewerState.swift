@@ -4,6 +4,8 @@ public struct ViewerState: Equatable, Sendable {
   public var top: ViewerTopRowState
   /// The Screen tab: the helper's screen and what is laid over it.
   public var screen: ViewerScreenState
+  /// The sessions column at the leading edge, beside every tab; nil hides it.
+  public var sessions: ViewerSessionsState?
   /// The Details column beside the screen; nil hides it.
   public var details: ViewerDetailsState?
   /// The alert over the whole window; nil shows none.
@@ -25,6 +27,7 @@ public struct ViewerState: Equatable, Sendable {
   /// - Parameters:
   ///   - top: The quiet row at the top.
   ///   - screen: The Screen tab.
+  ///   - sessions: The sessions column; nil hides it.
   ///   - details: The Details column; nil hides it.
   ///   - alert: The alert over the whole window; nil shows none.
   ///   - mini: The small screen over the Activity or Apps tab; nil shows none.
@@ -35,6 +38,7 @@ public struct ViewerState: Equatable, Sendable {
   public init(
     top: ViewerTopRowState,
     screen: ViewerScreenState,
+    sessions: ViewerSessionsState? = nil,
     details: ViewerDetailsState? = nil,
     alert: AlertCardState<AlertChoice>? = nil,
     mini: MiniScreenState? = nil,
@@ -45,6 +49,7 @@ public struct ViewerState: Equatable, Sendable {
   ) {
     self.top = top
     self.screen = screen
+    self.sessions = sessions
     self.details = details
     self.alert = alert
     self.mini = mini

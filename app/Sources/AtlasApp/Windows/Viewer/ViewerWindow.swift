@@ -33,8 +33,6 @@ final class ViewerWindow: NSWindow, NSWindowDelegate, WindowPresenting {
   private let rowToolbar = NSToolbar(identifier: "viewer")
   /// Reads the Screenshots tab's keys while the window is open.
   private var shotKeys: Any?
-  /// Where the sessions button is in the window's content, as it last said; nil while it is not drawn.
-  private var sessionsFrame: CGRect?
 
   /// Creates the window, hidden until ``present()``.
   ///
@@ -86,28 +84,6 @@ final class ViewerWindow: NSWindow, NSWindowDelegate, WindowPresenting {
     setFrameAutosaveName(Self.autosaveName)
     followTitle()
     followAnnouncements()
-    followSessionsMenu()
-  }
-
-  /// Opens the sessions menu once it is asked for, as the panel's row for more sessions asks, and the button has a
-  /// place in the window.
-  private func followSessionsMenu() {
-    StateTracking.follow { [weak self] () -> Bool? in
-      self?.controller.session.sessionsMenuWanted
-    } apply: { [weak self] _ in
-      self?.openWantedSessionsMenu()
-    }
-  }
-
-  /// Opens the sessions menu under its button while it is asked for, the window is presented and the button is
-  /// drawn; else it waits for whichever comes last. Unstructured, so the menu's tracking loop starts after the update
-  /// that asked, once the window has drawn.
-  private func openWantedSessionsMenu() {
-    guard controller.session.sessionsMenuWanted, sessionsFrame != nil else { return }
-    Task { @MainActor [weak self] in
-      guard let self, isPresented, controller.session.sessionsMenuWanted, sessionsFrame != nil else { return }
-      handle(.showSessions)
-    }
   }
 
   /// Titles the window with the helper's name once it is known, so the Window menu tells it from the setup window.
@@ -153,9 +129,7 @@ final class ViewerWindow: NSWindow, NSWindowDelegate, WindowPresenting {
     followScreen()
   }
 
-  /// What the person did in the window: Keys, ⋯ and the sessions button open their menus here, and the sessions
-  /// button's place is kept here for the menu asked for by itself; everything else goes to the controller. A menu
-  /// asked for while one is open waits for nothing: it is not opened again.
+  /// What the person did in the window: Keys and ⋯ open their menus here; everything else goes to the controller.
   ///
   /// - Parameter event: The event.
   func handle(_ event: ViewerEvent) {
@@ -164,43 +138,26 @@ final class ViewerWindow: NSWindow, NSWindowDelegate, WindowPresenting {
       open(KeysMenu.menu(for: controller), below: frame, as: .keys)
     case .showMore(let frame):
       open(MoreMenu.menu(controller.moreMenu, target: self), below: frame, as: .more)
-    case .showSessions:
-      // The button places itself as it is drawn (``ViewerEvent/placeSessions(_:)``), before it can be pressed.
-      guard controller.session.openMenu == nil, let frame = sessionsFrame else { return }
-      let menu = SessionsMenu.menu(controller.sessionsMenu, target: self, scale: backingScaleFactor)
-      open(menu, at: Self.menuOrigin(leadingBelow: frame), as: .sessions)
-    case .placeSessions(let frame):
-      sessionsFrame = frame
-      openWantedSessionsMenu()
     default:
       controller.send(event)
     }
   }
 
-  /// Opens a menu under a top-row button at the bar's trailing end, its trailing edge on the button's.
+  /// Opens a menu under a top-row button at the bar's trailing end, its trailing edge on the button's, the button
+  /// pressed until the menu closes.
   ///
   /// - Parameters:
   ///   - menu: The menu.
   ///   - frame: The button's frame in the window's content, top left first.
   ///   - kind: Which menu.
   private func open(_ menu: NSMenu, below frame: CGRect, as kind: ViewerMenu) {
-    open(menu, at: Self.menuOrigin(below: frame, width: menu.size.width), as: kind)
-  }
-
-  /// Opens a menu with its top left corner at `origin`, its button pressed until the menu closes.
-  ///
-  /// - Parameters:
-  ///   - menu: The menu.
-  ///   - origin: Its top left corner in the window's content.
-  ///   - kind: Which menu.
-  private func open(_ menu: NSMenu, at origin: NSPoint, as kind: ViewerMenu) {
     guard let content = contentView else { return }
     // Nothing animates in the frame the menu's tracking loop starts, nor as it ends: an animation under way
     // then would stop halfway until the menu closes.
     var still = Transaction(animation: nil)
     still.disablesAnimations = true
     withTransaction(still) { controller.setOpenMenu(kind) }
-    menu.popUp(positioning: nil, at: origin, in: content)
+    menu.popUp(positioning: nil, at: Self.menuOrigin(below: frame, width: menu.size.width), in: content)
     withTransaction(still) { controller.setOpenMenu(nil) }
   }
 
@@ -213,15 +170,6 @@ final class ViewerWindow: NSWindow, NSWindowDelegate, WindowPresenting {
   /// - Returns: The menu's top left corner.
   static func menuOrigin(below frame: CGRect, width: CGFloat) -> NSPoint {
     NSPoint(x: frame.maxX - width, y: frame.maxY + menuGap)
-  }
-
-  /// Where the sessions menu opens: under its button, ``menuGap`` below it, its leading edge on the button's, as the
-  /// button sits in the bar's leading column.
-  ///
-  /// - Parameter frame: The button's frame in the window's content, top left first.
-  /// - Returns: The menu's top left corner.
-  static func menuOrigin(leadingBelow frame: CGRect) -> NSPoint {
-    NSPoint(x: frame.minX, y: frame.maxY + menuGap)
   }
 
   /// Reads the Screenshots tab's keys before the window does, and Escape on the Screen while a window is outlined,

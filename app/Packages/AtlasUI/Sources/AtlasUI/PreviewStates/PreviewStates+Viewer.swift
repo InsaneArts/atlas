@@ -42,7 +42,7 @@
         PreviewState(name: "A screenshot, large", value: viewerShotLarge),
         PreviewState(name: "Screenshots, none yet", value: viewerShotsEmpty),
         PreviewState(name: "Sessions", value: viewerSessions),
-        PreviewState(name: "Sessions, menu open", value: viewerSessionsMenuOpen),
+        PreviewState(name: "Sessions, one ended", value: viewerSessionsEnded),
         PreviewState(name: "Activity by session", value: viewerActivityBySession),
         PreviewState(name: "Activity, needs you", value: viewerActivityNeedsYou),
         PreviewState(name: "Activity, one session", value: viewerActivityOneSession),

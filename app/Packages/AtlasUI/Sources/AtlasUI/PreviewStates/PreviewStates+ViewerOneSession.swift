@@ -60,11 +60,8 @@
     /// ended among its facts.
     @MainActor public static let viewerSessionEnded: ViewerState = {
       var state = viewerSessionDetail
-      state.top.sessions = ViewerSessionsButton(
-        icons: [SessionSamples.piIcon],
-        title: SessionSamples.piName,
-        help: "Choose whose work to show"
-      )
+      state.sessions?.chosen = .one(SessionSamples.piKey)
+      state.sessions?.ended = [piEndedRow]
       state.details?.sessionDetail = ViewerSessionDetail(
         icon: SessionSamples.piIcon,
         name: SessionSamples.piName,

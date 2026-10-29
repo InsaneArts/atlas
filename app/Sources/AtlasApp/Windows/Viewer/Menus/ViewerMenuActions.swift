@@ -39,8 +39,4 @@ import Foundation
   ///
   /// - Parameter sender: The menu item.
   func findInTab(_ sender: Any?)
-  /// All Sessions, or one host session, by the item's represented key: whose work the window shows.
-  ///
-  /// - Parameter sender: The menu item.
-  func chooseSession(_ sender: Any?)
 }

@@ -3,9 +3,6 @@
 public struct ViewerTopRowState: Equatable, Sendable {
   /// The helper's state as this window sees it, with its mark and its line.
   public var status: StatusSummary
-  /// The sessions button beside the status, while two or more host sessions are live or one is chosen; nil hides
-  /// it.
-  public var sessions: ViewerSessionsButton?
   /// The tabs, and which one is selected: the only place the selected tab is kept.
   public var tabs: CapsuleTabsState<ViewerTab>
   /// What the Activity tab holds that the person has not seen.
@@ -21,7 +18,6 @@ public struct ViewerTopRowState: Equatable, Sendable {
   ///
   /// - Parameters:
   ///   - status: The helper's state as this window sees it.
-  ///   - sessions: The sessions button; none by default.
   ///   - tabs: The tabs, and which one is selected.
   ///   - activityUnseen: What Activity holds unseen; nothing by default.
   ///   - actions: The buttons on the right.
@@ -29,7 +25,6 @@ public struct ViewerTopRowState: Equatable, Sendable {
   ///   - isFullScreen: Whether the window is in full screen.
   public init(
     status: StatusSummary,
-    sessions: ViewerSessionsButton? = nil,
     tabs: CapsuleTabsState<ViewerTab>,
     activityUnseen: ViewerUnseen = .none,
     actions: ViewerTopActions,
@@ -37,7 +32,6 @@ public struct ViewerTopRowState: Equatable, Sendable {
     isFullScreen: Bool
   ) {
     self.status = status
-    self.sessions = sessions
     self.tabs = tabs
     self.activityUnseen = activityUnseen
     self.actions = actions

@@ -4,50 +4,24 @@ import AtlasUI
 import Foundation
 
 extension ViewerPresenter {
-  /// The most icons the sessions button stacks.
-  static let mostButtonIcons = 3
+  /// The most icons All sessions stacks.
+  static let mostStackedIcons = 3
+  /// 20: the most ended sessions the sessions column lists.
+  static let mostEnded = 20
 
-  /// The sessions button: while two or more host sessions are live, as the service decides, or one is chosen; the
-  /// live sessions' icons and "All sessions", or the chosen session's icon and name; pressed while its menu is open.
-  /// None otherwise, so with one session the bar is as it was.
+  /// The sessions column: while two or more host sessions are live, as the service decides, or one is chosen; none
+  /// otherwise, so with one session the window is as it was. It says whose work shows, stacks the first live
+  /// sessions' icons on All sessions, then lists every live session with its state and line: the status's first, in
+  /// the service's order, then those the status had no room to list, from the last read of the list, in its order;
+  /// then the sessions that list says ended, newest first, at most ``mostEnded``. An older service that offers no list
+  /// gives the status's sessions alone and no Ended part.
   ///
   /// - Parameter snapshot: What the controller holds.
-  /// - Returns: The button, or nil for none.
-  static func sessionsButton(_ snapshot: ViewerSnapshot) -> ViewerSessionsButton? {
+  /// - Returns: The column, or nil for none.
+  static func sessions(_ snapshot: ViewerSnapshot) -> ViewerSessionsState? {
     let reading = snapshot.reading.statusReading
-    let choice = snapshot.shownSessions
-    guard reading.showsSessions || choice != .all else { return nil }
-    let icons: [RowIcon]
-    let title: String
-    switch choice {
-    case .all:
-      icons = reading.liveSessions
-        .prefix(mostButtonIcons)
-        .map { $0.host.icon }
-      title = ViewerWords.allSessionsButton
-    case .one(let key):
-      let chosen = resolvedSession(key, snapshot)
-      icons = [chosen.icon]
-        .compactMap { $0 }
-      title = chosen.name
-    }
-    return ViewerSessionsButton(
-      icons: icons,
-      title: title,
-      isOpen: snapshot.session.openMenu == .sessions,
-      help: ViewerWords.sessionsHelp
-    )
-  }
-
-  /// The sessions menu: whose work shows, then every live session, each with its state and line: the status's first,
-  /// in the service's order, then those the status had no room to list, from the last read of the list, in its order;
-  /// then the sessions that list says ended, newest first, at most ``ViewerSessionsMenu/mostEnded``. An older service
-  /// that offers no list gives the status's sessions alone and no Ended part.
-  ///
-  /// - Parameter snapshot: What the controller holds.
-  /// - Returns: The menu.
-  static func sessionsMenu(_ snapshot: ViewerSnapshot) -> ViewerSessionsMenu {
-    let reading = snapshot.reading.statusReading
+    let chosen = snapshot.shownSessions
+    guard reading.showsSessions || chosen != .all else { return nil }
     let listed = reading.liveSessions
     let listedKeys = Set(listed.map(\.key))
     let rest = (snapshot.panes.sessions.list?.live ?? [])
@@ -56,32 +30,37 @@ extension ViewerPresenter {
     let liveKeys = Set(live.map(\.key))
     let ended = (snapshot.panes.sessions.list?.sessions ?? [])
       .filter { $0.isEnded && !liveKeys.contains($0.key) }
-      .prefix(ViewerSessionsMenu.mostEnded)
-    let liveItems = live.map { session in
-      ViewerSessionsMenuItem(
-        key: session.key,
-        title: session.name,
-        subtitle: ViewerWords.sessionSubtitle(session, line: reading.line(of: session), now: snapshot.date),
-        icon: session.host.icon
-      )
-    }
-    return ViewerSessionsMenu(
-      chosen: snapshot.shownSessions,
-      live: liveItems,
+      .prefix(mostEnded)
+    let icons =
+      live
+      .prefix(mostStackedIcons)
+      .map { $0.host.icon }
+    return ViewerSessionsState(
+      chosen: chosen,
+      icons: icons,
+      live: live.map { session in
+        ViewerSessionRow(
+          id: session.key,
+          icon: session.host.icon,
+          name: session.name,
+          state: ViewerWords.sessionSubtitle(session, line: reading.line(of: session), now: snapshot.date),
+          tone: session.state.tone
+        )
+      },
       ended: ended.map { record in
-        ViewerSessionsMenuItem(
-          key: record.key,
-          title: record.name,
-          subtitle: ViewerWords.endedSubtitle(record, now: snapshot.date),
-          icon: record.host.icon
+        ViewerSessionRow(
+          id: record.key,
+          icon: record.host.icon,
+          name: record.name,
+          state: ViewerWords.endedSubtitle(record, now: snapshot.date)
         )
       }
     )
   }
 
   /// One session as every surface names it, looked up once: the status first, then the sessions' list's live
-  /// sessions, its records, and last the log's own names, so the menu, Activity, Details, Screenshots and the Screen's
-  /// chip agree on its name, icon and state.
+  /// sessions, its records, and last the log's own names, so the sessions column, Activity, Details, Screenshots and
+  /// the Screen's chip agree on its name, icon and state.
   ///
   /// - Parameters:
   ///   - key: The session's key; empty for Terminal.

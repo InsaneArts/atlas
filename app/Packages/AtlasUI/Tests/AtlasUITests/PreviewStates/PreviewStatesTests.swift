@@ -79,7 +79,8 @@
         }
       )
       #expect(chips == ["typing", "inControl", "paused", "holder"])
-      #expect(states.contains { $0.top.sessions != nil })
+      #expect(states.contains { $0.sessions != nil })
+      #expect(states.contains { $0.sessions?.ended.isEmpty == false })
       #expect(states.contains { $0.details != nil })
       #expect(states.contains { $0.top.actions.pause?.isOn == true })
       #expect(states.contains { $0.toast != nil })

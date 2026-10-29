@@ -56,11 +56,9 @@ final class WindowCoordinator {
   ///   - tab: The tab to show, or nil for the one it shows.
   ///   - session: Whose work to show, every host session's or one's, or nil for the window's own choice; it is
   ///     chosen before the window shows.
-  ///   - showsSessionsMenu: Whether to open the window's menu of sessions once it shows.
-  func openViewer(tab: ViewerTab? = nil, session: ViewerSessionChoice? = nil, showsSessionsMenu: Bool = false) {
+  func openViewer(tab: ViewerTab? = nil, session: ViewerSessionChoice? = nil) {
     let prepare = { (controller: ViewerController) in
       if let session { controller.chooseSession(session) }
-      if showsSessionsMenu { controller.askForSessionsMenu() }
     }
     if let open = viewer, open.window.isPresented { prepare(open.controller) }
     let controller = present(

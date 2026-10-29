@@ -1,9 +1,9 @@
 import SwiftUI
 
-/// The main window's one quiet bar: what the helper is doing at the leading edge, with the sessions button at that
-/// column's end while it shows, the four tabs centred in their glass track, and only the actions that apply at the
-/// trailing edge, straight on the window's ground; a faint accent wash lies across it while this window holds
-/// control. A narrowing window takes the widest of the bar's layouts that fits.
+/// The main window's one quiet bar: what the helper is doing at the leading edge, the four tabs centred in their glass
+/// track, and only the actions that apply at the trailing edge, straight on the window's ground; a faint accent wash
+/// lies across it while this window holds control. A narrowing window takes the widest of the bar's layouts that
+/// fits.
 struct ViewerTopRow: View {
   /// What the row shows.
   let state: ViewerTopRowState
@@ -34,7 +34,8 @@ struct ViewerTopRow: View {
   /// - Returns: The bar.
   private func row(_ fit: ViewerTopRowFit) -> some View {
     ViewerBarArrangement(gap: ViewerLayout.columnGap) {
-      leading(fit)
+      ViewerTopStatus(status: state.status, reservesLine: fit.reservesLine)
+        .accessibilityIdentifier("status")
       Tabs(state: state.tabs, face: fit.tabFace) { tab in
         send(.selectTab(tab))
       } accessory: { tab in
@@ -50,38 +51,11 @@ struct ViewerTopRow: View {
       )
     }
   }
-
-  /// The bar's first column: the status, and the sessions button at its end while it shows, after the line where
-  /// the line takes the room, else after the room left, so the button keeps its place as the bar narrows.
-  ///
-  /// - Parameter fit: The layout.
-  /// - Returns: The column.
-  @ViewBuilder private func leading(_ fit: ViewerTopRowFit) -> some View {
-    let status = ViewerTopStatus(status: state.status, reservesLine: fit.reservesLine)
-      .accessibilityIdentifier("status")
-    if let sessions = state.sessions {
-      HStack(spacing: ViewerLayout.columnGap) {
-        status
-        if !fit.reservesLine {
-          Spacer(minLength: .zero)
-        }
-        ViewerSessionsPicker(button: sessions, showsWords: fit.sessionWords, send: send)
-      }
-    } else {
-      status
-    }
-  }
 }
 
 #if DEBUG
   #Preview("Working") {
     ViewerTopRow(state: PreviewStates.viewerWorking.top) { _ in }
-      .frame(width: PreviewStates.viewerSize.width, height: ViewerLayout.topRowHeight)
-      .sampleSurface()
-  }
-
-  #Preview("Sessions") {
-    ViewerTopRow(state: PreviewStates.viewerSessions.top) { _ in }
       .frame(width: PreviewStates.viewerSize.width, height: ViewerLayout.topRowHeight)
       .sampleSurface()
   }

@@ -25,34 +25,65 @@
       ),
     ]
 
-    /// The sessions button while every session's work shows: the three first live sessions' icons.
-    static let allSessionsButton = ViewerSessionsButton(
+    /// The live sessions in the service's order: Claude Code with the helper, Codex waiting its turn, Cursor idle since
+    /// it opened Opie and Terminal idle since a command took a screenshot 70 seconds ago.
+    static let sessionRows = [
+      ViewerSessionRow(
+        id: SessionSamples.claudeKey,
+        icon: SessionSamples.claudeIcon,
+        name: SessionSamples.claudeName,
+        state: "Acting · has the helper",
+        tone: .active
+      ),
+      ViewerSessionRow(
+        id: SessionSamples.codexKey,
+        icon: SessionSamples.codexIcon,
+        name: SessionSamples.codexName,
+        state: "Waiting for the helper · 8 s"
+      ),
+      ViewerSessionRow(
+        id: SessionSamples.cursorKey,
+        icon: SessionSamples.cursorIcon,
+        name: SessionSamples.cursorName,
+        state: "Idle · 4 min ago"
+      ),
+      ViewerSessionRow(
+        id: SessionSamples.terminalKey,
+        icon: SessionSamples.terminalIcon,
+        name: SessionSamples.terminalName,
+        state: "Idle · 70 s ago"
+      ),
+    ]
+
+    /// The sessions column while every session's work shows: the three first live sessions' icons over All sessions,
+    /// then each live session.
+    static let allSessions = ViewerSessionsState(
       icons: [SessionSamples.claudeIcon, SessionSamples.codexIcon, SessionSamples.cursorIcon],
-      title: "All sessions",
-      help: "Choose whose work to show"
+      live: sessionRows
     )
 
-    /// The sessions button while Claude Code's work alone shows.
-    static let claudeButton = ViewerSessionsButton(
-      icons: [SessionSamples.claudeIcon],
-      title: SessionSamples.claudeName,
-      help: "Choose whose work to show"
+    /// Pi · notes-sync, which ended 20 minutes ago.
+    static let piEndedRow = ViewerSessionRow(
+      id: SessionSamples.piKey,
+      icon: SessionSamples.piIcon,
+      name: SessionSamples.piName,
+      state: "Ended 20 min ago"
     )
 
-    /// Claude Code, Codex, Cursor and a Terminal session live, Claude Code with the helper: the sessions button beside
-    /// the status, the holder named on the screen, and each caption led by Claude Code's icon.
+    /// Claude Code, Codex, Cursor and a Terminal session live, Claude Code with the helper: the sessions column beside
+    /// the screen, the holder named on the screen, and each caption led by Claude Code's icon.
     @MainActor public static let viewerSessions: ViewerState = {
       var state = viewerWorking
-      state.top.sessions = allSessionsButton
+      state.sessions = allSessions
       state.screen.chip = .holder(name: SessionSamples.claudeName, icon: SessionSamples.claudeIcon)
       state.screen.captions = sessionCaptions
       return state
     }()
 
-    /// The sessions menu open under its button, which draws pressed. The menu itself is AppKit's, drawn by the system.
-    @MainActor public static let viewerSessionsMenuOpen: ViewerState = {
+    /// The four live sessions and Pi · notes-sync, which ended, dimmed under Ended at the column's foot.
+    @MainActor public static let viewerSessionsEnded: ViewerState = {
       var state = viewerSessions
-      state.top.sessions?.isOpen = true
+      state.sessions?.ended = [piEndedRow]
       return state
     }()
 
@@ -231,7 +262,25 @@
       var state = viewerNeedsYou
       state.alert = nil
       state.top.status.line = "A click by Claude Code may not have finished"
-      state.top.sessions = allSessionsButton
+      state.sessions = ViewerSessionsState(
+        icons: [SessionSamples.claudeIcon, SessionSamples.codexIcon, SessionSamples.cursorIcon],
+        live: [
+          ViewerSessionRow(
+            id: SessionSamples.claudeKey,
+            icon: SessionSamples.claudeIcon,
+            name: SessionSamples.claudeName,
+            state: "Needs you · a click may not have finished",
+            tone: .attention
+          ),
+          ViewerSessionRow(
+            id: SessionSamples.codexKey,
+            icon: SessionSamples.codexIcon,
+            name: SessionSamples.codexName,
+            state: "Waits until you recover"
+          ),
+          sessionRows[2],
+        ]
+      )
       state.top.tabs = viewerTabs(.activity)
       state.screen.captions = [
         sessionCaptions[0],
@@ -289,11 +338,11 @@
       label: "Which actions"
     )
 
-    /// Activity for Claude Code alone, chosen in the sessions menu: its lines by time under its name and icon.
+    /// Activity for Claude Code alone, chosen in the sessions column: its lines by time under its name and icon.
     @MainActor public static let viewerActivityOneSession: ViewerState = {
       var state = viewerActivityBySession
       state.top.status.line = SessionSamples.claudeDoing
-      state.top.sessions = claudeButton
+      state.sessions?.chosen = .one(SessionSamples.claudeKey)
       let opened = ViewerActivityLine(
         id: "34",
         time: "10:31:12",
@@ -330,7 +379,7 @@
     /// Login.
     @MainActor public static let viewerSessionDetail: ViewerState = {
       var state = viewerSessions
-      state.top.sessions = claudeButton
+      state.sessions?.chosen = .one(SessionSamples.claudeKey)
       state.top.actions.details = viewerDetailsToggle(shown: true)
       state.details = viewerDetails.details
       state.details?.sessionDetail = ViewerSessionDetail(
