@@ -43,6 +43,7 @@ mod select;
 pub mod session;
 mod session_view;
 pub mod setup;
+mod single_flight;
 pub mod switch;
 pub mod task;
 mod time;
