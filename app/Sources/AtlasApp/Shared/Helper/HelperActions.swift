@@ -141,12 +141,14 @@ final class HelperActions {
   /// it.
   ///
   /// - Parameter stopped: Whether agents stop.
+  /// - Returns: What the Stop came to; for Resume, nothing left.
   /// - Throws: ``ServiceError`` when the service refuses, or, for Resume, while another request is unanswered.
-  func setStopped(_ stopped: Bool) async throws {
+  @discardableResult
+  func setStopped(_ stopped: Bool) async throws -> StopOutcome {
     guard stopped || agentRequests == 0 else { throw ServiceError(HelperWords.waitForAction) }
     agentRequests += 1
     defer { agentRequests -= 1 }
-    try await service.setStopped(stopped)
+    return try await service.setStopped(stopped)
   }
 
   /// Ends this app's control and waits until every acquisition and release is answered, `command` marked waiting

@@ -235,8 +235,8 @@ final class ViewerController {
   /// - Parameter stopped: Whether agents stop.
   func setStopped(_ stopped: Bool) async {
     do {
-      try await actions.setStopped(stopped)
-      say(stopped ? ViewerWords.agentStopped : ViewerWords.agentResumed)
+      let outcome = try await actions.setStopped(stopped)
+      say(stopped ? HelperWords.stopped(outcome) : ViewerWords.agentResumed)
     } catch {
       say(error.localizedDescription)
     }

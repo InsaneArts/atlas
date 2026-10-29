@@ -105,6 +105,24 @@ struct PanelControllerTests {
     #expect(controller.actions.agentRequests == 0)
   }
 
+  @Test("a stop that ends everything keeps the line, and one that left jobs running says so in its place")
+  func aStopThatLeftJobsRunningSaysSo() async {
+    let service = ScriptedService()
+    let controller = PanelController.scripted(service)
+    await controller.stopAgent()
+    #expect(controller.state.notice == nil, "a complete Stop leaves the status line")
+    service.stopOutcome = StopOutcome(
+      warnings: [],
+      unknown: [StopOutcome.Job(id: "7c2e91a04b3f")],
+      unresolved: [StopOutcome.Job(id: "000000000000")]
+    )
+    await controller.stopAgent()
+    #expect(
+      controller.state.notice
+        == "Agents stopped, but 2 background jobs couldn't be stopped. They may still run in the helper."
+    )
+  }
+
   @Test("a stop the service refuses says why in place of the line, until the panel opens again")
   func refusedStop() async {
     let service = ScriptedService()

@@ -43,11 +43,13 @@ public protocol ViewerService: Sendable {
   /// - Throws: ``ServiceError`` when the service refuses.
   func revoke() async throws
 
-  /// Stops agents in the helper, ending an agent's input under way, or lets them go on.
+  /// Stops agents in the helper, ending an agent's input under way and its background jobs, or lets them go on.
   ///
   /// - Parameter stopped: Whether agents stop.
+  /// - Returns: What the Stop came to: what the service warned of, and the background jobs it could not end.
   /// - Throws: ``ServiceError`` when the service refuses.
-  func setStopped(_ stopped: Bool) async throws
+  @discardableResult
+  func setStopped(_ stopped: Bool) async throws -> StopOutcome
 
   /// Sends input to the helper under a lease.
   ///

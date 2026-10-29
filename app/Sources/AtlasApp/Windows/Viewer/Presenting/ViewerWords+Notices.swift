@@ -1,10 +1,8 @@
 import Foundation
 
-/// The notices over the screen: what Stop, Resume and a change in the helper did, why control ended, and text too
-/// long to send.
+/// The notices over the screen: what Resume and a change in the helper did, why control ended, and text too long to
+/// send. How Stop went is said as every window says it (``HelperWords/stopped(_:)``).
 extension ViewerWords {
-  /// Once Stop ran.
-  static let agentStopped = "Agent stopped."
   /// Once Resume ran.
   static let agentResumed = "Agent resumed."
   /// Take Control still refused once the wait for the agent's step ran out: an agent's action holds the helper.

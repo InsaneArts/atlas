@@ -28,6 +28,8 @@ public final class ScriptedService: ViewerService {
   public var held: [String: CheckedContinuation<Void, Never>] = [:]
   /// Requests that fail every time.
   public var fail: Set<String> = []
+  /// What every Stop or Resume answers.
+  public var stopOutcome = StopOutcome()
   /// How many acquisitions from now on are refused as busy, as while an agent's action runs.
   public var busyAcquires = 0
   /// How many acquisitions from now on are granted, but their reply is lost on the way back, as a timeout loses it.
@@ -242,11 +244,14 @@ public final class ScriptedService: ViewerService {
   /// Records stopping or resuming agents, unless held or failed.
   ///
   /// - Parameter stopped: Whether agents stop.
+  /// - Returns: ``stopOutcome``.
   /// - Throws: A ``ServiceError`` when the route fails.
   @MainActor
-  public func setStopped(_ stopped: Bool) async throws {
+  @discardableResult
+  public func setStopped(_ stopped: Bool) async throws -> StopOutcome {
     log.append(stopped ? "stop" : "resume")
     try await pause("hold")
+    return stopOutcome
   }
 
   /// Records the input, a batch a request, unless held or failed.

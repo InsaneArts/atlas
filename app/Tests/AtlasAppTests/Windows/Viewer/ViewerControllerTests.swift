@@ -77,13 +77,30 @@ struct ViewerControllerTests {
     let viewer = ViewerController.scripted(service)
     await viewer.setStopped(true)
     #expect(service.log == ["stop"])
-    #expect(viewer.session.notice == ViewerWords.agentStopped)
+    #expect(viewer.session.notice == "Agent stopped.")
     await viewer.setStopped(false)
     #expect(service.log == ["stop", "resume"])
     #expect(viewer.session.notice == ViewerWords.agentResumed)
     service.fail = ["hold"]
     await viewer.setStopped(true)
     #expect(viewer.session.notice == "hold failed", "a refusal says why")
+    viewer.close()
+  }
+
+  @Test("a Stop that left background jobs running says so, with what the service warned of")
+  func aStopThatLeftJobsRunningSaysSo() async throws {
+    let service = ScriptedService()
+    service.stopOutcome = StopOutcome(
+      warnings: ["Atlas could not stop 1 background job"],
+      refused: [StopOutcome.Job(id: "7c2e91a04b3f", reason: "identity")]
+    )
+    let viewer = ViewerController.scripted(service)
+    await viewer.setStopped(true)
+    #expect(
+      viewer.session.notice
+        == "Agents stopped, but 1 background job couldn't be stopped. It may still run in the helper. "
+        + "Atlas could not stop 1 background job."
+    )
     viewer.close()
   }
 
