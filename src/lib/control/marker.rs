@@ -396,15 +396,7 @@ pub(super) fn replace_private(path: &Path, bytes: &[u8]) -> Result<()> {
 
     let written = file.write_all(bytes).and_then(|()| file.sync_all());
     #[cfg(test)]
-    if super::commands_tests::INTERRUPT_REPLACE.with(|interrupt| {
-        let stops = interrupt
-            .get()
-            .is_some_and(|ending| name.to_string_lossy().ends_with(ending));
-        if stops {
-            interrupt.set(None);
-        }
-        stops
-    }) {
+    if super::faults::replacing_stops(&name.to_string_lossy()) {
         // As a writer killed here would, it leaves the replacement unnamed.
         return Err(Error::new("state", "interrupted before the rename"));
     }

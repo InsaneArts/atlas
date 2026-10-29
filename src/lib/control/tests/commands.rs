@@ -1,22 +1,10 @@
 //! Commands agents started with `run`: other agents act beside one while it
 //! runs, recovery and everything strict wait for it, and one that died
 //! blocks everyone as any unknown outcome does.
-use super::marker::REPLACING;
-use super::*;
-use crate::error::Holder;
-
-thread_local! {
-    /// Set to the end of a record's name, the next replacement of that
-    /// record on this thread stops before its rename, as a writer killed
-    /// there would.
-    pub(super) static INTERRUPT_REPLACE: std::cell::Cell<Option<&'static str>> = const { std::cell::Cell::new(None) };
-}
-
-/// Stop the next replacement of the record whose name ends with `name`
-/// before its rename.
-fn interrupt_replacing(name: &'static str) {
-    INTERRUPT_REPLACE.with(|interrupt| interrupt.set(Some(name)));
-}
+use crate::{
+    control::{faults::interrupt_replacing, marker::REPLACING, *},
+    error::Holder,
+};
 
 /// Two controllers of one helper, as two commands would hold them.
 fn pair(directory: &Path) -> (Controller, Controller) {
@@ -97,7 +85,7 @@ fn an_update_waits_for_a_running_command() {
 #[test]
 fn a_command_whose_process_died_blocks_every_agent() {
     if !crate::test_support::isolated(
-        "control::commands_tests::a_command_whose_process_died_blocks_every_agent",
+        "control::tests::commands::a_command_whose_process_died_blocks_every_agent",
     ) {
         return;
     }
@@ -129,7 +117,7 @@ fn an_unmarked_claim_still_blocks_agents_beside_it() {
 #[test]
 fn an_orphaned_privileged_executor_is_never_taken_for_a_command() {
     if !crate::test_support::isolated(
-        "control::commands_tests::an_orphaned_privileged_executor_is_never_taken_for_a_command",
+        "control::tests::commands::an_orphaned_privileged_executor_is_never_taken_for_a_command",
     ) {
         return;
     }
@@ -171,7 +159,7 @@ fn an_unknown_outcome_beside_a_running_command_still_blocks_agents() {
 #[test]
 fn recovery_keeps_a_running_command_and_its_mark() {
     if !crate::test_support::isolated(
-        "control::commands_tests::recovery_keeps_a_running_command_and_its_mark",
+        "control::tests::commands::recovery_keeps_a_running_command_and_its_mark",
     ) {
         return;
     }

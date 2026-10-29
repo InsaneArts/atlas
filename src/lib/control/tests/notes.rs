@@ -1,9 +1,13 @@
 //! The labels kept beside the lock and the marker: which host session
 //! claimed each pending change, which holds control and which waits, and
 //! the order waiters take control in.
-use super::*;
-use crate::host_session::{Host, HostSession, Instance};
-use crate::{error::Holder, files::token};
+use super::appears;
+use crate::{
+    control::*,
+    error::Holder,
+    files::token,
+    host_session::{Host, HostSession, Instance},
+};
 use std::os::unix::fs::DirBuilderExt;
 
 fn session(id: &str) -> HostSession {
@@ -151,18 +155,9 @@ fn claim_if_claimer() {
     }
 }
 
-/// Wait for `path` to appear, for at most five seconds.
-fn appears(path: &Path) {
-    let started = Instant::now();
-    while !path.exists() {
-        assert!(started.elapsed() < Duration::from_secs(5), "{path:?}");
-        std::thread::sleep(Duration::from_millis(10));
-    }
-}
-
 #[test]
 fn a_killed_holders_cause_survives_it() {
-    const TEST: &str = "control::notes_tests::a_killed_holders_cause_survives_it";
+    const TEST: &str = "control::tests::notes::a_killed_holders_cause_survives_it";
     claim_if_claimer();
     if !crate::test_support::isolated(TEST) {
         return;
@@ -313,7 +308,7 @@ fn waiting_notes(controller: &Controller) -> Vec<Note> {
 #[test]
 fn six_waiters_take_the_lock_in_the_order_they_began() {
     if !crate::test_support::isolated(
-        "control::notes_tests::six_waiters_take_the_lock_in_the_order_they_began",
+        "control::tests::notes::six_waiters_take_the_lock_in_the_order_they_began",
     ) {
         return;
     }
@@ -369,7 +364,7 @@ fn six_waiters_take_the_lock_in_the_order_they_began() {
 #[test]
 fn a_dead_or_stale_waiters_note_is_skipped() {
     if !crate::test_support::isolated(
-        "control::notes_tests::a_dead_or_stale_waiters_note_is_skipped",
+        "control::tests::notes::a_dead_or_stale_waiters_note_is_skipped",
     ) {
         return;
     }
@@ -422,7 +417,7 @@ fn a_dead_or_stale_waiters_note_is_skipped() {
 #[test]
 fn a_waiter_with_no_note_still_gets_the_lock() {
     if !crate::test_support::isolated(
-        "control::notes_tests::a_waiter_with_no_note_still_gets_the_lock",
+        "control::tests::notes::a_waiter_with_no_note_still_gets_the_lock",
     ) {
         return;
     }
@@ -444,7 +439,7 @@ fn a_waiter_with_no_note_still_gets_the_lock() {
 #[test]
 fn a_newcomer_waits_its_turn_but_the_person_and_a_stop_end_every_wait() {
     if !crate::test_support::isolated(
-        "control::notes_tests::a_newcomer_waits_its_turn_but_the_person_and_a_stop_end_every_wait",
+        "control::tests::notes::a_newcomer_waits_its_turn_but_the_person_and_a_stop_end_every_wait",
     ) {
         return;
     }
@@ -455,7 +450,7 @@ fn a_newcomer_waits_its_turn_but_the_person_and_a_stop_end_every_wait() {
     let ahead = waiter_note(&controller, this, now - 1000, Duration::ZERO);
 
     // The lock is free, but an older waiter is in line: a newcomer with a
-    // wait lets it go first, and one with none answers as before.
+    // wait lets it go first, and one with none takes it at once.
     let refused = controller
         .clone()
         .waiting(Duration::from_millis(300))
