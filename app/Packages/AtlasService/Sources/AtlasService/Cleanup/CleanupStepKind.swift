@@ -5,9 +5,9 @@ public enum CleanupStepKind: String, Equatable, Sendable {
   case quit
   /// Rolls back an environment plan the session applied in the helper.
   case undoPlan = "undo-plan"
-  /// Removes an app the session's task installed from the helper's Applications.
+  /// Moves an app the session's task installed to the helper's Trash.
   case removeInstall = "remove-install"
-  /// Removes a copy of an app Atlas made for the session.
+  /// Moves a copy of an app Atlas made for the session to the person's Trash.
   case removeCopy = "remove-copy"
   /// A kind this app does not know.
   case unknown

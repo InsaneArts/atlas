@@ -49,7 +49,7 @@ struct ViewerPresenterCleanupTests {
     )
   }
 
-  /// A preview of quitting Probe and Notes, rolling back a plan, removing Probe and two copies.
+  /// A preview of quitting Probe and Notes, rolling back a plan, moving Probe to the helper's Trash and removing two copies.
   ///
   /// - Parameter active: Whether the session may still be working.
   /// - Returns: The preview.
@@ -84,14 +84,14 @@ struct ViewerPresenterCleanupTests {
     #expect(try cleanup(terminal) == nil, "Terminal's session has no key a cleanup can name")
   }
 
-  @Test("the confirmation lists what will be quit and removed")
-  func theConfirmationListsWhatWillBeQuitAndRemoved() throws {
+  @Test("the confirmation lists what will be quit and moved to the Trash")
+  func theConfirmationListsWhatWillBeQuitAndMovedToTheTrash() throws {
     let steps = ViewerPresenter.cleanupSteps(Self.preview(active: false))
     #expect(
       steps == [
         "Quits Probe and Notes",
         "Undoes 1 environment change",
-        "Removes Probe from Applications",
+        "Moves Probe to the helper's Trash",
         "Removes 2 copies",
       ]
     )
@@ -118,6 +118,8 @@ struct ViewerPresenterCleanupTests {
       steps: [CleanupStep(number: 1, kind: .undoPlan), CleanupStep(number: 2, kind: .undoPlan)]
     )
     #expect(ViewerPresenter.cleanupSteps(plans) == ["Undoes 2 environment changes"])
+    let one = CleanupReply(preview: true, steps: [CleanupStep(number: 1, kind: .removeCopy)])
+    #expect(ViewerPresenter.cleanupSteps(one) == ["Removes 1 copy"])
   }
 
   @Test("an uncertain or blocked cleanup says so on its own")
@@ -167,6 +169,8 @@ struct ViewerPresenterCleanupTests {
         CleanupStep(number: 5, kind: .removeCopy, app: "Notes", state: .done, alreadyGone: true),
         CleanupStep(number: 6, kind: .undoPlan, state: .uncertain),
         CleanupStep(number: 7, kind: .unknown, state: .pending),
+        CleanupStep(number: 8, kind: .removeCopy, app: "Mail", state: .kept, reason: "other-volume"),
+        CleanupStep(number: 9, kind: .removeInstall, app: "Mail", state: .kept, reason: "unreadable"),
       ]
     )
     #expect(
@@ -178,6 +182,8 @@ struct ViewerPresenterCleanupTests {
         Fact(name: "Remove the copy of Notes", value: "Done: it was already gone"),
         Fact(name: "Undo an environment change", value: "Not known whether it worked"),
         Fact(name: "Another step", value: "Didn't run"),
+        Fact(name: "Remove the copy of Mail", value: "Kept: it could not be moved to the Trash"),
+        Fact(name: "Remove Mail from Applications", value: "Kept: Atlas couldn't read its record of it"),
       ]
     )
     #expect(ViewerPresenter.cleanupNotice(applied) == "The cleanup didn't finish. Details lists each step.")
@@ -187,8 +193,39 @@ struct ViewerPresenterCleanupTests {
     var snapshot = try Self.chosen(Self.record(copies: [HostSessionCopy(app: "Probe")]))
     snapshot.session.cleanupReceipts[Self.key] = applied
     let cleanup = try #require(ViewerPresenter.details(snapshot).hostSession?.cleanup)
-    #expect(cleanup.receipt.count == 7, "the receipt shows above the button, which can be pressed again")
+    #expect(cleanup.receipt.count == 9, "the receipt shows above the button, which can be pressed again")
     #expect(cleanup.isEnabled)
+  }
+
+  @Test("an install moved to the helper's Trash says so in the receipt and a copy reads as done")
+  func anInstallMovedToTheHelpersTrashSaysSoInTheReceiptAndACopyReadsAsDone() {
+    let applied = CleanupReply(
+      ok: true,
+      state: .complete,
+      steps: [
+        CleanupStep(number: 1, kind: .quit, apps: ["Probe"], state: .done),
+        CleanupStep(number: 2, kind: .undoPlan, state: .done),
+        CleanupStep(
+          number: 3,
+          kind: .removeInstall,
+          app: "Probe",
+          state: .done,
+          trashed: "Probe.app (atlas a7d2c0ffee12)"
+        ),
+        CleanupStep(number: 4, kind: .removeCopy, app: "TextEdit", state: .done),
+        CleanupStep(number: 5, kind: .removeCopy, app: "Notes", state: .done, alreadyGone: true),
+      ]
+    )
+    #expect(
+      ViewerPresenter.cleanupReceipt(applied) == [
+        Fact(name: "Quit Probe", value: "Done"),
+        Fact(name: "Undo an environment change", value: "Done"),
+        Fact(name: "Remove Probe from Applications", value: "Moved to the helper's Trash"),
+        Fact(name: "Remove the copy of TextEdit", value: "Done"),
+        Fact(name: "Remove the copy of Notes", value: "Done: it was already gone"),
+      ]
+    )
+    #expect(ViewerPresenter.cleanupNotice(applied) == "Cleaned up this session's work.")
   }
 
   @Test("the button stays disabled while a cleanup runs")
@@ -199,7 +236,9 @@ struct ViewerPresenterCleanupTests {
     service.cleanupApplied = CleanupReply(
       ok: true,
       state: .complete,
-      steps: [CleanupStep(number: 1, kind: .removeCopy, app: "Probe", state: .done)]
+      steps: [
+        CleanupStep(number: 1, kind: .removeCopy, app: "Probe", state: .done)
+      ]
     )
     let viewer = try await ViewerController.watching(service)
     viewer.send(.chooseSession(.one(Self.key)))

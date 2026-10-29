@@ -5,7 +5,7 @@ public enum CleanupStepState: String, Equatable, Sendable {
   case pending
   /// It started, and has not ended.
   case started
-  /// It worked, or what it removes was already gone.
+  /// It worked, or what it takes away was already gone.
   case done
   /// It was left as it is on purpose, as for an app that changed since it was installed.
   case kept

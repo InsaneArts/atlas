@@ -75,6 +75,30 @@ struct CleanupReplyTests {
     #expect(!applied.isUnderWay, "no step is under way once the apply replied")
   }
 
+  @Test("a trashed step keeps its name in the Trash")
+  func aTrashedStepKeepsItsNameInTheTrash() throws {
+    let applied = try decoded(
+      """
+      {"ok": true, "preview": false, "state": "complete",
+       "steps": [
+         {"n": 1, "do": "remove-install", "app": "Probe", "state": "done", "trashed": "Probe.app (atlas a7d2c0ffee12)"},
+         {"n": 2, "do": "remove-copy", "app": "TextEdit", "state": "done",
+          "trashed": "TextEdit copy (atlas 9c1e0011aabb)"},
+         {"n": 3, "do": "remove-copy", "app": "Notes", "state": "done", "alreadyGone": true},
+         {"n": 4, "do": "remove-copy", "app": "Mail", "state": "kept", "reason": "other-volume"},
+         {"n": 5, "do": "remove-copy", "state": "done", "trashed": 7}
+       ]}
+      """
+    )
+    #expect(
+      applied.steps.map(\.trashed) == [
+        "Probe.app (atlas a7d2c0ffee12)", "TextEdit copy (atlas 9c1e0011aabb)", nil, nil, nil,
+      ]
+    )
+    #expect(applied.steps.map(\.reason) == [nil, nil, nil, "other-volume", nil])
+    #expect(applied.steps.map(\.state) == [.done, .done, .done, .kept, .done], "a name of the wrong type is left out")
+  }
+
   @Test("a preview with a step started reads as under way")
   func aPreviewWithAStepStartedIsUnderWay() throws {
     let running = try decoded(

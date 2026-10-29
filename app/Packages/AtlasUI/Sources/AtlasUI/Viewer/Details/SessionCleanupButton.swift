@@ -15,7 +15,7 @@ struct SessionCleanupButton: View {
     }
     .buttonStyle(.capsule(.glass, size: .small, fill: true, isWorking: !cleanup.isEnabled))
     .disabled(!cleanup.isEnabled)
-    .help(Text(verbatim: "Quit, roll back and remove what this session left in the helper, once you confirm"))
+    .help(Text(verbatim: "Quit, roll back and clean up what this session left, once you confirm"))
   }
 }
 

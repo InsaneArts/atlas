@@ -42,8 +42,8 @@
       return state
     }()
 
-    /// Clean Up This Session's Work… asks first, over Claude Code's detail: what it quits, undoes and removes,
-    /// and that the session may still be working; Cancel in blue, Clean Up in red.
+    /// Clean Up This Session's Work… asks first, over Claude Code's detail: what it quits, undoes and moves to the
+    /// Trash, and that the session may still be working; Cancel in blue, Clean Up in red.
     @MainActor public static let viewerCleanUp: ViewerState = {
       var state = viewerSessionDetail
       state.alert = AlertCardState(
@@ -51,7 +51,7 @@
         message: """
           Quits Opie
           Undoes 1 environment change
-          Removes Probe from Applications
+          Moves Probe to the helper's Trash
           Removes 1 copy
 
           This session may still be working.

@@ -2,7 +2,7 @@ import Foundation
 
 extension ViewerClient {
   /// How long a cleanup may take, in seconds: 60, well beyond quitting the session's apps (up to 10 s), then rolling
-  /// back its plans and removing what it installed and copied.
+  /// back its plans and moving what it installed to the helper's Trash and removing what it copied.
   static let cleanupTimeout: TimeInterval = 60
   /// The code of an apply's reply that ran and did not finish: it still lists its steps.
   static let unfinishedCleanupCode = "cleanup"
