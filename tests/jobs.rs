@@ -6,8 +6,8 @@
 
 use atlas::{
     daemon::{
-        job::{Jobs, Start},
-        protocol::{Expected, JobId, StopReason},
+        job::Jobs,
+        protocol::{Expected, JobId, JobStart, JobView, StopReason},
     },
     process,
 };
@@ -30,8 +30,8 @@ fn jobs_in(folder: &std::path::Path) -> Arc<Jobs> {
     Arc::new(Jobs::open(folder, env!("CARGO_BIN_EXE_atlas").into(), uid()).unwrap())
 }
 
-fn start(argv: &[&str]) -> Start {
-    Start {
+fn start(argv: &[&str]) -> JobStart {
+    JobStart {
         argv: argv.iter().map(|argument| (*argument).to_owned()).collect(),
         lifetime: Duration::from_secs(60),
         name: None,
@@ -51,10 +51,10 @@ fn id_of(job: &Value) -> JobId {
 }
 
 fn expected_of(job: &Value) -> Expected {
-    serde_json::from_value(serde_json::json!({
-        "boot": job["boot"], "pid": job["pid"], "start": job["start"], "pgid": job["pgid"],
-    }))
-    .unwrap()
+    serde_json::from_value::<JobView>(job.clone())
+        .unwrap()
+        .expected()
+        .unwrap()
 }
 
 fn pid_of(job: &Value) -> i32 {

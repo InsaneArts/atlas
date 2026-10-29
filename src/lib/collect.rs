@@ -38,9 +38,7 @@ use std::{
     time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
 
-mod reason;
-
-pub use reason::Refused;
+use crate::daemon::protocol::ReadRefusal;
 
 /// The most files one call collects.
 pub const MAX_FILES: usize = 16;
@@ -145,53 +143,56 @@ pub(crate) struct Receipt {
 /// Why one file was not collected.
 #[derive(Debug, PartialEq, Eq)]
 struct Failure {
-    reason: Refused,
+    reason: ReadRefusal,
     error: String,
 }
 
 impl Failure {
-    fn new(reason: Refused, source: &str) -> Self {
+    fn new(reason: ReadRefusal, source: &str) -> Self {
         let error = match reason {
-            Refused::Outside => format!(
+            ReadRefusal::Outside => format!(
                 "{source} is not in the helper's home, its temporary folder or /tmp, so it was not collected"
             ),
-            Refused::Protected => format!(
+            ReadRefusal::Protected => format!(
                 "{source} is in a folder macOS guards, such as Documents or Library, so it was not collected"
             ),
-            Refused::Symlink => format!(
+            ReadRefusal::Symlink => format!(
                 "{source} goes through a link, which Atlas never follows; collect the file itself"
             ),
-            Refused::NotRegular => {
+            ReadRefusal::NotRegular => {
                 format!("{source} is not a regular file; archive a folder first with ditto -c -k")
             }
-            Refused::Dataless => format!("{source}'s contents are not on this Mac yet"),
-            Refused::Owner => format!("{source} does not belong to the helper"),
-            Refused::TooLarge => format!(
+            ReadRefusal::Dataless => format!("{source}'s contents are not on this Mac yet"),
+            ReadRefusal::Owner => format!("{source} does not belong to the helper"),
+            ReadRefusal::TooLarge => format!(
                 "{source} is larger than allowed: pass --max-size (at most 1G), and collect at most 1 GiB a call"
             ),
-            Refused::Changing => format!(
+            ReadRefusal::Changing => format!(
                 "{source} changed in the last 2 seconds, or while it was read, so it was not collected; wait until whatever writes it is done"
             ),
-            Refused::Missing => format!("There is no {source} in the helper"),
-            Refused::Name => format!("{source} has no name that can be a file here"),
-            Refused::Exists => {
+            ReadRefusal::Missing => format!("There is no {source} in the helper"),
+            ReadRefusal::Name => format!("{source} has no name that can be a file here"),
+            ReadRefusal::Exists => {
                 format!("A file named like {source} was already collected in this call")
             }
-            Refused::Space => format!("There is not enough room here for {source}"),
-            Refused::SessionChanged => {
+            ReadRefusal::Space => format!("There is not enough room here for {source}"),
+            ReadRefusal::SessionChanged => {
                 "The helper changed since Atlas checked it, so this file was not collected".into()
             }
-            Refused::OnConsole => {
+            ReadRefusal::OnConsole => {
                 "The helper came on screen, so this file was not collected".into()
             }
-            Refused::Unreadable | Refused::Gone => format!("{source} could not be read"),
+            ReadRefusal::Unreadable | ReadRefusal::Gone => format!("{source} could not be read"),
         };
         Self { reason, error }
     }
 
     /// Whether the helper itself changed, so no later file is read either.
     fn ends_the_call(&self) -> bool {
-        matches!(self.reason, Refused::SessionChanged | Refused::OnConsole)
+        matches!(
+            self.reason,
+            ReadRefusal::SessionChanged | ReadRefusal::OnConsole
+        )
     }
 }
 
@@ -252,7 +253,7 @@ async fn collected(
         if changed {
             failed.push((
                 source.clone(),
-                Failure::new(Refused::SessionChanged, source),
+                Failure::new(ReadRefusal::SessionChanged, source),
             ));
             continue;
         }
@@ -362,11 +363,11 @@ fn given(source: &str, person: Option<&Path>) -> Option<Failure> {
         .components()
         .any(|part| matches!(part, Component::CurDir | Component::ParentDir));
     if source.is_empty() || source.len() > READ_PATH_MAX || source.contains('\0') || dotted {
-        return Some(Failure::new(Refused::Outside, source));
+        return Some(Failure::new(ReadRefusal::Outside, source));
     }
     if person.is_some_and(|home| path.is_absolute() && path.starts_with(home)) {
         return Some(Failure {
-            reason: Refused::Outside,
+            reason: ReadRefusal::Outside,
             error: "Give a path in the helper's home, relative to it, such as \
                     atlas-work/report.pdf: your shell turns ~ into your own home"
                 .into(),
@@ -413,13 +414,13 @@ impl One<'_> {
             .filter(|name| {
                 !name.is_empty() && name.len() <= NAME_MAX && !name.chars().any(char::is_control)
             })
-            .ok_or_else(|| fail(Refused::Name))?;
+            .ok_or_else(|| fail(ReadRefusal::Name))?;
         if self
             .taken
             .iter()
             .any(|taken| taken.eq_ignore_ascii_case(name))
         {
-            return Err(fail(Refused::Exists));
+            return Err(fail(ReadRefusal::Exists));
         }
 
         let started = now_ms();
@@ -429,7 +430,7 @@ impl One<'_> {
             .mode(0o600)
             .custom_flags(libc::O_NOFOLLOW)
             .open(&self.partial)
-            .map_err(|_| fail(Refused::Space))?;
+            .map_err(|_| fail(ReadRefusal::Space))?;
         let mut hasher = Sha256::new();
         let mut identity: Option<FileIdentity> = None;
         let mut real = String::new();
@@ -457,16 +458,16 @@ impl One<'_> {
                 "mtime": reply["file"]["mtime"],
                 "ctime": reply["file"]["ctime"],
             }))
-            .map_err(|_| fail(Refused::Unreadable))?;
+            .map_err(|_| fail(ReadRefusal::Unreadable))?;
             if reply["length"].as_u64() != Some(received) {
-                return Err(fail(Refused::Changing));
+                return Err(fail(ReadRefusal::Changing));
             }
             if identity.is_none() {
                 if file.size > self.room {
-                    return Err(fail(Refused::TooLarge));
+                    return Err(fail(ReadRefusal::TooLarge));
                 }
                 if !room_for(self.copies, file.size) {
-                    return Err(fail(Refused::Space));
+                    return Err(fail(ReadRefusal::Space));
                 }
                 real = reply["file"]["path"]
                     .as_str()
@@ -474,7 +475,7 @@ impl One<'_> {
                     .to_owned();
                 in_home = reply["file"]["inHome"].as_str().map(str::to_owned);
             } else if identity != Some(file) {
-                return Err(fail(Refused::Changing));
+                return Err(fail(ReadRefusal::Changing));
             }
             identity = Some(file);
             offset += received;
@@ -483,10 +484,10 @@ impl One<'_> {
             }
         }
         let Some(identity) = identity else {
-            return Err(fail(Refused::Unreadable));
+            return Err(fail(ReadRefusal::Unreadable));
         };
         if offset != identity.size {
-            return Err(fail(Refused::Changing));
+            return Err(fail(ReadRefusal::Changing));
         }
 
         let mut request = json!({
@@ -503,18 +504,18 @@ impl One<'_> {
         let (reply, _) = read_part(client, &request, &mut partial, &mut Sha256::new()).await?;
         let sha256 = crate::name::hex(&hasher.finalize());
         if reply["sha256"].as_str() != Some(sha256.as_str()) {
-            return Err(fail(Refused::Changing));
+            return Err(fail(ReadRefusal::Changing));
         }
-        partial.sync_all().map_err(|_| fail(Refused::Space))?;
+        partial.sync_all().map_err(|_| fail(ReadRefusal::Space))?;
         drop(partial);
 
         let path = self.copies.join(name);
         match fs::hard_link(&self.partial, &path) {
             Ok(()) => {}
             Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {
-                return Err(fail(Refused::Exists));
+                return Err(fail(ReadRefusal::Exists));
             }
-            Err(_) => return Err(fail(Refused::Space)),
+            Err(_) => return Err(fail(ReadRefusal::Space)),
         }
         Ok(Kept {
             source: real,
@@ -579,19 +580,19 @@ async fn read_part(
     }
     .await;
     if written.is_err() {
-        return Err(fail(Refused::Space));
+        return Err(fail(ReadRefusal::Space));
     }
     let reply = reply.map_err(|error| match error.code {
-        "session-changed" => fail(Refused::SessionChanged),
-        "on-console" => fail(Refused::OnConsole),
-        _ => fail(Refused::Unreadable),
+        "session-changed" => fail(ReadRefusal::SessionChanged),
+        "on-console" => fail(ReadRefusal::OnConsole),
+        _ => fail(ReadRefusal::Unreadable),
     })?;
     if reply["ok"] != true {
-        let reason = match (Refused::of(&reply), reply["code"].as_str()) {
+        let reason = match (ReadRefusal::of(&reply), reply["code"].as_str()) {
             (Some(reason), _) => reason,
-            (None, Some("session-changed")) => Refused::SessionChanged,
-            (None, Some("on-console")) => Refused::OnConsole,
-            (None, _) => Refused::Unreadable,
+            (None, Some("session-changed")) => ReadRefusal::SessionChanged,
+            (None, Some("on-console")) => ReadRefusal::OnConsole,
+            (None, _) => ReadRefusal::Unreadable,
         };
         return Err(fail(reason));
     }

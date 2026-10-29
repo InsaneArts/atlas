@@ -12,7 +12,7 @@ use super::{
 use crate::{
     app_selection::Process,
     collect::{Intact, Kept},
-    daemon::{job::Left, protocol::JobId},
+    daemon::protocol::{JobId, JobRefusal, JobState, Left, Shown},
     environment::{PlanState, Undone},
     error::{Error, Result},
     files::Token,
@@ -60,7 +60,7 @@ pub(crate) trait Hands {
     fn intact(&self, collection: &Collection) -> Intact;
     /// Background job `id` as the helper shows it now, read without
     /// control.
-    async fn job(&self, id: &JobId) -> Result<Value>;
+    async fn job(&self, id: &JobId) -> Result<Shown>;
     /// The jobs the helper's own records give to `session`'s work (to
     /// `task` only, when there is one) that may still run, so a job its
     /// task's record never noted is stopped too. None when the helper
@@ -495,22 +495,19 @@ async fn stop_job(hands: &impl Hands, task: &Key, id: &JobId) -> Outcome {
         Ok(shown) => shown,
         Err(error)
             if error.code == "job"
-                && error
-                    .details
-                    .get("reason")
-                    .is_some_and(|reason| reason == "unknown") =>
+                && crate::jobs::refusal_of(&error) == Some(JobRefusal::Unknown) =>
         {
             return Outcome::gone();
         }
         Err(error) => return job_failed(&error),
     };
-    if shown["state"] == "unknown" {
+    if shown.unreadable() {
         return Outcome::failed(Reason::Identity).with(CameTo::failed(
             "Atlas cannot tell whether this job's process is running",
         ));
     }
-    let ended = if shown["state"] == "ended" {
-        shown
+    let ended = if shown.state() == Some(JobState::Ended) {
+        serde_json::to_value(shown).unwrap_or_default()
     } else {
         match hands.stop_job(task, id).await {
             Ok(ended) => ended,
@@ -536,11 +533,10 @@ fn job_failed(error: &Error) -> Outcome {
     if error.uncertain {
         return Outcome::erred(error, Reason::Helper);
     }
-    let reason = error.details.get("reason").and_then(Value::as_str);
-    let (state, reason) = match (error.code, reason) {
-        ("job", Some("identity")) => (StepState::Failed, Reason::Identity),
-        ("job", Some("other-account")) => (StepState::Failed, Reason::OtherAccount),
-        ("job", Some("still-stopping")) => (StepState::Failed, Reason::StillStopping),
+    let (state, reason) = match (error.code, crate::jobs::refusal_of(error)) {
+        ("job", Some(JobRefusal::Identity)) => (StepState::Failed, Reason::Identity),
+        ("job", Some(JobRefusal::OtherAccount)) => (StepState::Failed, Reason::OtherAccount),
+        ("job", Some(JobRefusal::StillStopping)) => (StepState::Failed, Reason::StillStopping),
         ("stopped", _) => (StepState::Blocked, Reason::Stopped),
         ("daemon" | "transport" | "on-console" | "logged-out" | "blocked", _) => {
             (StepState::Blocked, Reason::Daemon)

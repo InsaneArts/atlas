@@ -121,7 +121,7 @@ fn only_the_helpers_own_temporary_folder_is_read() {
         "/private/var/folders/ab/cd/C/cache",
         "/private/var/folders/ab/cd/T",
     ] {
-        assert_eq!(locate(path, &places), Err(Refused::Outside), "{path}");
+        assert_eq!(locate(path, &places), Err(ReadRefusal::Outside), "{path}");
     }
     let unknown = Places {
         temporary: None,
@@ -129,7 +129,7 @@ fn only_the_helpers_own_temporary_folder_is_read() {
     };
     assert_eq!(
         locate("/var/folders/ab/cd/T/x", &unknown),
-        Err(Refused::Outside),
+        Err(ReadRefusal::Outside),
         "no account's when its own is not known"
     );
 }
@@ -158,7 +158,7 @@ fn dots_and_paths_outside_the_allowed_folders_are_refused() {
         ".atlas/helper/jobs/x.log",
         ".ATLAS/x",
     ] {
-        assert_eq!(locate(path, &places), Err(Refused::Outside), "{path}");
+        assert_eq!(locate(path, &places), Err(ReadRefusal::Outside), "{path}");
     }
 }
 
@@ -186,7 +186,7 @@ fn protected_folders_are_refused_before_they_are_opened() {
         let expected = if path.starts_with("Library\u{17F}") {
             Ok(PathBuf::from("/Users/atlas").join(path))
         } else {
-            Err(Refused::Protected)
+            Err(ReadRefusal::Protected)
         };
         assert_eq!(refused, expected, "{path}");
     }
@@ -260,7 +260,7 @@ fn another_owners_file_is_refused() {
             1 << 20,
             SystemTime::now()
         ),
-        Err(Refused::Owner)
+        Err(ReadRefusal::Owner)
     );
 }
 

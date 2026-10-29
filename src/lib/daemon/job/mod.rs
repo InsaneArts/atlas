@@ -22,23 +22,26 @@ mod store;
 mod supervise;
 mod verdict;
 
-pub use observe::{Kernel, Live, left, observe};
-pub use record::{Ended, How, JobIdentity, JobState, Left, Record, Stopping};
 pub use supervise::supervise;
-pub use verdict::{Observation, Verdict, verdict};
 
 use super::{
-    protocol::{Expected, JobId, JobRequest, StopReason, failure},
+    protocol::{
+        Census, Expected, How, JobFailure, JobId, JobRefusal, JobReply, JobRequest, JobStart,
+        JobState, Logged, NamedJob, RefusedJob, Showing, Shown, StopCameTo, StopReason, Stopped,
+        StoppedAll, Unread, Unreadable, failure,
+    },
     run,
 };
 use crate::{
     error::{Error, Result},
-    host_session::{Key, now_ms},
+    host_session::now_ms,
 };
 use base64::{Engine, engine::general_purpose::STANDARD};
 use nix::sys::signal::Signal;
+use observe::{Kernel, Live};
 use record::VERSION;
-use serde_json::{Value, json};
+use record::{JobIdentity, Record, Stopping};
+use serde_json::Value;
 use signal::Signalled;
 use std::{
     collections::{HashMap, HashSet},
@@ -53,6 +56,7 @@ use std::{
 };
 use store::{Found, Store};
 use tokio::{io::AsyncReadExt, process::Child};
+use verdict::Verdict;
 
 /// The most jobs running in the helper at once.
 const RUNNING_MAX: usize = 16;
@@ -96,15 +100,6 @@ pub struct Jobs {
     log_limit: u64,
     kernel: Box<dyn Kernel>,
     state: Mutex<State>,
-}
-
-/// What a job start asks for.
-pub struct Start {
-    pub argv: Vec<String>,
-    pub lifetime: Duration,
-    pub name: Option<String>,
-    pub task: Option<Key>,
-    pub session: Option<Key>,
 }
 
 /// A start's job once its record is written, before it is launched.
@@ -181,14 +176,13 @@ impl Jobs {
     /// What the daemon's hello says of its jobs: how many may run, how many
     /// are launching, and how many records it cannot read, whose jobs may
     /// still run too.
-    pub fn census(&self) -> Value {
+    pub fn census(&self) -> Census {
         let state = self.state();
-        let launching = state.launching.len();
-        json!({
-            "running": state.running,
-            "launching": launching,
-            "unresolved": state.unresolved,
-        })
+        Census {
+            running: state.running,
+            launching: state.launching.len(),
+            unresolved: state.unresolved,
+        }
     }
 
     /// Carry out `request`, the reply its connection gets. What reads the
@@ -206,29 +200,14 @@ impl Jobs {
             }
         };
         match request {
-            JobRequest::Start {
-                argv,
-                lifetime,
-                name,
-                task,
-                session,
-                uid,
-                ..
-            } => {
+            JobRequest::Start { start, uid, .. } => {
                 if uid != self.uid {
                     return failure(
                         "identity",
                         "This helper daemon runs as another account than the one asked for",
                     );
                 }
-                self.start(Start {
-                    argv,
-                    lifetime,
-                    name,
-                    task,
-                    session,
-                })
-                .await
+                self.start(start).await
             }
             JobRequest::Stop { id, expect, grace } => {
                 blocking(Box::new(move |jobs| jobs.stop(&id, &expect, grace))).await
@@ -249,15 +228,9 @@ impl Jobs {
     /// The file and process work runs on blocking threads. A launch that
     /// fails before its exec leaves nothing running; one that may have
     /// started something is kept, supervised, and said to be unconfirmed.
-    pub async fn start(self: &Arc<Self>, start: Start) -> Value {
+    pub async fn start(self: &Arc<Self>, start: JobStart) -> Value {
         let jobs = self.clone();
-        let asked = Start {
-            argv: start.argv.clone(),
-            lifetime: start.lifetime,
-            name: start.name.clone(),
-            task: start.task.clone(),
-            session: start.session.clone(),
-        };
+        let asked = start.clone();
         let prepared = match tokio::task::spawn_blocking(move || jobs.prepare(&asked)).await {
             Ok(Ok(prepared)) => prepared,
             Ok(Err(refusal)) => return refusal,
@@ -271,7 +244,7 @@ impl Jobs {
 
     /// Resolve the program, check the limits, and write the job's record
     /// and log: the job, or the refusal.
-    fn prepare(&self, start: &Start) -> std::result::Result<Prepared, Value> {
+    fn prepare(&self, start: &JobStart) -> std::result::Result<Prepared, Value> {
         let Some(program) = start.argv.first() else {
             return Err(failure("spawn-failed", "No command to run"));
         };
@@ -320,18 +293,20 @@ impl Jobs {
             })
             .collect();
         if running.len() + state.launching.len() >= RUNNING_MAX {
-            return Err(refusal(
-                "limit",
+            return Err(JobFailure::new(
+                JobRefusal::Limit,
                 "16 background jobs already run in the helper; stop one first",
-            ));
+            )
+            .into_value());
         }
         if start.task.is_some()
             && running.iter().filter(|job| job.task == start.task).count() >= TASK_MAX
         {
-            return Err(refusal(
-                "limit",
+            return Err(JobFailure::new(
+                JobRefusal::Limit,
                 "This task already runs 8 background jobs; stop one first",
-            ));
+            )
+            .into_value());
         }
         while state.store.holds(&record.id) {
             record.id = JobId::new();
@@ -366,7 +341,7 @@ impl Jobs {
     }
 
     /// Launch a prepared job, and reply.
-    async fn launch(self: &Arc<Self>, prepared: Prepared, start: &Start) -> Value {
+    async fn launch(self: &Arc<Self>, prepared: Prepared, start: &JobStart) -> Value {
         let Prepared {
             mut record,
             executable,
@@ -550,7 +525,7 @@ impl Jobs {
         if !written {
             return unconfirmed(&record, "The job runs, but its record could not be written");
         }
-        json!({"ok": true, "op": "job", "action": "start", "job": record.view()})
+        JobReply::Start { job: record.view() }.into_value()
     }
 
     /// End a launch that failed after its launcher made a session of its
@@ -632,17 +607,26 @@ impl Jobs {
         let mut state = self.state();
         let mut record = match state.store.read(id) {
             None => return unknown(id),
-            Some(Found::Unreadable(_)) => return refusal("unknown", UNREADABLE).with_id(id),
+            Some(Found::Unreadable(_)) => {
+                return JobFailure::new(JobRefusal::Unknown, UNREADABLE)
+                    .about(id)
+                    .into_value();
+            }
             Some(Found::Record(record)) => *record,
         };
         match record.state {
             JobState::Ended => return already_ended(&record),
             JobState::Starting | JobState::Launched => {
-                return refusal("unknown", "The job has not finished starting").with_id(id);
+                return JobFailure::new(JobRefusal::Unknown, "The job has not finished starting")
+                    .about(id)
+                    .into_value();
             }
             JobState::Stopping => {
-                return json!({"ok": true, "op": "job", "action": "stop",
-                    "job": record.view(), "alreadyStopping": true});
+                return JobReply::Stop(Stopped {
+                    job: record.view(),
+                    came_to: StopCameTo::AlreadyStopping(true),
+                })
+                .into_value();
             }
             JobState::Running => {}
         }
@@ -679,8 +663,11 @@ impl Jobs {
                     stopping.since = now_ms();
                 }
                 state.store.put(&record);
-                json!({"ok": true, "op": "job", "action": "stop",
-                    "job": record.view(), "signalled": "SIGTERM"})
+                JobReply::Stop(Stopped {
+                    job: record.view(),
+                    came_to: StopCameTo::Signalled("SIGTERM".into()),
+                })
+                .into_value()
             }
             Signalled::NotSent(verdict) => {
                 if self.settle(
@@ -708,7 +695,7 @@ impl Jobs {
         let mut state = self.state();
         let processes = self.kernel.of_user(self.uid).ok();
         let now = now_ms();
-        state.stopped_all = Some((now, How::of(reason)));
+        state.stopped_all = Some((now, How::from(reason)));
         let (mut stopping, mut ended) = (0, 0);
         let (mut refused, mut unobserved, mut unresolved) = (Vec::new(), Vec::new(), Vec::new());
         for read in state.store.records() {
@@ -718,7 +705,7 @@ impl Jobs {
                 Found::Unreadable(id) if state.launching.contains(&id) => continue,
                 // Never acted on, and never taken to have ended.
                 Found::Unreadable(id) => {
-                    unresolved.push(json!({"id": id}));
+                    unresolved.push(NamedJob { id });
                     continue;
                 }
             };
@@ -729,34 +716,42 @@ impl Jobs {
                 self.begin_stop(
                     &mut state,
                     &mut record,
-                    How::of(reason),
+                    How::from(reason),
                     supervise::GRACE_MS,
                     processes.as_deref(),
                     now,
                 );
             } else if record.state != JobState::Stopping {
                 if record.state == JobState::Launched && !state.launching.contains(&record.id) {
-                    refused.push(json!({"id": record.id, "reason": "identity"}));
+                    refused.push(RefusedJob {
+                        id: record.id,
+                        reason: JobRefusal::Identity,
+                    });
                 }
                 continue;
             }
             match (
                 record.state,
-                record
-                    .stopping
-                    .as_ref()
-                    .and_then(|stop| stop.refused.as_deref()),
+                record.stopping.as_ref().and_then(|stop| stop.refused),
             ) {
                 (JobState::Ended, _) => ended += 1,
-                (_, Some("unobserved")) => unobserved.push(json!({"id": record.id})),
-                (_, Some(why)) => refused.push(json!({"id": record.id, "reason": why})),
+                (_, Some(JobRefusal::Unobserved)) => unobserved.push(NamedJob { id: record.id }),
+                (_, Some(reason)) => refused.push(RefusedJob {
+                    id: record.id,
+                    reason,
+                }),
                 _ => stopping += 1,
             }
         }
         self.count(&mut state);
-        json!({"ok": true, "op": "job", "action": "stop-all", "stopping": stopping,
-            "ended": ended, "refused": refused, "unknown": unobserved,
-            "unresolved": unresolved})
+        JobReply::StopAll(StoppedAll {
+            stopping,
+            ended,
+            refused,
+            unknown: unobserved,
+            unresolved,
+        })
+        .into_value()
     }
 
     /// One job, or every one, as it stands now.
@@ -774,8 +769,11 @@ impl Jobs {
         let mut views = Vec::new();
         for read in reads {
             match read {
-                Found::Unreadable(id) => views.push(json!({"id": id, "state": "unknown",
-                    "error": UNREADABLE})),
+                Found::Unreadable(id) => views.push(Shown::Unreadable(Unreadable {
+                    id,
+                    state: Unread::Unknown,
+                    error: UNREADABLE.to_owned(),
+                })),
                 Found::Record(mut record) => {
                     self.look(
                         &mut state,
@@ -785,15 +783,16 @@ impl Jobs {
                         false,
                         now,
                     );
-                    views.push(record.view());
+                    views.push(Shown::Job(Box::new(record.view())));
                 }
             }
         }
-        views.sort_by_key(|view| view["startedAt"].as_u64().unwrap_or(0));
-        match id {
-            Some(_) => json!({"ok": true, "op": "job", "action": "show", "job": views.pop()}),
-            None => json!({"ok": true, "op": "job", "action": "show", "jobs": views}),
-        }
+        views.sort_by_key(Shown::started_at);
+        JobReply::Show(match id {
+            Some(_) => Showing::One { job: views.pop() },
+            None => Showing::Every { jobs: views },
+        })
+        .into_value()
     }
 
     /// The last `bytes` of job `id`'s output, as base64, with the task the
@@ -819,16 +818,22 @@ impl Jobs {
             file.take(bytes as u64).read_to_end(&mut tail)?;
             Ok((tail, size))
         })();
-        match tail {
-            Ok((tail, size)) => json!({"ok": true, "op": "job", "action": "log", "id": id,
-                "task": task, "data": STANDARD.encode(&tail), "size": size,
-                "outputTruncated": size > tail.len() as u64, "logResets": resets}),
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
-                json!({"ok": true, "op": "job", "action": "log", "id": id, "task": task,
-                    "data": "", "size": 0, "outputTruncated": false, "logResets": resets})
+        let (tail, size) = match tail {
+            Ok(read) => read,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => (Vec::new(), 0),
+            Err(error) => {
+                return failure("io", format!("The job's log could not be read: {error}"));
             }
-            Err(error) => failure("io", format!("The job's log could not be read: {error}")),
-        }
+        };
+        JobReply::Log(Logged {
+            id: id.clone(),
+            task,
+            data: STANDARD.encode(&tail),
+            size,
+            output_truncated: size > tail.len() as u64,
+            log_resets: resets,
+        })
+        .into_value()
     }
 
     fn state(&self) -> MutexGuard<'_, State> {
@@ -891,70 +896,56 @@ struct Launch {
 /// The reply for a job that may run but could not be confirmed: of unknown
 /// outcome, with the job as the daemon keeps it.
 fn unconfirmed(record: &Record, said: &str) -> Value {
-    let mut reply = failure("job", said);
-    reply["reason"] = json!("unconfirmed");
-    reply["uncertain"] = json!(true);
-    reply["id"] = json!(record.id);
-    reply["job"] = record.view();
-    reply
-}
-
-/// A refusal with code `job`, for `reason`: never of unknown outcome.
-fn refusal(reason: &str, error: &str) -> Value {
-    let mut refusal = failure("job", error);
-    refusal["reason"] = json!(reason);
-    refusal
+    JobFailure {
+        uncertain: true,
+        job: Some(record.view()),
+        ..JobFailure::new(JobRefusal::Unconfirmed, said).about(&record.id)
+    }
+    .into_value()
 }
 
 /// The refusal of a job no record names.
 fn unknown(id: &JobId) -> Value {
-    refusal(
-        "unknown",
+    JobFailure::new(
+        JobRefusal::Unknown,
         "No background job with that ID is known in the helper",
     )
-    .with_id(id)
+    .about(id)
+    .into_value()
 }
 
 fn identity(id: &JobId) -> Value {
-    refusal(
-        "identity",
+    JobFailure::new(
+        JobRefusal::Identity,
         "The job is no longer the process Atlas started, so nothing was signalled",
     )
-    .with_id(id)
+    .about(id)
+    .into_value()
 }
 
 /// The refusal a verdict that sends nothing gives.
 fn refused_by(verdict: &Verdict, id: &JobId) -> Value {
-    match verdict {
-        Verdict::OtherAccount => refusal(
-            "other-account",
-            "Part of the job belongs to another account, so nothing was signalled",
-        )
-        .with_id(id),
-        Verdict::Unknown => refusal(
-            "unobserved",
-            "Atlas could not read the job's processes, so nothing was signalled; try again",
-        )
-        .with_id(id),
-        _ => identity(id),
-    }
+    let error = match verdict.reason() {
+        JobRefusal::OtherAccount => {
+            "Part of the job belongs to another account, so nothing was signalled"
+        }
+        JobRefusal::Unobserved => {
+            "Atlas could not read the job's processes, so nothing was signalled; try again"
+        }
+        _ => return identity(id),
+    };
+    JobFailure::new(verdict.reason(), error)
+        .about(id)
+        .into_value()
 }
 
 /// The reply to a stop of a job that has already ended.
 fn already_ended(record: &Record) -> Value {
-    json!({"ok": true, "op": "job", "action": "stop", "job": record.view(), "alreadyEnded": true})
-}
-
-/// A reply naming the job it is about.
-trait WithId {
-    fn with_id(self, id: &JobId) -> Self;
-}
-
-impl WithId for Value {
-    fn with_id(mut self, id: &JobId) -> Self {
-        self["id"] = json!(id);
-        self
-    }
+    JobReply::Stop(Stopped {
+        job: record.view(),
+        came_to: StopCameTo::AlreadyEnded(true),
+    })
+    .into_value()
 }
 
 #[cfg(test)]

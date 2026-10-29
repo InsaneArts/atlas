@@ -164,13 +164,17 @@ impl Hands for Fake {
             .unwrap_or_default()
     }
 
-    async fn job(&self, id: &crate::daemon::protocol::JobId) -> Result<Value> {
-        Ok(self
+    async fn job(
+        &self,
+        id: &crate::daemon::protocol::JobId,
+    ) -> Result<crate::daemon::protocol::Shown> {
+        let shown = self
             .jobs
             .borrow()
             .get(id.as_str())
             .cloned()
-            .unwrap_or_else(|| json!({"id": id, "state": "running"})))
+            .unwrap_or_else(|| json!({"id": id, "state": "running"}));
+        Ok(serde_json::from_value(shown).unwrap())
     }
 
     async fn jobs_of(&self, _: &Key, task: Option<&Key>) -> Result<Vec<plan::Job>> {
@@ -1523,7 +1527,7 @@ async fn a_session_that_acts_while_adoption_waits_for_control_is_not_adopted() {
 /// Note in `task`'s record a job it started, still running.
 fn job_started(place: &Place, task: &Task, name: &str) -> crate::daemon::protocol::JobId {
     use crate::{
-        daemon::{job::JobState, protocol::Expected},
+        daemon::protocol::{Expected, JobState},
         task::record::JobEntry,
     };
     let id = crate::daemon::protocol::JobId::new();

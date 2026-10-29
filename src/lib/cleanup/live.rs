@@ -12,7 +12,7 @@ use crate::{
     client::{Actor, Client},
     collect::{self, Intact},
     control::Ownership,
-    daemon::protocol::JobId,
+    daemon::protocol::{JobId, Shown},
     environment::{self, PlanState, Undone},
     error::{Error, Result},
     files::Token,
@@ -147,7 +147,7 @@ impl Hands for Live<'_> {
         }
     }
 
-    async fn job(&self, id: &JobId) -> Result<Value> {
+    async fn job(&self, id: &JobId) -> Result<Shown> {
         crate::jobs::show(self.client, id).await
     }
 
@@ -155,7 +155,13 @@ impl Hands for Live<'_> {
         Ok(crate::jobs::of_session(self.client, session, task)
             .await?
             .into_iter()
-            .map(|(id, task, name)| Job { id, task, name })
+            .filter_map(|job| {
+                Some(Job {
+                    task: job.task?,
+                    id: job.id,
+                    name: job.name,
+                })
+            })
             .collect())
     }
 

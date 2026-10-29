@@ -54,6 +54,15 @@ fn job_view(id: &str, state: &str) -> Value {
         "state": state, "startedAt": 10, "endsAt": 20, "logResets": 0})
 }
 
+/// A view as the helper sends it, read as the person's side reads it.
+fn viewed(view: &Value) -> JobView {
+    serde_json::from_value(view.clone()).unwrap()
+}
+
+fn shown(view: &Value) -> Shown {
+    serde_json::from_value(view.clone()).unwrap()
+}
+
 const ID: &str = "7c2e91a04b3f";
 
 fn id() -> JobId {
@@ -260,7 +269,7 @@ async fn a_job_is_stopped_only_as_its_tasks_record_says() {
     let client = agent(client_in(dir.path()), "job-stop");
     let mut view = job_view(ID, "running");
     view["task"] = json!(client.task.as_ref().unwrap().key());
-    note(&client, None, entry(&view).unwrap()).unwrap();
+    note(&client, None, entry(&viewed(&view)).unwrap()).unwrap();
     // The helper's own record says otherwise; the task's copy is what is sent.
     let heard = stand_in(&client.config.socket_path, |_| {
         Some(
@@ -332,7 +341,7 @@ async fn a_list_without_a_helper_shows_the_tasks_jobs_as_unknown() {
     let client = agent(client_in(dir.path()), "job-start");
     let mut view = job_view(ID, "running");
     view["task"] = json!(client.task.as_ref().unwrap().key());
-    note(&client, None, entry(&view).unwrap()).unwrap();
+    note(&client, None, entry(&viewed(&view)).unwrap()).unwrap();
     let listed = list(&client, false).await.unwrap();
     assert_eq!(listed["jobs"][0]["state"], "unknown");
     assert!(listed["warnings"].is_array());
@@ -387,20 +396,20 @@ fn the_stop_reply_says_what_was_left() {
     ended["signal"] = json!("SIGTERM");
     ended["left"] = json!([]);
     assert_eq!(
-        stopped(&id(), &ended, waited),
+        stopped(&id(), &shown(&ended), waited),
         json!({"ok": true, "id": ID, "state": "ended", "how": "stopped", "signal": "SIGTERM",
             "waitedMs": 412, "left": []})
     );
 
     ended["signal"] = json!("SIGKILL");
     ended["left"] = json!([{"pid": 4377, "name": "sleep"}]);
-    let reply = stopped(&id(), &ended, waited);
+    let reply = stopped(&id(), &shown(&ended), waited);
     assert_eq!(reply["left"][0]["pid"], 4377);
     assert_eq!(reply["next"], LEFT_RUNNING);
 
     let mut stopping = job_view(ID, "stopping");
     stopping["remaining"] = json!(2);
-    let reply = stopped(&id(), &stopping, Duration::from_secs(10));
+    let reply = stopped(&id(), &shown(&stopping), Duration::from_secs(10));
     assert_eq!(
         reply,
         json!({"ok": false, "code": "job", "reason": "still-stopping", "id": ID,
@@ -525,7 +534,10 @@ async fn a_stop_the_client_leaves_is_finished_by_the_daemon() {
         "an acknowledged stop leaves nothing pending"
     );
     *ended.lock().unwrap() = true;
-    assert_eq!(show(&client, &job).await.unwrap()["state"], "ended");
+    assert_eq!(
+        show(&client, &job).await.unwrap().state(),
+        Some(JobState::Ended)
+    );
 }
 
 #[tokio::test]
@@ -534,7 +546,7 @@ async fn listing_never_rewrites_the_identity_the_task_first_noted() {
     let client = agent(client_in(dir.path()), "job-start");
     let mut view = job_view(ID, "running");
     view["task"] = json!(client.task.as_ref().unwrap().key());
-    note(&client, None, entry(&view).unwrap()).unwrap();
+    note(&client, None, entry(&viewed(&view)).unwrap()).unwrap();
     let mut other = view.clone();
     other["start"] = json!([1761650001, 0]);
     other["state"] = json!("ended");
@@ -563,7 +575,7 @@ async fn listing_notes_how_far_a_job_got_when_its_identity_agrees() {
     let client = agent(client_in(dir.path()), "job-start");
     let mut view = job_view(ID, "running");
     view["task"] = json!(client.task.as_ref().unwrap().key());
-    note(&client, None, entry(&view).unwrap()).unwrap();
+    note(&client, None, entry(&viewed(&view)).unwrap()).unwrap();
     view["state"] = json!("ended");
     view["how"] = json!("leader-gone");
     view["left"] = json!([{"pid": 9, "name": "node"}]);
@@ -691,7 +703,7 @@ fn a_stop_says_what_still_runs_after_the_jobs_leader_went_whatever_group_it_is_i
     let mut gone = job_view(ID, "ended");
     gone["how"] = json!("leader-gone");
     gone["left"] = json!([{"pid": 4313, "name": "sleep"}]);
-    let reply = stopped(&id(), &gone, Duration::ZERO);
+    let reply = stopped(&id(), &shown(&gone), Duration::ZERO);
     assert_eq!(reply["next"], LEADER_GONE);
     assert!(
         !reply["next"]
@@ -699,4 +711,27 @@ fn a_stop_says_what_still_runs_after_the_jobs_leader_went_whatever_group_it_is_i
             .unwrap()
             .contains("left the job's group")
     );
+}
+
+#[test]
+fn every_view_the_helper_sends_reads_back_as_it_was_sent() {
+    let views = [
+        r#"{"adopted":true,"boot":"6A1E0000-0000-0000-0000-000000000000","endsAt":18446744073709551615,"id":"7c2e91a04b3f","logResets":0,"name":"nc","pgid":4312,"pid":4312,"session":null,"start":[1761650000,123456],"startedAt":1,"state":"running","task":null,"uid":502}"#,
+        r#"{"adopted":true,"boot":"6A1E0000-0000-0000-0000-000000000000","endsAt":18446744073709551615,"id":"7c2e91a04b3f","logResets":0,"name":"nc","pgid":4312,"pid":4312,"session":null,"start":[1761650000,123456],"startedAt":1,"state":"running","task":null,"uid":502}"#,
+        r#"{"adopted":true,"boot":"6A1E0000-0000-0000-0000-000000000000","endsAt":18446744073709551615,"id":"7c2e91a04b3f","logResets":0,"name":"nc","pgid":4312,"pid":4312,"session":null,"signal":"SIGTERM","start":[1761650000,123456],"startedAt":1,"state":"stopping","task":null,"uid":502}"#,
+        r#"{"adopted":true,"boot":"6A1E0000-0000-0000-0000-000000000000","endsAt":18446744073709551615,"id":"7c2e91a04b3f","logResets":0,"name":"nc","pgid":4312,"pid":4312,"session":null,"signal":"SIGTERM","start":[1761650000,123456],"startedAt":1,"state":"stopping","task":null,"uid":502}"#,
+        r#"{"adopted":true,"boot":"6A1E0000-0000-0000-0000-000000000000","endsAt":18446744073709551615,"id":"7c2e91a04b3f","logResets":0,"name":"nc","pgid":4312,"pid":4312,"session":null,"signal":"SIGTERM","start":[1761650000,123456],"startedAt":1,"state":"stopping","task":null,"uid":502}"#,
+        r#"{"adopted":true,"boot":"6A1E0000-0000-0000-0000-000000000000","endedAt":7,"endsAt":18446744073709551615,"exitCode":3,"exitSignal":"SIGKILL","how":"leader-gone","id":"7c2e91a04b3f","left":[{"name":"sleep","pid":4313}],"logResets":0,"name":"nc","pgid":4312,"pid":4312,"remaining":1,"session":null,"signal":"SIGTERM","start":[1761650000,123456],"startedAt":1,"state":"ended","task":"0123456789ab","uid":502}"#,
+        r#"{"adopted":true,"boot":"6A1E0000-0000-0000-0000-000000000000","endedAt":7,"endsAt":18446744073709551615,"exitCode":3,"exitSignal":"SIGKILL","how":"leader-gone","id":"7c2e91a04b3f","left":[{"name":"sleep","pid":4313}],"logResets":0,"name":"nc","pgid":4312,"pid":4312,"remaining":1,"session":null,"signal":"SIGTERM","start":[1761650000,123456],"startedAt":1,"state":"ended","task":"0123456789ab","uid":502}"#,
+        r#"{"adopted":true,"boot":"6A1E0000-0000-0000-0000-000000000000","endsAt":0,"id":"7c2e91a04b3f","logResets":0,"name":"nc","pgid":4312,"pid":4312,"refused":"unobserved","session":null,"signal":null,"start":[1761650000,123456],"startedAt":1,"state":"stopping","task":null,"uid":502}"#,
+        r#"{"error":"Atlas cannot tell whether this job's process is running","id":"0123456789ab","state":"unknown"}"#,
+        r#"{"adopted":true,"boot":"6A1E0000-0000-0000-0000-000000000000","endsAt":18446744073709551615,"id":"7c2e91a04b3f","logResets":0,"name":"nc","pgid":4312,"pid":4312,"session":null,"start":[1761650000,123456],"startedAt":1,"state":"running","task":null,"uid":502}"#,
+        r#"{"boot":"6A1E0000-0000-0000-0000-000000000000","endsAt":18446744073709551615,"id":"7c2e91a04b3f","logResets":0,"name":"nc","pgid":4312,"pid":4312,"refused":"other-account","remaining":2,"session":null,"signal":null,"start":[1761650000,123456],"startedAt":1,"state":"stopping","task":null,"uid":502}"#,
+        r#"{"boot":"6A1E0000-0000-0000-0000-000000000000","endsAt":18446744073709551615,"id":"7c2e91a04b3f","logResets":0,"name":"nc","pgid":4312,"pid":4312,"session":null,"start":[1761650000,123456],"startedAt":1,"state":"running","task":null,"uid":502}"#,
+    ];
+    for text in views {
+        let value: Value = serde_json::from_str(text).unwrap();
+        let typed: Shown = serde_json::from_value(value.clone()).unwrap();
+        assert_eq!(json!(typed), value, "{text}");
+    }
 }

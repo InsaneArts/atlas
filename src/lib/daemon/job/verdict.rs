@@ -2,7 +2,10 @@
 //! the person's side's copy of it, and one fresh look at its leader and its
 //! group. Pure, so every rule is tested on its own.
 use super::record::{JobIdentity, Record};
-use crate::{daemon::protocol::Expected, process::Info};
+use crate::{
+    daemon::protocol::{Expected, JobRefusal},
+    process::Info,
+};
 
 /// One look at a job's processes: its leader's PID now, and its group.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -46,11 +49,11 @@ pub enum Verdict {
 
 impl Verdict {
     /// The reason a refusal gives for this verdict.
-    pub fn reason(&self) -> &'static str {
+    pub fn reason(&self) -> JobRefusal {
         match self {
-            Self::OtherAccount => "other-account",
-            Self::Unknown => "unobserved",
-            _ => "identity",
+            Self::OtherAccount => JobRefusal::OtherAccount,
+            Self::Unknown => JobRefusal::Unobserved,
+            _ => JobRefusal::Identity,
         }
     }
 }

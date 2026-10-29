@@ -196,7 +196,7 @@ pub(crate) struct CameTo {
     /// The processes that left a stopped job's group and still ran, which
     /// were never signalled.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub left: Vec<crate::daemon::job::Left>,
+    pub left: Vec<crate::daemon::protocol::Left>,
 }
 
 /// A file in the helper whose collected copy is missing or changed.

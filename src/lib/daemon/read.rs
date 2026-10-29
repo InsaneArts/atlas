@@ -11,8 +11,7 @@
 //! a login nobody watches. No link is followed anywhere in the path. The
 //! session is checked again before the file is opened and between parts,
 //! so nothing is read once the helper has come on screen.
-use super::protocol::{FileIdentity, READ_RANGE_MAX, ReadRequest, failure};
-use crate::collect::Refused;
+use super::protocol::{FileIdentity, READ_RANGE_MAX, ReadRefusal, ReadRequest, failure};
 use base64::{Engine, engine::general_purpose::STANDARD};
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
@@ -149,12 +148,12 @@ pub(crate) fn read_at(
 
 /// Why a read stopped: a reason of its own, or the guard's refusal.
 enum Stop {
-    Refused(Refused),
+    Refused(ReadRefusal),
     Guard(Value),
 }
 
-impl From<Refused> for Stop {
-    fn from(reason: Refused) -> Self {
+impl From<ReadRefusal> for Stop {
+    fn from(reason: ReadRefusal) -> Self {
         Self::Refused(reason)
     }
 }
@@ -176,11 +175,11 @@ fn served(
         .map_err(|error| opened(&error))?;
     let mut real = PathBuf::new();
     nix::fcntl::fcntl(&file, nix::fcntl::FcntlArg::F_GETPATH(&mut real))
-        .map_err(|_| Refused::Unreadable)?;
+        .map_err(|_| ReadRefusal::Unreadable)?;
     if let Some(inside) = within(&real, &places.home) {
         refuse_inside(inside, &places.home)?;
     }
-    let metadata = file.metadata().map_err(|_| Refused::Unreadable)?;
+    let metadata = file.metadata().map_err(|_| ReadRefusal::Unreadable)?;
     let identity = readable(
         &metadata,
         &real,
@@ -220,9 +219,9 @@ fn served(
     }
 
     // Unchanged to the nanosecond while it was read, or it was being written.
-    let after = file.metadata().map_err(|_| Refused::Unreadable)?;
+    let after = file.metadata().map_err(|_| ReadRefusal::Unreadable)?;
     if identity_of(&after) != identity {
-        return Err(Refused::Changing.into());
+        return Err(ReadRefusal::Changing.into());
     }
     guard().map_err(Stop::Guard)?;
     Ok(reply)
@@ -235,7 +234,7 @@ fn served(
 /// Atlas's own and every temporary folder but the helper's own are
 /// refused. Nothing is opened: only the first part of a path in the home
 /// is looked at, without following it.
-fn locate(path: &str, places: &Places) -> Result<PathBuf, Refused> {
+fn locate(path: &str, places: &Places) -> Result<PathBuf, ReadRefusal> {
     let home = &places.home;
     let rewritten = if let Some(rest) = path.strip_prefix("/tmp/") {
         format!("{SHARED_TEMPORARY}/{rest}")
@@ -249,7 +248,7 @@ fn locate(path: &str, places: &Places) -> Result<PathBuf, Refused> {
         .components()
         .any(|part| matches!(part, Component::CurDir | Component::ParentDir))
     {
-        return Err(Refused::Outside);
+        return Err(ReadRefusal::Outside);
     }
     let located = if given.is_absolute() {
         given.to_owned()
@@ -271,7 +270,7 @@ fn locate(path: &str, places: &Places) -> Result<PathBuf, Refused> {
     if shared || own {
         Ok(located)
     } else {
-        Err(Refused::Outside)
+        Err(ReadRefusal::Outside)
     }
 }
 
@@ -279,20 +278,20 @@ fn locate(path: &str, places: &Places) -> Result<PathBuf, Refused> {
 /// a folder macOS guards or Atlas's own: by its name in any ASCII case, and
 /// by what the first part is on the disk, so a spelling the file system
 /// takes for one of them (another Unicode case, say) is refused too.
-fn refuse_inside(inside: &Path, home: &Path) -> Result<(), Refused> {
+fn refuse_inside(inside: &Path, home: &Path) -> Result<(), ReadRefusal> {
     let Some(first) = inside.components().next().map(Component::as_os_str) else {
-        return Err(Refused::Outside);
+        return Err(ReadRefusal::Outside);
     };
     let named = |name: &str| first.eq_ignore_ascii_case(name);
     if PROTECTED.iter().any(|folder| named(folder)) {
-        return Err(Refused::Protected);
+        return Err(ReadRefusal::Protected);
     }
     if named(OWN) {
-        return Err(Refused::Outside);
+        return Err(ReadRefusal::Outside);
     }
     // A spelling APFS takes for one of them in another Unicode case.
     if !first.is_ascii() && differs_only_in_unicode_case(first) {
-        return Err(Refused::Protected);
+        return Err(ReadRefusal::Protected);
     }
 
     let Some(found) = node(&home.join(first)) else {
@@ -300,10 +299,10 @@ fn refuse_inside(inside: &Path, home: &Path) -> Result<(), Refused> {
     };
     let is = |name: &str| node(&home.join(name)) == Some(found);
     if PROTECTED.iter().any(|folder| is(folder)) {
-        return Err(Refused::Protected);
+        return Err(ReadRefusal::Protected);
     }
     if is(OWN) {
-        return Err(Refused::Outside);
+        return Err(ReadRefusal::Outside);
     }
     Ok(())
 }
@@ -348,11 +347,11 @@ fn within<'a>(path: &'a Path, home: &Path) -> Option<&'a Path> {
 }
 
 /// Why an open failed, as a reason.
-fn opened(error: &std::io::Error) -> Refused {
+fn opened(error: &std::io::Error) -> ReadRefusal {
     match error.raw_os_error() {
-        Some(libc::ELOOP) => Refused::Symlink,
-        Some(libc::ENOENT | libc::ENOTDIR) => Refused::Missing,
-        _ => Refused::Unreadable,
+        Some(libc::ELOOP) => ReadRefusal::Symlink,
+        Some(libc::ENOENT | libc::ENOTDIR) => ReadRefusal::Missing,
+        _ => ReadRefusal::Unreadable,
     }
 }
 
@@ -368,28 +367,28 @@ fn readable(
     expect: Option<&FileIdentity>,
     max_size: u64,
     now: SystemTime,
-) -> Result<FileIdentity, Refused> {
+) -> Result<FileIdentity, ReadRefusal> {
     if !roots
         .iter()
         .any(|root| real.starts_with(root) && real != *root)
     {
-        return Err(Refused::Outside);
+        return Err(ReadRefusal::Outside);
     }
     if !metadata.is_file() {
-        return Err(Refused::NotRegular);
+        return Err(ReadRefusal::NotRegular);
     }
     if metadata.st_flags() & SF_DATALESS != 0 {
-        return Err(Refused::Dataless);
+        return Err(ReadRefusal::Dataless);
     }
     if metadata.uid() != uid {
-        return Err(Refused::Owner);
+        return Err(ReadRefusal::Owner);
     }
     if metadata.len() > max_size {
-        return Err(Refused::TooLarge);
+        return Err(ReadRefusal::TooLarge);
     }
     let identity = identity_of(metadata);
     match expect {
-        Some(expect) if *expect != identity => Err(Refused::Changing),
+        Some(expect) if *expect != identity => Err(ReadRefusal::Changing),
         Some(_) => Ok(identity),
         None => {
             let now = now.duration_since(UNIX_EPOCH).unwrap_or_default();
@@ -400,7 +399,7 @@ fn readable(
             if still(identity.mtime) && still(identity.ctime) {
                 Ok(identity)
             } else {
-                Err(Refused::Changing)
+                Err(ReadRefusal::Changing)
             }
         }
     }
@@ -435,15 +434,15 @@ fn send(
         while filled < want {
             let count = file
                 .read_at(&mut buffer[filled..want], offset + sent + filled as u64)
-                .map_err(|_| Refused::Unreadable)?;
+                .map_err(|_| ReadRefusal::Unreadable)?;
             if count == 0 {
                 // Shorter than it said it was: written meanwhile.
-                return Err(Refused::Changing.into());
+                return Err(ReadRefusal::Changing.into());
             }
             filled += count;
         }
         if !events(json!({"event": "data", "data": STANDARD.encode(&buffer[..filled])})) {
-            return Err(Refused::Gone.into());
+            return Err(ReadRefusal::Gone.into());
         }
         sent += filled as u64;
     }
@@ -461,9 +460,9 @@ fn digest(file: &File, size: u64, guard: &dyn Fn() -> Result<(), Value>) -> Resu
         guard().map_err(Stop::Guard)?;
         let count = file
             .read_at(&mut buffer, read)
-            .map_err(|_| Refused::Unreadable)?;
+            .map_err(|_| ReadRefusal::Unreadable)?;
         if count == 0 {
-            return Err(Refused::Changing.into());
+            return Err(ReadRefusal::Changing.into());
         }
         let count = usize::try_from(size - read).map_or(count, |left| count.min(left));
         hasher.update(&buffer[..count]);
@@ -473,7 +472,7 @@ fn digest(file: &File, size: u64, guard: &dyn Fn() -> Result<(), Value>) -> Resu
 }
 
 /// The refusal for `reason`: nothing in the helper changed.
-fn refusal(reason: Refused) -> Value {
+fn refusal(reason: ReadRefusal) -> Value {
     let mut reply = failure("collect", reason.said());
     reply["reason"] = json!(reason);
     reply

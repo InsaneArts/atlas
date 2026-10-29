@@ -7,7 +7,10 @@ use crate::{
     actions::{self, Expect},
     config::Config,
     control::{Beside, Controller, Ownership, SharedLease},
-    daemon::protocol::{Crop, Region, SESSION_PIN, SessionPin},
+    daemon::protocol::{
+        Crop, JobReply, JobState, JobView, Region, SESSION_PIN, SessionPin, StopCameTo, Stopped,
+        StoppedAll,
+    },
     digest::file_sha256,
     doing::Doing,
     error::{Error, Holder, Result},
@@ -22,6 +25,7 @@ use crate::{
 };
 use base64::{Engine, engine::general_purpose::STANDARD};
 use fs2::FileExt;
+use serde::Deserialize;
 use serde_json::{Value, json};
 use std::{
     fs::{self, OpenOptions},
@@ -845,15 +849,11 @@ impl Client {
             // A job it would not signal, could not see, or whose record it
             // cannot read may still run.
             Ok(reply) if reply["ok"] == true => {
-                let list = |field: &str| reply[field].as_array().cloned().unwrap_or_default();
-                let jobs = json!({
-                    "stopping": reply["stopping"].as_u64().unwrap_or(0),
-                    "ended": reply["ended"].as_u64().unwrap_or(0),
-                    "refused": list("refused"),
-                    "unknown": list("unknown"),
-                    "unresolved": list("unresolved"),
-                });
-                let left = list("refused").len() + list("unknown").len() + list("unresolved").len();
+                let jobs = match JobReply::deserialize(&reply) {
+                    Ok(JobReply::StopAll(jobs)) => jobs,
+                    _ => StoppedAll::default(),
+                };
+                let left = jobs.refused.len() + jobs.unknown.len() + jobs.unresolved.len();
                 let warning = (left > 0).then(|| {
                     format!(
                         "The helper did not stop {}, as it could not tell they are still Atlas's; atlas job list --all shows {}",
@@ -861,7 +861,7 @@ impl Client {
                         if left == 1 { "it" } else { "them" }
                     )
                 });
-                (Some(jobs), warning)
+                (Some(json!(jobs)), warning)
             }
             Ok(reply) if reply["code"] == "bad-request" => (None, None),
             Err(error) if error.code == "io" && !self.config.socket_path.exists() => (None, None),
@@ -2436,14 +2436,18 @@ pub fn validate_completion(request: &Value, reply: &Value) -> Result<()> {
             reply["performed"].as_u64() == request["actions"].as_array().map(|v| v.len() as u64)
                 && (request["expect"].is_null() || reply["expect"] == request["expect"])
         }
-        Some("job") => match request["action"].as_str() {
-            Some("start") => job_started(request, reply),
-            Some("stop") => {
-                reply["job"]["id"] == request["id"]
-                    && (reply["signalled"] == "SIGTERM"
-                        || reply["alreadyEnded"] == true
-                        || reply["alreadyStopping"] == true)
+        Some("job") => match (request["action"].as_str(), JobReply::deserialize(reply)) {
+            (Some("start"), Ok(JobReply::Start { job })) => job_started(request, &job),
+            (Some("start"), _) => false,
+            (Some("stop"), Ok(JobReply::Stop(Stopped { job, came_to }))) => {
+                let confirmed = match came_to {
+                    StopCameTo::Signalled(signal) => signal == "SIGTERM",
+                    StopCameTo::AlreadyEnded(ended) => ended,
+                    StopCameTo::AlreadyStopping(stopping) => stopping,
+                };
+                request["id"] == job.id.as_str() && confirmed
             }
+            (Some("stop"), _) => false,
             _ => true,
         },
         Some("run") => {
@@ -2466,29 +2470,21 @@ pub fn validate_completion(request: &Value, reply: &Value) -> Result<()> {
     }
 }
 
-/// Whether a job start's `reply` proves the job it started: an ID, a
-/// leader that is a group of its own, an exact start time, the boot it
-/// started in, the helper account the request was for, and a state. Else
-/// a job may run that the person's side knows nothing of.
-fn job_started(request: &Value, reply: &Value) -> bool {
-    let job = &reply["job"];
-    let pid = job["pid"].as_i64();
-    let start = job["start"].as_array().map(|start| {
-        start.len() == 2
-            && start[0].as_u64().is_some_and(|seconds| seconds > 0)
-            && start[1].as_u64().is_some_and(|micros| micros < 1_000_000)
-    });
-    job["id"]
-        .as_str()
-        .is_some_and(|id| crate::daemon::protocol::JobId::parse(id).is_some())
-        && pid.is_some_and(|pid| pid > 1)
-        && job["pgid"].as_i64() == pid
-        && start == Some(true)
-        && job["boot"].as_str().is_some_and(|boot| !boot.is_empty())
-        && job["uid"] == request["uid"]
+/// Whether a job start's reply proves the job it started: a leader that
+/// is a group of its own, an exact start time, the boot it started in, the
+/// helper account the request was for, and a state. Else a job may run
+/// that the person's side knows nothing of.
+fn job_started(request: &Value, job: &JobView) -> bool {
+    job.pid.is_some_and(|pid| pid > 1)
+        && job.pgid == job.pid
+        && job
+            .start
+            .is_some_and(|[seconds, micros]| seconds > 0 && micros < 1_000_000)
+        && !job.boot.is_empty()
+        && request["uid"] == job.uid
         && matches!(
-            job["state"].as_str(),
-            Some("running" | "stopping" | "ended")
+            job.state,
+            JobState::Running | JobState::Stopping | JobState::Ended
         )
 }
 

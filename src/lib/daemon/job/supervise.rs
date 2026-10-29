@@ -6,12 +6,19 @@
 use super::{
     Jobs, State,
     observe::{as_left, left, observe},
-    record::{Ended, How, JobState, Left, Record, Stopping},
+    record::{Ended, Record, Stopping},
     signal::Signalled,
     store::Found,
     verdict::Verdict,
 };
-use crate::{daemon::run, host_session::now_ms, process::Info};
+use crate::{
+    daemon::{
+        protocol::{How, JobState, Left},
+        run,
+    },
+    host_session::now_ms,
+    process::Info,
+};
 use nix::sys::signal::Signal;
 use std::{
     os::unix::process::ExitStatusExt,
@@ -187,7 +194,7 @@ impl Jobs {
         }
         let mut stopping = Stopping::new(why, now, grace_ms);
         if !matches!(verdict, Verdict::Signal { .. }) {
-            stopping.refused = Some(verdict.reason().to_owned());
+            stopping.refused = Some(verdict.reason());
         }
         record.state = JobState::Stopping;
         record.stopping = Some(stopping);
@@ -220,7 +227,7 @@ impl Jobs {
                 if self.settle(state, record, &verdict, stopping.why, processes) {
                     return;
                 }
-                stopping.refused = Some(verdict.reason().to_owned());
+                stopping.refused = Some(verdict.reason());
             }
         }
         record.stopping = Some(stopping);
@@ -249,8 +256,8 @@ impl Jobs {
             return;
         }
         if !matches!(verdict, Verdict::Signal { .. }) {
-            let why = verdict.reason().to_owned();
-            if stopping.refused.as_deref() != Some(why.as_str()) {
+            let why = verdict.reason();
+            if stopping.refused != Some(why) {
                 stopping.refused = Some(why);
                 record.stopping = Some(stopping);
                 state.store.put(record);
@@ -285,7 +292,7 @@ impl Jobs {
                     if self.settle(state, record, &verdict, stopping.why, processes) {
                         return;
                     }
-                    stopping.refused = Some(verdict.reason().to_owned());
+                    stopping.refused = Some(verdict.reason());
                 }
             }
         }

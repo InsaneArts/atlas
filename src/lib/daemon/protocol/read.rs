@@ -6,7 +6,7 @@ use serde_json::Value;
 /// Why a file was not collected.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
-pub enum Refused {
+pub enum ReadRefusal {
     /// Not in the helper's home, its own temporary folder or `/tmp`, or in
     /// Atlas's own folder.
     Outside,
@@ -40,7 +40,7 @@ pub enum Refused {
     Gone,
 }
 
-impl Refused {
+impl ReadRefusal {
     /// The reason a helper's refusal names, when it is one of these.
     pub fn of(reply: &Value) -> Option<Self> {
         Self::deserialize(&reply["reason"]).ok()
@@ -95,7 +95,7 @@ impl Refused {
     }
 }
 
-impl std::fmt::Display for Refused {
+impl std::fmt::Display for ReadRefusal {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         formatter.write_str(self.as_str())
     }
@@ -109,29 +109,29 @@ mod tests {
     #[test]
     fn each_reason_reads_back_as_the_word_replies_give() {
         for reason in [
-            Refused::Outside,
-            Refused::Protected,
-            Refused::Symlink,
-            Refused::NotRegular,
-            Refused::Dataless,
-            Refused::Owner,
-            Refused::TooLarge,
-            Refused::Changing,
-            Refused::Missing,
-            Refused::Unreadable,
-            Refused::Name,
-            Refused::Exists,
-            Refused::Space,
-            Refused::SessionChanged,
-            Refused::OnConsole,
-            Refused::Gone,
+            ReadRefusal::Outside,
+            ReadRefusal::Protected,
+            ReadRefusal::Symlink,
+            ReadRefusal::NotRegular,
+            ReadRefusal::Dataless,
+            ReadRefusal::Owner,
+            ReadRefusal::TooLarge,
+            ReadRefusal::Changing,
+            ReadRefusal::Missing,
+            ReadRefusal::Unreadable,
+            ReadRefusal::Name,
+            ReadRefusal::Exists,
+            ReadRefusal::Space,
+            ReadRefusal::SessionChanged,
+            ReadRefusal::OnConsole,
+            ReadRefusal::Gone,
         ] {
             assert_eq!(json!(reason), json!(reason.as_str()));
             assert_eq!(
-                Refused::of(&json!({"reason": reason.as_str()})),
+                ReadRefusal::of(&json!({"reason": reason.as_str()})),
                 Some(reason)
             );
         }
-        assert_eq!(Refused::of(&json!({"reason": "later"})), None);
+        assert_eq!(ReadRefusal::of(&json!({"reason": "later"})), None);
     }
 }

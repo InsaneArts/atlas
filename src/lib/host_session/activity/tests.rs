@@ -403,10 +403,7 @@ fn a_previous_session_with_leftovers_is_mentioned_and_one_without_is_not() {
 #[test]
 fn a_sessions_jobs_and_collections_are_listed_without_their_names_or_arguments() {
     use crate::{
-        daemon::{
-            job::JobState,
-            protocol::{Expected, JobId},
-        },
+        daemon::protocol::{Expected, JobId, JobState},
         task::{
             Task,
             record::{JobEntry, OutputEntry},

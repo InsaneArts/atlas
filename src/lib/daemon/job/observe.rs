@@ -1,8 +1,8 @@
 //! What the daemon reads of processes, through the kernel, and what it
 //! notes of a job's descendants to say which left its group. Nothing noted
 //! here ever decides a signal.
-use super::record::Left;
 use crate::{
+    daemon::protocol::Left,
     error::Result,
     process::{self, Info, Instance},
 };

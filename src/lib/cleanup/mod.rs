@@ -17,6 +17,7 @@ mod tests;
 
 use crate::{
     client::{Actor, Client},
+    daemon::protocol::Shown,
     environment::PlanState,
     error::Result,
     files::Token,
@@ -139,7 +140,10 @@ pub(crate) async fn preview(
     for entry in &to_run {
         if let Step::StopJob { job, .. } = &entry.step {
             let state = match hands.job(job).await {
-                Ok(shown) => shown["state"].clone(),
+                Ok(Shown::Later(row)) => row["state"].clone(),
+                Ok(shown) => shown
+                    .state()
+                    .map_or_else(|| json!("unknown"), |state| json!(state)),
                 Err(_) => json!("unknown"),
             };
             jobs.push((job.clone(), state));

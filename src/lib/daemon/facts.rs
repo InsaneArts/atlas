@@ -1,8 +1,11 @@
 //! The `hello` reply: who the daemon runs as, in which session, on which
 //! display, with which permissions.
-use crate::native::{
-    accessibility_trusted as accessibility, capture,
-    cf::{self, CFBoolean, CFDictionary, CFString},
+use crate::{
+    daemon::protocol::Census,
+    native::{
+        accessibility_trusted as accessibility, capture,
+        cf::{self, CFBoolean, CFDictionary, CFString},
+    },
 };
 use objc2_application_services::AXIsProcessTrustedWithOptions;
 use objc2_core_graphics::{
@@ -613,11 +616,10 @@ pub fn manager_name() -> String {
         .unwrap_or_else(|| "Unknown".into())
 }
 
-/// The full `hello` reply.
 /// The daemon's hello: who and where the helper is, what it may do, and,
 /// when it keeps background jobs, how many may still run, are launching,
 /// or have records it cannot read (`jobs`).
-pub fn hello(manager: &str, jobs: Option<Value>) -> Value {
+pub fn hello(manager: &str, jobs: Option<Census>) -> Value {
     use crate::daemon::protocol::{JOBS, READ, SESSION_PIN};
 
     let mut capabilities = vec![SESSION_PIN, READ];
@@ -639,7 +641,7 @@ pub fn hello(manager: &str, jobs: Option<Value>) -> Value {
             "capabilities": capabilities},
     });
     if let Some(jobs) = jobs {
-        hello["daemon"]["jobs"] = jobs;
+        hello["daemon"]["jobs"] = json!(jobs);
     }
     hello
 }

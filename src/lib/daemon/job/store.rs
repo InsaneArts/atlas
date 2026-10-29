@@ -1,9 +1,9 @@
 //! Where the daemon keeps its job records and logs: one record file and one
 //! log a job, beside its socket. A record that cannot be written is kept in
 //! memory instead, so what the daemon decided is never lost with it.
-use super::record::{JobState, Record};
+use super::record::Record;
 use crate::{
-    daemon::protocol::JobId,
+    daemon::protocol::{JobId, JobState},
     error::Result,
     files::Durability,
     record_folder::{LISTED, RecordFolder, Records},

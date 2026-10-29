@@ -6,10 +6,7 @@
 use super::{Name, Task};
 use crate::{
     collect::ReceiptId,
-    daemon::{
-        job::{How, JobState},
-        protocol::{Expected, JobId},
-    },
+    daemon::protocol::{Expected, How, JobId, JobState},
     error::{Error, Result},
     files::Token,
     host_session::Key,

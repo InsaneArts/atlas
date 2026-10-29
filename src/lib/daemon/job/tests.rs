@@ -1,6 +1,16 @@
-use super::*;
-use crate::process::{Info, Instance, Start};
+use super::{
+    observe::{left, observe},
+    record::{Ended, VERSION},
+    verdict::{Observation, verdict},
+    *,
+};
+use crate::{
+    daemon::protocol::Left,
+    host_session::Key,
+    process::{Info, Instance, Start},
+};
 use nix::errno::Errno;
+use serde_json::json;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 
 const UID: u32 = 502;
@@ -321,7 +331,7 @@ fn a_job_record_reads_back_as_it_was_written() {
     let text = serde_json::to_string(&record).unwrap();
     assert!(text.contains("\"how\":\"leader-gone\""), "{text}");
     assert_eq!(serde_json::from_str::<Record>(&text).unwrap(), record);
-    let view = record.view();
+    let view = json!(record.view());
     assert_eq!(view["how"], "leader-gone");
     assert_eq!(view["remaining"], 1);
     assert!(view.get("argv").is_none(), "arguments are never kept");
@@ -647,10 +657,223 @@ fn a_record_that_cannot_be_read_is_counted_unresolved_and_named_by_a_stop_of_eve
     std::fs::write(folder.path().join(format!("jobs/{other}.json")), b"{").unwrap();
     jobs.watch_once(false, false);
     assert_eq!(
-        jobs.census(),
+        json!(jobs.census()),
         json!({"running": 1, "launching": 0, "unresolved": 1})
     );
     let reply = jobs.stop_all(StopReason::Person);
     assert_eq!(reply["unresolved"], json!([{"id": other}]), "{reply}");
     assert_eq!(table.signals(), [(4312, Signal::SIGTERM)]);
+}
+
+/// Every reply as it goes on the wire: Atlas.app and older builds read
+/// these keys and values.
+#[test]
+fn the_replies_keep_their_wire_shape() {
+    let id = JobId::parse(ID).unwrap();
+    let expect = record().expected().unwrap();
+    let mut out = Vec::new();
+    let table = Table::with(vec![leader()]);
+    let (_f, jobs) = jobs_with(&record(), &table);
+    out.push(("show-one", jobs.show(Some(&id))));
+    out.push(("show-all", jobs.show(None)));
+    out.push(("census", json!(jobs.census())));
+    out.push(("log-missing", jobs.log(&id, 10)));
+    out.push((
+        "show-unknown",
+        jobs.show(Some(&JobId::parse("0123456789ab").unwrap())),
+    ));
+    out.push((
+        "stop-unknown",
+        jobs.stop(
+            &JobId::parse("0123456789ab").unwrap(),
+            &expect,
+            Duration::from_secs(1),
+        ),
+    ));
+    let mut wrong = expect.clone();
+    wrong.pid += 1;
+    out.push((
+        "stop-identity",
+        jobs.stop(&id, &wrong, Duration::from_secs(1)),
+    ));
+    out.push((
+        "stop-signalled",
+        jobs.stop(&id, &expect, Duration::from_secs(1)),
+    ));
+    out.push(("show-stopping", jobs.show(Some(&id))));
+    out.push((
+        "stop-already-stopping",
+        jobs.stop(&id, &expect, Duration::from_secs(1)),
+    ));
+    out.push(("stop-all", jobs.stop_all(StopReason::Person)));
+    let mut ended = record();
+    ended.state = JobState::Ended;
+    ended.adopted = true;
+    ended.task = Key::parse("0123456789ab");
+    ended.ended = Some(Ended {
+        how: How::LeaderGone,
+        at: 7,
+        signal: Some("SIGTERM".into()),
+        exit_code: Some(3),
+        exit_signal: Some("SIGKILL".into()),
+        left: vec![Left {
+            pid: 4313,
+            name: "sleep".into(),
+        }],
+    });
+    let table = Table::with(vec![]);
+    let (f, jobs) = jobs_with(&ended, &table);
+    std::fs::write(f.path().join(format!("jobs/{ID}.log")), b"hello").unwrap();
+    out.push(("show-ended", jobs.show(Some(&id))));
+    out.push((
+        "stop-ended",
+        jobs.stop(&id, &expect, Duration::from_secs(1)),
+    ));
+    out.push(("log", jobs.log(&id, 3)));
+    let table = Table::with(vec![leader()]);
+    let mut due = record();
+    due.ends_at = 0;
+    let (_f, jobs) = jobs_with(&due, &table);
+    table.failing.store(true, Ordering::SeqCst);
+    jobs.watch_once(false, false);
+    jobs.watch_once(false, false);
+    out.push(("show-refused", jobs.show(Some(&id))));
+    out.push(("stop-all-unobserved", jobs.stop_all(StopReason::OnConsole)));
+    let t2 = Table::with(vec![leader()]);
+    let (_g, j2) = jobs_with(&record(), &t2);
+    t2.failing.store(true, Ordering::SeqCst);
+    out.push((
+        "stop-unobserved",
+        j2.stop(&id, &expect, Duration::from_secs(1)),
+    ));
+    let table = Table::with(vec![leader()]);
+    let (folder, jobs) = jobs_with(&record(), &table);
+    let other = JobId::parse("0123456789ab").unwrap();
+    std::fs::write(folder.path().join(format!("jobs/{other}.json")), b"{").unwrap();
+    out.push(("show-all-unreadable", jobs.show(None)));
+    out.push((
+        "stop-unreadable",
+        jobs.stop(&other, &expect, Duration::from_secs(1)),
+    ));
+    out.push(("stop-all-unreadable", jobs.stop_all(StopReason::Stopped)));
+    let mut held = record();
+    held.state = JobState::Stopping;
+    held.stopping = Some(Stopping {
+        refused: Some(JobRefusal::OtherAccount),
+        stuck: Some(2),
+        ..Stopping::new(How::Timeout, 1, 5)
+    });
+    let mut stranger = leader();
+    stranger.uid = 501;
+    stranger.ruid = 501;
+    stranger.svuid = 501;
+    let table = Table::with(vec![stranger]);
+    let (_h, jobs) = jobs_with(&held, &table);
+    out.push(("show-held", jobs.show(Some(&id))));
+    out.push(("stop-all-held", jobs.stop_all(StopReason::Person)));
+    out.push(("unconfirmed", unconfirmed(&record(), "said")));
+    out.push((
+        "limit",
+        JobFailure::new(JobRefusal::Limit, "msg").into_value(),
+    ));
+    let expected = [
+        (
+            "show-one",
+            r#"{"action":"show","job":{"adopted":true,"boot":"6A1E0000-0000-0000-0000-000000000000","endsAt":18446744073709551615,"id":"7c2e91a04b3f","logResets":0,"name":"nc","pgid":4312,"pid":4312,"session":null,"start":[1761650000,123456],"startedAt":1,"state":"running","task":null,"uid":502},"ok":true,"op":"job"}"#,
+        ),
+        (
+            "show-all",
+            r#"{"action":"show","jobs":[{"adopted":true,"boot":"6A1E0000-0000-0000-0000-000000000000","endsAt":18446744073709551615,"id":"7c2e91a04b3f","logResets":0,"name":"nc","pgid":4312,"pid":4312,"session":null,"start":[1761650000,123456],"startedAt":1,"state":"running","task":null,"uid":502}],"ok":true,"op":"job"}"#,
+        ),
+        ("census", r#"{"launching":0,"running":1,"unresolved":0}"#),
+        (
+            "log-missing",
+            r#"{"action":"log","data":"","id":"7c2e91a04b3f","logResets":0,"ok":true,"op":"job","outputTruncated":false,"size":0,"task":null}"#,
+        ),
+        (
+            "show-unknown",
+            r#"{"code":"job","error":"No background job with that ID is known in the helper","id":"0123456789ab","ok":false,"reason":"unknown","uncertain":false}"#,
+        ),
+        (
+            "stop-unknown",
+            r#"{"code":"job","error":"No background job with that ID is known in the helper","id":"0123456789ab","ok":false,"reason":"unknown","uncertain":false}"#,
+        ),
+        (
+            "stop-identity",
+            r#"{"code":"job","error":"The job is no longer the process Atlas started, so nothing was signalled","id":"7c2e91a04b3f","ok":false,"reason":"identity","uncertain":false}"#,
+        ),
+        (
+            "stop-signalled",
+            r#"{"action":"stop","job":{"adopted":true,"boot":"6A1E0000-0000-0000-0000-000000000000","endsAt":18446744073709551615,"id":"7c2e91a04b3f","logResets":0,"name":"nc","pgid":4312,"pid":4312,"session":null,"signal":"SIGTERM","start":[1761650000,123456],"startedAt":1,"state":"stopping","task":null,"uid":502},"ok":true,"op":"job","signalled":"SIGTERM"}"#,
+        ),
+        (
+            "show-stopping",
+            r#"{"action":"show","job":{"adopted":true,"boot":"6A1E0000-0000-0000-0000-000000000000","endsAt":18446744073709551615,"id":"7c2e91a04b3f","logResets":0,"name":"nc","pgid":4312,"pid":4312,"session":null,"signal":"SIGTERM","start":[1761650000,123456],"startedAt":1,"state":"stopping","task":null,"uid":502},"ok":true,"op":"job"}"#,
+        ),
+        (
+            "stop-already-stopping",
+            r#"{"action":"stop","alreadyStopping":true,"job":{"adopted":true,"boot":"6A1E0000-0000-0000-0000-000000000000","endsAt":18446744073709551615,"id":"7c2e91a04b3f","logResets":0,"name":"nc","pgid":4312,"pid":4312,"session":null,"signal":"SIGTERM","start":[1761650000,123456],"startedAt":1,"state":"stopping","task":null,"uid":502},"ok":true,"op":"job"}"#,
+        ),
+        (
+            "stop-all",
+            r#"{"action":"stop-all","ended":0,"ok":true,"op":"job","refused":[],"stopping":1,"unknown":[],"unresolved":[]}"#,
+        ),
+        (
+            "show-ended",
+            r#"{"action":"show","job":{"adopted":true,"boot":"6A1E0000-0000-0000-0000-000000000000","endedAt":7,"endsAt":18446744073709551615,"exitCode":3,"exitSignal":"SIGKILL","how":"leader-gone","id":"7c2e91a04b3f","left":[{"name":"sleep","pid":4313}],"logResets":0,"name":"nc","pgid":4312,"pid":4312,"remaining":1,"session":null,"signal":"SIGTERM","start":[1761650000,123456],"startedAt":1,"state":"ended","task":"0123456789ab","uid":502},"ok":true,"op":"job"}"#,
+        ),
+        (
+            "stop-ended",
+            r#"{"action":"stop","alreadyEnded":true,"job":{"adopted":true,"boot":"6A1E0000-0000-0000-0000-000000000000","endedAt":7,"endsAt":18446744073709551615,"exitCode":3,"exitSignal":"SIGKILL","how":"leader-gone","id":"7c2e91a04b3f","left":[{"name":"sleep","pid":4313}],"logResets":0,"name":"nc","pgid":4312,"pid":4312,"remaining":1,"session":null,"signal":"SIGTERM","start":[1761650000,123456],"startedAt":1,"state":"ended","task":"0123456789ab","uid":502},"ok":true,"op":"job"}"#,
+        ),
+        (
+            "log",
+            r#"{"action":"log","data":"bGxv","id":"7c2e91a04b3f","logResets":0,"ok":true,"op":"job","outputTruncated":true,"size":5,"task":"0123456789ab"}"#,
+        ),
+        (
+            "show-refused",
+            r#"{"action":"show","job":{"adopted":true,"boot":"6A1E0000-0000-0000-0000-000000000000","endsAt":0,"id":"7c2e91a04b3f","logResets":0,"name":"nc","pgid":4312,"pid":4312,"refused":"unobserved","session":null,"signal":null,"start":[1761650000,123456],"startedAt":1,"state":"stopping","task":null,"uid":502},"ok":true,"op":"job"}"#,
+        ),
+        (
+            "stop-all-unobserved",
+            r#"{"action":"stop-all","ended":0,"ok":true,"op":"job","refused":[],"stopping":0,"unknown":[{"id":"7c2e91a04b3f"}],"unresolved":[]}"#,
+        ),
+        (
+            "stop-unobserved",
+            r#"{"code":"job","error":"Atlas could not read the job's processes, so nothing was signalled; try again","id":"7c2e91a04b3f","ok":false,"reason":"unobserved","uncertain":false}"#,
+        ),
+        (
+            "show-all-unreadable",
+            r#"{"action":"show","jobs":[{"error":"Atlas cannot tell whether this job's process is running","id":"0123456789ab","state":"unknown"},{"adopted":true,"boot":"6A1E0000-0000-0000-0000-000000000000","endsAt":18446744073709551615,"id":"7c2e91a04b3f","logResets":0,"name":"nc","pgid":4312,"pid":4312,"session":null,"start":[1761650000,123456],"startedAt":1,"state":"running","task":null,"uid":502}],"ok":true,"op":"job"}"#,
+        ),
+        (
+            "stop-unreadable",
+            r#"{"code":"job","error":"Atlas cannot tell whether this job's process is running","id":"0123456789ab","ok":false,"reason":"unknown","uncertain":false}"#,
+        ),
+        (
+            "stop-all-unreadable",
+            r#"{"action":"stop-all","ended":0,"ok":true,"op":"job","refused":[],"stopping":1,"unknown":[],"unresolved":[{"id":"0123456789ab"}]}"#,
+        ),
+        (
+            "show-held",
+            r#"{"action":"show","job":{"boot":"6A1E0000-0000-0000-0000-000000000000","endsAt":18446744073709551615,"id":"7c2e91a04b3f","logResets":0,"name":"nc","pgid":4312,"pid":4312,"refused":"other-account","remaining":2,"session":null,"signal":null,"start":[1761650000,123456],"startedAt":1,"state":"stopping","task":null,"uid":502},"ok":true,"op":"job"}"#,
+        ),
+        (
+            "stop-all-held",
+            r#"{"action":"stop-all","ended":0,"ok":true,"op":"job","refused":[{"id":"7c2e91a04b3f","reason":"other-account"}],"stopping":0,"unknown":[],"unresolved":[]}"#,
+        ),
+        (
+            "unconfirmed",
+            r#"{"code":"job","error":"said","id":"7c2e91a04b3f","job":{"boot":"6A1E0000-0000-0000-0000-000000000000","endsAt":18446744073709551615,"id":"7c2e91a04b3f","logResets":0,"name":"nc","pgid":4312,"pid":4312,"session":null,"start":[1761650000,123456],"startedAt":1,"state":"running","task":null,"uid":502},"ok":false,"reason":"unconfirmed","uncertain":true}"#,
+        ),
+        (
+            "limit",
+            r#"{"code":"job","error":"msg","ok":false,"reason":"limit","uncertain":false}"#,
+        ),
+    ];
+    assert_eq!(out.len(), expected.len());
+    for ((name, value), (expected_name, expected)) in out.iter().zip(expected) {
+        assert_eq!(*name, expected_name);
+        assert_eq!(serde_json::to_string(value).unwrap(), expected, "{name}");
+    }
 }

@@ -8,11 +8,10 @@
 //! task is named.
 use crate::{
     client::Client,
-    daemon::{
-        job::{How, JobState},
-        protocol::{
-            Expected, JOB_GRACE, JOB_LIFETIME_MAX, JOBS, JobId, SessionPin, StopReason, job_name,
-        },
+    daemon::protocol::{
+        Expected, How, JOB_GRACE, JOB_LIFETIME_MAX, JOBS, JobId, JobRefusal, JobReply, JobState,
+        JobView, Logged, Progress, SessionPin, Showing, Shown, StopCameTo, StopReason, Stopped,
+        job_name,
     },
     error::{Error, Result},
     host_session::{Key, now_ms},
@@ -23,6 +22,7 @@ use crate::{
     transport::Transport,
 };
 use base64::{Engine, engine::general_purpose::STANDARD};
+use serde::Deserialize;
 use serde_json::{Map, Value, json};
 use std::time::{Duration, Instant};
 
@@ -109,9 +109,11 @@ async fn started(
         return Err(refused(&reply));
     }
 
-    let job = &reply["job"];
+    let Ok(JobReply::Start { job }) = JobReply::deserialize(&reply) else {
+        return Err(unconfirmed());
+    };
     let mut warnings = carried_warnings(&reply);
-    if let Some(entry) = entry(job)
+    if let Some(entry) = entry(&job)
         && note(client, None, entry).is_err()
     {
         warnings.push(
@@ -121,15 +123,15 @@ async fn started(
     }
     let mut out = json!({
         "ok": true,
-        "id": job["id"],
-        "name": job["name"],
-        "pid": job["pid"],
-        "state": job["state"],
-        "endsAt": job["endsAt"],
+        "id": job.id,
+        "name": job.name,
+        "pid": job.pid,
+        "state": job.state,
+        "endsAt": job.ends_at,
     });
-    if job["state"] == "ended" {
-        out["how"] = job["how"].clone();
-        out["exitCode"] = job["exitCode"].clone();
+    if job.state == JobState::Ended {
+        out["how"] = json!(job.ended().map(|ended| ended.how));
+        out["exitCode"] = json!(job.ended().and_then(|ended| ended.exit_code));
     }
     if !warnings.is_empty() {
         out["warnings"] = json!(warnings);
@@ -167,14 +169,15 @@ async fn waited_for(
     client: &Client,
     id: &JobId,
     grace: Duration,
-    acknowledged: &Value,
+    acknowledged: &Stopped,
     found: Found,
 ) -> Value {
     let started = Instant::now();
-    let mut shown = acknowledged["job"].clone();
-    if acknowledged["alreadyEnded"] != true {
+    let already_ended = matches!(acknowledged.came_to, StopCameTo::AlreadyEnded(true));
+    let mut shown = Shown::Job(Box::new(acknowledged.job.clone()));
+    if !already_ended {
         let until = grace + BEYOND_GRACE;
-        while shown["state"] != "ended" && started.elapsed() < until {
+        while shown.state() != Some(JobState::Ended) && started.elapsed() < until {
             tokio::time::sleep(POLL).await;
             if let Ok(now) = show(client, id).await {
                 shown = now;
@@ -182,13 +185,16 @@ async fn waited_for(
         }
     }
 
-    let noted = entry(&shown).map(|entry| note(client, found.owner.as_ref(), entry));
+    let noted = shown
+        .job()
+        .and_then(entry)
+        .map(|entry| note(client, found.owner.as_ref(), entry));
     let mut reply = stopped(id, &shown, started.elapsed());
     if matches!(noted, Some(Ok(Noted::Disagrees))) {
         reply["mismatch"] = json!(true);
         reply["warnings"] = json!([DISAGREES]);
     }
-    if acknowledged["alreadyEnded"] == true {
+    if already_ended {
         reply["alreadyEnded"] = json!(true);
     }
     if found.checked == Checked::Helper {
@@ -237,7 +243,7 @@ async fn expected_for(client: &Client, id: &JobId, task: Option<&Key>) -> Result
                 "job",
                 "That task's record does not list this job; atlas job list --all shows whose it is",
             )
-            .with("reason", "unknown")
+            .with("reason", JobRefusal::Unknown)
             .with("id", id)),
         };
     }
@@ -251,19 +257,13 @@ async fn expected_for(client: &Client, id: &JobId, task: Option<&Key>) -> Result
     }
 
     let shown = show(client, id).await?;
-    let theirs = shown["task"].as_str().and_then(Key::parse);
+    let theirs = shown.job().and_then(|job| job.task.clone());
     match theirs {
         Some(theirs) if Some(&theirs) != mine.as_ref() => Err(other_task(id, &theirs, "stop")),
         theirs => {
-            let expected = serde_json::from_value::<Expected>(json!({
-                "boot": shown["boot"],
-                "pid": shown["pid"],
-                "start": shown["start"],
-                "pgid": shown["pgid"],
-            }))
-            .map_err(|_| {
+            let expected = shown.job().and_then(JobView::expected).ok_or_else(|| {
                 Error::new("job", "The job has not finished starting")
-                    .with("reason", "unknown")
+                    .with("reason", JobRefusal::Unknown)
                     .with("id", id)
             })?;
             // No task's record lists it: the helper's record is all it is
@@ -287,18 +287,15 @@ pub(crate) async fn stop_for_cleanup(client: &Client, task: &Key, id: &JobId) ->
         // A job the task's record never noted (its start was not confirmed,
         // or its entry could not be written) is stopped by the helper's
         // record alone, when that record says it is this task's.
-        Err(error)
-            if error
-                .details
-                .get("reason")
-                .is_some_and(|reason| reason == "unknown") =>
-        {
-            let shown = show(client, id).await?;
-            if shown["task"].as_str() != Some(task.as_str()) {
+        Err(error) if refusal_of(&error) == Some(JobRefusal::Unknown) => {
+            let Some(job) = show(client, id).await?.job().cloned() else {
+                return Err(error);
+            };
+            if job.task.as_ref() != Some(task) {
                 return Err(error);
             }
             Found {
-                expected: shown_identity(&shown).ok_or(error)?,
+                expected: job.expected().ok_or(error)?,
                 owner: Some(task.clone()),
                 checked: Checked::Helper,
             }
@@ -319,9 +316,17 @@ fn other_task(id: &JobId, theirs: &Key, command: &str) -> Error {
              session was lost: atlas job {command} {id} --task {theirs}"
         ),
     )
-    .with("reason", "other-task")
+    .with("reason", JobRefusal::OtherTask)
     .with("id", id)
     .with("task", theirs)
+}
+
+/// Why the helper refused a job request, when the refusal says.
+pub(crate) fn refusal_of(error: &Error) -> Option<JobRefusal> {
+    error
+        .details
+        .get("reason")
+        .and_then(|reason| JobRefusal::deserialize(reason).ok())
 }
 
 /// Ask the helper to stop job `id` when it is still `expected`, under
@@ -333,7 +338,7 @@ pub(crate) async fn stop_held(
     id: &JobId,
     expected: &Expected,
     grace: Duration,
-) -> Result<Value> {
+) -> Result<Stopped> {
     let request = json!({
         "op": "job",
         "action": "stop",
@@ -342,46 +347,58 @@ pub(crate) async fn stop_held(
         "graceMs": crate::time::ms(grace),
     });
     let reply = client.change(request).await?;
-    if reply["ok"] == true {
-        Ok(reply)
-    } else {
-        Err(refused(&reply))
+    if reply["ok"] != true {
+        return Err(refused(&reply));
+    }
+    match JobReply::deserialize(&reply) {
+        Ok(JobReply::Stop(stopped)) => Ok(stopped),
+        _ => Err(unconfirmed()),
     }
 }
 
 /// How a stop that was waited for reads: how the job ended and what left
 /// its group, or that it is still stopping. Pure, for tests.
-fn stopped(id: &JobId, shown: &Value, waited: Duration) -> Value {
+fn stopped(id: &JobId, shown: &Shown, waited: Duration) -> Value {
     let waited_ms = crate::time::ms(waited);
-    if shown["state"] != "ended" {
+    let ended = shown
+        .job()
+        .filter(|job| job.state == JobState::Ended)
+        .map(|job| (job, job.ended()));
+    let Some((job, ended)) = ended else {
+        let remaining = match shown.job().map(|job| &job.progress) {
+            Some(Progress::Stopping(stopping)) => stopping.remaining,
+            Some(Progress::Ended(ended)) => ended.remaining,
+            _ => None,
+        };
         return json!({
             "ok": false,
             "code": "job",
-            "reason": "still-stopping",
+            "reason": JobRefusal::StillStopping,
             "id": id,
-            "state": "stopping",
-            "remaining": shown["remaining"].as_u64().unwrap_or(0),
+            "state": JobState::Stopping,
+            "remaining": remaining.unwrap_or(0),
             "waitedMs": waited_ms,
             "uncertain": false,
             "error": "The job has not ended yet; Atlas keeps stopping it",
             "next": "atlas job list shows when it has ended.",
         });
-    }
-    let left = shown["left"].as_array().cloned().unwrap_or_default();
+    };
+    let left = ended.map(|ended| ended.left.clone()).unwrap_or_default();
+    let how = ended.map(|ended| ended.how);
     let mut reply = json!({
         "ok": true,
         "id": id,
-        "state": "ended",
-        "how": shown["how"],
-        "signal": shown["signal"],
+        "state": job.state,
+        "how": how,
+        "signal": ended.and_then(|ended| ended.signal.clone()),
         "waitedMs": waited_ms,
         "left": left,
     });
-    if !shown["exitCode"].is_null() {
-        reply["exitCode"] = shown["exitCode"].clone();
+    if let Some(code) = ended.and_then(|ended| ended.exit_code) {
+        reply["exitCode"] = json!(code);
     }
     if !left.is_empty() {
-        reply["next"] = json!(if shown["how"] == "leader-gone" {
+        reply["next"] = json!(if how == Some(How::LeaderGone) {
             LEADER_GONE
         } else {
             LEFT_RUNNING
@@ -422,13 +439,13 @@ pub async fn list(client: &Client, all: bool) -> Result<Value> {
 
     let mut listed = Vec::new();
     for job in jobs {
-        let Some(id) = job["id"].as_str().and_then(JobId::parse) else {
+        let Some(id) = job.id() else {
             if all {
-                listed.push(job);
+                listed.push(json!(job));
             }
             continue;
         };
-        let task = job["task"].as_str().and_then(Key::parse);
+        let task = job.job().and_then(|job| job.task.clone());
         let ours = recorded.iter().any(|entry| entry.id == id) || (task.is_some() && task == mine);
         if !ours && !all {
             continue;
@@ -436,7 +453,7 @@ pub async fn list(client: &Client, all: bool) -> Result<Value> {
         let mut view = listed_view(&job);
         // How far a job of this task got is noted; the identity it was
         // first noted with is not, and one the helper disagrees with is said.
-        if let Some(entry) = entry(&job)
+        if let Some(entry) = job.job().and_then(entry)
             && let Some(known) = recorded.iter().find(|known| known.id == entry.id)
         {
             if known.expected != entry.expected {
@@ -457,35 +474,49 @@ pub async fn list(client: &Client, all: bool) -> Result<Value> {
 }
 
 /// A job as `job list` shows it.
-fn listed_view(job: &Value) -> Value {
-    if job["state"] == "unknown" {
-        return job.clone();
-    }
+fn listed_view(shown: &Shown) -> Value {
+    let Some(job) = shown.job() else {
+        return json!(shown);
+    };
     let mut view = json!({
-        "id": job["id"],
-        "name": job["name"],
-        "state": job["state"],
-        "pid": job["pid"],
-        "startedAt": job["startedAt"],
-        "endsAt": job["endsAt"],
+        "id": job.id,
+        "name": job.name,
+        "state": job.state,
+        "pid": job.pid,
+        "startedAt": job.started_at,
+        "endsAt": job.ends_at,
     });
-    if job["adopted"] == true {
+    if job.adopted {
         view["adopted"] = json!(true);
     }
-    for field in ["remaining", "refused", "signal"] {
-        if !job[field].is_null() {
-            view[field] = job[field].clone();
-        }
+    let (signal, remaining, refused) = match &job.progress {
+        Progress::Ended(ended) => (ended.signal.as_ref(), ended.remaining, None),
+        Progress::Stopping(stopping) => (
+            stopping.signal.as_ref(),
+            stopping.remaining,
+            stopping.refused,
+        ),
+        Progress::Neither {} => (None, None, None),
+    };
+    if let Some(remaining) = remaining {
+        view["remaining"] = json!(remaining);
     }
-    if job["state"] == "ended" {
-        view["how"] = job["how"].clone();
-        view["endedAt"] = job["endedAt"].clone();
-        view["exitCode"] = job["exitCode"].clone();
+    if let Some(refused) = refused {
+        view["refused"] = json!(refused);
+    }
+    if let Some(signal) = signal {
+        view["signal"] = json!(signal);
+    }
+    let ended = job.ended();
+    if job.state == JobState::Ended {
+        view["how"] = json!(ended.map(|ended| ended.how));
+        view["endedAt"] = json!(ended.map(|ended| ended.ended_at));
+        view["exitCode"] = json!(ended.and_then(|ended| ended.exit_code));
     }
     // Processes that left the job's group, or that its leader left behind,
     // still run and were never signalled.
-    if job["left"].as_array().is_some_and(|left| !left.is_empty()) {
-        view["left"] = job["left"].clone();
+    if let Some(ended) = ended.filter(|ended| !ended.left.is_empty()) {
+        view["left"] = json!(ended.left);
     }
     view
 }
@@ -498,7 +529,7 @@ pub async fn log(client: &Client, id: &JobId, bytes: usize, task: Option<&Key>) 
     // when that task is named, as for a stop.
     match show(client, id).await {
         Ok(shown) => {
-            let theirs = shown["task"].as_str().and_then(Key::parse);
+            let theirs = shown.job().and_then(|job| job.task.clone());
             let mine = client.task.as_ref().map(|task| task.key());
             if let Some(theirs) = theirs
                 && Some(&theirs) != mine
@@ -520,17 +551,25 @@ pub async fn log(client: &Client, id: &JobId, bytes: usize, task: Option<&Key>) 
     if reply["ok"] != true {
         return Err(refused(&reply));
     }
-    let data = reply["data"]
-        .as_str()
-        .and_then(|data| STANDARD.decode(data).ok())
-        .ok_or_else(|| Error::new("protocol", "The job's log came back malformed"))?;
+    let malformed = || Error::new("protocol", "The job's log came back malformed");
+    let Ok(JobReply::Log(logged)) = JobReply::deserialize(&reply) else {
+        return Err(malformed());
+    };
+    let Logged {
+        data,
+        size,
+        output_truncated,
+        log_resets,
+        ..
+    } = logged;
+    let data = STANDARD.decode(data).map_err(|_| malformed())?;
     Ok(json!({
         "ok": true,
         "id": id,
         "output": String::from_utf8_lossy(&data),
-        "size": reply["size"],
-        "outputTruncated": reply["outputTruncated"],
-        "logResets": reply["logResets"],
+        "size": size,
+        "outputTruncated": output_truncated,
+        "logResets": log_resets,
     }))
 }
 
@@ -617,14 +656,13 @@ pub(crate) async fn stop_every(client: &Client, reason: StopReason) -> Everyone 
             };
         }
     };
-    let asked = reply["stopping"].as_u64().unwrap_or(0);
-    let count = |field: &str| {
-        reply[field]
-            .as_array()
-            .map_or(0, |listed| listed.len() as u64)
+    let all = match JobReply::deserialize(&reply) {
+        Ok(JobReply::StopAll(all)) => all,
+        _ => Default::default(),
     };
-    let refused = count("refused");
-    let unknown = count("unknown");
+    let asked = all.stopping;
+    let refused = all.refused.len() as u64;
+    let unknown = all.unknown.len() as u64;
     let mut left = asked;
     let started = Instant::now();
     while left > 0 && started.elapsed() < JOB_GRACE + BEYOND_GRACE {
@@ -632,7 +670,7 @@ pub(crate) async fn stop_every(client: &Client, reason: StopReason) -> Everyone 
         if let Ok(jobs) = shown_all(client).await {
             left = jobs
                 .iter()
-                .filter(|job| matches!(job["state"].as_str(), Some("running" | "stopping")))
+                .filter(|job| matches!(job.state(), Some(JobState::Running | JobState::Stopping)))
                 .count() as u64;
         }
     }
@@ -646,7 +684,7 @@ pub(crate) async fn stop_every(client: &Client, reason: StopReason) -> Everyone 
 }
 
 /// Job `id` as the helper shows it now. Reading changes nothing.
-pub(crate) async fn show(client: &Client, id: &JobId) -> Result<Value> {
+pub(crate) async fn show(client: &Client, id: &JobId) -> Result<Shown> {
     let reply = client
         .transport
         .call(&json!({"op": "job", "action": "show", "id": id}))
@@ -655,21 +693,23 @@ pub(crate) async fn show(client: &Client, id: &JobId) -> Result<Value> {
     if reply["code"] == "bad-request" {
         return Err(Error::new("daemon", OLDER));
     }
-    if reply["ok"] == true {
-        Ok(reply["job"].clone())
-    } else {
-        Err(refused(&reply))
+    if reply["ok"] != true {
+        return Err(refused(&reply));
     }
+    Ok(match JobReply::deserialize(&reply) {
+        Ok(JobReply::Show(Showing::One { job: Some(shown) })) => shown,
+        _ => Shown::Later(reply["job"].clone()),
+    })
 }
 
 /// The jobs the helper's records give to `task` of host session
-/// `session` (every task of it without one) that may still run, each with
-/// its task and name, for a cleanup to stop.
+/// `session` (every task of it without one) that may still run, for a
+/// cleanup to stop.
 pub(crate) async fn of_session(
     client: &Client,
     session: &Key,
     task: Option<&Key>,
-) -> Result<Vec<(JobId, Key, String)>> {
+) -> Result<Vec<JobView>> {
     let jobs = match shown_all(client).await {
         Ok(jobs) => jobs,
         // A daemon from before jobs keeps none.
@@ -678,36 +718,20 @@ pub(crate) async fn of_session(
     };
     Ok(jobs
         .iter()
+        .filter_map(Shown::job)
+        .filter(|job| job.state.live())
+        .filter(|job| job.session.as_ref() == Some(session))
         .filter(|job| {
-            matches!(
-                job["state"].as_str(),
-                Some("launched" | "running" | "stopping")
-            )
+            job.task
+                .as_ref()
+                .is_some_and(|theirs| task.is_none_or(|task| task == theirs))
         })
-        .filter(|job| job["session"].as_str() == Some(session.as_str()))
-        .filter_map(|job| {
-            let id = job["id"].as_str().and_then(JobId::parse)?;
-            let theirs = job["task"].as_str().and_then(Key::parse)?;
-            let name = job["name"].as_str().unwrap_or("job").to_owned();
-            task.is_none_or(|task| *task == theirs)
-                .then_some((id, theirs, name))
-        })
+        .cloned()
         .collect())
 }
 
-/// What the helper's view of a job says it is.
-fn shown_identity(shown: &Value) -> Option<Expected> {
-    serde_json::from_value(json!({
-        "boot": shown["boot"],
-        "pid": shown["pid"],
-        "start": shown["start"],
-        "pgid": shown["pgid"],
-    }))
-    .ok()
-}
-
 /// Every job as the helper shows it now, or why it cannot say.
-async fn shown_all(client: &Client) -> Result<Vec<Value>> {
+async fn shown_all(client: &Client) -> Result<Vec<Shown>> {
     let daemon = Transport {
         timeout: Duration::from_secs(10),
         ..client.transport.clone()
@@ -717,7 +741,10 @@ async fn shown_all(client: &Client) -> Result<Vec<Value>> {
         .await
         .map_err(certain)?;
     if reply["ok"] == true {
-        return Ok(reply["jobs"].as_array().cloned().unwrap_or_default());
+        return Ok(match JobReply::deserialize(&reply) {
+            Ok(JobReply::Show(Showing::Every { jobs })) => jobs,
+            _ => Vec::new(),
+        });
     }
     if reply["code"] == "bad-request" {
         return Err(Error::new("daemon", OLDER));
@@ -726,29 +753,26 @@ async fn shown_all(client: &Client) -> Result<Vec<Value>> {
 }
 
 /// The task's record's entry for a job the helper shows as `job`.
-fn entry(job: &Value) -> Option<JobEntry> {
+fn entry(job: &JobView) -> Option<JobEntry> {
+    let ended = job.ended();
     Some(JobEntry {
-        id: job["id"].as_str().and_then(JobId::parse)?,
-        name: job["name"].as_str()?.to_owned(),
-        started_at: job["startedAt"].as_u64()?,
-        expected: serde_json::from_value(json!({
-            "boot": job["boot"],
-            "pid": job["pid"],
-            "start": job["start"],
-            "pgid": job["pgid"],
-        }))
-        .ok()?,
-        state: serde_json::from_value::<Lenient<JobState>>(job["state"].clone()).ok()?,
-        how: (!job["how"].is_null())
-            .then(|| serde_json::from_value::<Lenient<How>>(job["how"].clone()).ok())
-            .flatten(),
-        ended_at: job["endedAt"].as_u64(),
+        id: job.id.clone(),
+        name: job.name.clone(),
+        started_at: job.started_at,
+        expected: job.expected()?,
+        state: Lenient::Known(job.state),
+        how: ended.map(|ended| Lenient::Known(ended.how)),
+        ended_at: ended.map(|ended| ended.ended_at),
         later: Map::new(),
     })
 }
 
-/// Note `entry` in the record of the task `owner` names, else of this
-/// command's task; nothing without one.
+/// A job reply the helper sent without the job it was about: what it did
+/// is not known.
+fn unconfirmed() -> Error {
+    Error::new("protocol", "Helper did not confirm operation completion").uncertain()
+}
+
 /// Note `entry` in the record of the task `owner` names, else of this
 /// command's task; nothing without one. An identity the record already
 /// keeps for the job is never replaced: [`Noted::Disagrees`] says so.

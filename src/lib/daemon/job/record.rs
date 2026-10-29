@@ -2,12 +2,14 @@
 //! got, how a stop is going and how it ended. The arguments it was started
 //! with are never kept: they may carry secrets.
 use crate::{
-    daemon::protocol::{Expected, JobId, StopReason},
+    daemon::protocol::{
+        EndedView, Expected, How, JobId, JobRefusal, JobState, JobView, Left, Progress,
+        StoppingView,
+    },
     host_session::Key,
     process::{Instance, Start},
 };
 use serde::{Deserialize, Serialize};
-use serde_json::{Value, json};
 
 /// The record format this build writes.
 pub(super) const VERSION: u32 = 1;
@@ -82,65 +84,6 @@ impl JobIdentity {
     }
 }
 
-/// How far a job got.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "lowercase")]
-pub enum JobState {
-    /// Written before anything is spawned: no process yet.
-    Starting,
-    /// Its launcher runs, with its PID and start time, but it has not yet
-    /// said it is a session of its own.
-    Launched,
-    Running,
-    /// Told to end: TERM, then KILL after the grace.
-    Stopping,
-    Ended,
-}
-
-/// How a job ended.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "kebab-case")]
-pub enum How {
-    /// It ended by itself.
-    Exited,
-    /// An agent stopped it.
-    Stopped,
-    /// It ran past its time limit.
-    Timeout,
-    /// The person stopped agents.
-    Person,
-    /// The helper came on screen.
-    OnConsole,
-    /// It was found ended with nothing to say why: the daemon was down, or
-    /// its PID is another process's now.
-    Gone,
-    /// It started in another boot.
-    Restarted,
-    /// Its leader is gone while processes of its group remain: they are
-    /// listed in `left` and never signalled, since without its leader
-    /// nothing proves the group is still the job's.
-    LeaderGone,
-}
-
-impl How {
-    pub(super) fn of(reason: StopReason) -> Self {
-        match reason {
-            StopReason::Person => Self::Person,
-            StopReason::OnConsole => Self::OnConsole,
-            StopReason::Stopped => Self::Stopped,
-        }
-    }
-}
-
-/// A process that left a job's group, or that was in it when its leader
-/// went, and still runs: reported, never signalled.
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct Left {
-    pub pid: i32,
-    pub name: String,
-}
-
 /// A stop under way.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -168,7 +111,7 @@ pub struct Stopping {
     /// Why no signal could be sent the last time: its processes no longer
     /// match it, or could not be read.
     #[serde(default)]
-    pub refused: Option<String>,
+    pub refused: Option<JobRefusal>,
 }
 
 impl Stopping {
@@ -269,56 +212,46 @@ impl Record {
 
     /// Whether it may still have processes.
     pub(super) fn live(&self) -> bool {
-        matches!(
-            self.state,
-            JobState::Launched | JobState::Running | JobState::Stopping
-        )
+        self.state.live()
     }
 
     /// The job as replies show it.
-    pub fn view(&self) -> Value {
-        let mut view = json!({
-            "id": self.id,
-            "name": self.name,
-            "task": self.task,
-            "session": self.session,
-            "uid": self.uid,
-            "boot": self.boot,
-            "pid": self.pid,
-            "start": self.start,
-            "pgid": self.pgid,
-            "state": self.state,
-            "startedAt": self.started_at,
-            "endsAt": self.ends_at,
-            "logResets": self.log_resets,
-        });
-        if self.adopted {
-            view["adopted"] = json!(true);
+    pub fn view(&self) -> JobView {
+        let progress = match (&self.ended, &self.stopping) {
+            (Some(ended), _) => Progress::Ended(EndedView {
+                how: ended.how,
+                ended_at: ended.at,
+                signal: ended.signal.clone(),
+                exit_code: ended.exit_code,
+                exit_signal: ended.exit_signal.clone(),
+                left: ended.left.clone(),
+                remaining: (ended.how == How::LeaderGone).then_some(ended.left.len()),
+            }),
+            (None, Some(stopping)) if self.state == JobState::Stopping => {
+                Progress::Stopping(StoppingView {
+                    signal: stopping.signal.clone(),
+                    remaining: stopping.stuck,
+                    refused: stopping.refused,
+                })
+            }
+            (None, _) => Progress::Neither {},
+        };
+        JobView {
+            id: self.id.clone(),
+            name: self.name.clone(),
+            task: self.task.clone(),
+            session: self.session.clone(),
+            uid: self.uid,
+            boot: self.boot.clone(),
+            pid: self.pid,
+            start: self.start,
+            pgid: self.pgid,
+            state: self.state,
+            started_at: self.started_at,
+            ends_at: self.ends_at,
+            log_resets: self.log_resets,
+            adopted: self.adopted,
+            progress,
         }
-        if let Some(stopping) = &self.stopping
-            && self.state == JobState::Stopping
-        {
-            view["signal"] = json!(stopping.signal);
-            if let Some(stuck) = stopping.stuck {
-                view["remaining"] = json!(stuck);
-            }
-            if let Some(refused) = &stopping.refused {
-                view["refused"] = json!(refused);
-            }
-        }
-        if let Some(ended) = &self.ended {
-            view["how"] = json!(ended.how);
-            view["endedAt"] = json!(ended.at);
-            view["signal"] = json!(ended.signal);
-            view["exitCode"] = json!(ended.exit_code);
-            if let Some(signal) = &ended.exit_signal {
-                view["exitSignal"] = json!(signal);
-            }
-            view["left"] = json!(ended.left);
-            if ended.how == How::LeaderGone {
-                view["remaining"] = json!(ended.left.len());
-            }
-        }
-        view
     }
 }

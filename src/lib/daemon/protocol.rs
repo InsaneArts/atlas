@@ -1,14 +1,16 @@
 //! Protocol v1 requests the helper daemon accepts, validated before anything
 //! runs. Refusals keep their exact wording: clients and the live checks
 //! match on it.
-use crate::{
-    host_session::Key,
-    name::{lower_hex, name_type, random_hex},
-    process::Start,
-};
+use crate::host_session::Key;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use std::time::Duration;
+
+mod job;
+mod read;
+
+pub use job::*;
+pub use read::ReadRefusal;
 
 /// Longest request line, in bytes.
 pub const MAX_REQUEST: usize = 1024 * 1024;
@@ -112,90 +114,6 @@ pub const JOBS: &str = "jobs";
 
 /// The daemon capability to read files for the person's side to collect.
 pub const READ: &str = "read";
-
-name_type! {
-    /// A background job's handle: 12 lowercase hexadecimal digits, drawn at
-    /// random when it starts, so it says nothing of the job.
-    #[derive(Hash, PartialOrd, Ord)]
-    pub struct JobId;
-    refused(text) = format!("{text} is not a job's ID");
-    display
-}
-
-impl JobId {
-    /// How many hexadecimal digits a job's ID has.
-    pub const LEN: usize = 12;
-
-    /// A new random ID.
-    pub fn new() -> Self {
-        Self(random_hex(Self::LEN))
-    }
-
-    /// `text` as a job's ID, when it is exactly [`JobId::LEN`] lowercase
-    /// hexadecimal digits.
-    pub fn parse(text: &str) -> Option<Self> {
-        lower_hex(text, Self::LEN).then(|| Self(text.to_owned()))
-    }
-}
-
-impl Default for JobId {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
-/// What the person's side knows a job to be: the boot it started in, its
-/// leader's PID and exact start time, and its process group. A record a
-/// later build wrote may hold more beside it; a request names exactly
-/// these.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct Expected {
-    pub boot: String,
-    pub pid: i32,
-    pub start: Start,
-    pub pgid: i32,
-}
-
-/// Why every job is being stopped at once.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "kebab-case")]
-pub enum StopReason {
-    /// The person stopped agents.
-    Person,
-    /// The helper came on screen.
-    OnConsole,
-    /// Atlas is logging the helper out or being uninstalled.
-    Stopped,
-}
-
-/// What is asked of the helper's background jobs.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum JobRequest {
-    /// Start `argv` as a job for the helper account `uid` that runs for at
-    /// most `lifetime`, named `name`, for `task` of host session `session`.
-    Start {
-        argv: Vec<String>,
-        lifetime: Duration,
-        name: Option<String>,
-        task: Option<Key>,
-        session: Option<Key>,
-        uid: u32,
-        pin: Option<SessionPin>,
-    },
-    /// Stop job `id` when it is still what `expect` says, waiting `grace`
-    /// between TERM and KILL.
-    Stop {
-        id: JobId,
-        expect: Expected,
-        grace: Duration,
-    },
-    /// Stop every job, by the daemon's own records alone.
-    StopAll { reason: StopReason },
-    /// One job, or every one.
-    Show { id: Option<JobId> },
-    /// The last `bytes` of a job's output.
-    Log { id: JobId, bytes: usize },
-}
 
 /// What a file is, as `fstat` of its open descriptor says: the same path
 /// with any of these changed is another file, or one being written.
@@ -460,16 +378,18 @@ fn job(request: &Value) -> Result<JobRequest, Value> {
                 .and_then(|uid| u32::try_from(uid).ok())
                 .ok_or_else(|| bad("job start requires the helper's \"uid\""))?;
             Ok(JobRequest::Start {
-                argv: job_argv(request)?,
-                lifetime: millis(
-                    request,
-                    "lifetimeMs",
-                    (JOB_LIFETIME_MIN, JOB_LIFETIME_MAX),
-                    None,
-                )?,
-                name,
-                task: key(request, "task")?,
-                session: key(request, "hostSession")?,
+                start: JobStart {
+                    argv: job_argv(request)?,
+                    lifetime: millis(
+                        request,
+                        "lifetimeMs",
+                        (JOB_LIFETIME_MIN, JOB_LIFETIME_MAX),
+                        None,
+                    )?,
+                    name,
+                    task: key(request, "task")?,
+                    session: key(request, "hostSession")?,
+                },
                 uid,
                 pin: pin(request)?,
             })
@@ -867,21 +787,13 @@ mod tests {
             br#"{"op":"job","action":"start","argv":["/bin/sleep","9"],"lifetimeMs":3600000,"uid":502,"name":"web","task":"3f9a1c07b2e4","hostSession":"3f9a1c07b2e4"}"#,
         )
         .unwrap();
-        let Request::Job(JobRequest::Start {
-            argv,
-            lifetime,
-            name,
-            task,
-            uid,
-            ..
-        }) = start
-        else {
+        let Request::Job(JobRequest::Start { start, uid, .. }) = start else {
             panic!("a start");
         };
-        assert_eq!(argv, ["/bin/sleep", "9"]);
-        assert_eq!(lifetime, Duration::from_secs(3600));
-        assert_eq!(name.as_deref(), Some("web"));
-        assert_eq!(task.unwrap().as_str(), "3f9a1c07b2e4");
+        assert_eq!(start.argv, ["/bin/sleep", "9"]);
+        assert_eq!(start.lifetime, Duration::from_secs(3600));
+        assert_eq!(start.name.as_deref(), Some("web"));
+        assert_eq!(start.task.unwrap().as_str(), "3f9a1c07b2e4");
         assert_eq!(uid, 502);
 
         let stop =
