@@ -1,6 +1,7 @@
 //! Which accessibility elements a name or role picks out, as `atlas
 //! elements --name` matches them: shared by the commands that list and click
-//! elements and by the helper's check of the focused field.
+//! elements and by the helper's check of the focused field. A name that
+//! picks out nothing is judged by how close it comes to the names there are.
 use crate::{native::ax::Element, text::same_text};
 
 /// Which accessibility elements a command is about.
@@ -172,4 +173,60 @@ fn could_begin(text: &str, name: &str) -> bool {
     text.chars()
         .flat_map(char::to_lowercase)
         .all(|c| name.next() == Some(c))
+}
+
+/// How close `text` is to `query` (already lowercased), if at all: the same
+/// text under another role (0), one holding the other (1), or a few
+/// characters off (2), with how far off it is.
+pub(crate) fn closeness(query: &str, text: &str) -> Option<(u8, usize)> {
+    let text: String = text.chars().flat_map(char::to_lowercase).collect();
+    let (wanted, length) = (query.chars().count(), text.chars().count());
+    let apart = wanted.abs_diff(length);
+
+    if text.is_empty() {
+        return None;
+    }
+
+    if text == query {
+        return Some((0, 0));
+    }
+
+    if wanted.min(length) >= 2 && (text.contains(query) || query.contains(text.as_str())) {
+        return Some((1, apart));
+    }
+
+    // A short query is a few characters off most short names ("OK" from
+    // "No" and "Go"), so only a longer one is matched that way.
+    if wanted < 4 {
+        return None;
+    }
+
+    let limit = (wanted / 3).max(1);
+    if apart > limit {
+        return None;
+    }
+
+    let distance = edits(query, &text);
+    (distance <= limit).then_some((2, distance))
+}
+
+/// How many characters must be added, removed or changed to turn one text
+/// into the other.
+fn edits(a: &str, b: &str) -> usize {
+    let b: Vec<char> = b.chars().collect();
+    let mut row: Vec<usize> = (0..=b.len()).collect();
+
+    for (i, x) in a.chars().enumerate() {
+        let mut diagonal = row[0];
+        row[0] = i + 1;
+        for (j, y) in b.iter().enumerate() {
+            let above = row[j + 1];
+            row[j + 1] = (above + 1)
+                .min(row[j] + 1)
+                .min(diagonal + usize::from(x != *y));
+            diagonal = above;
+        }
+    }
+
+    row[b.len()]
 }
