@@ -1230,7 +1230,7 @@ async fn activity_json_lists_the_newest_200_rows_by_ids_that_hold_across_reads()
     let log = (0..250)
         .map(|at| {
             let row = json!({"at": format!("{}", 1_000_000 + at), "operation": "input",
-                "ok": true, "actionCount": 1, "actor": "viewer", "elapsedMs": 2.5});
+                "ok": true, "actionCount": 1, "actor": "agent", "elapsedMs": 2.5});
             format!("{row}\n")
         })
         .collect::<String>();

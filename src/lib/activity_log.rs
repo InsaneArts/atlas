@@ -11,7 +11,7 @@ use sha2::{Digest, Sha256};
 use std::{
     fs::{self, OpenOptions},
     io::{Read, Seek, SeekFrom, Write},
-    os::unix::fs::OpenOptionsExt,
+    os::unix::fs::{MetadataExt, OpenOptionsExt},
     path::Path,
 };
 
@@ -27,6 +27,8 @@ const ROTATE_AT: u64 = 1024 * 1024;
 /// row takes at most for each row asked for past that.
 const TAIL: u64 = 64 * 1024;
 const ROW_BYTES: u64 = 512;
+/// The most of the log one read goes through, from its end.
+const READ_LIMIT: u64 = 4 * 1024 * 1024;
 
 /// What a request asked of the helper, as its `op` names it. One this
 /// build does not know is kept as it was written.
@@ -320,6 +322,12 @@ impl Row {
     pub fn is(&self, op: &Op) -> bool {
         self.operation.as_ref() == Some(op)
     }
+
+    /// Whether it is input the person sent through a viewer, which comes
+    /// in a quick run of rows as they use the mouse and keyboard.
+    pub(crate) fn persons_input(&self) -> bool {
+        self.actor() == "viewer" && self.is(&Op::Input) && self.command.is_none()
+    }
 }
 
 /// A field as this build reads it, or missing when it was written as
@@ -391,58 +399,138 @@ pub(crate) fn append(directory: &Path, row: &Row) -> Result<()> {
 
 /// One row per command from the log in `directory`, newest first, at most
 /// `limit`. A command that acted in several steps (typing in batches,
-/// opening then waiting) is its newest step. A line that does not read, or
-/// names no operation, is passed over.
+/// opening then waiting) is its newest step, and a run of the person's
+/// input through a viewer is its newest row, counting every action of the
+/// run. A line that does not read, or names no operation, is passed over.
+///
+/// The log is read from its end, a [`TAIL`] at a time, until `limit` rows
+/// are found or [`READ_LIMIT`] bytes were read: it is read often, so never
+/// more than that, however long it is. When it runs out first, as just
+/// after it starts over, the reading goes on into [`PREVIOUS`] within the
+/// same limit.
 pub fn recent(directory: &Path, limit: usize) -> Vec<Row> {
     if limit == 0 {
         return Vec::new();
     }
 
     // Never through a link, and never waiting on a pipe put in its place.
-    let Some(mut file) = crate::files::open_plain(&directory.join(FILE)) else {
-        return Vec::new();
-    };
+    // Both are opened before either is read, and the previous log is passed
+    // over when it is the same file, as when the log started over between
+    // the two: so no row is read twice.
+    let current = crate::files::open_plain(&directory.join(FILE));
+    let previous = crate::files::open_plain(&directory.join(PREVIOUS)).filter(|previous| {
+        current
+            .as_ref()
+            .is_none_or(|current| !same_file(current, previous))
+    });
 
-    let tail = TAIL.max(ROW_BYTES.saturating_mul(limit as u64));
-    let length = file.metadata().map(|m| m.len()).unwrap_or(0);
-    let mut bytes = Vec::new();
-    if file
-        .seek(SeekFrom::Start(length.saturating_sub(tail)))
-        .is_err()
-        || file.take(tail).read_to_end(&mut bytes).is_err()
-    {
-        return Vec::new();
-    }
-
-    // The tail may start inside a character; only that first, partial line
-    // is lost.
-    let mut rows: Vec<Row> = Vec::new();
-    for row in String::from_utf8_lossy(&bytes)
-        .lines()
-        .rev()
-        .filter_map(|line| serde_json::from_str::<Value>(line).ok())
-        .filter_map(|value| Row::parse(&value))
-    {
-        let step = row.command.is_some()
-            && rows
-                .last()
-                .is_some_and(|newer| newer.command == row.command);
-        if !step {
-            rows.push(row);
-        }
-        if rows.len() == limit {
+    let mut rows = Vec::new();
+    let mut room = READ_LIMIT;
+    for file in [current, previous].into_iter().flatten() {
+        if rows.len() >= limit || room == 0 {
             break;
         }
+        read_back(file, limit, &mut room, &mut rows);
     }
 
+    rows.truncate(limit);
     rows
+}
+
+/// Whether `one` and `other` are the same file.
+fn same_file(one: &fs::File, other: &fs::File) -> bool {
+    match (one.metadata(), other.metadata()) {
+        (Ok(one), Ok(other)) => (one.dev(), one.ino()) == (other.dev(), other.ino()),
+        // Unknown, so it is passed over: a row is never read twice.
+        _ => true,
+    }
+}
+
+/// Add the rows of `file`, read from its end a [`TAIL`] at a time, to
+/// `rows`, older than those already there, until they number `limit` or
+/// `room` bytes are spent.
+fn read_back(mut file: fs::File, limit: usize, room: &mut u64, rows: &mut Vec<Row>) {
+    let wanted = limit.saturating_sub(rows.len()) as u64;
+    let mut chunk = TAIL.max(ROW_BYTES.saturating_mul(wanted));
+    let mut end = file.metadata().map(|m| m.len()).unwrap_or(0);
+    // The start of the oldest line read so far, whose beginning is in the
+    // part of the file before it.
+    let mut partial = Vec::new();
+
+    while end > 0 && *room > 0 && rows.len() < limit {
+        let size = chunk.min(end).min(*room);
+        let start = end - size;
+        let mut bytes = Vec::new();
+        if file.seek(SeekFrom::Start(start)).is_err()
+            || (&mut file).take(size).read_to_end(&mut bytes).is_err()
+        {
+            break;
+        }
+        bytes.append(&mut partial);
+
+        // Lines are cut at their newline only, so a character is never
+        // split; the first line of a read that did not reach the file's
+        // start waits for the part before it.
+        let whole = if start == 0 {
+            0
+        } else {
+            match bytes.iter().position(|byte| *byte == b'\n') {
+                Some(newline) => newline + 1,
+                None => bytes.len(),
+            }
+        };
+        partial = bytes[..whole].to_vec();
+
+        for line in bytes[whole..].split(|byte| *byte == b'\n').rev() {
+            let Some(row) = serde_json::from_slice::<Value>(line)
+                .ok()
+                .and_then(|value| Row::parse(&value))
+            else {
+                continue;
+            };
+            if !gathered(rows, row) && rows.len() == limit {
+                break;
+            }
+        }
+
+        end = start;
+        *room -= size;
+        chunk = TAIL;
+    }
+}
+
+/// Add `row`, older than those in `rows`, to them: as a step of the
+/// command or the run of the person's input the newest of them stands for,
+/// when it is one, adding its actions to the run's; whether it was.
+fn gathered(rows: &mut Vec<Row>, row: Row) -> bool {
+    let Some(newer) = rows.last_mut() else {
+        rows.push(row);
+        return false;
+    };
+
+    if row.command.is_some() && newer.command == row.command {
+        return true;
+    }
+    if row.persons_input()
+        && newer.persons_input()
+        && (row.ok, &row.code) == (newer.ok, &newer.code)
+    {
+        newer.action_count = match (newer.action_count, row.action_count) {
+            (None, None) => None,
+            (newer, older) => Some(newer.unwrap_or(0) + older.unwrap_or(0)),
+        };
+        return true;
+    }
+
+    rows.push(row);
+    false
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use serde_json::json;
-    use std::fs;
+    use std::{fs, io::Write};
 
     #[test]
     fn the_activity_log_is_read_only_as_a_plain_file_never_a_link_or_a_pipe() {
@@ -523,9 +611,241 @@ mod tests {
 
         assert_eq!(cut(&text) & 0xC0, 0x80, "the tail starts inside é");
         fs::write(dir.path().join(FILE), text).unwrap();
-        let rows = recent(dir.path(), 5);
+        let rows = recent(dir.path(), 1);
         assert_eq!(rows.len(), 1);
         assert_eq!(rows[0].at.as_deref(), Some("1"));
+
+        let rows = recent(dir.path(), 5);
+        assert_eq!(rows.len(), 2, "the line the tail cut is read whole");
+        assert_eq!(rows[1].operation, Some(Op::Other("old".into())));
+    }
+
+    /// `rows` as the log's lines.
+    fn log(rows: impl IntoIterator<Item = Value>) -> String {
+        rows.into_iter().map(|row| format!("{row}\n")).collect()
+    }
+
+    /// One of the person's inputs through a viewer, at `at`.
+    fn persons(at: u64) -> Value {
+        json!({"at": at.to_string(), "operation": "input", "ok": true, "actionCount": 1,
+            "actor": "viewer", "elapsedMs": 2.5})
+    }
+
+    /// An agent's click, at `at`.
+    fn agents(at: u64) -> Value {
+        json!({"at": at.to_string(), "operation": "input", "ok": true, "actionCount": 1,
+            "actor": "agent", "verb": "click", "command": format!("{at:012}")})
+    }
+
+    #[test]
+    fn a_run_of_the_persons_input_counts_once_so_agents_rows_stay_in_reach() {
+        let dir = tempfile::tempdir().unwrap();
+        let rows = (0..3)
+            .map(agents)
+            .chain((10..60).map(persons))
+            .chain([agents(70)])
+            .chain((80..90).map(persons));
+        fs::write(dir.path().join(FILE), log(rows)).unwrap();
+
+        let shown = recent(dir.path(), 5);
+        let read = shown
+            .iter()
+            .map(|row| (row.actor(), row.at.as_deref().unwrap(), row.action_count))
+            .collect::<Vec<_>>();
+        assert_eq!(
+            read,
+            [
+                ("viewer", "89", Some(10)),
+                ("agent", "70", Some(1)),
+                ("viewer", "59", Some(50)),
+                ("agent", "2", Some(1)),
+                ("agent", "1", Some(1)),
+            ],
+            "the newest of a run stands for it, with every action it sent"
+        );
+
+        let mut failed = persons(91);
+        failed["ok"] = json!(false);
+        failed["code"] = json!("busy");
+        let mut file = OpenOptions::new()
+            .append(true)
+            .open(dir.path().join(FILE))
+            .unwrap();
+        file.write_all(log([failed]).as_bytes()).unwrap();
+        let shown = recent(dir.path(), 2);
+        assert_eq!(
+            shown.iter().map(Row::failed).collect::<Vec<_>>(),
+            [true, false],
+            "a failure is never folded into input that worked"
+        );
+    }
+
+    #[test]
+    fn a_long_run_of_the_persons_input_past_the_first_tail_still_finds_the_agents_rows_before_it() {
+        let dir = tempfile::tempdir().unwrap();
+        let run = 20_000;
+        let rows = (0..3).map(agents).chain((10..10 + run).map(persons));
+        let text = log(rows);
+        assert!(text.len() as u64 > 10 * TAIL && (text.len() as u64) < READ_LIMIT);
+        fs::write(dir.path().join(FILE), text).unwrap();
+
+        let shown = recent(dir.path(), 200);
+        assert_eq!(shown.len(), 4);
+        assert_eq!(shown[0].action_count, Some(run));
+        assert_eq!(
+            shown[1..]
+                .iter()
+                .map(|row| row.at.as_deref().unwrap())
+                .collect::<Vec<_>>(),
+            ["2", "1", "0"]
+        );
+    }
+
+    #[test]
+    fn the_read_never_goes_past_its_byte_cap() {
+        let dir = tempfile::tempdir().unwrap();
+        let filler = format!("{{\"pad\":\"{}\"}}\n", "x".repeat(1000));
+        let lines = READ_LIMIT as usize / filler.len() + 1;
+        let text = format!(
+            "{}{}{}",
+            log([agents(0)]),
+            filler.repeat(lines),
+            log([agents(9)])
+        );
+        assert!(text.len() as u64 > READ_LIMIT);
+        fs::write(dir.path().join(FILE), &text).unwrap();
+
+        let shown = recent(dir.path(), 5);
+        assert_eq!(
+            shown
+                .iter()
+                .map(|row| row.at.as_deref().unwrap())
+                .collect::<Vec<_>>(),
+            ["9"],
+            "the row past the cap is never reached"
+        );
+
+        let near = format!(
+            "{}{}{}",
+            log([agents(0)]),
+            filler.repeat(lines / 2),
+            log([agents(9)])
+        );
+        fs::write(dir.path().join(FILE), near).unwrap();
+        assert_eq!(recent(dir.path(), 5).len(), 2, "one within it is");
+    }
+
+    /// The `at` of each of `rows`, in order.
+    fn times(rows: &[Row]) -> Vec<&str> {
+        rows.iter()
+            .map(|row| row.at.as_deref().unwrap_or_default())
+            .collect()
+    }
+
+    /// A line that names no operation, about `bytes` long, to fill a log.
+    fn filler(bytes: usize) -> String {
+        format!("{{\"pad\":\"{}\"}}\n", "x".repeat(bytes))
+    }
+
+    #[test]
+    fn right_after_the_log_rotates_the_rows_before_it_still_read() {
+        let dir = tempfile::tempdir().unwrap();
+        fs::write(dir.path().join(PREVIOUS), log((0..5).map(agents))).unwrap();
+        fs::write(dir.path().join(FILE), log((10..12).map(agents))).unwrap();
+
+        assert_eq!(
+            times(&recent(dir.path(), 5)),
+            ["11", "10", "4", "3", "2"],
+            "the new log's rows, then the previous log's newest"
+        );
+        assert_eq!(
+            times(&recent(dir.path(), 2)),
+            ["11", "10"],
+            "the previous log is read only when the new one runs out"
+        );
+
+        fs::remove_file(dir.path().join(FILE)).unwrap();
+        assert_eq!(
+            times(&recent(dir.path(), 2)),
+            ["4", "3"],
+            "nor is it lost in the moment before the new log is made"
+        );
+    }
+
+    #[test]
+    fn a_command_or_a_run_of_the_persons_input_across_the_rotation_is_one_row() {
+        let dir = tempfile::tempdir().unwrap();
+        let step = |at: u64, ok: bool| {
+            json!({"at": at.to_string(), "operation": "input", "ok": ok, "verb": "type",
+                "command": "typing"})
+        };
+        fs::write(dir.path().join(PREVIOUS), log([agents(0), step(1, true)])).unwrap();
+        fs::write(dir.path().join(FILE), log([step(2, false)])).unwrap();
+        assert_eq!(
+            times(&recent(dir.path(), 5)),
+            ["2", "0"],
+            "the newest step stands for its command"
+        );
+
+        fs::write(
+            dir.path().join(PREVIOUS),
+            log([agents(0), persons(1), persons(2)]),
+        )
+        .unwrap();
+        fs::write(dir.path().join(FILE), log([persons(3)])).unwrap();
+        let shown = recent(dir.path(), 5);
+        assert_eq!(times(&shown), ["3", "0"]);
+        assert_eq!(
+            shown[0].action_count,
+            Some(3),
+            "the run counts every action"
+        );
+    }
+
+    #[test]
+    fn the_previous_log_is_read_within_the_same_byte_cap() {
+        let dir = tempfile::tempdir().unwrap();
+        let mib = 1024 * 1024;
+        let current = format!(
+            "{}{}{}",
+            log([agents(5)]),
+            filler(3 * mib),
+            log([agents(9)])
+        );
+        let previous = format!(
+            "{}{}{}",
+            log([agents(0)]),
+            filler(2 * mib),
+            log([agents(1)])
+        );
+        assert!((current.len() as u64) < READ_LIMIT);
+        assert!(((current.len() + previous.len()) as u64) > READ_LIMIT);
+        fs::write(dir.path().join(FILE), current).unwrap();
+        fs::write(dir.path().join(PREVIOUS), previous).unwrap();
+
+        assert_eq!(
+            times(&recent(dir.path(), 5)),
+            ["9", "5", "1"],
+            "the previous log's oldest row is past what one read goes through"
+        );
+    }
+
+    #[test]
+    fn the_previous_log_is_never_read_twice_or_through_a_link() {
+        let dir = tempfile::tempdir().unwrap();
+        fs::write(dir.path().join(FILE), log((0..3).map(agents))).unwrap();
+        fs::hard_link(dir.path().join(FILE), dir.path().join(PREVIOUS)).unwrap();
+        assert_eq!(
+            times(&recent(dir.path(), 10)),
+            ["2", "1", "0"],
+            "the same file under both names, as when the log rotates mid-read"
+        );
+
+        fs::remove_file(dir.path().join(PREVIOUS)).unwrap();
+        let elsewhere = dir.path().join("elsewhere.jsonl");
+        fs::write(&elsewhere, log([agents(7)])).unwrap();
+        std::os::unix::fs::symlink(&elsewhere, dir.path().join(PREVIOUS)).unwrap();
+        assert_eq!(times(&recent(dir.path(), 10)), ["2", "1", "0"]);
     }
 
     #[test]
