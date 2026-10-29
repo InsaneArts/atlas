@@ -18,13 +18,23 @@ use std::{
 /// before the row is written.
 pub(crate) const PERSON_INPUT_SPAN: Duration = Duration::from_secs(5);
 
-/// The person's input through a viewer, gathered into one row a
-/// [`PERSON_INPUT_SPAN`]: their mouse and keyboard send a message every few
-/// milliseconds, and a row for each would push everyone else's work out of
-/// the log's reach. The row counts the actions and takes the newest one's
-/// time; like every row, it keeps no coordinates or text. Clones share it.
-#[derive(Clone, Default)]
-pub(crate) struct PersonInput(Arc<Mutex<Gathering>>);
+/// The person's input through a viewer, gathered into one row a span,
+/// [`PERSON_INPUT_SPAN`] unless made with another: their mouse and keyboard
+/// send a message every few milliseconds, and a row for each would push
+/// everyone else's work out of the log's reach. The row counts the actions
+/// and takes the newest one's time; like every row, it keeps no coordinates
+/// or text. Clones share it.
+#[derive(Clone)]
+pub(crate) struct PersonInput {
+    gathering: Arc<Mutex<Gathering>>,
+    span: Duration,
+}
+
+impl Default for PersonInput {
+    fn default() -> Self {
+        Self::with_span(PERSON_INPUT_SPAN)
+    }
+}
 
 /// The row being gathered, where it goes and since when, and whether its
 /// writing is already timed.
@@ -35,6 +45,19 @@ struct Gathering {
 }
 
 impl PersonInput {
+    /// Input gathered into one row each `span`.
+    pub(crate) fn with_span(span: Duration) -> Self {
+        Self {
+            gathering: Arc::default(),
+            span,
+        }
+    }
+
+    /// How long input gathers into one row before it is written.
+    pub(crate) fn span(&self) -> Duration {
+        self.span
+    }
+
     /// Gather `row`, one input that worked, for `directory`'s log: written
     /// once its span ends, with the earlier gathered row first when that
     /// span has ended or it is for another log.
@@ -42,7 +65,7 @@ impl PersonInput {
         let mut gathering = self.lock();
         if let Some((into, gathered, since)) = gathering.row.as_mut()
             && into == directory
-            && since.elapsed() < PERSON_INPUT_SPAN
+            && since.elapsed() < self.span
         {
             gathered.action_count =
                 Some(gathered.action_count.unwrap_or(0) + row.action_count.unwrap_or(0));
@@ -82,7 +105,9 @@ impl PersonInput {
     }
 
     fn lock(&self) -> std::sync::MutexGuard<'_, Gathering> {
-        self.0.lock().unwrap_or_else(PoisonError::into_inner)
+        self.gathering
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
     }
 }
 
@@ -197,7 +222,7 @@ impl Client {
             && gathering.untimed()
         {
             tokio::spawn(async move {
-                tokio::time::sleep(PERSON_INPUT_SPAN).await;
+                tokio::time::sleep(gathering.span()).await;
                 let _ = tokio::task::spawn_blocking(move || gathering.flush()).await;
             });
         }

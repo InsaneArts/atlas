@@ -2491,17 +2491,23 @@ fn an_install_row_keeps_the_installed_apps_bundle_id() {
 
 /// A viewer's client for `dir`, gathering the person's input as a viewer
 /// does.
-fn persons_client(dir: &Path) -> Client {
+/// A viewer's client in `dir` whose person's input gathers a `span`.
+fn persons_client(dir: &Path, span: Duration) -> Client {
     let mut client = client_in(dir);
     client.actor = Actor::Viewer;
-    client.person_input = Some(PersonInput::default());
+    client.person_input = Some(PersonInput::with_span(span));
     client
 }
+
+/// A span no test outlasts, so gathering never ends while a test runs.
+const LONG_SPAN: Duration = Duration::from_secs(3600);
+/// A span short enough to wait out in a test.
+const SHORT_SPAN: Duration = Duration::from_millis(200);
 
 #[test]
 fn the_persons_input_through_a_viewer_is_one_row_a_span_counting_every_action() {
     let dir = tempfile::tempdir().unwrap();
-    let client = persons_client(dir.path());
+    let client = persons_client(dir.path(), LONG_SPAN);
     let clicked = json!({"op": "input", "actions": [{"type": "click", "x": 412, "y": 96}, {"type": "type", "text": "hunter2"}]});
     for _ in 0..30 {
         client
@@ -2537,8 +2543,14 @@ fn the_persons_input_through_a_viewer_is_one_row_a_span_counting_every_action() 
     client.person_input.as_ref().unwrap().flush().unwrap();
     let text = std::fs::read_to_string(output.join(activity_log::FILE)).unwrap();
     assert_eq!(text.lines().count(), 3);
-    for secret in ["412", "96", "hunter2"] {
-        assert!(!text.contains(secret), "{secret}");
+    // Digits can turn up in a row's times by chance, so coordinates are
+    // looked for as fields, and the typed text as words.
+    assert!(!text.contains("hunter2"), "no typed text");
+    for line in text.lines() {
+        let row: Value = serde_json::from_str(line).unwrap();
+        for field in ["x", "y", "text", "actions"] {
+            assert!(row.get(field).is_none(), "{field} in {line}");
+        }
     }
 
     // An agent's input, and the person's elsewhere, are written at once.
@@ -2546,7 +2558,7 @@ fn the_persons_input_through_a_viewer_is_one_row_a_span_counting_every_action() 
     agent
         .record_blocking(&clicked, &json!({"ok": true}), Duration::ZERO)
         .unwrap();
-    let mut unshared = persons_client(dir.path());
+    let mut unshared = persons_client(dir.path(), LONG_SPAN);
     unshared.person_input = None;
     unshared
         .record_blocking(&clicked, &json!({"ok": true}), Duration::ZERO)
@@ -2555,10 +2567,17 @@ fn the_persons_input_through_a_viewer_is_one_row_a_span_counting_every_action() 
     assert_eq!(text.lines().count(), 5);
 }
 
+#[test]
+fn the_persons_input_gathers_five_seconds_a_row_unless_made_with_another_span() {
+    assert_eq!(PersonInput::default().span(), PERSON_INPUT_SPAN);
+    assert_eq!(PERSON_INPUT_SPAN, Duration::from_secs(5));
+    assert_eq!(PersonInput::with_span(SHORT_SPAN).span(), SHORT_SPAN);
+}
+
 #[tokio::test]
 async fn the_persons_gathered_input_is_written_once_its_span_ends_with_nothing_after_it() {
     let dir = tempfile::tempdir().unwrap();
-    let client = persons_client(dir.path());
+    let client = persons_client(dir.path(), SHORT_SPAN);
     let output = client.output_dir().unwrap().to_path_buf();
     let clicked = json!({"op": "input", "actions": [{"type": "click", "x": 1, "y": 2}]});
     for _ in 0..3 {
@@ -2569,7 +2588,7 @@ async fn the_persons_gathered_input_is_written_once_its_span_ends_with_nothing_a
     }
     assert!(activity_log::recent(&output, 5).is_empty());
 
-    tokio::time::sleep(PERSON_INPUT_SPAN).await;
+    tokio::time::sleep(SHORT_SPAN).await;
     let mut rows = Vec::new();
     for _ in 0..300 {
         rows = activity_log::recent(&output, 5);
