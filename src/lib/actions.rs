@@ -97,8 +97,7 @@ const FIELD_MAX: usize = 256;
 /// The app an agent's batch is for: its process in the helper and, when
 /// named, the window and the field that should have keyboard focus. A
 /// batch that names one is sent only while each action would reach it.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct Expect {
     pid: i32,
     /// The window's number, as the window list gives it.
@@ -130,7 +129,7 @@ impl Expect {
         let window = u32::try_from(number)
             .ok()
             .filter(|number| *number > 0)
-            .ok_or_else(|| Error::new("input", "\"window\" must be a window number"))?;
+            .ok_or_else(not_a_window)?;
         Ok(Self {
             window: Some(window),
             ..self
@@ -142,10 +141,7 @@ impl Expect {
     pub fn in_field(self, name: &str) -> Result<Self> {
         let length = name.chars().count();
         if name.trim().is_empty() || length > FIELD_MAX {
-            return Err(Error::new(
-                "input",
-                format!("\"field\" must be a name of 1 to {FIELD_MAX} characters"),
-            ));
+            return Err(not_a_field());
         }
 
         Ok(Self {
@@ -156,20 +152,34 @@ impl Expect {
 
     /// A request's expectation: none when absent or null. Anything but
     /// `{"pid": N}` naming a process, with at most a window number and a
-    /// field name, is refused, so a member this build does not know is
-    /// never ignored.
+    /// field name, is refused, each member with its own error, so a member
+    /// this build does not know is never ignored.
     pub fn from_request(value: &Value) -> Result<Option<Self>> {
         if value.is_null() {
             return Ok(None);
         }
 
-        let Self { pid, window, field } = Self::deserialize(value).map_err(|_| not_a_process())?;
-        let mut expect = Self::new(pid.into())?;
-        if let Some(window) = window {
-            expect = expect.in_window(window.into())?;
+        let members = value.as_object().ok_or_else(not_a_process)?;
+        if let Some(unknown) = members
+            .keys()
+            .find(|key| !["pid", "window", "field"].contains(&key.as_str()))
+        {
+            return Err(Error::new(
+                "input",
+                format!("\"expect\" has a member this build does not check: {unknown}"),
+            ));
         }
-        if let Some(field) = field {
-            expect = expect.in_field(&field)?;
+
+        let pid = members
+            .get("pid")
+            .and_then(Value::as_i64)
+            .ok_or_else(not_a_process)?;
+        let mut expect = Self::new(pid)?;
+        if let Some(window) = members.get("window") {
+            expect = expect.in_window(window.as_i64().ok_or_else(not_a_window)?)?;
+        }
+        if let Some(field) = members.get("field") {
+            expect = expect.in_field(field.as_str().ok_or_else(not_a_field)?)?;
         }
 
         Ok(Some(expect))
@@ -205,6 +215,17 @@ impl Expect {
 
 fn not_a_process() -> Error {
     Error::new("input", "\"expect\" must name a process ID")
+}
+
+fn not_a_window() -> Error {
+    Error::new("input", "\"window\" must be a window number")
+}
+
+fn not_a_field() -> Error {
+    Error::new(
+        "input",
+        format!("\"field\" must be a name of 1 to {FIELD_MAX} characters"),
+    )
 }
 
 /// CoreGraphics modifier masks (`CGEventFlags`), the flags a chord sends.
@@ -558,18 +579,24 @@ mod tests {
             json!({"pid": 5})
         );
 
-        for refused in [
-            json!({"pid": 5, "window": 0}),
-            json!({"pid": 5, "window": -3}),
-            json!({"pid": 5, "window": "4120"}),
-            json!({"pid": 5, "window": 4294967296_i64}),
-            json!({"pid": 5, "field": ""}),
-            json!({"pid": 5, "field": "  "}),
-            json!({"pid": 5, "field": "x".repeat(FIELD_MAX + 1)}),
-            json!({"pid": 5, "field": 7}),
+        for (refused, member) in [
+            (json!({"pid": 5, "window": 0}), "\"window\""),
+            (json!({"pid": 5, "window": -3}), "\"window\""),
+            (json!({"pid": 5, "window": "4120"}), "\"window\""),
+            (json!({"pid": 5, "window": 4294967296_i64}), "\"window\""),
+            (json!({"pid": 5, "field": ""}), "\"field\""),
+            (json!({"pid": 5, "field": "  "}), "\"field\""),
+            (
+                json!({"pid": 5, "field": "x".repeat(FIELD_MAX + 1)}),
+                "\"field\"",
+            ),
+            (json!({"pid": 5, "field": 7}), "\"field\""),
+            (json!({"window": 4120}), "process ID"),
+            (json!({"pid": 5, "app": "TextEdit"}), "app"),
         ] {
             let error = Expect::from_request(&refused).unwrap_err();
             assert_eq!(error.code, "input", "{refused}");
+            assert!(error.error.contains(member), "{refused}: {}", error.error);
         }
         let longest = json!({"pid": 5, "field": "é".repeat(FIELD_MAX)});
         assert!(Expect::from_request(&longest).is_ok());
