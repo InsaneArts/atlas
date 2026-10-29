@@ -6,7 +6,7 @@ import SwiftUI
 struct GroupedList<Items: RandomAccessCollection, Row: View>: View where Items.Element: Identifiable {
   /// How the group is drawn.
   enum Style: Sendable {
-    /// Radius 12: setup's lists and the Apps tab.
+    /// Radius 12: setup's grouped lists.
     case regular
     /// Radius 10: Settings' groups.
     case compact

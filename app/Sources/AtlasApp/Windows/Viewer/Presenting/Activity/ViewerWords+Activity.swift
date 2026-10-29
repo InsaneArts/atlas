@@ -1,7 +1,7 @@
 import AtlasUI
 import Foundation
 
-/// The Activity tab's words that depend on what it holds: the filters, the summary, the moments, a step's words and
+/// The Activity tab's words that depend on what it holds: the filters, the moments, a step's words and
 /// times, what followed a problem, and the empty messages. Fixed copy, such as Show large, stays in its view.
 extension ViewerWords {
   /// The Activity filters, for VoiceOver.

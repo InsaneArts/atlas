@@ -89,9 +89,6 @@ extension Color {
   /// The accent laid under the current step's row, as a wash: the accent at 0.09.
   static let accentWash = Color.accent
     .opacity(0.09)
-  /// The accent tinting a bar while the person holds control: the accent at 0.07.
-  static let accentTint = Color.accent
-    .opacity(0.07)
   /// A ring in the accent: a rim, a focus ring or a selection's edge: the accent at 0.20.
   static let accentRing = Color.accent
     .opacity(0.2)

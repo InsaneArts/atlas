@@ -180,7 +180,6 @@ struct DesignSystemTests {
   func washesAreTheirBaseAtTheirOpacity() {
     let washes: [(name: String, wash: Color, base: Color, opacity: Float)] = [
       ("accentWash", .accentWash, .accent, 0.09),
-      ("accentTint", .accentTint, .accent, 0.07),
       ("accentRing", .accentRing, .accent, 0.2),
       ("attentionWash", .attentionWash, .attention, 0.09),
       ("attentionFill", .attentionFill, .attention, 0.16),

@@ -19,12 +19,4 @@ enum PictureRing {
   static func outerRadius(around radius: CGFloat) -> CGFloat {
     radius + reach
   }
-
-  /// The ring's inner corner around a picture with corners `radius`: the picture's and the gap.
-  ///
-  /// - Parameter radius: The picture's corner.
-  /// - Returns: The ring's inner corner.
-  static func innerRadius(around radius: CGFloat) -> CGFloat {
-    outerRadius(around: radius) - width
-  }
 }
