@@ -9,7 +9,7 @@
 //! whether the helper has its own state for it. Launching apps and sign-ins
 //! are not verified: credentials are never copied, so only the app can tell.
 use crate::{
-    client::Client,
+    client::{Client, Run},
     environment::{discovery::discover, run as environment_run},
     error::{Code, Error, Result},
     transport::run_output,
@@ -93,7 +93,7 @@ async fn probe(client: &Client, home: &str, name: &str) -> Result<(Value, &'stat
                 "--version".to_owned(),
             ];
 
-            Ok((client.run(argv).await?, "path"))
+            Ok((client.run(argv, Run::held()).await?, "path"))
         }
         Err(error) => Err(error),
     }
@@ -160,13 +160,16 @@ async fn app(client: &Client, name: &str, bundle: &str) -> Result<Value> {
 
     // One app the helper could not look at leaves the others' report whole.
     let reply = client
-        .inspect(vec![
-            "/bin/sh".into(),
-            "-c".into(),
-            script.into(),
-            "sh".into(),
-            bundle.into(),
-        ])
+        .run(
+            vec![
+                "/bin/sh".into(),
+                "-c".into(),
+                script.into(),
+                "sh".into(),
+                bundle.into(),
+            ],
+            Run::inspect(),
+        )
         .await
         .unwrap_or(Value::Null);
 

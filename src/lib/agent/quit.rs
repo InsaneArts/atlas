@@ -3,7 +3,7 @@
 //! or every app also removes the copies `open` made of them.
 use crate::{
     app_selection::{Closing, Process, atlas_bundle, selected},
-    client::Client,
+    client::{Client, Run},
     control::Ownership,
     error::{Code, Error, Result},
     handoff,
@@ -128,7 +128,7 @@ pub(crate) async fn quit_until(
         ]);
     }
 
-    let reply = accepted(client.run_owned(ownership, argv).await?)?;
+    let reply = accepted(client.run(argv, Run::owned(ownership)).await?)?;
     if reply["timedOut"] == true || reply["exitCode"] != 0 {
         return Err(Error::new(
             Code::WaitFailed,

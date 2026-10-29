@@ -2,7 +2,7 @@
 //! through a read-only probe, listed, and waited for until one appears or
 //! none is left.
 use crate::{
-    client::{Client, Verified},
+    client::{Client, Run, Verified},
     error::{Code, Error, Result},
     native::windows::{Shown, Window},
     ui::text::same_text,
@@ -52,14 +52,16 @@ async fn windows(client: &Client) -> Result<Vec<Window>> {
 /// The window list alone, with the helper probe bounded by `limit`.
 async fn window_list(client: &Client, limit: Duration) -> Result<Vec<Window>> {
     let probe = windows_probe(client, DockRead::Skip);
-    let reply = client.inspect_within(probe, limit).await?;
+    let reply = client.run(probe, Run::inspect().within(limit)).await?;
     Ok(shown(&reply)?.windows)
 }
 
 /// The window list and where the Dock takes clicks, to judge a point by.
 pub(super) async fn pointer_view(client: &Client) -> Result<Shown> {
     let probe = windows_probe(client, DockRead::Read);
-    let reply = client.inspect_within(probe, PROBE_LIMIT).await?;
+    let reply = client
+        .run(probe, Run::inspect().within(PROBE_LIMIT))
+        .await?;
     shown(&reply)
 }
 
@@ -70,7 +72,9 @@ pub(super) async fn verified_window_list(
     verified: &Verified,
 ) -> Result<Vec<Window>> {
     let probe = windows_probe(client, DockRead::Skip);
-    let reply = client.inspect_in(verified, probe, PROBE_LIMIT).await?;
+    let reply = client
+        .run(probe, Run::inspect().within(PROBE_LIMIT).pinned(verified))
+        .await?;
     Ok(shown(&reply)?.windows)
 }
 

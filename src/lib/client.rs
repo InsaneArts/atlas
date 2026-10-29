@@ -21,7 +21,7 @@ pub(crate) use capture::prune_captures;
 pub use capture::{Frame, SCREENSHOT_SIDE, Size, png_dimensions};
 pub use input::Check;
 pub use mutate::validate_completion;
-pub(crate) use run::INSPECT_TIMEOUT;
+pub(crate) use run::Run;
 pub use run::{RUN_TIMEOUT, RUN_TIMEOUT_MAX};
 
 use crate::{

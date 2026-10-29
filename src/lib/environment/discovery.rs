@@ -2,7 +2,7 @@
 //! or sources a shell startup file. Presence is not application compatibility.
 use super::{SHARED_BIN, helper_search_path, variable_name as variable};
 use crate::{
-    client::{Client, RUN_TIMEOUT},
+    client::{Client, RUN_TIMEOUT, Run},
     error::{Code, Error, Result},
     session::require_hidden,
     transport::{OutputError, run_output},
@@ -72,7 +72,7 @@ impl Probe {
         ];
         argv.extend_from_slice(args);
 
-        let reply = client.inspect_within(argv, RUN_TIMEOUT).await?;
+        let reply = client.run(argv, Run::inspect().within(RUN_TIMEOUT)).await?;
         if reply["exitCode"] != 0 || reply["timedOut"] == true || !reply["signal"].is_null() {
             return Err(Error::new(
                 Code::Environment,

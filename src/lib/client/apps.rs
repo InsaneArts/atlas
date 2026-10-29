@@ -64,8 +64,8 @@ impl Client {
         read.await.map_err(Error::certain)
     }
 
-    /// [`Client::apps`] in the helper session `verified` names, as
-    /// [`Client::inspect_in`] runs: a daemon that can be told the session
+    /// [`Client::apps`] in the helper session `verified` names, as a pinned
+    /// [`Run`](super::Run) runs: a daemon that can be told the session
     /// refuses the listing in any other, and an older one is verified again.
     pub(crate) async fn apps_in(&self, verified: &Verified) -> Result<Value> {
         let Some(pin) = verified.pin() else {

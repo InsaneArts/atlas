@@ -14,7 +14,7 @@ use super::{
     helper_job, running_developer_id, signature,
 };
 use crate::{
-    client::{Client, timestamp},
+    client::{Client, Run, timestamp},
     config::{Config, home, save_private},
     control::Ownership,
     error::{Code, Error, Result},
@@ -491,7 +491,7 @@ impl Migration {
 
         let outcome = match self
             .client(through)
-            .run_pending(argv, Duration::from_secs(20))
+            .run(argv, Run::pending().within(Duration::from_secs(20)))
             .await
         {
             Ok(reply) if reply["timedOut"] == true || !reply["signal"].is_null() => {
@@ -695,7 +695,7 @@ impl Migration {
         // Inspection is read-only and needs no pending marker.
         let reply = self
             .client(through)
-            .run_pending(argv, Duration::from_secs(20))
+            .run(argv, Run::pending().within(Duration::from_secs(20)))
             .await?;
 
         helper_result(&reply)
@@ -1132,7 +1132,10 @@ pub(crate) async fn managed_job(client: &Client) -> Result<Value> {
     };
 
     let reply = client
-        .run_pending(helper_argv(client, &request)?, Duration::from_secs(20))
+        .run(
+            helper_argv(client, &request)?,
+            Run::pending().within(Duration::from_secs(20)),
+        )
         .await?;
 
     Ok(helper_result(&reply)?["jobs"][LABEL].clone())
@@ -1200,13 +1203,13 @@ async fn plan(config_path: &Path) -> Result<Plan> {
 
     // Inspection is read-only, so it needs no pending marker.
     let reply = client
-        .run_pending(
+        .run(
             helper_argv_with(
                 &client,
                 &request,
                 setup_identity(config.helper_uid, Some(&config_path))?,
             )?,
-            Duration::from_secs(20),
+            Run::pending().within(Duration::from_secs(20)),
         )
         .await?;
     let jobs = helper_result(&reply)?["jobs"].clone();

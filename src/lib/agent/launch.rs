@@ -3,7 +3,7 @@
 //! launchd still holds a finished job for the app or the app is known only
 //! by the task's own install.
 use crate::{
-    client::Client,
+    client::{Client, Run},
     control::Ownership,
     error::{Code, Error, Result},
     handoff, task,
@@ -141,10 +141,10 @@ async fn launch(
     mut argv: Vec<String>,
     named_at: Option<usize>,
 ) -> Result<(Value, bool)> {
-    let mut reply = accepted(client.run_owned(ownership, argv.clone()).await?)?;
+    let mut reply = accepted(client.run(argv.clone(), Run::owned(ownership)).await?)?;
 
     if reply["exitCode"] != 0 && cleared_stale_launch(client, ownership, &reply).await? {
-        reply = accepted(client.run_owned(ownership, argv.clone()).await?)?;
+        reply = accepted(client.run(argv.clone(), Run::owned(ownership)).await?)?;
     }
 
     // An app this task installed that LaunchServices does not know by its
@@ -155,7 +155,7 @@ async fn launch(
         && let Some(path) = crate::install_app::installed_path(client, app).await
     {
         argv[at] = path;
-        reply = accepted(client.run_owned(ownership, argv).await?)?;
+        reply = accepted(client.run(argv, Run::owned(ownership)).await?)?;
         return Ok((reply, true));
     }
 
@@ -224,7 +224,7 @@ async fn cleared_stale_launch(
         "sh".to_owned(),
         bundle.to_owned(),
     ];
-    let cleared = accepted(client.run_owned(ownership, argv).await?)?;
+    let cleared = accepted(client.run(argv, Run::owned(ownership)).await?)?;
 
     Ok(!run_output(&cleared, 4096).unwrap_or_default().is_empty())
 }

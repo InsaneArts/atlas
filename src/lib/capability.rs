@@ -9,7 +9,7 @@
 //! observed. Doctor reports a pass only while that generation is unchanged,
 //! the observation is fresh, and both Save and Open passed.
 use crate::{
-    client::{Client, timestamp},
+    client::{Client, Run, timestamp},
     config::home,
     control::Ownership,
     error::{Code, Error, Result},
@@ -451,7 +451,7 @@ impl Canary<'_> {
     }
 
     async fn run(&self, argv: Vec<String>) -> Result<Value> {
-        self.client.run_owned(self.ownership, argv).await
+        self.client.run(argv, Run::owned(self.ownership)).await
     }
 
     async fn keys(&self, actions: Value) -> Result<()> {
@@ -864,8 +864,7 @@ async fn launch(client: &Client, ownership: &Ownership, program: &Path) -> Resul
     );
 
     let reply = client
-        .run_owned(
-            ownership,
+        .run(
             vec![
                 "/bin/sh".into(),
                 "-c".into(),
@@ -873,6 +872,7 @@ async fn launch(client: &Client, ownership: &Ownership, program: &Path) -> Resul
                 "sh".into(),
                 program.to_string_lossy().into_owned(),
             ],
+            Run::owned(ownership),
         )
         .await?;
 

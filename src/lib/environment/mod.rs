@@ -18,7 +18,7 @@ mod undo;
 mod worker;
 
 use crate::{
-    client::Client,
+    client::{Client, Run},
     config::parse_toml,
     control::Ownership,
     error::{Code, Error, Result},
@@ -875,7 +875,7 @@ async fn dispatch_as(
 
     let result = match ownership {
         None => client
-            .inspect_within(argv, timeout)
+            .run(argv, Run::inspect().within(timeout))
             .await
             .and_then(|reply| decode_reply(&reply, false, &name)),
         Some(ownership) => change(client, ownership, argv, timeout, raw_output, &name).await,

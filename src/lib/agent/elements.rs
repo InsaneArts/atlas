@@ -9,7 +9,7 @@ use super::{
 };
 use crate::{
     actions::{Button, Expect},
-    client::{Check, Client, Verified},
+    client::{Check, Client, Run, Verified},
     daemon::protocol::{Crop, Region},
     error::{Code, Error, Result},
     native::{
@@ -138,9 +138,7 @@ pub(super) const WITHHELD_NEXT: &str = "Ask the person to unlock the Mac: apps h
 async fn app_elements(client: &Client, verified: &Verified, pid: i64) -> Result<Scanned> {
     let probe = client.config.identity_probe.to_string_lossy().into_owned();
     let argv = vec![probe, "elements-info".into(), pid.to_string()];
-    let reply = client
-        .inspect_in(verified, argv, crate::client::INSPECT_TIMEOUT)
-        .await?;
+    let reply = client.run(argv, Run::inspect().pinned(verified)).await?;
     let value = run_output(&reply, 8 << 20)
         .ok()
         .and_then(|bytes| serde_json::from_slice::<Value>(&bytes).ok())
