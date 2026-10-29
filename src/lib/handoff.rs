@@ -472,7 +472,7 @@ fn handed_in(
 impl Owner<'_> {
     /// Label `copied`, a copy of `path` just made, with the host session it
     /// was made for and the app its files are opened with. A lost session
-    /// label leaves the copy everyone's, as before.
+    /// label leaves the copy everyone's, like a copy made with no session.
     fn mark(&self, path: &Path, copied: &Path) -> Result<()> {
         let Some(folder) = copied.parent() else {
             return Ok(());
@@ -719,7 +719,7 @@ impl Removed {
 /// except any in use by an app in `running` (from a list the helper gave
 /// once `app` was gone) and, for a command of host `session`, any another
 /// session made or whose label cannot be read. Without a session, every
-/// copy not in use goes, as it always did: a session only ever keeps more.
+/// copy not in use goes: a session only ever keeps more.
 pub(crate) fn remove_copies_in(
     root: &Path,
     app: &str,
@@ -1325,7 +1325,7 @@ mod tests {
         assert_eq!(
             (removed.folders.len(), removed.kept_others),
             (3, 0),
-            "as before"
+            "without a session every copy not in use goes"
         );
         assert!(busy.exists(), "one in use always stays");
     }
