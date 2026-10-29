@@ -487,16 +487,29 @@ fn place(
     };
 
     guard()?;
-    let copied = Command::new("/usr/bin/ditto")
-        .arg("--noacl")
-        .arg(source)
-        .arg(&staged)
-        .output()?;
-    if !copied.status.success() {
-        return give_up(
-            record,
-            refused("The helper could not copy that app; check it can be read"),
-        );
+    let copied = crate::bounded::output(
+        Command::new("/usr/bin/ditto")
+            .arg("--noacl")
+            .arg(source)
+            .arg(&staged),
+        crate::bounded::COPY,
+    );
+    match copied {
+        Ok(copied) if copied.status.success() => {}
+        Ok(_) => {
+            return give_up(
+                record,
+                refused("The helper could not copy that app; check it can be read"),
+            );
+        }
+        // A copy cut short at its deadline leaves part of the app staged.
+        Err(error) if error.kind() == std::io::ErrorKind::TimedOut => {
+            return give_up(
+                record,
+                refused("The helper could not copy that app in time"),
+            );
+        }
+        Err(error) => return Err(error.into()),
     }
 
     let plist = staged.join("Contents/Info.plist");
@@ -579,11 +592,13 @@ fn plain_identifier(id: &str) -> bool {
 
 /// One string `plist` holds at `key`, by plutil.
 fn bundle_value(plist: &Path, key: &str) -> Option<String> {
-    let output = Command::new("/usr/bin/plutil")
-        .args(["-extract", key, "raw", "-o", "-"])
-        .arg(plist)
-        .output()
-        .ok()?;
+    let output = crate::bounded::output(
+        Command::new("/usr/bin/plutil")
+            .args(["-extract", key, "raw", "-o", "-"])
+            .arg(plist),
+        crate::bounded::FILE,
+    )
+    .ok()?;
     let value = String::from_utf8(output.stdout).ok()?;
     let value = value.trim();
     (output.status.success() && !value.is_empty() && value.len() <= 255).then(|| value.to_owned())

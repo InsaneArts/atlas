@@ -793,9 +793,10 @@ fn descriptor_acl(file: &fs::File) -> Result<bool> {
 /// The helper's short name, as an ACL entry names it. Resolved once per
 /// operation and passed to every allow_helper of it.
 pub(super) fn helper_name(uid: u32) -> Result<String> {
-    let identity = Command::new("/usr/bin/id")
-        .args(["-un", &uid.to_string()])
-        .output()?;
+    let identity = crate::bounded::output(
+        Command::new("/usr/bin/id").args(["-un", &uid.to_string()]),
+        crate::bounded::LOOKUP,
+    )?;
     let name =
         String::from_utf8(identity.stdout).map_err(|_| problem("Invalid helper short name"))?;
     let name = name.trim();
@@ -825,10 +826,12 @@ pub(super) fn allow_helper(path: &Path, helper: &str, executable: bool) -> Resul
         "read,readattr,readsecurity"
     };
 
-    let output = Command::new("/bin/chmod")
-        .args(["+a", &format!("user:{helper} allow {rights}")])
-        .arg(path)
-        .output()?;
+    let output = crate::bounded::output(
+        Command::new("/bin/chmod")
+            .args(["+a", &format!("user:{helper} allow {rights}")])
+            .arg(path),
+        crate::bounded::FILE,
+    )?;
     if !output.status.success() {
         let reason = String::from_utf8_lossy(&output.stderr);
         let reason = reason.trim();

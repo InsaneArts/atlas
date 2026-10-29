@@ -18,7 +18,7 @@ use std::{
     io::Write,
     os::unix::fs::{DirBuilderExt, MetadataExt, OpenOptionsExt, PermissionsExt},
     path::{Path, PathBuf},
-    process::{Command, Stdio},
+    process::Command,
     time::Duration,
 };
 
@@ -81,7 +81,7 @@ fn root(helper: u32) -> Result<PathBuf> {
             account.name
         );
         for args in [vec!["-N"], vec!["+a", grant.as_str()]] {
-            quiet("/bin/chmod", &args, &root)
+            quiet("/bin/chmod", &args, &root, crate::bounded::FILE)
                 .map_err(|_| problem(format!("Could not let the helper into {ROOT}")))?;
         }
     }
@@ -91,13 +91,10 @@ fn root(helper: u32) -> Result<PathBuf> {
 
 /// Whether `folder`'s only access entry is the helper's inherited read grant.
 fn granted(folder: &Path, account: &str) -> bool {
-    let Ok(output) = Command::new("/bin/ls")
-        .arg("-lde")
-        .arg(folder)
-        .stdin(Stdio::null())
-        .stderr(Stdio::null())
-        .output()
-    else {
+    let Ok(output) = crate::bounded::output(
+        Command::new("/bin/ls").arg("-lde").arg(folder),
+        crate::bounded::FILE,
+    ) else {
         return false;
     };
 
@@ -136,17 +133,12 @@ fn granted(folder: &Path, account: &str) -> bool {
     entries.len() == 1 && rights == wanted
 }
 
-/// Run a system tool on `path`, quietly, failing when the tool does.
-fn quiet(tool: &str, args: &[&str], path: &Path) -> Result<()> {
-    let status = Command::new(tool)
-        .args(args)
-        .arg(path)
-        .stdin(Stdio::null())
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .status()?;
+/// Run a system tool on `path`, quietly, for `limit` at most, failing when
+/// the tool does or takes longer.
+fn quiet(tool: &str, args: &[&str], path: &Path, limit: Duration) -> Result<()> {
+    let output = crate::bounded::output(Command::new(tool).args(args).arg(path), limit)?;
 
-    if status.success() {
+    if output.status.success() {
         Ok(())
     } else {
         Err(problem(format!("{tool} failed on {}", path.display())))
@@ -502,8 +494,9 @@ fn copy(path: &Path, root: &Path, token: &Token) -> Result<PathBuf> {
         "/usr/bin/ditto",
         &["--noacl", &path.to_string_lossy()],
         &copy,
+        crate::bounded::COPY,
     )
-    .and_then(|()| quiet("/bin/chmod", &["-R", "go-w"], &copy));
+    .and_then(|()| quiet("/bin/chmod", &["-R", "go-w"], &copy, crate::bounded::COPY));
     if made.is_err() {
         let _ = fs::remove_dir_all(&folder);
         return Err(problem(format!(
@@ -664,14 +657,14 @@ fn names(copy: &Path) -> Vec<String> {
 
 /// One string from a bundle's Info.plist.
 fn bundle_value(bundle: &Path, key: &str) -> Option<String> {
-    let output = Command::new("/usr/libexec/PlistBuddy")
-        .arg("-c")
-        .arg(format!("Print :{key}"))
-        .arg(bundle.join("Contents/Info.plist"))
-        .stdin(Stdio::null())
-        .stderr(Stdio::null())
-        .output()
-        .ok()?;
+    let output = crate::bounded::output(
+        Command::new("/usr/libexec/PlistBuddy")
+            .arg("-c")
+            .arg(format!("Print :{key}"))
+            .arg(bundle.join("Contents/Info.plist")),
+        crate::bounded::FILE,
+    )
+    .ok()?;
 
     output
         .status
@@ -1062,13 +1055,25 @@ mod tests {
         );
         let grant_with_write = format!("{grant},write,add_file");
 
-        quiet("/bin/chmod", &["+a", &grant], dir.path()).unwrap();
+        quiet(
+            "/bin/chmod",
+            &["+a", &grant],
+            dir.path(),
+            crate::bounded::FILE,
+        )
+        .unwrap();
         assert!(granted(dir.path(), &me));
         assert!(!granted(dir.path(), "someone-else"));
 
         // A grant that also lets the helper write is not the one wanted.
         let other = tempfile::tempdir().unwrap();
-        quiet("/bin/chmod", &["+a", &grant_with_write], other.path()).unwrap();
+        quiet(
+            "/bin/chmod",
+            &["+a", &grant_with_write],
+            other.path(),
+            crate::bounded::FILE,
+        )
+        .unwrap();
         assert!(!granted(other.path(), &me));
     }
 

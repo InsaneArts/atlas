@@ -37,9 +37,10 @@ impl Looks<'static> {
 /// The helper's own processes, from `ps`.
 fn helper_processes() -> Result<Vec<(u32, String)>> {
     let uid = nix::unistd::getuid().as_raw().to_string();
-    let output = Command::new("/bin/ps")
-        .args(["-U", &uid, "-o", "pid=,comm="])
-        .output()?;
+    let output = crate::bounded::output(
+        Command::new("/bin/ps").args(["-U", &uid, "-o", "pid=,comm="]),
+        crate::bounded::LOOKUP,
+    )?;
     if !output.status.success() {
         return Err(problem("Could not list the helper's processes"));
     }
