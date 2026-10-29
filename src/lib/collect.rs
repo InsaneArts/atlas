@@ -7,38 +7,34 @@
 //! is never held whole. A copy is kept only once its size and SHA-256 match
 //! what the helper read, and under a name nothing else has: it is linked
 //! into place, never written over anything.
+mod receipt;
+mod scavenge;
+
+pub(crate) use receipt::{Intact, intact};
+pub use receipt::{Kept, ReadSpan, ReceiptId};
+
 use crate::{
     client::Client,
     daemon::protocol::{
-        FileIdentity, READ, READ_PATH_MAX, READ_RANGE_MAX, READ_SIZE_MAX, SessionPin,
+        FileIdentity, READ, READ_PATH_MAX, READ_RANGE_MAX, READ_SIZE_MAX, ReadRefusal, SessionPin,
     },
-    digest::file_sha256,
     error::{Code, Error, Result},
     files::write_private,
-    host_session::{Key, now_ms},
-    name::{lower_hex, name_type, random_hex},
+    host_session::now_ms,
     task::{record::OutputEntry, store::Store},
     transport::{OutputError, append_event},
 };
-use nix::{
-    dir::{Dir, Type},
-    fcntl::{AtFlags, OFlag},
-    sys::stat::{FileStat, Mode, SFlag, fstat, fstatat},
-    unistd::{UnlinkatFlags, unlinkat},
-};
-use serde::{Deserialize, Serialize};
+use receipt::{Receipt, VERSION};
+use scavenge::remove_abandoned;
 use serde_json::{Map, Value, json};
 use sha2::{Digest, Sha256};
 use std::{
-    ffi::{CStr, CString},
     fs::{self, File, OpenOptions},
     io::Write,
     os::unix::fs::{DirBuilderExt, MetadataExt, OpenOptionsExt},
     path::{Component, Path, PathBuf},
-    time::{Duration, Instant, SystemTime, UNIX_EPOCH},
+    time::Instant,
 };
-
-use crate::daemon::protocol::ReadRefusal;
 
 /// The most files one call collects.
 pub const MAX_FILES: usize = 16;
@@ -50,95 +46,12 @@ pub const DEFAULT_SIZE: u64 = 64 << 20;
 const OLDER: &str = "The helper is running an older Atlas that cannot collect files; run atlas restart, then try again";
 /// Room left free beside a copy, so collecting never fills the disk.
 const ROOM: u64 = 64 << 20;
-/// A partial file older than this was left by a collection that was killed.
-const ABANDONED: Duration = Duration::from_secs(60 * 60);
 /// The folder in the output folder that keeps collected copies.
 const COLLECTED: &str = "collected";
 /// The folder of the copies of a command with no task.
 const UNLABELLED: &str = "unlabelled";
-/// The receipt format this build writes.
-const VERSION: u32 = 1;
 /// The longest a file name may be, in bytes.
 const NAME_MAX: usize = 255;
-
-name_type! {
-    /// A collection's receipt: when it was made, in milliseconds since
-    /// 1970, and six random hexadecimal digits, so two collections never
-    /// share one.
-    #[derive(Hash)]
-    pub struct ReceiptId;
-    refused(text) = format!("{text} is not a collection's receipt");
-    display
-}
-
-impl ReceiptId {
-    /// A new receipt, made at `at`.
-    fn new(at: u64) -> Self {
-        Self(format!("{at}-{}", random_hex(6)))
-    }
-
-    /// `text` as a receipt, when it is one of Atlas's.
-    pub fn parse(text: &str) -> Option<Self> {
-        let (at, random) = text.split_once('-')?;
-        let at_ok =
-            !at.is_empty() && at.len() <= 20 && at.bytes().all(|byte| byte.is_ascii_digit());
-        (at_ok && lower_hex(random, 6)).then(|| Self(text.to_owned()))
-    }
-}
-
-/// One file a collection kept: where it was in the helper, where its copy
-/// is, and what the copy must still be.
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub struct Kept {
-    pub source: String,
-    /// The source relative to the helper's home, when it is in it.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub in_home: Option<String>,
-    pub path: PathBuf,
-    pub size: u64,
-    pub sha256: String,
-    /// When this version of the source was read, by this Mac's clock;
-    /// none in a receipt from before Atlas kept it.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub read: Option<ReadSpan>,
-}
-
-/// When one version of a file was read: from its first part to its
-/// verified digest, in milliseconds since 1970 by this Mac's clock. The
-/// bytes kept are the file as it stood somewhere in between.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub struct ReadSpan {
-    pub started: u64,
-    pub finished: u64,
-}
-
-impl ReadSpan {
-    /// Whether this span can be trusted to order versions, for a collection
-    /// made at `collected`: a clock that moved backwards while it was read,
-    /// or since the collection began, leaves it out of order.
-    pub fn trusted(&self, collected: u64) -> bool {
-        collected <= self.started && self.started <= self.finished
-    }
-
-    /// Whether this version was read wholly before `other` began: only then
-    /// is `other` the newer of the two.
-    pub fn before(&self, other: &Self) -> bool {
-        self.finished < other.started
-    }
-}
-
-/// A collection's receipt file, beside its copies.
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub(crate) struct Receipt {
-    pub version: u32,
-    pub receipt: ReceiptId,
-    pub at: u64,
-    pub task: Option<Key>,
-    pub files: Vec<Kept>,
-}
 
 /// Why one file was not collected.
 #[derive(Debug, PartialEq, Eq)]
@@ -248,6 +161,45 @@ async fn collected(
     let folder = private_folders(output, &[COLLECTED, &owner, receipt.as_str()])?;
     let copies = private_folders(&folder, &["files"])?;
 
+    let Copied {
+        kept,
+        failed,
+        total,
+    } = copy_each(client, pin, files, max_size, &folder, &copies).await;
+    let receipt = write_receipt(client, &folder, receipt, at, &kept)?;
+    let warnings = note_output(client, output, receipt.as_ref(), at, &kept, total);
+
+    let _ = client
+        .record(
+            &json!({"op": "collect"}),
+            &json!({"ok": failed.is_empty(), "count": kept.len(), "bytes": total,
+            "code": (!failed.is_empty()).then_some("collect")}),
+            started.elapsed(),
+        )
+        .await;
+
+    Ok(reply(files.len(), receipt, kept, failed, &warnings))
+}
+
+/// What a call's files came to: the copies kept, the files that failed
+/// and why, and the bytes kept, every copy together.
+struct Copied {
+    kept: Vec<Kept>,
+    failed: Vec<(String, Failure)>,
+    total: u64,
+}
+
+/// Collect each of `files` in turn, its partial file in `folder` and its
+/// copy in `copies`. Once the helper itself changed, every later file is
+/// refused unread.
+async fn copy_each(
+    client: &Client,
+    pin: Option<SessionPin>,
+    files: &[String],
+    max_size: u64,
+    folder: &Path,
+    copies: &Path,
+) -> Copied {
     let mut kept: Vec<Kept> = Vec::new();
     let mut failed: Vec<(String, Failure)> = Vec::new();
     let mut total = 0;
@@ -269,7 +221,7 @@ async fn collected(
             max_size,
             room: MAX_TOTAL.saturating_sub(total),
             partial: folder.join(format!(".{n}.partial")),
-            copies: &copies,
+            copies,
             taken: &names,
         };
         match plan.collect(client, pin).await {
@@ -283,24 +235,49 @@ async fn collected(
             }
         }
     }
+    Copied {
+        kept,
+        failed,
+        total,
+    }
+}
 
-    let receipt = if kept.is_empty() {
-        let _ = fs::remove_dir_all(&folder);
-        None
-    } else {
-        let written = Receipt {
-            version: VERSION,
-            receipt: receipt.clone(),
-            at,
-            task: client.task.as_ref().map(|task| task.key().clone()),
-            files: kept.clone(),
-        };
-        write_private(&folder.join("receipt.json"), &serde_json::to_vec(&written)?)?;
-        Some(receipt)
+/// Write the receipt of the copies `kept` into `folder`, made at `at`: the
+/// receipt, or none, and the folder removed, when nothing was kept.
+fn write_receipt(
+    client: &Client,
+    folder: &Path,
+    receipt: ReceiptId,
+    at: u64,
+    kept: &[Kept],
+) -> Result<Option<ReceiptId>> {
+    if kept.is_empty() {
+        let _ = fs::remove_dir_all(folder);
+        return Ok(None);
+    }
+    let written = Receipt {
+        version: VERSION,
+        receipt: receipt.clone(),
+        at,
+        task: client.task.as_ref().map(|task| task.key().clone()),
+        files: kept.to_vec(),
     };
+    write_private(&folder.join("receipt.json"), &serde_json::to_vec(&written)?)?;
+    Ok(Some(receipt))
+}
 
+/// Note the collection `receipt` in its task's record in `output`: the
+/// warnings, when it could not be.
+fn note_output(
+    client: &Client,
+    output: &Path,
+    receipt: Option<&ReceiptId>,
+    at: u64,
+    kept: &[Kept],
+    total: u64,
+) -> Vec<&'static str> {
     let mut warnings = Vec::new();
-    if let (Some(receipt), Some(task)) = (&receipt, &client.task) {
+    if let (Some(receipt), Some(task)) = (receipt, &client.task) {
         let entry = OutputEntry {
             receipt: receipt.clone(),
             at,
@@ -316,16 +293,18 @@ async fn collected(
             warnings.push("Atlas could not note this collection in the task's record");
         }
     }
+    warnings
+}
 
-    let _ = client
-        .record(
-            &json!({"op": "collect"}),
-            &json!({"ok": failed.is_empty(), "count": kept.len(), "bytes": total,
-            "code": (!failed.is_empty()).then_some("collect")}),
-            started.elapsed(),
-        )
-        .await;
-
+/// The reply to a call that asked for `asked` files: its receipt, the
+/// copies kept, and, when any failed, which and why.
+fn reply(
+    asked: usize,
+    receipt: Option<ReceiptId>,
+    kept: Vec<Kept>,
+    failed: Vec<(String, Failure)>,
+    warnings: &[&str],
+) -> Value {
     let mut reply = json!({
         "ok": failed.is_empty(),
         "receipt": receipt,
@@ -337,12 +316,8 @@ async fn collected(
         reply["error"] = json!(format!(
             "{} of {} {} not collected",
             failed.len(),
-            files.len(),
-            if files.len() == 1 {
-                "file was"
-            } else {
-                "files were"
-            }
+            asked,
+            if asked == 1 { "file was" } else { "files were" }
         ));
         reply["failed"] = failed
             .into_iter()
@@ -354,7 +329,7 @@ async fn collected(
     if !warnings.is_empty() {
         reply["warnings"] = json!(warnings);
     }
-    Ok(reply)
+    reply
 }
 
 /// Why `source` is refused before it is sent: a path, not a pattern, with
@@ -393,6 +368,14 @@ struct One<'a> {
     taken: &'a [&'a str],
 }
 
+/// What the helper said of a file it sent whole: the version read, the
+/// path it read, and that path relative to its home, when it is in it.
+struct Received {
+    identity: FileIdentity,
+    real: String,
+    in_home: Option<String>,
+}
+
 impl One<'_> {
     /// Collect it, removing whatever was begun when it fails.
     async fn collect(
@@ -411,6 +394,46 @@ impl One<'_> {
         pin: Option<SessionPin>,
     ) -> std::result::Result<Kept, Failure> {
         let fail = |reason| Failure::new(reason, self.source);
+        let name = self.name()?;
+
+        let started = now_ms();
+        let mut partial = OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .mode(0o600)
+            .custom_flags(libc::O_NOFOLLOW)
+            .open(&self.partial)
+            .map_err(|_| fail(ReadRefusal::Space))?;
+        let mut hasher = Sha256::new();
+        let Received {
+            identity,
+            real,
+            in_home,
+        } = self.receive(client, pin, &mut partial, &mut hasher).await?;
+        let sha256 = crate::name::hex(&hasher.finalize());
+        self.confirm(client, pin, identity, &mut partial, &sha256)
+            .await?;
+        partial.sync_all().map_err(|_| fail(ReadRefusal::Space))?;
+        drop(partial);
+
+        let path = self.link(name)?;
+        Ok(Kept {
+            source: real,
+            in_home,
+            path,
+            size: identity.size,
+            sha256,
+            read: Some(ReadSpan {
+                started,
+                finished: now_ms(),
+            }),
+        })
+    }
+
+    /// The name its copy takes: the source's own, when it can be a file
+    /// here and no file collected before it in this call has it.
+    fn name(&self) -> std::result::Result<&str, Failure> {
+        let fail = |reason| Failure::new(reason, self.source);
         let name = Path::new(self.source)
             .file_name()
             .and_then(|name| name.to_str())
@@ -425,16 +448,20 @@ impl One<'_> {
         {
             return Err(fail(ReadRefusal::Exists));
         }
+        Ok(name)
+    }
 
-        let started = now_ms();
-        let mut partial = OpenOptions::new()
-            .write(true)
-            .create_new(true)
-            .mode(0o600)
-            .custom_flags(libc::O_NOFOLLOW)
-            .open(&self.partial)
-            .map_err(|_| fail(ReadRefusal::Space))?;
-        let mut hasher = Sha256::new();
+    /// Read the file part by part into `partial`, hashing each part, every
+    /// part of the same version as the first: once the first says how large
+    /// it is, it must fit what is left of the call and of the disk.
+    async fn receive(
+        &self,
+        client: &Client,
+        pin: Option<SessionPin>,
+        partial: &mut File,
+        hasher: &mut Sha256,
+    ) -> std::result::Result<Received, Failure> {
+        let fail = |reason| Failure::new(reason, self.source);
         let mut identity: Option<FileIdentity> = None;
         let mut real = String::new();
         let mut in_home = None;
@@ -453,7 +480,7 @@ impl One<'_> {
             if let Some(pin) = pin {
                 request["session"] = json!(pin);
             }
-            let (reply, received) = read_part(client, &request, &mut partial, &mut hasher).await?;
+            let (reply, received) = read_part(client, &request, partial, hasher).await?;
             let file: FileIdentity = serde_json::from_value(json!({
                 "dev": reply["file"]["dev"],
                 "ino": reply["file"]["ino"],
@@ -492,7 +519,23 @@ impl One<'_> {
         if offset != identity.size {
             return Err(fail(ReadRefusal::Changing));
         }
+        Ok(Received {
+            identity,
+            real,
+            in_home,
+        })
+    }
 
+    /// Check that the helper's digest of the version `identity` is
+    /// `sha256`, the digest of the parts it sent.
+    async fn confirm(
+        &self,
+        client: &Client,
+        pin: Option<SessionPin>,
+        identity: FileIdentity,
+        partial: &mut File,
+        sha256: &str,
+    ) -> std::result::Result<(), Failure> {
         let mut request = json!({
             "op": "read",
             "path": self.source,
@@ -504,33 +547,25 @@ impl One<'_> {
         if let Some(pin) = pin {
             request["session"] = json!(pin);
         }
-        let (reply, _) = read_part(client, &request, &mut partial, &mut Sha256::new()).await?;
-        let sha256 = crate::name::hex(&hasher.finalize());
-        if reply["sha256"].as_str() != Some(sha256.as_str()) {
-            return Err(fail(ReadRefusal::Changing));
+        let (reply, _) = read_part(client, &request, partial, &mut Sha256::new()).await?;
+        if reply["sha256"].as_str() != Some(sha256) {
+            return Err(Failure::new(ReadRefusal::Changing, self.source));
         }
-        partial.sync_all().map_err(|_| fail(ReadRefusal::Space))?;
-        drop(partial);
+        Ok(())
+    }
 
+    /// Link the finished partial file into the copies folder as `name`,
+    /// never over anything: the copy's path.
+    fn link(&self, name: &str) -> std::result::Result<PathBuf, Failure> {
+        let fail = |reason| Failure::new(reason, self.source);
         let path = self.copies.join(name);
         match fs::hard_link(&self.partial, &path) {
-            Ok(()) => {}
+            Ok(()) => Ok(path),
             Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {
-                return Err(fail(ReadRefusal::Exists));
+                Err(fail(ReadRefusal::Exists))
             }
-            Err(_) => return Err(fail(ReadRefusal::Space)),
+            Err(_) => Err(fail(ReadRefusal::Space)),
         }
-        Ok(Kept {
-            source: real,
-            in_home,
-            path,
-            size: identity.size,
-            sha256,
-            read: Some(ReadSpan {
-                started,
-                finished: now_ms(),
-            }),
-        })
     }
 }
 
@@ -641,194 +676,6 @@ fn private_folders(root: &Path, levels: &[&str]) -> Result<PathBuf> {
         }
     }
     Ok(folder)
-}
-
-/// Remove what collections killed partway left under `root`, the collected
-/// folder, once it is an hour old: the partial files in each receipt's
-/// folder, and the folder of a collection that never wrote its receipt,
-/// whose copies were never reported. Every level is opened from the one
-/// above it without following a link, and must be a private folder of
-/// this account named as Atlas names them: anything else is left alone.
-fn remove_abandoned(root: &Path) {
-    let Some(mut root) = private_dir(Dir::open(root, directory_flags(), Mode::empty())) else {
-        return;
-    };
-    for owner in names(&mut root) {
-        let known = owner
-            .to_str()
-            .is_ok_and(|name| name == UNLABELLED || Key::parse(name).is_some());
-        if !known {
-            continue;
-        }
-        let Some(mut receipts) = private_dir(Dir::openat(
-            &root,
-            owner.as_c_str(),
-            directory_flags(),
-            Mode::empty(),
-        )) else {
-            continue;
-        };
-        for receipt in names(&mut receipts) {
-            let named = receipt
-                .to_str()
-                .is_ok_and(|name| ReceiptId::parse(name).is_some());
-            if named {
-                scavenge(&receipts, &receipt);
-            }
-        }
-    }
-}
-
-/// Clear what a collection killed partway left in the receipt folder
-/// `name` of `parent`.
-fn scavenge(parent: &Dir, name: &CStr) {
-    let Ok(stat) = fstatat(parent, name, AtFlags::AT_SYMLINK_NOFOLLOW) else {
-        return;
-    };
-    let stale = old(&stat);
-    let Some(mut folder) = private_dir(Dir::openat(parent, name, directory_flags(), Mode::empty()))
-    else {
-        return;
-    };
-    let entries = names(&mut folder);
-    let receipted = entries
-        .iter()
-        .any(|entry| entry.as_bytes() == b"receipt.json");
-    for entry in &entries {
-        let partial = entry
-            .to_str()
-            .is_ok_and(|entry| entry.starts_with('.') && entry.ends_with(".partial"));
-        if partial || (stale && !receipted) {
-            remove_file_at(&folder, entry);
-        }
-    }
-    if stale && !receipted {
-        if let Some(mut files) = private_dir(Dir::openat(
-            &folder,
-            c"files",
-            directory_flags(),
-            Mode::empty(),
-        )) {
-            for entry in names(&mut files) {
-                remove_file_at(&files, &entry);
-            }
-            drop(files);
-            let _ = unlinkat(&folder, c"files", UnlinkatFlags::RemoveDir);
-        }
-        drop(folder);
-        let _ = unlinkat(parent, name, UnlinkatFlags::RemoveDir);
-    }
-}
-
-/// Remove the regular file `name` of `folder` once it is an hour old:
-/// never a link or a folder.
-fn remove_file_at(folder: &Dir, name: &CStr) {
-    if stale_file(folder, name) {
-        let _ = unlinkat(folder, name, UnlinkatFlags::NoRemoveDir);
-    }
-}
-
-/// Whether `name` of `folder` is a regular file, itself and not a link,
-/// that last changed over an hour ago.
-fn stale_file(folder: &Dir, name: &CStr) -> bool {
-    fstatat(folder, name, AtFlags::AT_SYMLINK_NOFOLLOW).is_ok_and(|stat| {
-        SFlag::from_bits_truncate(stat.st_mode & SFlag::S_IFMT.bits()) == SFlag::S_IFREG
-            && old(&stat)
-    })
-}
-
-/// Whether what `stat` describes last changed over an hour ago.
-fn old(stat: &FileStat) -> bool {
-    let changed = UNIX_EPOCH + Duration::from_secs(u64::try_from(stat.st_mtime).unwrap_or(0));
-    SystemTime::now()
-        .duration_since(changed)
-        .is_ok_and(|age| age > ABANDONED)
-}
-
-/// How each level of the collected folder is opened: a folder, never
-/// through a link.
-fn directory_flags() -> OFlag {
-    OFlag::O_RDONLY | OFlag::O_DIRECTORY | OFlag::O_NOFOLLOW | OFlag::O_CLOEXEC
-}
-
-/// The folder `opened`, when it is a private folder of this account.
-fn private_dir(opened: nix::Result<Dir>) -> Option<Dir> {
-    let folder = opened.ok()?;
-    let stat = fstat(&folder).ok()?;
-    let directory =
-        SFlag::from_bits_truncate(stat.st_mode & SFlag::S_IFMT.bits()) == SFlag::S_IFDIR;
-    let private = stat.st_uid == nix::unistd::getuid().as_raw() && stat.st_mode & 0o077 == 0;
-    (directory && private).then_some(folder)
-}
-
-/// The names in `folder`, but `.` and `..`, and links, which are never
-/// followed.
-fn names(folder: &mut Dir) -> Vec<CString> {
-    folder
-        .iter()
-        .flatten()
-        .filter(|entry| !matches!(entry.file_name().to_bytes(), b"." | b".."))
-        .filter(|entry| entry.file_type() != Some(Type::Symlink))
-        .map(|entry| entry.file_name().to_owned())
-        .collect()
-}
-
-/// How a collection's copies stand now.
-#[derive(Clone, Debug, Default, PartialEq, Eq)]
-pub(crate) struct Intact {
-    /// The files whose copies are as they were collected.
-    pub kept: Vec<Kept>,
-    /// The files whose copies are gone.
-    pub missing: Vec<Kept>,
-    /// The files whose copies no longer have their size and digest.
-    pub changed: Vec<Kept>,
-    /// The receipt itself is gone or cannot be read, so which files it
-    /// kept is not known.
-    pub unknown: bool,
-}
-
-impl Intact {
-    /// Whether every copy is as it was collected.
-    pub fn whole(&self) -> bool {
-        self.missing.is_empty() && self.changed.is_empty() && !self.unknown
-    }
-}
-
-/// Whether the copies the collection `receipt` of `task` kept in `output`
-/// still have their recorded size and digest. A receipt that cannot be
-/// read leaves nothing known kept.
-pub(crate) fn intact(output: &Path, task: Option<&Key>, receipt: &ReceiptId) -> Intact {
-    let owner = task.map_or_else(|| UNLABELLED.to_owned(), Key::to_string);
-    let path = output
-        .join(COLLECTED)
-        .join(owner)
-        .join(receipt.as_str())
-        .join("receipt.json");
-    let read = crate::files::read_own(&path, 1024 * 1024)
-        .and_then(|bytes| serde_json::from_slice::<Receipt>(&bytes).ok())
-        .filter(|read| read.receipt == *receipt);
-    let Some(read) = read else {
-        return Intact {
-            unknown: true,
-            ..Intact::default()
-        };
-    };
-    let mut intact = Intact::default();
-    for file in read.files {
-        let size = fs::symlink_metadata(&file.path)
-            .ok()
-            .filter(|metadata| metadata.is_file())
-            .map(|metadata| metadata.len());
-        match size {
-            None => intact.missing.push(file),
-            Some(size) if size != file.size => intact.changed.push(file),
-            Some(_) if file_sha256(&file.path).as_deref() != Some(file.sha256.as_str()) => {
-                intact.changed.push(file);
-            }
-            Some(_) => intact.kept.push(file),
-        }
-    }
-    intact
 }
 
 #[cfg(test)]
