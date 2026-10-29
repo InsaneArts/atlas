@@ -5,7 +5,7 @@
 //! apart from one that failed or answered something else, and each request
 //! is bounded by what is left of one deadline. Only copies are made;
 //! nothing is set but each element's own messaging timeout.
-use super::{ABSENT, Element, Frame, bounded_string, ffi};
+use super::{ABSENT, Element, Frame, ffi, text::bounded_string};
 use crate::error::{Error, Result};
 use objc2_application_services::{AXError, AXUIElement, AXValue, AXValueType};
 use objc2_core_foundation::{CFBoolean, CFNull, CFRetained, CFString, CFType};

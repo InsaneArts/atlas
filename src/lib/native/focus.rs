@@ -1978,8 +1978,16 @@ mod tests {
         for source in [
             include_str!("focus.rs"),
             include_str!("ax.rs"),
-            include_str!("ax/keyboard.rs"),
+            include_str!("ax/batch.rs"),
             include_str!("ax/ffi.rs"),
+            include_str!("ax/keyboard.rs"),
+            include_str!("ax/menus.rs"),
+            include_str!("ax/model.rs"),
+            include_str!("ax/scan.rs"),
+            include_str!("ax/stop.rs"),
+            include_str!("ax/system.rs"),
+            include_str!("ax/text.rs"),
+            include_str!("ax/tree.rs"),
         ] {
             let code = source.split("#[cfg(test)]").next().unwrap_or_default();
             for setter in [
