@@ -2,15 +2,6 @@
 use sha2::{Digest, Sha256};
 use std::{fs, io::Read, path::Path};
 
-/// Whether `text` is exactly `digits` lowercase hexadecimal digits, as
-/// Atlas writes digests and random names.
-pub(crate) fn lower_hex(text: &str, digits: usize) -> bool {
-    text.len() == digits
-        && text
-            .bytes()
-            .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
-}
-
 /// The executable a shared probe path stands for: the file itself, or the
 /// Atlas.app executable it links to when the link belongs to this
 /// account. Any other link is not followed.

@@ -140,7 +140,7 @@ fn notes(folder: &Path, tidy: bool) -> Vec<(String, Note)> {
         .filter_map(|entry| {
             let name = entry.file_name().into_string().ok()?;
             let stem = name.strip_suffix(".json")?;
-            if stem.len() != NAME_LEN || !stem.bytes().all(|byte| byte.is_ascii_hexdigit()) {
+            if !crate::name::lower_hex(stem, NAME_LEN) {
                 return None;
             }
             let path = entry.path();

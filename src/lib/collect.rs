@@ -16,6 +16,7 @@ use crate::{
     error::{Error, Result},
     files::write_private,
     host_session::{Key, now_ms},
+    name::{lower_hex, name_type, random_hex},
     task::{record::OutputEntry, store::Store},
     transport::{OutputError, append_event},
 };
@@ -62,18 +63,20 @@ const VERSION: u32 = 1;
 /// The longest a file name may be, in bytes.
 const NAME_MAX: usize = 255;
 
-/// A collection's receipt: when it was made, in milliseconds since 1970,
-/// and six random hexadecimal digits, so two collections never share one.
-#[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
-#[serde(try_from = "String", into = "String")]
-pub struct ReceiptId(String);
+name_type! {
+    /// A collection's receipt: when it was made, in milliseconds since
+    /// 1970, and six random hexadecimal digits, so two collections never
+    /// share one.
+    #[derive(Hash)]
+    pub struct ReceiptId;
+    refused(text) = format!("{text} is not a collection's receipt");
+    display
+}
 
 impl ReceiptId {
     /// A new receipt, made at `at`.
     fn new(at: u64) -> Self {
-        let mut random = crate::files::token();
-        random.truncate(6);
-        Self(format!("{at}-{random}"))
+        Self(format!("{at}-{}", random_hex(6)))
     }
 
     /// `text` as a receipt, when it is one of Atlas's.
@@ -81,31 +84,7 @@ impl ReceiptId {
         let (at, random) = text.split_once('-')?;
         let at_ok =
             !at.is_empty() && at.len() <= 20 && at.bytes().all(|byte| byte.is_ascii_digit());
-        (at_ok && crate::digest::lower_hex(random, 6)).then(|| Self(text.to_owned()))
-    }
-
-    pub fn as_str(&self) -> &str {
-        &self.0
-    }
-}
-
-impl TryFrom<String> for ReceiptId {
-    type Error = String;
-
-    fn try_from(text: String) -> std::result::Result<Self, Self::Error> {
-        Self::parse(&text).ok_or_else(|| format!("{text} is not a collection's receipt"))
-    }
-}
-
-impl From<ReceiptId> for String {
-    fn from(receipt: ReceiptId) -> Self {
-        receipt.0
-    }
-}
-
-impl std::fmt::Display for ReceiptId {
-    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        formatter.write_str(&self.0)
+        (at_ok && lower_hex(random, 6)).then(|| Self(text.to_owned()))
     }
 }
 
@@ -522,11 +501,7 @@ impl One<'_> {
             request["session"] = json!(pin);
         }
         let (reply, _) = read_part(client, &request, &mut partial, &mut Sha256::new()).await?;
-        let sha256: String = hasher
-            .finalize()
-            .iter()
-            .map(|byte| format!("{byte:02x}"))
-            .collect();
+        let sha256 = crate::name::hex(&hasher.finalize());
         if reply["sha256"].as_str() != Some(sha256.as_str()) {
             return Err(fail(Refused::Changing));
         }

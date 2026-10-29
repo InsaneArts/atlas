@@ -266,13 +266,7 @@ fn validate_files<'a>(files: impl ExactSizeIterator<Item = &'a Payload> + Clone)
     unique_targets(files.clone().map(|file| file.target.as_path()))?;
 
     for file in files {
-        if !file.source.is_absolute()
-            || file.sha256.len() != 64
-            || !file
-                .sha256
-                .bytes()
-                .all(|b| b.is_ascii_hexdigit() && !b.is_ascii_uppercase())
-        {
+        if !file.source.is_absolute() || !crate::name::lower_hex(&file.sha256, 64) {
             return Err(problem("Invalid frozen file selection"));
         }
     }

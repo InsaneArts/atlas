@@ -507,10 +507,7 @@ const INSTALL: [&str; 2] = ["install-", "install-previous-"];
 
 /// Whether `text` is exactly a token from [`crate::files::token`].
 fn token_shaped(text: &str) -> bool {
-    text.len() == crate::files::TOKEN_BYTES * 2
-        && text
-            .bytes()
-            .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+    crate::files::Token::parse(text).is_some()
 }
 
 /// Whether `name` is a copy `atlas update` stages: `.Atlas.app.update-` and

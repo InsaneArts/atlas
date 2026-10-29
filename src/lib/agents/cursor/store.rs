@@ -415,9 +415,10 @@ fn validate(record: &Record) -> Result<()> {
                 .components()
                 .all(|part| matches!(part, Component::Normal(_)))
             || entry.mode & !0o777 != 0
-            || entry.digest.as_ref().is_some_and(|digest| {
-                digest.len() != 64 || !digest.bytes().all(|b| b.is_ascii_hexdigit())
-            })
+            || entry
+                .digest
+                .as_ref()
+                .is_some_and(|digest| !crate::name::lower_hex(digest, 64))
         {
             return Err(problem(
                 "Cursor's Atlas ownership record contains an invalid path or file",

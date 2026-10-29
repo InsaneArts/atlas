@@ -1,8 +1,10 @@
 //! Atlas's own files: each written private to this account, read only
 //! when it is a plain file (and this account's, where that matters), and
 //! named by random tokens no person chose.
-use crate::error::{Error, Result};
-use rand::RngCore;
+use crate::{
+    error::{Error, Result},
+    name::{lower_hex, name_type, random_hex},
+};
 use std::{
     fs::{self, File, OpenOptions},
     io::{Read, Write},
@@ -17,59 +19,34 @@ pub const TOKEN_BYTES: usize = 24;
 /// A new random name: [`TOKEN_BYTES`] random bytes as lowercase
 /// hexadecimal digits.
 pub fn token() -> String {
-    let mut bytes = [0; TOKEN_BYTES];
-    rand::rng().fill_bytes(&mut bytes);
-    bytes.iter().map(|b| format!("{b:02x}")).collect()
+    random_hex(TOKEN_BYTES * 2)
 }
 
-/// A name shaped as a [`token`] makes it: Atlas's own random name for a
-/// copy folder or an environment plan, never one a person chose.
-#[derive(
-    Clone, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, serde::Serialize, serde::Deserialize,
-)]
-#[serde(try_from = "String", into = "String")]
-pub struct Token(String);
+name_type! {
+    /// A name shaped as a [`token`] makes it: Atlas's own random name for a
+    /// copy folder or an environment plan, never one a person chose.
+    #[derive(Hash, PartialOrd, Ord)]
+    pub struct Token;
+    refused(text) = format!("{text} is not one of Atlas's tokens");
+    display
+}
 
 impl Token {
     /// `text` as a token, when it is [`TOKEN_BYTES`] bytes as lowercase
     /// hexadecimal digits.
     pub fn parse(text: &str) -> Option<Self> {
-        crate::digest::lower_hex(text, TOKEN_BYTES * 2).then(|| Self(text.to_owned()))
+        lower_hex(text, TOKEN_BYTES * 2).then(|| Self(text.to_owned()))
     }
 
     /// A new random token.
     pub fn new() -> Self {
         Self(token())
     }
-
-    pub fn as_str(&self) -> &str {
-        &self.0
-    }
 }
 
 impl Default for Token {
     fn default() -> Self {
         Self::new()
-    }
-}
-
-impl TryFrom<String> for Token {
-    type Error = String;
-
-    fn try_from(text: String) -> std::result::Result<Self, Self::Error> {
-        Self::parse(&text).ok_or_else(|| format!("{text} is not one of Atlas's tokens"))
-    }
-}
-
-impl From<Token> for String {
-    fn from(token: Token) -> Self {
-        token.0
-    }
-}
-
-impl std::fmt::Display for Token {
-    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        formatter.write_str(&self.0)
     }
 }
 

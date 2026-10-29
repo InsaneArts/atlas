@@ -3,6 +3,7 @@
 //! folders held open by descriptor and never through a link, so what is
 //! printed is exactly what was opened.
 use super::super::{model::Node, problem};
+use crate::name::hex;
 use nix::{
     dir::Dir,
     fcntl::{AtFlags, OFlag, openat},
@@ -312,8 +313,4 @@ pub(super) fn refusal(unprinted: Unprinted) -> crate::error::Error {
         ),
         Unprinted::Unreadable(said) => problem(said),
     }
-}
-
-fn hex(bytes: &[u8]) -> String {
-    bytes.iter().map(|byte| format!("{byte:02x}")).collect()
 }

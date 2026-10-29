@@ -1,7 +1,11 @@
 //! Protocol v1 requests the helper daemon accepts, validated before anything
 //! runs. Refusals keep their exact wording: clients and the live checks
 //! match on it.
-use crate::{host_session::Key, process::Start};
+use crate::{
+    host_session::Key,
+    name::{lower_hex, name_type, random_hex},
+    process::Start,
+};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use std::time::Duration;
@@ -109,11 +113,14 @@ pub const JOBS: &str = "jobs";
 /// The daemon capability to read files for the person's side to collect.
 pub const READ: &str = "read";
 
-/// A background job's handle: 12 lowercase hexadecimal digits, drawn at
-/// random when it starts, so it says nothing of the job.
-#[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
-#[serde(try_from = "String", into = "String")]
-pub struct JobId(String);
+name_type! {
+    /// A background job's handle: 12 lowercase hexadecimal digits, drawn at
+    /// random when it starts, so it says nothing of the job.
+    #[derive(Hash, PartialOrd, Ord)]
+    pub struct JobId;
+    refused(text) = format!("{text} is not a job's ID");
+    display
+}
 
 impl JobId {
     /// How many hexadecimal digits a job's ID has.
@@ -121,45 +128,19 @@ impl JobId {
 
     /// A new random ID.
     pub fn new() -> Self {
-        let mut id = crate::files::token();
-        id.truncate(Self::LEN);
-        Self(id)
+        Self(random_hex(Self::LEN))
     }
 
     /// `text` as a job's ID, when it is exactly [`JobId::LEN`] lowercase
     /// hexadecimal digits.
     pub fn parse(text: &str) -> Option<Self> {
-        crate::digest::lower_hex(text, Self::LEN).then(|| Self(text.to_owned()))
-    }
-
-    pub fn as_str(&self) -> &str {
-        &self.0
+        lower_hex(text, Self::LEN).then(|| Self(text.to_owned()))
     }
 }
 
 impl Default for JobId {
     fn default() -> Self {
         Self::new()
-    }
-}
-
-impl TryFrom<String> for JobId {
-    type Error = String;
-
-    fn try_from(text: String) -> Result<Self, Self::Error> {
-        Self::parse(&text).ok_or_else(|| format!("{text} is not a job's ID"))
-    }
-}
-
-impl From<JobId> for String {
-    fn from(id: JobId) -> Self {
-        id.0
-    }
-}
-
-impl std::fmt::Display for JobId {
-    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        formatter.write_str(&self.0)
     }
 }
 

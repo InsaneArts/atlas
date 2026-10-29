@@ -14,11 +14,14 @@ mod sys;
 
 pub use crate::process::Instance;
 
-use crate::{control::Cause, ui::hints};
+use crate::{
+    control::Cause,
+    name::{hex, lower_hex, name_type},
+    ui::hints,
+};
 use ancestry::{Ancestor, Facts};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
-use std::fmt;
 
 /// Hex digits of a host session's key, the only part rows carry.
 pub const KEY_LEN: usize = 12;
@@ -92,12 +95,15 @@ impl Host {
     }
 }
 
-/// A host session's key: the first [`KEY_LEN`] hex digits of SHA-256 of
-/// "{host}:{id}". No host value ever reaches a path or another session's
-/// reply but through it.
-#[derive(Clone, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
-#[serde(try_from = "String", into = "String")]
-pub struct Key(String);
+name_type! {
+    /// A host session's key: the first [`KEY_LEN`] hex digits of SHA-256 of
+    /// "{host}:{id}". No host value ever reaches a path or another session's
+    /// reply but through it.
+    #[derive(Hash, PartialOrd, Ord)]
+    pub struct Key;
+    refused(text) = format!("{text} is not a host session key");
+    display
+}
 
 impl Key {
     /// The key of `id` of `host`.
@@ -108,70 +114,29 @@ impl Key {
     /// The first [`KEY_LEN`] hex digits of SHA-256 of `text`: how every
     /// key Atlas makes from a label is drawn.
     pub(crate) fn digest(text: &str) -> Self {
-        let digest = Sha256::digest(text.as_bytes());
-        let hex: String = digest.iter().map(|byte| format!("{byte:02x}")).collect();
-        Self(hex[..KEY_LEN].to_owned())
+        let mut hex = hex(&Sha256::digest(text.as_bytes()));
+        hex.truncate(KEY_LEN);
+        Self(hex)
     }
 
     /// `text` as a key, when it is exactly [`KEY_LEN`] lowercase hex digits.
     pub fn parse(text: &str) -> Option<Self> {
-        crate::digest::lower_hex(text, KEY_LEN).then(|| Self(text.to_owned()))
-    }
-
-    pub fn as_str(&self) -> &str {
-        &self.0
+        lower_hex(text, KEY_LEN).then(|| Self(text.to_owned()))
     }
 }
 
-impl TryFrom<String> for Key {
-    type Error = String;
-
-    fn try_from(text: String) -> Result<Self, Self::Error> {
-        Self::parse(&text).ok_or_else(|| format!("{text} is not a host session key"))
-    }
+name_type! {
+    /// A host's own id for a session, or an ATLAS_SESSION label: 1 to
+    /// [`ID_MAX`] bytes of ASCII letters, digits, `.`, `_`, `:` and `-`, so
+    /// no other value is ever kept or shown.
+    pub struct HostId;
+    refused(_value) = "not a plain host session id".to_owned();
 }
-
-impl From<Key> for String {
-    fn from(key: Key) -> Self {
-        key.0
-    }
-}
-
-impl fmt::Display for Key {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        formatter.write_str(&self.0)
-    }
-}
-
-/// A host's own id for a session, or an ATLAS_SESSION label: 1 to
-/// [`ID_MAX`] bytes of ASCII letters, digits, `.`, `_`, `:` and `-`, so no
-/// other value is ever kept or shown.
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(try_from = "String", into = "String")]
-pub struct HostId(String);
 
 impl HostId {
     /// `value` as a host id, when it is a plain one.
     pub fn parse(value: &str) -> Option<Self> {
         plain(value).then(|| Self(value.to_owned()))
-    }
-
-    pub fn as_str(&self) -> &str {
-        &self.0
-    }
-}
-
-impl TryFrom<String> for HostId {
-    type Error = String;
-
-    fn try_from(value: String) -> Result<Self, Self::Error> {
-        Self::parse(&value).ok_or_else(|| "not a plain host session id".to_owned())
-    }
-}
-
-impl From<HostId> for String {
-    fn from(id: HostId) -> Self {
-        id.0
     }
 }
 
@@ -472,10 +437,7 @@ impl Recovery {
 /// Whether `value` may be a host id: 1 to [`ID_MAX`] bytes of ASCII
 /// letters, digits, `.`, `_`, `:` and `-`.
 pub(crate) fn plain(value: &str) -> bool {
-    (1..=ID_MAX).contains(&value.len())
-        && value
-            .bytes()
-            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'_' | b':' | b'-'))
+    crate::name::plain(value, ID_MAX)
 }
 
 /// Milliseconds since 1970, as records keep times.
@@ -529,8 +491,7 @@ mod tests {
             Vec::new(),
         )
         .unwrap();
-        let digest = Sha256::digest(format!("claude:{CLAUDE_ID}").as_bytes());
-        let hex: String = digest.iter().map(|byte| format!("{byte:02x}")).collect();
+        let hex = hex(&Sha256::digest(format!("claude:{CLAUDE_ID}").as_bytes()));
 
         assert_eq!(session.host, Host::Claude);
         assert_eq!(session.key.as_str(), &hex[..KEY_LEN]);

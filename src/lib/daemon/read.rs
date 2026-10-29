@@ -456,11 +456,7 @@ fn digest(file: &File, size: u64, guard: &dyn Fn() -> Result<(), Value>) -> Resu
         hasher.update(&buffer[..count]);
         read += count as u64;
     }
-    Ok(hasher
-        .finalize()
-        .iter()
-        .map(|byte| format!("{byte:02x}"))
-        .collect())
+    Ok(crate::name::hex(&hasher.finalize()))
 }
 
 /// The refusal for `reason`: nothing in the helper changed.

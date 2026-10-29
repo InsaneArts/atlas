@@ -16,10 +16,10 @@ use crate::{
         record::Record as SessionRecord,
         store::{Kind, Store as Sessions, rolled_back},
     },
+    name::name_type,
 };
-use serde::{Deserialize, Serialize};
 use serde_json::Value;
-use std::{ffi::OsStr, fmt, path::Path};
+use std::{ffi::OsStr, path::Path};
 use store::Store;
 
 /// The most bytes a task name keeps.
@@ -28,46 +28,19 @@ const NAME_LIMIT: usize = 64;
 /// What names a task of the session a command comes from.
 const VARIABLE: &str = "ATLAS_TASK";
 
-/// A task's name, as ATLAS_TASK gives it: 1 to [`NAME_LIMIT`] bytes of
-/// ASCII letters, digits, `.`, `_`, `:` and `-`, so no other value is ever
-/// kept or shown.
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(try_from = "String", into = "String")]
-pub struct Name(String);
+name_type! {
+    /// A task's name, as ATLAS_TASK gives it: 1 to [`NAME_LIMIT`] bytes of
+    /// ASCII letters, digits, `.`, `_`, `:` and `-`, so no other value is
+    /// ever kept or shown.
+    pub struct Name;
+    refused(_value) = "not a plain task name".to_owned();
+    display
+}
 
 impl Name {
     /// `value` as a task name, when it is a plain one.
     pub fn parse(value: &str) -> Option<Self> {
-        let plain = (1..=NAME_LIMIT).contains(&value.len())
-            && value.bytes().all(|byte| {
-                byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'_' | b':' | b'-')
-            });
-        plain.then(|| Self(value.to_owned()))
-    }
-
-    /// The name as ATLAS_TASK gave it.
-    pub fn as_str(&self) -> &str {
-        &self.0
-    }
-}
-
-impl TryFrom<String> for Name {
-    type Error = String;
-
-    fn try_from(value: String) -> std::result::Result<Self, Self::Error> {
-        Self::parse(&value).ok_or_else(|| "not a plain task name".to_owned())
-    }
-}
-
-impl From<Name> for String {
-    fn from(name: Name) -> Self {
-        name.0
-    }
-}
-
-impl fmt::Display for Name {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        formatter.write_str(&self.0)
+        crate::name::plain(value, NAME_LIMIT).then(|| Self(value.to_owned()))
     }
 }
 

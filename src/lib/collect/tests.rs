@@ -146,10 +146,7 @@ fn random(bytes: usize) -> Vec<u8> {
 }
 
 fn sha256(bytes: &[u8]) -> String {
-    Sha256::digest(bytes)
-        .iter()
-        .map(|byte| format!("{byte:02x}"))
-        .collect()
+    crate::name::hex(&Sha256::digest(bytes))
 }
 
 #[tokio::test]

@@ -257,11 +257,7 @@ pub(super) struct Transaction {
 }
 
 pub(super) fn validate_id(id: &str) -> Result<()> {
-    if id.len() != 48
-        || !id
-            .bytes()
-            .all(|b| b.is_ascii_hexdigit() && !b.is_ascii_uppercase())
-    {
+    if !crate::name::lower_hex(id, 48) {
         return Err(problem(
             "Expected a 48-character lowercase plan ID, the planId a preview (atlas \
              environment MANIFEST) printed",

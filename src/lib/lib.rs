@@ -31,6 +31,7 @@ mod last_capture;
 pub mod login_log;
 pub mod mcp;
 pub mod menubar;
+mod name;
 pub mod native;
 pub mod onboarding;
 pub mod overview;

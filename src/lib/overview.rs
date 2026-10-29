@@ -607,11 +607,7 @@ pub fn activity(directory: &Path, limit: usize) -> Vec<Value> {
 /// the row itself. A command's newest step stands for it, so the row shown
 /// for a command under way is another one, with another id, once it ends.
 pub fn row_id(row: &Value) -> String {
-    let digest = Sha256::digest(row.to_string().as_bytes());
-    digest[..8]
-        .iter()
-        .map(|byte| format!("{byte:02x}"))
-        .collect()
+    crate::name::hex(&Sha256::digest(row.to_string().as_bytes())[..8])
 }
 
 /// Nanoseconds since an activity row was recorded, if it parses.

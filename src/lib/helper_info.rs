@@ -6,8 +6,8 @@
 use crate::{
     error::{Error, Result},
     files::open_plain,
+    name::name_type,
 };
-use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 use std::{
@@ -82,11 +82,7 @@ pub fn frame(png: &[u8]) -> Result<Value> {
         return Err(Error::new("capture", "The screen is too detailed to send"));
     }
 
-    let digest = Sha256::digest(&bytes);
-    let id = digest[..8]
-        .iter()
-        .map(|byte| format!("{byte:02x}"))
-        .collect::<String>();
+    let id = crate::name::hex(&Sha256::digest(&bytes)[..8]);
 
     use base64::{Engine, engine::general_purpose::STANDARD};
     Ok(json!({
@@ -218,34 +214,18 @@ pub fn capture_time(name: &str) -> Option<u128> {
     digits.parse().ok()
 }
 
-/// The file name of a screenshot an agent's capture wrote: Atlas's own
-/// timestamp name, never a path or a person's file.
-#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
-#[serde(try_from = "String", into = "String")]
-pub struct Capture(String);
+name_type! {
+    /// The file name of a screenshot an agent's capture wrote: Atlas's own
+    /// timestamp name, never a path or a person's file.
+    #[derive(PartialOrd, Ord)]
+    pub struct Capture;
+    refused(name) = format!("{name} is not a capture's name");
+}
 
 impl Capture {
     /// `name` as a capture's, when [`capture_time`] reads it.
     pub fn parse(name: &str) -> Option<Self> {
         capture_time(name).map(|_| Self(name.to_owned()))
-    }
-
-    pub fn as_str(&self) -> &str {
-        &self.0
-    }
-}
-
-impl TryFrom<String> for Capture {
-    type Error = String;
-
-    fn try_from(name: String) -> std::result::Result<Self, Self::Error> {
-        Self::parse(&name).ok_or_else(|| format!("{name} is not a capture's name"))
-    }
-}
-
-impl From<Capture> for String {
-    fn from(capture: Capture) -> Self {
-        capture.0
     }
 }
 

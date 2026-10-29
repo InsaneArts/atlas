@@ -344,10 +344,7 @@ fn the_digest_is_of_the_whole_file_as_it_stands() {
     asked.digest = true;
     let (reply, got) = served(&asked, &places);
     assert!(got.is_empty());
-    let expected: String = Sha256::digest(&bytes)
-        .iter()
-        .map(|byte| format!("{byte:02x}"))
-        .collect();
+    let expected = crate::name::hex(&Sha256::digest(&bytes));
     assert_eq!(reply["sha256"], expected, "{reply}");
 }
 

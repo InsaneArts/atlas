@@ -125,10 +125,8 @@ impl Gate {
             });
         }
 
-        // Owners are `control::token()`s: two hexadecimal digits a byte.
-        if owner.len() != 2 * crate::files::TOKEN_BYTES
-            || !owner.bytes().all(|b| b.is_ascii_hexdigit())
-        {
+        // Owners are `files::token()`s: two hexadecimal digits a byte.
+        if crate::files::Token::parse(owner).is_none() {
             return Err(Error::new("input", "Invalid native owner token"));
         }
 
