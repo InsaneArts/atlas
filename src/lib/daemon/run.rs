@@ -81,7 +81,7 @@ pub(super) fn search_path(home: Option<&Path>) -> String {
 
 /// Where a `program` with a slash is: a relative one starts at `home`, where
 /// the command runs, as it would in a shell there.
-pub(super) fn locate(program: &str, home: Option<&Path>) -> PathBuf {
+fn locate(program: &str, home: Option<&Path>) -> PathBuf {
     match home {
         Some(home) if Path::new(program).is_relative() => home.join(program),
         _ => PathBuf::from(program),

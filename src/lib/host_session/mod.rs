@@ -24,9 +24,9 @@ use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
 /// Hex digits of a host session's key, the only part rows carry.
-pub const KEY_LEN: usize = 12;
+pub(crate) const KEY_LEN: usize = 12;
 /// The longest host id or label accepted.
-pub const ID_MAX: usize = 128;
+pub(crate) const ID_MAX: usize = 128;
 /// How many of this process's ancestors are looked at to tell nested hosts
 /// apart.
 const ANCESTORS: usize = 32;

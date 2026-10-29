@@ -279,7 +279,7 @@ pub fn run_output(reply: &Value, limit: usize) -> std::result::Result<Vec<u8>, O
 
 /// Concatenate the base64 data of a reply's events named `name`, exactly
 /// as the helper sent them, within `limit` as [`run_output`] keeps it.
-pub fn event_bytes(
+fn event_bytes(
     reply: &Value,
     name: &str,
     limit: usize,

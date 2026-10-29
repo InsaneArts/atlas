@@ -6,11 +6,11 @@
 //! it aside and checks it again there before it deletes it. Apps opened by
 //! name are listed, never quit.
 mod live;
-pub(crate) mod plan;
-pub(crate) mod receipt;
+mod plan;
+mod receipt;
 mod reply;
-pub(crate) mod run;
-pub(crate) mod scope;
+mod run;
+mod scope;
 mod targets;
 #[cfg(test)]
 mod tests;
