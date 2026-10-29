@@ -50,17 +50,18 @@ extension ViewerStatus {
     static let stopStaysFor: Double = 60
 
     /// Whether Stop Agent is offered: an agent acts, or acted within ``stopStaysFor``, or a background job an agent
-    /// started may still run, however long ago it started. Stop also ends those jobs, so it stays the person's way to
-    /// end them while the helper otherwise looks idle.
+    /// started may still run (running, starting, or of a record the helper cannot read), however long ago it started.
+    /// Stop also ends those jobs, so it stays the person's way to end them while the helper otherwise looks idle, and
+    /// while the person holds control, which ends no job.
     public var offersStop: Bool {
       mode == .agent
         || (mode == .observing && agentActed(within: Self.stopStaysFor))
-        || (jobs.running > 0 && Self.jobsStop.contains(mode))
+        || (jobs.mayRun && Self.jobsStop.contains(mode))
     }
 
-    /// The modes in which running background jobs keep Stop offered: wherever the helper is reached and agents are
-    /// not stopped already.
-    static let jobsStop: Set<HelperMode> = [.observing, .agent, .recovering, .blocked]
+    /// The modes in which background jobs that may still run keep Stop offered: wherever the helper is reached and
+    /// agents are not stopped already, the person's own control included.
+    static let jobsStop: Set<HelperMode> = [.observing, .agent, .recovering, .blocked, .controlling]
 
     /// Whether Resume Agent is offered: the person stopped agents.
     public var offersResume: Bool { mode == .stopped }
