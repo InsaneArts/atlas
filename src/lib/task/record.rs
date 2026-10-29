@@ -323,7 +323,6 @@ pub(crate) enum CleanupState {
 
 /// A cleanup that covered a task's work: its receipt's ID and state.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
 pub(crate) struct CleanupNote {
     pub id: Token,
     pub state: CleanupState,
@@ -334,7 +333,6 @@ pub(crate) struct CleanupNote {
 /// Who took over a task's work after its session ended: the adopting
 /// session's key (none for the person, through Atlas.app), and when.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
 pub(crate) struct Adoption {
     pub key: Option<Key>,
     pub at: u64,

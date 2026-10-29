@@ -1,9 +1,12 @@
 //! A cleanup's hands in the real helper: its app list, Atlas's own quit
 //! script, the environment worker, and the copy root, under the control
 //! the cleanup holds.
-use super::run::{Hands, running_from, running_from_installs};
+use super::{
+    run::{Hands, Quitted},
+    targets::{still_in_installs, still_running},
+};
 use crate::{
-    agent,
+    agent::{self, Quitting},
     app_selection::Process,
     client::{Actor, Client},
     control::{Ownership, Token},
@@ -70,39 +73,44 @@ impl Hands for Live<'_> {
         processes: &[Process],
         folders: &[String],
         installs: &[Token],
-    ) -> Result<()> {
+    ) -> Result<Quitted> {
         let ownership = self.held()?;
         let started = Instant::now();
         // Done once nothing in a fresh list runs from the task's bundles,
         // whatever it is called.
         let left = |apps: &Value, _: &[u64]| {
-            running_from(apps, folders)
+            still_running(apps, folders)
                 .into_iter()
-                .map(|process| match process.name.as_str() {
-                    "" => format!("process {}", process.pid),
-                    _ => process.name,
+                .map(|app| match app["app"].as_str() {
+                    Some(name) if !name.is_empty() => name.to_owned(),
+                    _ => format!("process {}", app["pid"]),
                 })
                 .collect()
         };
-        agent::quit(self.client, ownership, processes, left, agent::QUIT_WAIT).await?;
+        let quitting =
+            agent::quit_until(self.client, ownership, processes, left, agent::QUIT_WAIT).await?;
+        if let Quitting::TimedOut { still } = quitting {
+            return Ok(Quitted::TimedOut(format!(
+                "{} did not quit within {} seconds",
+                still.join(", "),
+                agent::QUIT_WAIT.as_secs()
+            )));
+        }
 
         // Processes that are not apps, such as helpers running from an
         // install, are seen only by the helper's own process list.
         loop {
             let answer = environment::installs(self.client, installs).await?;
-            let still = running_from_installs(&answer);
-            if still.is_empty() {
-                return Ok(());
+            let still = still_in_installs(&answer);
+            if still == 0 {
+                return Ok(Quitted::Gone);
             }
             if started.elapsed() >= agent::QUIT_WAIT {
-                return Err(Error::new(
-                    "wait-failed",
-                    format!(
-                        "{} running from an installed app did not quit within {} seconds",
-                        crate::ui::text::count(still.len(), "process"),
-                        agent::QUIT_WAIT.as_secs()
-                    ),
-                ));
+                return Ok(Quitted::TimedOut(format!(
+                    "{} running from an installed app did not quit within {} seconds",
+                    crate::ui::text::count(still, "process"),
+                    agent::QUIT_WAIT.as_secs()
+                )));
             }
             tokio::time::sleep(Duration::from_millis(200)).await;
         }

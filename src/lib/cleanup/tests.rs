@@ -5,7 +5,9 @@ use crate::{
     host_session::{Host, HostSession},
     task::{Claims, store::Store as Tasks},
 };
-use run::Hands;
+use crate::{error::Error, task::record::CleanupState};
+use run::{Hands, Quitted};
+use scope::Adopter;
 use std::{
     cell::{Cell, RefCell},
     collections::BTreeMap,
@@ -107,7 +109,7 @@ impl Hands for Fake {
             .unwrap_or_else(|| json!({"ok": true, "outcome": "removed"})))
     }
 
-    async fn quit(&self, processes: &[Process], _: &[String], _: &[Token]) -> Result<()> {
+    async fn quit(&self, processes: &[Process], _: &[String], _: &[Token]) -> Result<Quitted> {
         let pids: Vec<String> = processes
             .iter()
             .map(|process| process.pid.to_string())
@@ -116,15 +118,14 @@ impl Hands for Fake {
             .borrow_mut()
             .push(format!("quit {}", pids.join(" ")));
         if self.slow {
-            return Err(Error::new(
-                "wait-failed",
-                "Probe did not quit within 10 seconds",
+            return Ok(Quitted::TimedOut(
+                "Probe did not quit within 10 seconds".into(),
             ));
         }
         self.apps
             .borrow_mut()
             .retain(|(pid, ..)| !processes.iter().any(|process| process.pid == *pid));
-        Ok(())
+        Ok(Quitted::Gone)
     }
 
     async fn undo_plan(&self, plan: &Token) -> Result<Undone> {
@@ -334,7 +335,7 @@ async fn steps_run_quit_then_plans_newest_first_then_installs_then_copies() {
     assert_eq!(
         fake.logged(),
         [
-            "quit 812 813".to_owned(),
+            "quit 813 812".to_owned(),
             format!("undo {newer}"),
             format!("undo {older}"),
             format!("remove {install}"),
@@ -357,6 +358,7 @@ fn installed(id: &Token, processes: &[(u64, &str)]) -> Value {
         .collect();
     json!({"installId": id, "phase": "installed", "app": "Probe",
         "path": "/Users/helper/Applications/Probe.app", "present": true, "unchanged": true,
+        "verified": true, "root": {"device": 1, "inode": 2},
         "processes": processes})
 }
 
@@ -473,7 +475,7 @@ async fn a_removal_that_finished_before_the_crash_counts_as_done_not_as_a_failur
     // died before it wrote what happened.
     let scope = own(&key);
     let loaded = place.loaded(&scope);
-    let mut receipt = Receipt::new(key.clone(), None, "agent", None);
+    let mut receipt = Receipt::new(key.clone(), None, Actor::Agent);
     merge(&mut receipt.steps, &loaded.undoable());
     let removal = receipt.steps.len() - 1;
     receipt.steps[removal].set(StepState::Started, None);
@@ -481,7 +483,13 @@ async fn a_removal_that_finished_before_the_crash_counts_as_done_not_as_a_failur
         step.set(StepState::Done, None);
     }
     Receipts::at(&place.output).save(&mut receipt).unwrap();
-    note(&place.output, &loaded.covered(&scope), &receipt, None).unwrap();
+    note(
+        &Tasks::at(&place.output),
+        &loaded.covered(&scope),
+        &receipt,
+        None,
+    )
+    .unwrap();
     fs::remove_dir_all(place.folder(&copy)).unwrap();
 
     let reply = place.apply(&fake, &scope).await;
@@ -799,14 +807,14 @@ fn adoption_is_refused_while_the_session_is_active_and_allowed_for_the_person() 
     let output = client.output_dir().unwrap();
     let record = Sessions::at(output).read(host.key()).unwrap();
 
-    let error = may_adopt(Some(&record)).unwrap_err();
+    let error = may_adopt(Some(&record), &[]).unwrap_err();
     assert_eq!(error.code, "input");
     assert!(error.error.contains("may still be working"), "{error}");
 
     let mut ended = record.clone();
     ended.ended = Some(ended.last_seen);
-    assert!(may_adopt(Some(&ended)).is_ok());
-    assert!(may_adopt(None).is_ok());
+    assert!(may_adopt(Some(&ended), &[]).is_ok());
+    assert!(may_adopt(None, &[]).is_ok());
 
     let person = Scope::for_person(host.key());
     assert!(person.adopting && person.named && person.task.is_none());
@@ -833,7 +841,7 @@ async fn an_adopted_session_is_noted_in_its_records_and_its_labels_are_checked_a
         &scope,
         &place.loaded(&scope),
         Actor::Agent,
-        Some(Some(new.clone())),
+        Some(Adopter::Session(new.clone())),
     )
     .await
     .unwrap();
@@ -855,7 +863,7 @@ async fn an_adopted_session_is_noted_in_its_records_and_its_labels_are_checked_a
 }
 
 #[tokio::test]
-async fn a_receipt_names_no_files() {
+async fn a_receipt_names_no_file_on_this_mac() {
     let place = Place::new();
     let key = session("names");
     let task = default_task(&key);
@@ -874,7 +882,9 @@ async fn a_receipt_names_no_files() {
     let reply = place.apply(&fake, &own(&key)).await;
     let id = reply["receipt"].as_str().unwrap();
     let bytes = fs::read_to_string(place.output.join(format!("cleanup/{id}.json"))).unwrap();
-    for named in ["Secret", "rtf", "settings.toml", "/", "copies"] {
+    // Paths inside the helper's home are kept; nothing of this Mac is.
+    assert!(bytes.contains(".config/probe/settings.toml"));
+    for named in ["Secret", "rtf", "/copies", "/Users/"] {
         assert!(!bytes.contains(named), "{named} in {bytes}");
     }
 }
@@ -993,4 +1003,306 @@ fn a_key_that_names_no_record_is_said_and_no_session_is_a_usage_error() {
     assert!(!scope.adopting && !scope.named);
     let elsewhere = Scope::of(&client, Some(&session("other")), None).unwrap();
     assert_eq!((elsewhere.task, elsewhere.adopting), (None, true));
+}
+
+#[test]
+fn a_task_atlas_task_names_before_it_has_a_record_has_nothing_to_clean_up() {
+    let place = Place::new();
+    let key = session("fresh");
+    let scope = Scope {
+        session: key.clone(),
+        task: Some(Task::of(&key, Some("probe")).unwrap().key().clone()),
+        adopting: false,
+        named: false,
+    };
+    let loaded = Loaded::of(&place.output, &scope).unwrap();
+    assert!(loaded.undoable().is_empty());
+}
+
+#[tokio::test]
+async fn nothing_runs_from_a_foreign_copy_or_a_replaced_install_is_quit() {
+    let place = Place::new();
+    let (key, other) = (session("quitter"), session("neighbour"));
+    let task = default_task(&key);
+    let theirs = place.copy(Some(&other));
+    place.claim(&task, Owned::Copy { id: theirs.clone() });
+    let install = Token::new();
+    place.claim(
+        &task,
+        Owned::Install {
+            id: install.clone(),
+            app: "Probe".into(),
+        },
+    );
+    let fake = Fake::at(&place.root);
+    let inside = place
+        .folder(&theirs)
+        .join("TextEdit.app/Contents/MacOS/TextEdit");
+    fake.running(812, "TextEdit", &inside.to_string_lossy());
+    // The helper no longer finds its own folder at the install's place:
+    // what runs there is someone else's.
+    let replaced = "/Users/helper/Applications/Probe.app/Contents/MacOS/Probe";
+    fake.running(813, "Probe", replaced);
+    fake.installed.borrow_mut().insert(
+        install.clone(),
+        json!({"installId": install, "phase": "installed", "app": "Probe", "verified": false}),
+    );
+    fake.removals.borrow_mut().insert(
+        install.clone(),
+        json!({"ok": true, "outcome": "kept", "reason": "replaced"}),
+    );
+
+    let reply = place.apply(&fake, &own(&key)).await;
+    assert!(
+        fake.logged().iter().all(|call| !call.starts_with("quit")),
+        "{:?}",
+        fake.logged()
+    );
+    assert_eq!(reply["steps"][0]["state"], "done");
+    assert!(place.folder(&theirs).exists());
+    assert_eq!(fake.apps.borrow().len(), 2, "both still run");
+}
+
+#[tokio::test]
+async fn an_app_running_from_a_copy_macos_cannot_trace_is_left_never_quit() {
+    let place = Place::new();
+    let key = session("translocated");
+    let task = default_task(&key);
+    let install = Token::new();
+    place.claim(
+        &task,
+        Owned::Install {
+            id: install.clone(),
+            app: "Probe".into(),
+        },
+    );
+    let fake = Fake::at(&place.root);
+    let mut answer = installed(&install, &[]);
+    answer["unproven"] = json!([{"pid": 900, "executable": "/private/var/folders/x/AppTranslocation/1/d/Probe.app/Contents/MacOS/Probe"}]);
+    fake.installed.borrow_mut().insert(install.clone(), answer);
+    fake.removals
+        .borrow_mut()
+        .insert(install.clone(), json!({"ok": true, "outcome": "inUse"}));
+
+    let reply = place.apply(&fake, &own(&key)).await;
+    assert!(fake.logged().iter().all(|call| !call.starts_with("quit")));
+    assert_eq!(
+        reply["left"],
+        json!([{"app": "Probe", "why": "runs from a copy macOS moved it to"}])
+    );
+    assert_eq!(reply["steps"][1]["reason"], "in-use");
+}
+
+#[tokio::test]
+async fn new_work_after_a_failed_quit_waits_for_every_quit() {
+    let place = Place::new();
+    let key = session("rewire");
+    let task = default_task(&key);
+    let first = place.copy(Some(&key));
+    place.claim(&task, Owned::Copy { id: first.clone() });
+    let plan = plan_claimed(&place, &task);
+    let mut slow = Fake::at(&place.root);
+    slow.slow = true;
+    let running = place
+        .folder(&first)
+        .join("TextEdit.app/Contents/MacOS/TextEdit");
+    slow.running(812, "TextEdit", &running.to_string_lossy());
+    let scope = own(&key);
+    let earlier = place.apply(&slow, &scope).await;
+    assert_eq!(states(&earlier), ["failed", "failed", "failed"]);
+
+    let second = place.copy(Some(&key));
+    place.claim(&task, Owned::Copy { id: second.clone() });
+    let mut still_slow = Fake::at(&place.root);
+    still_slow.slow = true;
+    still_slow.running(812, "TextEdit", &running.to_string_lossy());
+    let reply = place.apply(&still_slow, &scope).await;
+
+    let receipt = place.receipt(&reply);
+    let quits: Vec<u32> = receipt
+        .steps
+        .iter()
+        .filter(|entry| matches!(entry.step, Step::Quit { .. }))
+        .map(|entry| entry.n)
+        .collect();
+    assert_eq!(quits.len(), 2);
+    for entry in receipt
+        .steps
+        .iter()
+        .filter(|entry| !matches!(entry.step, Step::Quit { .. }))
+    {
+        assert_eq!(entry.after, quits, "{:?} waits for both quits", entry.step);
+    }
+    assert!(!still_slow.logged().contains(&format!("undo {plan}")));
+}
+
+#[tokio::test]
+async fn a_step_finished_before_its_claim_was_settled_is_settled_not_planned_again() {
+    let place = Place::new();
+    let key = session("settle");
+    let task = default_task(&key);
+    let copy = place.copy(Some(&key));
+    place.claim(&task, Owned::Copy { id: copy.clone() });
+    let scope = own(&key);
+    let fake = Fake::at(&place.root);
+    let first = place.apply(&fake, &scope).await;
+    assert_eq!(first["state"], "complete");
+
+    // As a crash between the receipt's last write and settling leaves it:
+    // the receipt says done, the claim still says made.
+    let mut receipt = place.receipt(&first);
+    for entry in &mut receipt.steps {
+        entry.settled = false;
+    }
+    Receipts::at(&place.output).save(&mut receipt).unwrap();
+    place.claim(&task, Owned::Copy { id: copy.clone() });
+
+    let fake = Fake::at(&place.root);
+    let second = place.apply(&fake, &scope).await;
+    assert_eq!(second["steps"], json!([]), "nothing planned again");
+    assert!(fake.logged().is_empty());
+    let record = Tasks::at(&place.output).load(task.key()).unwrap();
+    assert!(record.claims().all(|(_, state)| state == State::Gone));
+    let settled = Receipts::at(&place.output).load(&receipt.id).unwrap();
+    assert!(settled.steps.iter().all(|entry| entry.settled));
+}
+
+#[tokio::test]
+async fn what_a_finished_step_came_to_survives_a_later_run() {
+    let place = Place::new();
+    let key = session("kept-later");
+    let task = default_task(&key);
+    let copy = place.copy(Some(&key));
+    place.claim(&task, Owned::Copy { id: copy.clone() });
+    let plan = plan_claimed(&place, &task);
+    let fake = Fake::at(&place.root);
+    fake.undo.borrow_mut().insert(
+        plan,
+        Ok(Undone::Kept {
+            targets: vec![".config/probe/settings.toml".into()],
+            directories: 0,
+        }),
+    );
+    fake.running(
+        9,
+        "TextEdit",
+        "/System/Applications/TextEdit.app/Contents/MacOS/TextEdit",
+    );
+    let scope = own(&key);
+    let first = place.apply(&fake, &scope).await;
+    assert_eq!(first["state"], "incomplete");
+
+    let later = Fake::at(&place.root);
+    let second = place.apply(&later, &scope).await;
+    assert_eq!(second["state"], "complete");
+    assert_eq!(
+        second["steps"][1]["targets"],
+        json!([".config/probe/settings.toml"]),
+        "{second}"
+    );
+}
+
+#[test]
+fn fresh_task_records_keep_a_session_without_its_own_record_from_being_adopted() {
+    let task = default_task(&session("records-only"));
+    let mut record = crate::task::record::Record::new(&task, now_ms());
+    let error = may_adopt(None, std::slice::from_ref(&record)).unwrap_err();
+    assert_eq!(error.code, "input");
+
+    record.updated = now_ms() - 20 * 60 * 1000;
+    assert!(may_adopt(None, std::slice::from_ref(&record)).is_ok());
+    record.updated = now_ms();
+    record.adopted_by = Some(Adoption {
+        key: None,
+        at: now_ms(),
+    });
+    assert!(
+        may_adopt(None, std::slice::from_ref(&record)).is_ok(),
+        "a cleanup's own notes never count"
+    );
+}
+
+/// A client whose controller waits for control, and an agent session that
+/// ended a while ago and left an app opened by name.
+fn ended_neighbour(directory: &Path) -> (Client, HostSession) {
+    use crate::host_session::store::{Kind, note};
+
+    let mut client = crate::transaction_test::client(directory);
+    client.controller = client
+        .controller
+        .waiting(std::time::Duration::from_secs(10));
+    client.host_session = Some(HostSession::new(Host::Codex, "adopter").unwrap());
+    let neighbour = HostSession::new(Host::Codex, "neighbour").unwrap();
+    note(
+        &client,
+        &neighbour,
+        Kind::Other,
+        Some(&crate::doing::Doing::new("click")),
+        &Ok(json!({"ok": true})),
+    )
+    .unwrap();
+    let output = client.output_dir().unwrap().to_owned();
+    let long_ago = now_ms() - 30 * 60 * 1000;
+    Sessions::at(&output)
+        .update(&neighbour, long_ago, &client.controller, |record| {
+            record.last_seen = long_ago;
+            record.ended = Some(long_ago);
+        })
+        .unwrap();
+    Tasks::at(&output)
+        .update(&default_task(neighbour.key()), long_ago, |record| {
+            record.claim(
+                &Owned::Launch {
+                    app: "TextEdit".into(),
+                },
+                State::Made,
+                long_ago,
+            )
+        })
+        .unwrap();
+    (client, neighbour)
+}
+
+#[tokio::test]
+async fn an_agent_adopts_a_session_that_has_ended() {
+    let directory = tempfile::tempdir().unwrap();
+    let (client, neighbour) = ended_neighbour(directory.path());
+    let scope = Scope::of(&client, Some(neighbour.key()), None).unwrap();
+
+    let reply = apply_scope(&client, &scope).await.unwrap();
+    assert_eq!((&reply["ok"], &reply["steps"]), (&json!(true), &json!([])));
+    assert_eq!(reply["left"][0]["app"], "TextEdit");
+}
+
+#[tokio::test]
+async fn a_session_that_acts_while_adoption_waits_for_control_is_not_adopted() {
+    use crate::host_session::store::{Kind, note};
+
+    let directory = tempfile::tempdir().unwrap();
+    let (client, neighbour) = ended_neighbour(directory.path());
+    let scope = Scope::of(&client, Some(neighbour.key()), None).unwrap();
+    let held = client.controller.acquire(false).unwrap();
+    let acting = client.clone();
+    let waker = std::thread::spawn(move || {
+        std::thread::sleep(std::time::Duration::from_millis(300));
+        note(
+            &acting,
+            &neighbour,
+            Kind::Other,
+            Some(&crate::doing::Doing::new("click")),
+            &Ok(json!({"ok": true})),
+        )
+        .unwrap();
+        drop(held);
+    });
+
+    let error = apply_scope(&client, &scope).await.unwrap_err();
+    waker.join().unwrap();
+    assert_eq!(error.code, "input");
+    assert!(error.error.contains("may still be working"), "{error}");
+    let output = client.output_dir().unwrap();
+    assert!(
+        Receipts::at(output).of_session(&scope.session).is_empty(),
+        "nothing recorded"
+    );
 }

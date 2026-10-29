@@ -240,7 +240,8 @@ pub enum Check {
 }
 
 /// Who recorded mutations are attributed to in the activity log.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "lowercase")]
 pub enum Actor {
     Agent,
     Viewer,

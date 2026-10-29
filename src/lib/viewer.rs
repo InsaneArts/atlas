@@ -637,7 +637,7 @@ impl Viewer {
                 rows: &rows,
                 captures: &captures,
                 copies: &copies,
-                tasks: &crate::task::store::Store::at(output).all(),
+                tasks: &crate::task::store::Store::at(output).recent(),
                 now: u64::try_from(now / 1_000_000).unwrap_or(u64::MAX),
             }
             .history()
@@ -1919,7 +1919,10 @@ mod tests {
             read_json(&viewer, &format!("cleanup.json?session={session}")).await;
         assert_eq!(status, 200, "{preview}");
         assert_eq!(preview["preview"], true);
-        assert_eq!(preview["active"], false);
+        assert_eq!(
+            preview["active"], true,
+            "its task claimed something just now"
+        );
         assert_eq!(preview["steps"], json!([]));
         assert_eq!(preview["left"][0]["app"], "TextEdit");
 

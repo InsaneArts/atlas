@@ -625,8 +625,7 @@ fn folder_names(folder: &Path) -> Vec<String> {
 fn in_use(folder: &Path, running: &[Running]) -> bool {
     let names = folder_names(folder);
     running.iter().any(|app| {
-        Path::new(&app.executable).starts_with(folder)
-            || names.iter().any(|name| same_text(&app.name, name))
+        runs_from(&app.executable, folder) || names.iter().any(|name| same_text(&app.name, name))
     })
 }
 
@@ -783,40 +782,139 @@ pub(crate) enum CopyRemoval {
     Failed(String),
 }
 
+/// Whether a cleanup of host session `session`'s work may treat the copy
+/// folder `folder` as its own: a private folder of this account labelled
+/// for that session, or not labelled at all. An unlabelled copy is one a
+/// command without a session made, or one whose label was lost; a cleanup
+/// reaches it only when its own task's record claims its token, which is
+/// no wider than `close`, which removes every unlabelled copy of an app.
+fn cleanup_may_take(folder: &Path, session: &Key) -> std::result::Result<(), CopyRemoval> {
+    if !private_folder(folder) {
+        return Err(CopyRemoval::Unreadable);
+    }
+    match labelled(folder) {
+        Label::Unreadable => Err(CopyRemoval::Unreadable),
+        Label::Session(made) if made != *session => Err(CopyRemoval::AnotherSession),
+        Label::Session(_) | Label::None => Ok(()),
+    }
+}
+
+/// The node (`DEVICE:INODE`) of the copy folder `token` names under
+/// `root`, when a cleanup of host session `session`'s work may treat it as
+/// its own: what quitting what runs from it is checked against.
+pub(crate) fn copy_node(root: &Path, token: &Token, session: &Key) -> Option<String> {
+    let folder = root.join(token.as_str());
+    root_if_owned_in(root)?;
+    cleanup_may_take(&folder, session).ok()?;
+    let metadata = fs::symlink_metadata(&folder).ok()?;
+    Some(format!("{}:{}", metadata.dev(), metadata.ino()))
+}
+
+/// The name a copy folder being removed is moved to first.
+fn quarantined(token: &Token) -> String {
+    format!(".atlas-removing-{token}")
+}
+
 /// Remove the copy folder `token` names under `root` (ROOT, but in tests),
 /// for a cleanup of host session `session`'s work: only when it is a
 /// private folder of this account, labelled for that session or not at
 /// all, and not in use by an app in `running` (from a list the helper gave
-/// once the apps running from it were quit). Only that one folder is
-/// looked at.
+/// once the apps running from it were quit). It is moved, never replacing
+/// anything, to a name of its own in the root held open, checked again
+/// there to be the folder that was checked, and only then deleted; a
+/// folder that is not is put back, or kept where it is. A removal cut
+/// short is finished from that name, with the same checks. Only that one
+/// folder is looked at.
 pub(crate) fn remove_copy(
     root: &Path,
     token: &Token,
     session: &Key,
     running: &[Running],
 ) -> CopyRemoval {
-    let folder = root.join(token.as_str());
-    if fs::symlink_metadata(&folder)
-        .is_err_and(|error| error.kind() == std::io::ErrorKind::NotFound)
-    {
-        return CopyRemoval::AlreadyGone;
-    }
-    if root_if_owned_in(root).is_none() || !private_folder(&folder) {
+    if root_if_owned_in(root).is_none() {
         return CopyRemoval::Unreadable;
     }
-    match labelled(&folder) {
-        Label::Unreadable => return CopyRemoval::Unreadable,
-        Label::Session(made) if made != *session => return CopyRemoval::AnotherSession,
-        Label::Session(_) | Label::None => {}
+    let Ok(parent) = open_folder(root) else {
+        return CopyRemoval::Unreadable;
+    };
+    let (Some(name), Some(aside_name)) = (
+        crate::fs_move::FileName::new(token.as_str()),
+        crate::fs_move::FileName::new(&quarantined(token)),
+    ) else {
+        return CopyRemoval::Unreadable;
+    };
+    let folder = root.join(token.as_str());
+    let aside = root.join(quarantined(token));
+
+    // A removal cut short after the move: finished with the same checks.
+    if fs::symlink_metadata(&aside).is_ok() {
+        if let Err(kept) = cleanup_may_take(&aside, session) {
+            return kept;
+        }
+        return delete_aside(&aside);
+    }
+
+    let looked = match fs::symlink_metadata(&folder) {
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            return CopyRemoval::AlreadyGone;
+        }
+        Err(error) => return CopyRemoval::Failed(error.to_string()),
+        Ok(metadata) => metadata,
+    };
+    if let Err(kept) = cleanup_may_take(&folder, session) {
+        return kept;
     }
     if in_use(&folder, running) {
         return CopyRemoval::InUse;
     }
-    match fs::remove_dir_all(&folder) {
+
+    match crate::fs_move::move_between(&parent, &name, &parent, &aside_name) {
+        Ok(_) => {}
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            return CopyRemoval::AlreadyGone;
+        }
+        Err(error) => return CopyRemoval::Failed(error.to_string()),
+    }
+    let same = fs::symlink_metadata(&aside)
+        .is_ok_and(|moved| moved.dev() == looked.dev() && moved.ino() == looked.ino());
+    let still_ours = same.then(|| cleanup_may_take(&aside, session));
+    match still_ours {
+        Some(Ok(())) => delete_aside(&aside),
+        // Not the folder that was checked, or no longer this session's:
+        // put back where it was, never over anything, or kept where it is.
+        other => {
+            let _ = crate::fs_move::move_between(&parent, &aside_name, &parent, &name);
+            match other {
+                Some(Err(kept)) => kept,
+                _ => CopyRemoval::Unreadable,
+            }
+        }
+    }
+}
+
+/// Delete a copy folder moved aside; anything but its absence afterwards
+/// is a failure, so it is tried again.
+fn delete_aside(aside: &Path) -> CopyRemoval {
+    match fs::remove_dir_all(aside) {
         Ok(()) => CopyRemoval::Removed,
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => CopyRemoval::AlreadyGone,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => CopyRemoval::Removed,
         Err(error) => CopyRemoval::Failed(error.to_string()),
     }
+}
+
+/// `path`, a folder, held open without following a link.
+fn open_folder(path: &Path) -> std::io::Result<fs::File> {
+    fs::OpenOptions::new()
+        .read(true)
+        .custom_flags(libc::O_NOFOLLOW | libc::O_DIRECTORY)
+        .open(path)
+}
+
+/// Whether `executable` lies inside `folder`: the one test of where a
+/// process runs from that `close` and cleanup share.
+pub(crate) fn runs_from(executable: &str, folder: &Path) -> bool {
+    let path = Path::new(executable);
+    !executable.is_empty() && path.starts_with(folder) && path != folder
 }
 
 /// Where the copy folder `token` names is, under `root`.
@@ -1414,5 +1512,87 @@ mod tests {
         for name in ["Long Runner", "Runner", "runner"] {
             assert!(names.contains(&name.to_owned()), "{name} in {names:?}");
         }
+    }
+
+    /// A private copy root in `dir` holding a copy folder for `session`,
+    /// and that folder's token.
+    fn labelled_copy(dir: &Path, session: &Key) -> (PathBuf, Token) {
+        let root = dir.join("copies");
+        fs::DirBuilder::new().mode(0o700).create(&root).unwrap();
+        let token = Token::new();
+        let folder = root.join(token.as_str());
+        fs::DirBuilder::new().mode(0o700).create(&folder).unwrap();
+        fs::write(folder.join("notes.rtf"), "hello").unwrap();
+        label(&folder, session).unwrap();
+        (root, token)
+    }
+
+    #[test]
+    fn a_copy_cleanup_removes_is_moved_aside_and_deleted_there() {
+        let dir = tempfile::tempdir().unwrap();
+        let base = fs::canonicalize(dir.path()).unwrap();
+        let session = Key::of(crate::host_session::Host::Codex, "removing");
+        let (root, token) = labelled_copy(&base, &session);
+
+        assert_eq!(
+            remove_copy(&root, &token, &session, &[]),
+            CopyRemoval::Removed
+        );
+        assert!(
+            fs::read_dir(&root).unwrap().next().is_none(),
+            "nothing left aside"
+        );
+        assert_eq!(
+            remove_copy(&root, &token, &session, &[]),
+            CopyRemoval::AlreadyGone
+        );
+    }
+
+    #[test]
+    fn a_copy_removal_cut_short_after_its_move_is_finished_with_the_same_checks() {
+        let dir = tempfile::tempdir().unwrap();
+        let base = fs::canonicalize(dir.path()).unwrap();
+        let (own, other) = (
+            Key::of(crate::host_session::Host::Codex, "own"),
+            Key::of(crate::host_session::Host::Codex, "other"),
+        );
+
+        let (root, token) = labelled_copy(&base, &own);
+        let aside = root.join(quarantined(&token));
+        fs::rename(root.join(token.as_str()), &aside).unwrap();
+        assert_eq!(remove_copy(&root, &token, &own, &[]), CopyRemoval::Removed);
+        assert!(!aside.exists());
+
+        let theirs = base.join("theirs");
+        fs::create_dir(&theirs).unwrap();
+        let (root, token) = labelled_copy(&theirs, &other);
+        let aside = root.join(quarantined(&token));
+        fs::rename(root.join(token.as_str()), &aside).unwrap();
+        assert_eq!(
+            remove_copy(&root, &token, &own, &[]),
+            CopyRemoval::AnotherSession
+        );
+        assert!(
+            aside.join("notes.rtf").exists(),
+            "another session's is kept"
+        );
+    }
+
+    #[test]
+    fn a_copy_quit_target_is_only_one_this_session_may_take() {
+        let dir = tempfile::tempdir().unwrap();
+        let base = fs::canonicalize(dir.path()).unwrap();
+        let (own, other) = (
+            Key::of(crate::host_session::Host::Codex, "own"),
+            Key::of(crate::host_session::Host::Codex, "other"),
+        );
+        let (root, token) = labelled_copy(&base, &own);
+        let folder = root.join(token.as_str());
+        let metadata = fs::symlink_metadata(&folder).unwrap();
+        assert_eq!(
+            copy_node(&root, &token, &own),
+            Some(format!("{}:{}", metadata.dev(), metadata.ino()))
+        );
+        assert_eq!(copy_node(&root, &token, &other), None);
     }
 }

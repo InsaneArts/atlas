@@ -80,9 +80,31 @@ pub(crate) struct Undoable {
 /// that no step covers yet, each placed by the order steps run in: a new
 /// quit before any new removal, new plans newest first ahead of those
 /// already planned. Steps already planned keep their numbers and places,
-/// and nothing a step already covers is planned twice. Pure: it decides
-/// from what it is given only.
+/// and nothing a step already covers is planned twice. Then every step not
+/// yet done or kept waits for what its kind waits for among all the steps,
+/// old and new. Pure: it decides from what it is given only.
 pub(crate) fn merge(steps: &mut Vec<Entry>, work: &[Undoable]) {
+    add(steps, work);
+    rewire(steps);
+}
+
+/// Make every step not yet done or kept wait for every step it must: a
+/// quit for nothing, a plan for every quit, an install for every quit and
+/// plan, a copy for every quit. Steps done or kept keep what they waited
+/// for, and every step keeps its number.
+fn rewire(steps: &mut [Entry]) {
+    let quits = numbers(steps, |step| matches!(step, Step::Quit { .. }));
+    let plans = numbers(steps, |step| matches!(step, Step::UndoPlan { .. }));
+    for entry in steps.iter_mut().filter(|entry| !entry.state.finished()) {
+        entry.after = match entry.step {
+            Step::Quit { .. } => Vec::new(),
+            Step::UndoPlan { .. } | Step::RemoveCopy { .. } => quits.clone(),
+            Step::RemoveInstall { .. } => quits.iter().chain(&plans).copied().collect(),
+        };
+    }
+}
+
+fn add(steps: &mut Vec<Entry>, work: &[Undoable]) {
     let covered = |owned: &Owned, steps: &[Entry]| {
         steps
             .iter()

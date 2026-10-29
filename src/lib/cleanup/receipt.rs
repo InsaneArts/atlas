@@ -1,14 +1,18 @@
 //! A cleanup's receipt: one file per cleanup in the private output folder's
 //! `cleanup` folder, written through to the disk before each step starts
 //! and after it ends, so a run cut short is finished from it, never by
-//! looking around the helper again. It keeps tokens, IDs, app names and
-//! reasons, never a file's name or path.
+//! looking around the helper again. Each step keeps what it came to: the
+//! files a copy into the helper left as the helper changed them, the files
+//! an installed app wrote outside its bundle, and why a step failed. It
+//! keeps tokens, IDs, app names and paths inside the helper's home, never
+//! the name or path of a file on this Mac.
 use super::plan::Step;
 use crate::{
+    client::Actor,
     control::{Durability, Token},
     error::Result,
     host_session::{Key, now_ms},
-    record_folder::{RecordFolder, Records},
+    record_folder::{LISTED, RecordFolder, Records},
     task::record::CleanupState,
 };
 use serde::{Deserialize, Serialize};
@@ -16,8 +20,10 @@ use std::{path::Path, time::Duration};
 
 /// The receipt format this build writes.
 const VERSION: u32 = 1;
-/// How long a complete receipt is kept.
+/// How long a finished receipt, or one nothing else names, is kept.
 const KEEP: Duration = Duration::from_secs(7 * 24 * 60 * 60);
+/// The most characters of a failure's words a step keeps.
+const SAID: usize = 300;
 
 /// How receipts are kept: through to the disk, and waited for longer than
 /// session records are, as a cleanup holds control while it writes them.
@@ -43,8 +49,8 @@ pub(crate) struct Receipt {
     /// that had ended; none when the session cleans up its own, or when
     /// the person did through Atlas.app.
     pub adopted_by: Option<Key>,
-    /// Who ran it last: "agent" or "viewer".
-    pub actor: String,
+    /// Who ran it last.
+    pub actor: Actor,
     pub started: u64,
     pub updated: u64,
     pub state: CleanupState,
@@ -53,15 +59,15 @@ pub(crate) struct Receipt {
 
 impl Receipt {
     /// A new, empty receipt of `session`'s work (or `task`'s), started now.
-    pub fn new(session: Key, task: Option<Key>, actor: &str, adopted_by: Option<Key>) -> Self {
+    pub fn new(session: Key, task: Option<Key>, actor: Actor) -> Self {
         let now = now_ms();
         Self {
             version: VERSION,
             id: Token::new(),
             session,
             task,
-            adopted_by,
-            actor: actor.to_owned(),
+            adopted_by: None,
+            actor,
             started: now,
             updated: now,
             state: CleanupState::Incomplete,
@@ -91,7 +97,8 @@ impl Receipt {
     }
 }
 
-/// One step of a receipt, as it was planned and how far it got.
+/// One step of a receipt, as it was planned, how far it got and what it
+/// came to.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub(crate) struct Entry {
@@ -109,6 +116,14 @@ pub(crate) struct Entry {
     /// Whether it was done because the thing was already gone.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub already_gone: bool,
+    /// Whether the task records that claim its thing were told what became
+    /// of it. A step done or kept but not yet settled is settled before
+    /// anything is planned again.
+    #[serde(default)]
+    pub settled: bool,
+    /// What it came to, beyond its state.
+    #[serde(flatten)]
+    pub came_to: CameTo,
     /// When it last changed, in milliseconds since 1970; 0 before it ran.
     #[serde(default)]
     pub at: u64,
@@ -124,18 +139,75 @@ impl Entry {
             reason: None,
             retry: false,
             already_gone: false,
+            settled: false,
+            came_to: CameTo::default(),
             at: 0,
         }
     }
 
-    /// Note that it got to `state` now, for `reason`.
+    /// Note that it got to `state` now, for `reason`, with nothing else
+    /// known of it yet.
     pub fn set(&mut self, state: StepState, reason: Option<Reason>) {
         self.state = state;
         self.retry = reason.is_some_and(Reason::retried) && state == StepState::Failed;
         self.reason = reason;
         self.already_gone = false;
+        self.settled = false;
+        self.came_to = CameTo::default();
         self.at = now_ms();
     }
+}
+
+/// What one step came to, beyond its state.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct CameTo {
+    /// The files undoing a copy into the helper left as the helper changed
+    /// them, by their path in its home.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub targets: Vec<String>,
+    /// How many folders that copy made it left, as something else uses
+    /// them.
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub retained_directories: usize,
+    /// The files an installed app keeps outside its bundle that exist now,
+    /// which are never removed.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub side_effects: Vec<SideEffect>,
+    /// Whether a kept install is held aside in its own folder, as it could
+    /// not be put back.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub held_aside: bool,
+    /// The apps running from a copy macOS moved them to that cannot be
+    /// traced to the task's own, so never quit.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub untraced: Vec<String>,
+    /// Why it failed, in the helper's words.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub error: Option<String>,
+}
+
+impl CameTo {
+    /// A failure said in `words`, bounded.
+    pub fn failed(words: &str) -> Self {
+        Self {
+            error: Some(words.chars().take(SAID).collect()),
+            ..Self::default()
+        }
+    }
+}
+
+fn is_zero(count: &usize) -> bool {
+    *count == 0
+}
+
+/// A file an installed app keeps outside its bundle, by its path in the
+/// helper's home, and whether it was there before the install.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct SideEffect {
+    pub path: String,
+    pub existed_before: bool,
 }
 
 /// How far one step got.
@@ -240,6 +312,18 @@ impl Receipts {
             .filter(|receipt| receipt.id == *id && receipt.version <= VERSION)
     }
 
+    /// The receipts of `session`'s work among the newest in the folder:
+    /// those its tasks' records name, and any a run cut short before it
+    /// named them.
+    pub fn of_session(&self, session: &Key) -> Vec<Receipt> {
+        self.folder
+            .listed(LISTED)
+            .iter()
+            .filter_map(|id| self.load(id))
+            .filter(|receipt| receipt.session == *session)
+            .collect()
+    }
+
     /// Write `receipt` whole, through to the disk, as its state is now.
     pub fn save(&self, receipt: &mut Receipt) -> Result<()> {
         receipt.updated = now_ms();
@@ -250,18 +334,19 @@ impl Receipts {
             .write(&receipt.id, &serde_json::to_vec(receipt)?)
     }
 
-    /// Remove the complete receipts older than a week; the one `keep` and
-    /// every unfinished one stay.
-    pub fn prune(&self, keep: &Token) {
+    /// Remove the receipts older than a week that are finished, or that
+    /// belong to a session `recorded` no longer knows of; the one `keep`
+    /// stays.
+    pub fn prune(&self, keep: &Token, recorded: impl Fn(&Key) -> bool) {
         let Ok(_lock) = self.folder.lock() else {
             return;
         };
         let week = u64::try_from(KEEP.as_millis()).unwrap_or(u64::MAX);
         let now = now_ms();
-        for id in self.folder.listed(crate::record_folder::LISTED) {
+        for id in self.folder.listed(LISTED) {
             let old = self.load(&id).is_some_and(|receipt| {
-                receipt.state == CleanupState::Complete
-                    && now.saturating_sub(receipt.updated) > week
+                now.saturating_sub(receipt.updated) > week
+                    && (receipt.state == CleanupState::Complete || !recorded(&receipt.session))
             });
             if old && id != *keep {
                 self.folder.remove(&id);

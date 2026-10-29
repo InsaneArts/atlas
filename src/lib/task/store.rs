@@ -13,7 +13,18 @@ use crate::{
     host_session::{Key, store::Store as Sessions},
     record_folder::{LISTED, RecordFolder, Records},
 };
-use std::{path::Path, time::Duration};
+use std::{
+    path::{Path, PathBuf},
+    sync::{Arc, Mutex, PoisonError},
+    time::{Duration, SystemTime},
+};
+
+/// The records [`Store::recent`] read last, by the folder they came from and
+/// when it last changed.
+static RECENT: Mutex<Option<Snapshot>> = Mutex::new(None);
+
+/// Records as read: from which folder, as it was when.
+type Snapshot = (PathBuf, SystemTime, Arc<[Record]>);
 
 /// How task records are kept: through to the disk, and waited for as
 /// briefly as session records are, so a claim never holds `open` up long.
@@ -132,6 +143,27 @@ impl Store {
                 self.folder.remove(&record.key);
             }
         }
+    }
+
+    /// [`Store::all`], as last read: read again only once a record was
+    /// written (every write renames one into the folder, which changes it),
+    /// so readers that come often, such as the viewer's session list and
+    /// session pruning, do not read every record each time.
+    pub fn recent(&self) -> Arc<[Record]> {
+        let Some(modified) = self.folder.modified() else {
+            return Arc::from([]);
+        };
+        let directory = self.folder.directory().to_owned();
+        let mut cache = RECENT.lock().unwrap_or_else(PoisonError::into_inner);
+        if let Some((known, at, records)) = cache.as_ref()
+            && *known == directory
+            && *at == modified
+        {
+            return Arc::clone(records);
+        }
+        let records: Arc<[Record]> = self.all().into();
+        *cache = Some((directory, modified, Arc::clone(&records)));
+        records
     }
 
     /// The records among the newest [`LISTED`] in the folder.

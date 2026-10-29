@@ -702,11 +702,18 @@ fn signalled(output: &[u8]) -> Vec<u64> {
 pub(crate) const QUIT_WAIT: Duration = Duration::from_secs(10);
 
 /// In the helper, each process is signalled only while it is still the
-/// executable listed, so a reused process ID is left alone. It prints each
-/// process it signalled.
-const QUIT: &str = r#"while [ $# -ge 2 ]; do
-  pid=$1 exe=$2; shift 2
-  [ -n "$exe" ] && [ "$(/bin/ps -o comm= -p "$pid")" = "$exe" ] && /bin/kill "$pid" && echo "$pid"
+/// executable listed, so a reused process ID is left alone, and, when a
+/// folder is given with it, only while that folder still has the node it
+/// was proven to have (`stat` without `-L` looks at a link itself, never
+/// through it). It prints each process it signalled.
+const QUIT: &str = r#"while [ $# -ge 4 ]; do
+  pid=$1 exe=$2 folder=$3 node=$4; shift 4
+  [ -n "$exe" ] || continue
+  [ "$(/bin/ps -o comm= -p "$pid")" = "$exe" ] || continue
+  if [ -n "$folder" ]; then
+    [ "$(/usr/bin/stat -f %d:%i "$folder" 2>/dev/null)" = "$node" ] || continue
+  fi
+  /bin/kill "$pid" && echo "$pid"
 done
 exit 0"#;
 
@@ -717,6 +724,14 @@ pub(crate) struct Quit {
     /// The first valid app list in which none of them was left, which
     /// copies are judged against.
     pub after: Value,
+}
+
+/// How waiting for apps to quit ended.
+pub(crate) enum Quitting {
+    /// None is left.
+    Gone(Quit),
+    /// These were still running when the wait ran out.
+    TimedOut { still: Vec<String> },
 }
 
 /// Signal `processes`, then wait up to `limit` until `left` (given an app
@@ -731,6 +746,27 @@ pub(crate) async fn quit(
     left: impl Fn(&Value, &[u64]) -> Vec<String>,
     limit: Duration,
 ) -> Result<Quit> {
+    match quit_until(client, ownership, processes, left, limit).await? {
+        Quitting::Gone(quit) => Ok(quit),
+        Quitting::TimedOut { still } => Err(Error::new(
+            "wait-failed",
+            format!(
+                "{} did not quit within {} seconds",
+                still.join(", "),
+                limit.as_secs()
+            ),
+        )),
+    }
+}
+
+/// [`quit`], saying a wait that ran out as such rather than as an error.
+pub(crate) async fn quit_until(
+    client: &Client,
+    ownership: &Ownership,
+    processes: &[Process],
+    left: impl Fn(&Value, &[u64]) -> Vec<String>,
+    limit: Duration,
+) -> Result<Quitting> {
     let mut argv = vec![
         "/bin/sh".to_owned(),
         "-c".to_owned(),
@@ -738,7 +774,17 @@ pub(crate) async fn quit(
         "sh".to_owned(),
     ];
     for process in processes {
-        argv.extend([process.pid.to_string(), process.executable.clone()]);
+        let (folder, node) = process
+            .within
+            .as_ref()
+            .map(|within| (within.folder.clone(), within.node.clone()))
+            .unwrap_or_default();
+        argv.extend([
+            process.pid.to_string(),
+            process.executable.clone(),
+            folder,
+            node,
+        ]);
     }
 
     let reply = accepted(client.run_owned(ownership, argv).await?)?;
@@ -761,18 +807,10 @@ pub(crate) async fn quit(
             .map_err(|error| unconfirmed(error, &names_by_quit(processes, &signalled, true)))?;
         let still = left(&after, &signalled);
         if still.is_empty() {
-            return Ok(Quit { signalled, after });
+            return Ok(Quitting::Gone(Quit { signalled, after }));
         }
-
         if Instant::now() >= deadline {
-            return Err(Error::new(
-                "wait-failed",
-                format!(
-                    "{} did not quit within {} seconds",
-                    still.join(", "),
-                    limit.as_secs()
-                ),
-            ));
+            return Ok(Quitting::TimedOut { still });
         }
 
         tokio::time::sleep(Duration::from_millis(200)).await;
@@ -2903,6 +2941,7 @@ mod tests {
             executable: format!("/{pid}"),
             name: name.to_owned(),
             protected: false,
+            within: None,
         };
 
         let processes = [

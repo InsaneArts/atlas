@@ -311,9 +311,9 @@ impl Store {
             .folder
             .directory()
             .parent()
-            .map(|output| crate::task::store::Store::at(output).all())
-            .unwrap_or_default()
+            .map(|output| crate::task::store::Store::at(output).recent())
             .into_iter()
+            .flat_map(|tasks| tasks.to_vec())
             .filter(crate::task::record::Record::holds_anything)
             .map(|task| task.session)
             .collect();

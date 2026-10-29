@@ -70,6 +70,18 @@ pub(crate) struct Process {
     pub(crate) name: String,
     /// Part of macOS or of Atlas, so never closed.
     pub(crate) protected: bool,
+    /// The folder it must still run from when it is signalled, by the node
+    /// that folder had when it was proven to be the one a cleanup owns;
+    /// none for a process chosen by name.
+    pub(crate) within: Option<Within>,
+}
+
+/// A folder by its path and the node (`DEVICE:INODE`) it was proven to
+/// have.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct Within {
+    pub(crate) folder: String,
+    pub(crate) node: String,
 }
 
 /// The running apps `closing` selects.
@@ -108,6 +120,7 @@ pub(crate) fn selected(apps: &Value, closing: Closing, atlas: Option<&str>) -> V
                 executable: running["executable"].as_str().unwrap_or("").to_owned(),
                 name: running["name"].as_str().unwrap_or("").to_owned(),
                 protected: protected(running, atlas),
+                within: None,
             })
         })
         .collect()
