@@ -3,7 +3,9 @@ import Testing
 
 @testable import AtlasUI
 
+// On the main actor: a colour that follows the appearance resolves through AppKit, which answers on the main thread.
 @Suite("GlassSurface")
+@MainActor
 struct GlassSurfaceTests {
   @Test("glass falls back to an opaque fill under Reduce Transparency")
   func glassTurnsOpaqueUnderReduceTransparency() throws {

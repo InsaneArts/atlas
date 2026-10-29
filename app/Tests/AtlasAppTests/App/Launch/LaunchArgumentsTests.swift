@@ -26,14 +26,32 @@ struct LaunchArgumentsTests {
     #expect(LaunchArguments.mode(["app", "--onboarding", "--login", "status"]) == .login("status"))
     #expect(LaunchArguments.mode(["app", "--render-viewer", "v", "--onboarding"]) == .onboarding)
     #expect(
-      LaunchArguments.mode(["app", "--render-viewer", "v", "--render-onboarding", "o"]) == .renderOnboarding("o")
+      LaunchArguments.mode(["app", "--render-viewer", "v", "--render-onboarding", "o"])
+        == .renderOnboarding("o", dark: false)
     )
-    #expect(LaunchArguments.mode(["app", "--render", "p", "--render-viewer", "v"]) == .renderViewer("v"))
-    #expect(LaunchArguments.mode(["app", "--render-settings", "s", "--render-viewer", "v"]) == .renderViewer("v"))
-    #expect(LaunchArguments.mode(["app", "--render", "p", "--render-settings", "s"]) == .renderSettings("s"))
-    #expect(LaunchArguments.mode(["app", "--render-settings", "s", "--render-menubar", "m"]) == .renderSettings("s"))
+    #expect(LaunchArguments.mode(["app", "--render", "p", "--render-viewer", "v"]) == .renderViewer("v", dark: false))
+    #expect(
+      LaunchArguments.mode(["app", "--render-settings", "s", "--render-viewer", "v"]) == .renderViewer("v", dark: false)
+    )
+    #expect(
+      LaunchArguments.mode(["app", "--render", "p", "--render-settings", "s"]) == .renderSettings("s", dark: false)
+    )
+    #expect(
+      LaunchArguments.mode(["app", "--render-settings", "s", "--render-menubar", "m"])
+        == .renderSettings("s", dark: false)
+    )
     #expect(LaunchArguments.mode(["app", "--render", "p", "--render-menubar", "m"]) == .renderMenuBar("m"))
     #expect(LaunchArguments.mode(["app", "--render", "p", "--dark"]) == .app(render: "p", dark: true))
     #expect(LaunchArguments.mode(["app"]) == .app(render: nil, dark: false))
+  }
+
+  @Test("every render draws light unless --dark asks for dark")
+  func rendersDrawLightUnlessAskedForDark() {
+    #expect(LaunchArguments.mode(["app", "--render-viewer", "v", "--dark"]) == .renderViewer("v", dark: true))
+    #expect(LaunchArguments.mode(["app", "--render-settings", "s", "--dark"]) == .renderSettings("s", dark: true))
+    #expect(
+      LaunchArguments.mode(["app", "--dark", "--render-onboarding", "o"]) == .renderOnboarding("o", dark: true)
+    )
+    #expect(LaunchArguments.mode(["app", "--render", "p"]) == .app(render: "p", dark: false))
   }
 }

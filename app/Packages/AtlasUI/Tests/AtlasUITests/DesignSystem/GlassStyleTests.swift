@@ -3,7 +3,9 @@ import Testing
 
 @testable import AtlasUI
 
+// On the main actor: a colour that follows the appearance resolves through AppKit, which answers on the main thread.
 @Suite("Glass style")
+@MainActor
 struct GlassStyleTests {
   @Test("glass is the system glass on macOS 26, the thin material before it, and opaque under Reduce Transparency")
   func backingFollowsTheSystemAndReduceTransparency() {
@@ -32,11 +34,13 @@ struct GlassStyleTests {
     #expect(fill.resolve(in: EnvironmentValues()).opacity >= 0.94)
   }
 
-  @Test("the scrim behind an alert is black at one half")
-  func theScrimIsHalfBlack() {
-    let scrim = Color.scrim
-      .resolve(in: EnvironmentValues())
-    #expect(abs(scrim.opacity - 0.5) < 0.001)
-    #expect(scrim.red == 0 && scrim.green == 0 && scrim.blue == 0)
+  @Test("the scrim behind an alert is black at one half in the dark and at one quarter in the light")
+  func theScrimIsHalfBlackInTheDark() {
+    for (environment, opacity) in [(EnvironmentValues.dark, Float(0.5)), (.light, 0.25)] {
+      let scrim = Color.scrim
+        .resolve(in: environment)
+      #expect(abs(scrim.opacity - opacity) < 0.001)
+      #expect(scrim.red == 0 && scrim.green == 0 && scrim.blue == 0)
+    }
   }
 }

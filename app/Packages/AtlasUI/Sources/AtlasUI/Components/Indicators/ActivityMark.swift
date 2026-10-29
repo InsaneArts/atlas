@@ -24,7 +24,7 @@ struct ActivityMark: View {
       Image(systemName: "exclamationmark.triangle.fill")
         .font(Typography.font(.callout))
         .symbolRenderingMode(.palette)
-        .foregroundStyle(Color.ground, Color.attention)
+        .foregroundStyle(Color.onAttention, Color.attention)
     case .quiet:
       Circle()
         .fill(Color.strokePressed)

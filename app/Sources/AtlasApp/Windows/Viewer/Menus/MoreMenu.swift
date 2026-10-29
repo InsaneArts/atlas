@@ -17,7 +17,6 @@ enum MoreMenu {
   /// - Returns: The menu.
   static func menu(_ value: ViewerMoreMenu, target: AnyObject) -> NSMenu {
     let menu = NSMenu()
-    menu.appearance = Appearance.dark
     menu.minimumWidth = width
     let copy = value.actsOnShot ? ViewerWords.copyScreenshot : ViewerWords.copyPicture
     let save = value.actsOnShot ? ViewerWords.saveScreenshot : ViewerWords.savePicture

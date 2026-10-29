@@ -60,7 +60,7 @@ enum PanelRender {
   ///   - service: The viewer service to read.
   ///   - overrides: What the design check changes, from `ATLAS_RENDER_*`.
   ///   - path: Where to write the PNG.
-  ///   - appearance: The appearance of the menu bar strip around the panel.
+  ///   - appearance: The appearance to draw the panel, its card and the menu bar strip in, light or dark.
   /// - Returns: Whether the PNG was written.
   static func draw(
     service: any ViewerService,
@@ -92,7 +92,7 @@ enum PanelRender {
   /// - Parameters:
   ///   - snapshot: What the panel's controller would hold.
   ///   - path: Where to write the PNG.
-  ///   - appearance: The appearance of the menu bar strip around the panel.
+  ///   - appearance: The appearance to draw the panel, its card and the menu bar strip in, light or dark.
   ///   - reduceTransparency: Whether to draw it as under Reduce Transparency, its glass opaque.
   /// - Returns: Whether the PNG was written.
   static func draw(
@@ -138,7 +138,7 @@ enum PanelRender {
   /// - Parameters:
   ///   - alert: The alert, as the alert window's controller would hold it.
   ///   - path: Where to write the PNG.
-  ///   - appearance: The appearance of the ground behind it.
+  ///   - appearance: The appearance to draw the alert and the ground behind it in, light or dark.
   /// - Returns: Whether the PNG was written.
   static func draw(alert: AlertSnapshot, to path: String, appearance: NSAppearance?) -> Bool {
     let state = AlertPresenter.state(alert)

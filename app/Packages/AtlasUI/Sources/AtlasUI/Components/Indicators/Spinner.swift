@@ -6,7 +6,7 @@ struct Spinner: View {
   var size = IconSize.xs
   /// The turning arc's colour: the accent, or white inside an accent button.
   var arc = Color.accent
-  /// The faint ring the arc turns on: white at 0.16 by default, which a white button needs darker to show.
+  /// The faint ring the arc turns on: a glass edge (``Color/strokeStrong``) by default.
   var track = Color.strokeStrong
   @State private var turning = false
   @Environment(\.accessibilityReduceMotion) private var reduceMotion

@@ -4,7 +4,9 @@ import Testing
 
 @testable import AtlasUI
 
+// On the main actor: a colour that follows the appearance resolves through AppKit, which answers on the main thread.
 @Suite("Design system")
+@MainActor
 struct DesignSystemTests {
   /// The spacing scale, smallest first.
   private static let spacing: [CGFloat] = [
@@ -170,7 +172,7 @@ struct DesignSystemTests {
     }
   }
 
-  @Test("every colour wash is its base colour at the documented opacity")
+  @Test("every colour wash is its base colour at the documented opacity, in the dark")
   func washesAreTheirBaseAtTheirOpacity() {
     let washes: [(name: String, wash: Color, base: Color, opacity: Float)] = [
       ("accentWash", .accentWash, .accent, 0.09),
@@ -186,7 +188,7 @@ struct DesignSystemTests {
       ("strokeHighlight", .strokeHighlight, .white, 0.12),
       ("dropShadowSoft", .dropShadowSoft, .black, 0.4),
     ]
-    let environment = EnvironmentValues()
+    let environment = EnvironmentValues.dark
     for (name, wash, base, opacity) in washes {
       let washed = wash.resolve(in: environment)
       let solid = base.resolve(in: environment)
@@ -209,7 +211,7 @@ struct DesignSystemTests {
     }
   }
 
-  @Test("every new solid colour and glass tint is its documented value")
+  @Test("every new solid colour and glass tint is its documented value, in the dark")
   func newColoursHaveTheirValues() {
     let colours: [(name: String, colour: Color, rgb: [Float], opacity: Float)] = [
       ("fillPrimaryHover", .fillPrimaryHover, [0xFF, 0xFF, 0xFF], 1),
@@ -219,7 +221,7 @@ struct DesignSystemTests {
       ("onAttention", .onAttention, [0x1C, 0x12, 0x03], 1),
       ("fillPinned", .fillPinned, [28, 28, 31], 0.9),
     ]
-    let environment = EnvironmentValues()
+    let environment = EnvironmentValues.dark
     for (name, colour, rgb, opacity) in colours {
       let resolved = colour.resolve(in: environment)
       let channels = [resolved.red, resolved.green, resolved.blue]

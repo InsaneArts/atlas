@@ -3,7 +3,7 @@ import SwiftUI
 /// A chip on glass floating over the picture: 28 high, 12-point medium words, an optional mark before them
 /// and an optional time after them in tabular digits, which changes every second, so it takes no transition.
 /// The panel's picture takes the small one, 26 high with 11.5-point words. Under Reduce Transparency the
-/// glass turns opaque.
+/// glass turns opaque. It is dark in either appearance, as the helper's screen it floats over is framed in black.
 struct GlassChip<Content: View>: View {
   /// What leads the words.
   enum Lead: Equatable, Sendable {
@@ -111,6 +111,7 @@ struct GlassChip<Content: View>: View {
         .strokeBorder(Color.strokeStrong, lineWidth: Stroke.hairline)
     )
     .background { ChipShadow(shape: shape) }
+    .environment(\.colorScheme, .dark)
     .accessibilityElement(children: .combine)
   }
 

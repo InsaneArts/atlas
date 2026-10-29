@@ -1,16 +1,18 @@
 import SwiftUI
 
-/// Atlas's capsule buttons: white for the next step, glass beside it, plain for the quiet way out, and the accent,
-/// tinted and destructive looks an alert's buttons wear; a circle of glass for a symbol alone. A style, not a view, so
-/// the control stays a `Button` with its own label, role, shortcut and disabled state.
+/// Atlas's capsule buttons: the text's colour for the next step, glass beside it, plain for the quiet way out, and
+/// the accent, tinted and destructive looks an alert's buttons wear; a circle of glass for a symbol alone. A style, not
+/// a view, so the control stays a `Button` with its own label, role, shortcut and disabled state.
 ///
 /// Each answers the pointer: a glass fill steps from 0.08 at rest to 0.12 under the pointer and 0.16 while held, the
-/// white capsule goes pure white and then #E3E3E8, and the accent darkens a tenth while held. The held fill lands at
+/// main capsule steps off its colour, in the dark to pure white and then #E3E3E8, and the accent darkens a tenth while
+/// held. The held fill lands at
 /// once on mouse-down and eases back over 0.12 seconds once let go; the button never changes size.
 struct CapsuleButtonStyle: ButtonStyle {
   /// How the capsule is painted.
   enum Look: Sendable {
-    /// White with dark text: the one thing to do next.
+    /// The text's colour with the ground's words, white in the dark and near black in the light: the one thing to do
+    /// next.
     case primary
     /// A glass fill with a fine edge: the actions beside it.
     case glass

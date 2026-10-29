@@ -1,18 +1,22 @@
-// Draws every Atlas.app render group into OUT, for comparing a change's
-// renders with the last: node scripts/render-app.mjs OUT [--only a,b].
+// Draws every Atlas.app render group into OUT, in the light and the dark
+// appearance, for comparing a change's renders with the last:
+// node scripts/render-app.mjs OUT [--only a,b] [--appearance light,dark].
 //
 // It builds the debug AtlasApp, whose preview states only a debug build
-// carries, then writes each group to OUT/<group>/, replacing what was there:
+// carries, then writes each group to OUT/<appearance>/<group>/ for each
+// appearance asked for, both by default, replacing what was there; the app
+// draws light, or dark with --dark:
 // - viewer: --render-viewer, every state plus the narrow sets;
 // - components: the component samples --render-viewer draws beside them;
 // - onboarding: --render-onboarding;
 // - settings: --render-settings;
-// - panel: --render --dark, once a mode in PANEL_MODES plus paused, then
-//   once a set of host sessions in PANEL_SESSIONS, as sessions-<name>.png;
-// - alerts: --render --dark, once an entry in ALERT_RENDERS, then once a
-//   helper notice in NOTICE_RENDERS (the system alerts --notice shows);
+// - panel: --render, once a mode in PANEL_MODES plus paused, then once a
+//   set of host sessions in PANEL_SESSIONS, as sessions-<name>.png;
+// - alerts: --render, once an entry in ALERT_RENDERS, then once a helper
+//   notice in NOTICE_RENDERS (the system alerts --notice shows);
 // - menubar: --render-menubar, the menu bar item in every state of
-//   MENUBAR_STATES on each bar of MENUBAR_BARS, as <state>-<bar>.png.
+//   MENUBAR_STATES on each bar of MENUBAR_BARS, as <state>-<bar>.png, once
+//   into OUT/menubar/, since it draws both bars itself.
 //
 // The panel and the alerts read a viewer service from the capability URL on
 // stdin. Here that is a stub on a free port answering every route with 404,
@@ -25,6 +29,14 @@ import path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
+
+// The appearances the app draws in: light by default, dark with --dark.
+export const APPEARANCES = ['light', 'dark'];
+
+// The flags that draw a render in `appearance`.
+export function appearanceFlags(appearance) {
+  return appearance === 'dark' ? ['--dark'] : [];
+}
 
 export const GROUPS = [
   'viewer',
@@ -156,16 +168,25 @@ const PANEL_TIMEOUT_MS = 60 * 1000;
 
 function usage(message) {
   if (message) console.error(message);
-  console.error(`usage: node scripts/render-app.mjs OUT [--only ${GROUPS.join(',')}]`);
+  console.error(
+    `usage: node scripts/render-app.mjs OUT [--only ${GROUPS.join(',')}] [--appearance ${APPEARANCES.join(',')}]`,
+  );
   process.exit(2);
 }
 
-function parse(argv) {
+export function parse(argv) {
   let out;
   let only = GROUPS;
+  let appearances = APPEARANCES;
   for (let index = 0; index < argv.length; index += 1) {
     const argument = argv[index];
-    if (argument === '--only') {
+    if (argument === '--appearance') {
+      const list = argv[(index += 1)];
+      if (!list) usage('--appearance needs a list of appearances');
+      appearances = list.split(',').filter(Boolean);
+      const unknown = appearances.filter((appearance) => !APPEARANCES.includes(appearance));
+      if (unknown.length) usage(`unknown appearance: ${unknown.join(', ')}`);
+    } else if (argument === '--only') {
       const list = argv[(index += 1)];
       if (!list) usage('--only needs a list of groups');
       only = list.split(',').filter(Boolean);
@@ -178,7 +199,11 @@ function parse(argv) {
     }
   }
   if (!out) usage();
-  return { out: path.resolve(out), only: GROUPS.filter((group) => only.includes(group)) };
+  return {
+    out: path.resolve(out),
+    only: GROUPS.filter((group) => only.includes(group)),
+    appearances: APPEARANCES.filter((appearance) => appearances.includes(appearance)),
+  };
 }
 
 // `folder` with symbolic links resolved, as far as it exists.
@@ -299,10 +324,12 @@ function count(folder) {
   return fs.readdirSync(folder, { recursive: true }).filter((name) => name.endsWith('.png')).length;
 }
 
-async function renderViewerAndComponents(app, out, only) {
+async function renderViewerAndComponents(app, out, only, appearance) {
   const scratch = path.join(out, '.render-viewer');
   fresh(scratch);
-  await run(app, ['--render-viewer', scratch], { timeout: PREVIEW_TIMEOUT_MS });
+  await run(app, ['--render-viewer', scratch, ...appearanceFlags(appearance)], {
+    timeout: PREVIEW_TIMEOUT_MS,
+  });
   const components = path.join(scratch, 'components');
   if (only.includes('components')) {
     clear(path.join(out, 'components'));
@@ -318,10 +345,11 @@ async function renderViewerAndComponents(app, out, only) {
   }
 }
 
-async function renderPanel(app, folder, renders, stub) {
+async function renderPanel(app, folder, renders, stub, appearance) {
   fresh(folder);
   for (const render of renders) {
-    await run(app, ['--render', path.join(folder, `${render.file}.png`), '--dark'], {
+    const file = path.join(folder, `${render.file}.png`);
+    await run(app, ['--render', file, ...appearanceFlags(appearance)], {
       env: environment(render.environment),
       stdinLine: stub.url,
       timeout: PANEL_TIMEOUT_MS,
@@ -343,31 +371,25 @@ async function renderMenuBar(app, folder) {
   }
 }
 
-async function main() {
-  const { out, only } = parse(process.argv.slice(2));
-  const baselineFile = path.join(root, 'local/render-baselines.json');
-  const baselines = fs.existsSync(baselineFile)
-    ? JSON.parse(fs.readFileSync(baselineFile, 'utf8'))
-    : [];
-  for (const { directory, message } of baselines) {
-    if (inside(out, path.resolve(root, directory))) throw new Error(message);
-  }
-  for (const folder of [...only, '.render-viewer']) checkReplaceable(path.join(out, folder));
-  const app = build();
+// Draws every group in `only` but the menu bar, in one appearance, into
+// `out`, that appearance's folder.
+async function renderAppearance(app, out, only, appearance) {
   fs.mkdirSync(out, { recursive: true });
   if (only.includes('viewer') || only.includes('components')) {
-    await renderViewerAndComponents(app, out, only);
+    await renderViewerAndComponents(app, out, only, appearance);
   }
   for (const group of ['onboarding', 'settings']) {
     if (!only.includes(group)) continue;
     fresh(path.join(out, group));
-    await run(app, [`--render-${group}`, path.join(out, group)], { timeout: PREVIEW_TIMEOUT_MS });
+    await run(app, [`--render-${group}`, path.join(out, group), ...appearanceFlags(appearance)], {
+      timeout: PREVIEW_TIMEOUT_MS,
+    });
   }
   if (only.includes('panel') || only.includes('alerts')) {
     const stub = await startStub();
     try {
       if (only.includes('panel')) {
-        await renderPanel(app, path.join(out, 'panel'), PANEL_RENDERS, stub);
+        await renderPanel(app, path.join(out, 'panel'), PANEL_RENDERS, stub, appearance);
       }
       if (only.includes('alerts')) {
         await renderPanel(
@@ -375,14 +397,43 @@ async function main() {
           path.join(out, 'alerts'),
           [...ALERT_RENDERS, ...NOTICE_RENDERS],
           stub,
+          appearance,
         );
       }
     } finally {
       await stub.close();
     }
   }
+}
+
+async function main() {
+  const { out, only, appearances } = parse(process.argv.slice(2));
+  const baselineFile = path.join(root, 'local/render-baselines.json');
+  const baselines = fs.existsSync(baselineFile)
+    ? JSON.parse(fs.readFileSync(baselineFile, 'utf8'))
+    : [];
+  for (const { directory, message } of baselines) {
+    if (inside(out, path.resolve(root, directory))) throw new Error(message);
+  }
+  const drawn = only.filter((group) => group !== 'menubar');
+  for (const appearance of appearances) {
+    for (const folder of [...drawn, '.render-viewer']) {
+      checkReplaceable(path.join(out, appearance, folder));
+    }
+  }
+  if (only.includes('menubar')) checkReplaceable(path.join(out, 'menubar'));
+  const app = build();
+  fs.mkdirSync(out, { recursive: true });
+  for (const appearance of appearances) {
+    await renderAppearance(app, path.join(out, appearance), drawn, appearance);
+  }
   if (only.includes('menubar')) await renderMenuBar(app, path.join(out, 'menubar'));
-  for (const group of only) console.log(`${group}: ${count(path.join(out, group))} files`);
+  for (const appearance of appearances) {
+    for (const group of drawn) {
+      console.log(`${appearance}/${group}: ${count(path.join(out, appearance, group))} files`);
+    }
+  }
+  if (only.includes('menubar')) console.log(`menubar: ${count(path.join(out, 'menubar'))} files`);
 }
 
 if (process.argv[1] && import.meta.url === pathToFileURL(path.resolve(process.argv[1])).href) {

@@ -27,7 +27,8 @@ struct PanelPicture: View {
     .frame(width: PanelLayout.picture.width, height: PanelLayout.picture.height)
   }
 
-  /// The screen with what sits on it: the rim, the badge, the expand symbol, the caption and the pause button.
+  /// The screen with what sits on it: the rim, the badge, the expand symbol, the caption and the pause button, dark in
+  /// either appearance, as the helper's screen is framed in black.
   private var screen: some View {
     Button {
       send(.openScreen)
@@ -43,6 +44,7 @@ struct PanelPicture: View {
     .overlay(alignment: .topTrailing) { expand }
     .overlay(alignment: .bottomLeading) { caption }
     .overlay(alignment: .bottomTrailing) { pauseButton }
+    .environment(\.colorScheme, .dark)
     .onHover { isHovered = $0 }
   }
 

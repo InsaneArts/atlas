@@ -29,7 +29,7 @@
         try? FileManager.default
           .removeItem(at: directory)
       }
-      #expect(OnboardingRender.draw(to: directory.path))
+      #expect(OnboardingRender.draw(to: directory.path, appearance: Appearance.dark))
       for render in OnboardingRender.renders {
         let file = directory.appendingPathComponent("\(render.file).png")
         let image = try #require(NSBitmapImageRep(data: Data(contentsOf: file)), "\(render.file) was not drawn")
@@ -46,7 +46,7 @@
         try? FileManager.default
           .removeItem(at: directory)
       }
-      #expect(DockedRender.draw(to: directory.path))
+      #expect(DockedRender.draw(to: directory.path, appearance: Appearance.light))
       for render in DockedRender.renders {
         let file = directory.appendingPathComponent("\(render.file).png")
         let image = try #require(NSBitmapImageRep(data: Data(contentsOf: file)), "\(render.file) was not drawn")
@@ -67,7 +67,15 @@
         try? FileManager.default
           .removeItem(at: directory)
       }
-      #expect(ViewerRender.draw(file, render.value, to: directory, size: try #require(render.size)))
+      #expect(
+        ViewerRender.draw(
+          file,
+          render.value,
+          to: directory,
+          size: try #require(render.size),
+          appearance: Appearance.dark
+        )
+      )
       let drawn = directory.appendingPathComponent("\(file).png")
       let image = try #require(NSBitmapImageRep(data: Data(contentsOf: drawn)), "\(file) was not drawn")
       #expect(image.pixelsWide == Int(size.width) * PNG.scale)
@@ -84,7 +92,7 @@
       }
       let size = try #require(render.size)
       #expect(size.height == PreviewStates.viewerSize.height)
-      #expect(ViewerRender.draw(file, render.value, to: directory, size: size))
+      #expect(ViewerRender.draw(file, render.value, to: directory, size: size, appearance: Appearance.light))
       let drawn = directory.appendingPathComponent("\(file).png")
       let image = try #require(NSBitmapImageRep(data: Data(contentsOf: drawn)), "\(file) was not drawn")
       #expect(image.pixelsWide == Int(size.width) * PNG.scale)
@@ -109,11 +117,32 @@
         try? FileManager.default
           .removeItem(at: directory)
       }
-      #expect(SettingsRender.draw(file, state, to: directory))
+      #expect(SettingsRender.draw(file, state, to: directory, appearance: Appearance.dark))
       let drawn = directory.appendingPathComponent("\(file).png")
       let image = try #require(NSBitmapImageRep(data: Data(contentsOf: drawn)), "\(file) was not drawn")
       #expect(image.pixelsWide == Int(size.width) * PNG.scale)
       #expect(image.pixelsHigh == Int(size.height) * PNG.scale)
+    }
+
+    @Test("a render drawn light has a light ground, and drawn dark a dark one")
+    func rendersDrawInTheAppearanceAsked() throws {
+      let directory = try Self.directory()
+      defer {
+        try? FileManager.default
+          .removeItem(at: directory)
+      }
+      let state = try #require(SettingsRender.renders.first?.state)
+      var grounds: [CGFloat] = []
+      for (file, appearance) in [("light", Appearance.light), ("dark", Appearance.dark)] {
+        #expect(SettingsRender.draw(file, state, to: directory, appearance: appearance))
+        let drawn = directory.appendingPathComponent("\(file).png")
+        let image = try #require(NSBitmapImageRep(data: Data(contentsOf: drawn)), "\(file) was not drawn")
+        // A corner of the window's ground, clear of the title, the tabs and the panes.
+        let corner = try #require(image.colorAt(x: 2, y: 2)?.usingColorSpace(.sRGB))
+        grounds.append(corner.brightnessComponent)
+      }
+      #expect(grounds[0] > 0.9, "light: \(grounds[0])")
+      #expect(grounds[1] < 0.15, "dark: \(grounds[1])")
     }
 
     @Test("the settings renders draw every sample the previews list, each under a name of its own")
@@ -198,7 +227,7 @@
         try? FileManager.default
           .removeItem(at: directory)
       }
-      #expect(ComponentRender.draw(to: directory.path))
+      #expect(ComponentRender.draw(to: directory.path, appearance: Appearance.light))
       for sample in ComponentSample.allCases {
         let file = directory.appendingPathComponent("\(sample.rawValue).png")
         let image = try #require(NSBitmapImageRep(data: Data(contentsOf: file)), "\(sample.rawValue) was not drawn")

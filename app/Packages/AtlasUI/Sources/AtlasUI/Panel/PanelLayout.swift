@@ -74,16 +74,15 @@ enum PanelLayout {
   static let breathStill = 0.5
   /// 1: how long the live row's blue dot stays before it cools away, in seconds.
   static let liveHold: TimeInterval = 1
-  /// The panel's ground, rgb(30, 30, 33), drawn opaque under Reduce
+  /// The panel's ground, #F6F6F8 under Light and rgb(30, 30, 33) under Dark, drawn opaque under Reduce
   /// Transparency.
-  static let ground = Color(red: 30 / 255, green: 30 / 255, blue: 33 / 255)
+  static let ground = Color(light: .rgb(0xF6F6F8), dark: .rgb(0x1E1E21))
   /// 0.80: the ground's opacity over the popover's glass, so the material shows through.
   static let groundTint = 0.8
   /// 16: the panel's corners, where no popover holds it.
   static let corner: CGFloat = 16
-  /// The panel's shadow, 0 20 50 black at 0.5: its colour.
-  static let shadowColor = Color.black
-    .opacity(0.5)
+  /// The panel's shadow, 0 20 50 in a surface's shadow colour (``Color/dropShadow``): its colour.
+  static let shadowColor = Color.dropShadow
   /// 24: the shadow's radius, half the CSS 50 blur rounded to an even point, as ``Elevation`` halves them.
   static let shadowRadius: CGFloat = 24
   /// 20: how far the shadow falls below the panel.

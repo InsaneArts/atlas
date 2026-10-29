@@ -19,7 +19,6 @@ enum SessionsMenu {
   /// - Returns: The menu.
   static func menu(_ value: ViewerSessionsMenu, target: AnyObject, scale: CGFloat) -> NSMenu {
     let menu = NSMenu()
-    menu.appearance = Appearance.dark
     menu.minimumWidth = width
     let all = NSMenuItem(
       title: ViewerWords.allSessionsItem,

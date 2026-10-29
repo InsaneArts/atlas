@@ -21,10 +21,12 @@ struct ViewerScreen<Input: View, LivePicture: View>: View {
   /// The namespace the picture moves in between the stage and the corner, the window's.
   let zoom: Namespace.ID
 
-  /// The picture under what lies over it, or why there is none.
+  /// The picture under what lies over it, dark in either appearance, as the helper's screen is framed in black; or
+  /// why there is none.
   var body: some View {
     if let picture = state.picture {
       shown(picture)
+        .environment(\.colorScheme, .dark)
         .accessibilityElement(children: .contain)
         .accessibilityLabel(Text(verbatim: "The helper's screen"))
     } else if let empty = state.empty {

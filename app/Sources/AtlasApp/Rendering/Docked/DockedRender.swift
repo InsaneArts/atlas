@@ -28,9 +28,11 @@
 
     /// Draws every docked render to a PNG named after it in `directory`.
     ///
-    /// - Parameter directory: Where to write the PNGs.
+    /// - Parameters:
+    ///   - directory: Where to write the PNGs.
+    ///   - appearance: The appearance to draw them in, light or dark.
     /// - Returns: Whether every PNG was written.
-    static func draw(to directory: String) -> Bool {
+    static func draw(to directory: String, appearance: NSAppearance?) -> Bool {
       let folder = URL(fileURLWithPath: directory)
       return renders.map { render in
         PNG.write(
@@ -38,7 +40,8 @@
             .environment(\.appIcon, AppIconImage.image)
             .environment(\.accountPicture, AccountPictureImage.image),
           size: size,
-          to: folder.appendingPathComponent("\(render.file).png")
+          to: folder.appendingPathComponent("\(render.file).png"),
+          appearance: appearance
         )
       }
       .allSatisfy { $0 }

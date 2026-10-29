@@ -3,7 +3,8 @@
   import SwiftUI
 
   /// A sample System Settings window for the docked renders: a sidebar of bars, the page's name, and a list of apps
-  /// with their switches, drawn plainly so it reads as the place the panel docks beside, never as the real window.
+  /// with their switches, drawn plainly so it reads as the place the panel docks beside, never as the real window. It
+  /// draws in the render's appearance, as the real window would.
   struct SettingsSketch: View {
     /// The page's name, as macOS names it.
     let page: String
@@ -138,31 +139,31 @@
     static let appInset: CGFloat = 12
     /// 40: an app row's height.
     static let appHeight: CGFloat = 40
-    /// The window's ground: a dark grey.
-    static let windowFill = Color(white: 0.16)
+    /// The window's ground: the system's window background, light or dark as the render is.
+    static let windowFill = Color(nsColor: .windowBackgroundColor)
     /// The window's edge.
-    static let edge = Color.white
+    static let edge = Color.primary
       .opacity(0.12)
-    /// The sidebar's ground, a shade lighter than the window's.
-    static let sidebarFill = Color.white
+    /// The sidebar's ground, a shade off the window's.
+    static let sidebarFill = Color.primary
       .opacity(0.04)
     /// A sidebar bar.
-    static let bar = Color.white
+    static let bar = Color.primary
       .opacity(0.08)
     /// The picked sidebar bar.
-    static let pickedBar = Color.white
+    static let pickedBar = Color.primary
       .opacity(0.22)
     /// The page's name.
-    static let title = Color.white
+    static let title = Color.primary
       .opacity(0.85)
     /// The group's ground.
-    static let groupFill = Color.white
+    static let groupFill = Color.primary
       .opacity(0.05)
     /// An app's icon.
-    static let icon = Color.white
+    static let icon = Color.primary
       .opacity(0.14)
     /// An app's name and its switch.
-    static let name = Color.white
+    static let name = Color.primary
       .opacity(0.12)
   }
 #endif

@@ -2,14 +2,16 @@ import AppKit
 
 /// Atlas's appearance, and the person's display settings that AppKit motion reads.
 ///
-/// Every Atlas window, popover and menu is dark, whatever the system's setting, so its native title bar, controls and
-/// caret match the dark ground it draws; ``dark`` is the one place that appearance is named. Reduce Motion and Reduce
-/// Transparency are read as each transition starts, so a change in System Settings applies to the next one. SwiftUI
-/// views read the environment's `accessibilityReduceMotion` and `accessibilityReduceTransparency` instead.
+/// Every Atlas window, popover and menu follows the Mac's appearance, Light, Dark or Auto, and none sets its own, so
+/// its native title bar, controls and caret match the ground its colour tokens draw, and all of it changes while it is
+/// open. Only the design renders name an appearance, to draw each in turn: ``light`` and ``dark`` are the one place
+/// they are named. Reduce Motion and Reduce Transparency are read as each transition starts, so a change in System
+/// Settings applies to the next one. SwiftUI views read the environment's `accessibilityReduceMotion` and
+/// `accessibilityReduceTransparency` instead.
 enum Appearance {
-  /// The dark appearance every Atlas window, popover and menu draws in.
+  /// The dark appearance a design render draws in when asked for dark.
   static let dark = NSAppearance(named: .darkAqua)
-  /// The light appearance: only a panel render's menu bar strip drawn light uses it.
+  /// The light appearance a design render draws in otherwise.
   static let light = NSAppearance(named: .aqua)
 
   /// Whether Reduce Motion is on: a window then moves at once instead of gliding.

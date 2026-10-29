@@ -75,6 +75,20 @@ struct AppShellLayoutTests {
     #expect(dark.keys.sorted() == ["Shared/Windows/Appearance.swift"])
   }
 
+  @Test("no window, popover or menu sets its own appearance, so each follows the Mac's; only the renders name one")
+  func nothingOnScreenForcesAnAppearance() throws {
+    let appearance = try Regex(#"\.appearance\s*=(?!=)"#)
+    let forcing = try Self.code()
+      .filter { path, text in !path.hasPrefix("Rendering/") && text.contains(appearance) }
+    #expect(forcing.isEmpty, "\(forcing.keys.sorted())")
+    let named = try Self.code()
+      .filter { path, text in
+        !path.hasPrefix("Rendering/") && path != "AtlasApp.swift" && path != "Shared/Windows/Appearance.swift"
+          && (text.contains("Appearance.dark") || text.contains("Appearance.light"))
+      }
+    #expect(named.isEmpty, "\(named.keys.sorted())")
+  }
+
   @Test("no window is built, and no controller made, outside App")
   func windowsAndControllersAreBuiltInApp() throws {
     let window = try Regex(#"\b[A-Z][A-Za-z]*Window\(controller:"#)

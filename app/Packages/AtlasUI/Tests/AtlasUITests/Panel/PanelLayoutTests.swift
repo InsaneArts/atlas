@@ -3,7 +3,9 @@ import Testing
 
 @testable import AtlasUI
 
+// On the main actor: a colour that follows the appearance resolves through AppKit, which answers on the main thread.
 @Suite("PanelLayout")
+@MainActor
 struct PanelLayoutTests {
   @Test("a state change moves every piece of the panel together, easing out over 0.2 seconds with no bounce")
   func aStateChangeMovesTogether() {
@@ -57,14 +59,18 @@ struct PanelLayoutTests {
     #expect(try width(.regular) > PanelLayout.captionWidth, "the viewer's chip would have cut it")
   }
 
-  @Test("the panel's ground is tinted over the glass, and opaque under Reduce Transparency")
+  @Test("the panel's ground is tinted over the glass, and opaque under Reduce Transparency, in either appearance")
   func theGroundIsTintedOverTheGlass() {
     #expect(PanelLayout.groundOpacity(reduceTransparency: false) == 0.8)
     #expect(PanelLayout.groundOpacity(reduceTransparency: true) == 1)
-    let ground = PanelLayout.ground
-      .resolve(in: EnvironmentValues())
-    #expect(abs(ground.red * 255 - 30) < 0.5 && abs(ground.green * 255 - 30) < 0.5 && abs(ground.blue * 255 - 33) < 0.5)
-    #expect(ground.opacity == 1, "the ground itself is opaque; the tint is its opacity over the glass")
+    for (environment, rgb) in [(EnvironmentValues.dark, [Float(30), 30, 33]), (.light, [0xF6, 0xF6, 0xF8])] {
+      let ground = PanelLayout.ground
+        .resolve(in: environment)
+      for (channel, value) in zip([ground.red, ground.green, ground.blue], rgb) {
+        #expect(abs(channel * 255 - value) < 0.5)
+      }
+      #expect(ground.opacity == 1, "the ground itself is opaque; the tint is its opacity over the glass")
+    }
   }
 
   @Test("the connecting mark breathes between 0.3 and 0.7, holds at 0.5 when still, and rests at 0.55 beside a line")

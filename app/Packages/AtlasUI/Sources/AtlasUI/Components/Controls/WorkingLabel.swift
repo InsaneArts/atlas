@@ -14,7 +14,7 @@ struct WorkingLabel: View {
   var workingTitle: String?
   /// The spinner's arc colour: the accent on glass, white on the accent.
   var arc = Color.accent
-  /// The spinner's track colour, under its arc: a faint white by default, which a white button needs darker.
+  /// The spinner's track colour, under its arc: a glass edge (``Color/strokeStrong``) by default.
   var track = Color.strokeStrong
 
   /// What it draws, from its state.

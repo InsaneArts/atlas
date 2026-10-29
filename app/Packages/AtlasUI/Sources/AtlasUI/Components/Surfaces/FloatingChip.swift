@@ -1,7 +1,8 @@
 import SwiftUI
 
 /// A frosted capsule floating over the helper's screen: a caption, the chip at the top, or the mini screen's Live.
-/// Under Reduce Transparency it is drawn opaque on the window's ground.
+/// Under Reduce Transparency it is drawn opaque on the window's ground. It is dark in either appearance, as the
+/// helper's screen it floats over is framed in black.
 struct FloatingChip<Content: View>: View {
   /// How tall the chip is.
   enum Size: Sendable {

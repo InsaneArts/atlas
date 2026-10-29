@@ -6,15 +6,15 @@ enum LaunchMode: Equatable {
   case login(String)
   /// The setup window on its own.
   case onboarding
-  /// Draw every setup screen to PNGs in a folder (debug builds).
-  case renderOnboarding(String)
-  /// Draw every viewer state to PNGs in a folder (debug builds).
-  case renderViewer(String)
-  /// Draw every Settings state to PNGs in a folder (debug builds).
-  case renderSettings(String)
+  /// Draw every setup screen to PNGs in a folder, in light or dark (debug builds).
+  case renderOnboarding(String, dark: Bool)
+  /// Draw every viewer state to PNGs in a folder, in light or dark (debug builds).
+  case renderViewer(String, dark: Bool)
+  /// Draw every Settings state to PNGs in a folder, in light or dark (debug builds).
+  case renderSettings(String, dark: Bool)
   /// Draw the menu bar item in every state, light and dark, to PNGs in a folder.
   case renderMenuBar(String)
   /// The app that reads the viewer's URL on standard input: the menu bar, or with `render`, one drawing of the
-  /// panel in light or dark.
+  /// panel, or of an alert, in light or dark.
   case app(render: String?, dark: Bool)
 }

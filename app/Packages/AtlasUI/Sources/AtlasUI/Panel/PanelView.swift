@@ -43,7 +43,6 @@ public struct PanelView: View {
         .opacity(PanelLayout.groundOpacity(reduceTransparency: reduceTransparency))
     )
     .foregroundStyle(Color.textPrimary)
-    .environment(\.colorScheme, .dark)
     // Only a change is spoken: a poll that reads the same announcement or notice again says nothing.
     .onChange(of: state.announcement) { _, text in if let text { announce(text) } }
     .onChange(of: state.notice) { _, notice in if let notice { announce(notice) } }

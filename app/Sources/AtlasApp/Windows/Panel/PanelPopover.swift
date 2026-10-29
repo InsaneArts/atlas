@@ -45,8 +45,8 @@ final class PanelPopover: NSObject, NSPopoverDelegate {
     self.openSettings = openSettings
     self.gettingStarted = gettingStarted
     super.init()
-    // The popover follows the panel as Recent and the line come and go (`PanelPopover+Resize`); Atlas's panel is
-    // always dark, like its other windows.
+    // The popover follows the panel as Recent and the line come and go (`PanelPopover+Resize`); like Atlas's other
+    // windows, it follows the Mac's appearance.
     WindowShell.host(
       in: popover,
       label: PanelWords.name,

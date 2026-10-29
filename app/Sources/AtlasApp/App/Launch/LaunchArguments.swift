@@ -1,5 +1,6 @@
 /// Reads the app's arguments into what this launch does. The order is the one the app has always used: the flag
-/// modes first, each before the next, then the app that reads its viewer URL on standard input.
+/// modes first, each before the next, then the app that reads its viewer URL on standard input. Every render draws
+/// in the light appearance unless `--dark` asks for the dark one.
 enum LaunchArguments {
   /// What `arguments` ask this launch to do.
   ///
@@ -16,19 +17,20 @@ enum LaunchArguments {
     if arguments.contains("--onboarding") {
       return .onboarding
     }
+    let dark = arguments.contains("--dark")
     if let folder = value(after: "--render-onboarding", in: arguments) {
-      return .renderOnboarding(folder)
+      return .renderOnboarding(folder, dark: dark)
     }
     if let folder = value(after: "--render-viewer", in: arguments) {
-      return .renderViewer(folder)
+      return .renderViewer(folder, dark: dark)
     }
     if let folder = value(after: "--render-settings", in: arguments) {
-      return .renderSettings(folder)
+      return .renderSettings(folder, dark: dark)
     }
     if let folder = value(after: "--render-menubar", in: arguments) {
       return .renderMenuBar(folder)
     }
-    return .app(render: value(after: "--render", in: arguments), dark: arguments.contains("--dark"))
+    return .app(render: value(after: "--render", in: arguments), dark: dark)
   }
 
   /// The argument `offset` places after `flag`, if the flag is there and the argument is.

@@ -156,12 +156,16 @@
     /// Draws every main window state to PNGs in `directory`, at Retina scale (``PNG/scale``): the standard
     /// renders, the narrow ones, then the frames, each at its size.
     ///
-    /// - Parameter directory: Where the PNGs go.
+    /// - Parameters:
+    ///   - directory: Where the PNGs go.
+    ///   - appearance: The appearance to draw them in, light or dark.
     /// - Returns: Whether every state was drawn.
-    static func draw(to directory: String) -> Bool {
+    static func draw(to directory: String, appearance: NSAppearance?) -> Bool {
       let folder = URL(fileURLWithPath: directory)
       return (renders + narrowRenders + frameRenders)
-        .map { draw($0.name, $0.value, to: folder, size: $0.size ?? PreviewStates.viewerSize) }
+        .map {
+          draw($0.name, $0.value, to: folder, size: $0.size ?? PreviewStates.viewerSize, appearance: appearance)
+        }
         .allSatisfy { $0 }
     }
 
@@ -172,18 +176,21 @@
     ///   - state: The state.
     ///   - folder: Where the PNG goes.
     ///   - size: The window's size.
+    ///   - appearance: The appearance to draw it in, light or dark.
     /// - Returns: Whether it was drawn.
     static func draw(
       _ file: String,
       _ state: ViewerState,
       to folder: URL,
-      size: NSSize = PreviewStates.viewerSize
+      size: NSSize = PreviewStates.viewerSize,
+      appearance: NSAppearance?
     ) -> Bool {
       PNG.write(
         ViewerView(state: state) { _ in }
           .environment(\.appIcon, AppIconImage.image),
         size: size,
-        to: folder.appendingPathComponent("\(file).png")
+        to: folder.appendingPathComponent("\(file).png"),
+        appearance: appearance
       )
     }
   }

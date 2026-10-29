@@ -116,7 +116,7 @@ struct Disc: View {
     case .accentSoft: .accent
     case .neutral, .avatar: .textPrimary
     case .success: .onSuccess
-    case .attention: .ground
+    case .attention: .onAttention
     case .waiting: .textSecondary
     }
   }

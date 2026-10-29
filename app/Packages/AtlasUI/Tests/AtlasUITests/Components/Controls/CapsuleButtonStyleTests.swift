@@ -3,17 +3,19 @@ import Testing
 
 @testable import AtlasUI
 
+// On the main actor: a colour that follows the appearance resolves through AppKit, which answers on the main thread.
 @Suite("CapsuleButtonStyle")
+@MainActor
 struct CapsuleButtonStyleTests {
-  /// A colour's opacity, resolved.
+  /// A colour's opacity, resolved in the dark appearance.
   ///
   /// - Parameter color: The colour.
   /// - Returns: Its alpha.
   private func alpha(_ color: Color) -> Float {
-    color.resolve(in: EnvironmentValues()).opacity
+    color.resolve(in: .dark).opacity
   }
 
-  @Test("a glass button's fill steps from 0.08 to 0.12 to 0.16 at rest, on hover and while pressed")
+  @Test("a glass button's fill steps from 0.08 to 0.12 to 0.16 at rest, on hover and while pressed, in the dark")
   func glassFillSteps() {
     let rest = CapsuleButtonStyle.fill(look: .glass, isHovered: false, isPressed: false, isEnabled: true)
     let hovered = CapsuleButtonStyle.fill(look: .glass, isHovered: true, isPressed: false, isEnabled: true)
@@ -35,15 +37,18 @@ struct CapsuleButtonStyleTests {
     #expect(on == .fillControlOn)
   }
 
-  @Test("a primary capsule is pure white on hover and E3E3E8 while held")
+  @Test("a primary capsule is pure white on hover and E3E3E8 while held, in the dark")
   func primaryHoverAndHold() throws {
-    let environment = EnvironmentValues()
+    let environment = EnvironmentValues.dark
     let hovered = CapsuleButtonStyle.fill(look: .primary, isHovered: true, isPressed: false, isEnabled: true)
       .resolve(in: environment)
     let held = CapsuleButtonStyle.fill(look: .primary, isHovered: true, isPressed: true, isEnabled: true)
       .resolve(in: environment)
     #expect(hovered == Color.white.resolve(in: environment))
-    #expect(held == Color(red: 0xE3 / 255, green: 0xE3 / 255, blue: 0xE8 / 255).resolve(in: environment))
+    let channels = [held.red, held.green, held.blue]
+    for (channel, value) in zip(channels, [Float(0xE3), 0xE3, 0xE8]) {
+      #expect(abs(channel * 255 - value) < 0.5)
+    }
     let resting = CapsuleButtonStyle.fill(look: .primary, isHovered: false, isPressed: false, isEnabled: true)
     #expect(resting == .textPrimary)
   }
