@@ -412,11 +412,11 @@ pub(crate) fn append(directory: &Path, row: &Row) -> Result<()> {
 /// input through a viewer is its newest row, counting every action of the
 /// run. A line that does not read, or names no operation, is passed over.
 ///
-/// The log is read from its end, a [`TAIL`] at a time, until `limit` rows
-/// are found or [`READ_LIMIT`] bytes were read: it is read often, so never
-/// more than that, however long it is. When it runs out first, as just
-/// after it starts over, the reading goes on into [`PREVIOUS`] within the
-/// same limit.
+/// The log is read from its end, a [`TAIL`] at a time, until the last of
+/// `limit` runs is complete or [`READ_LIMIT`] bytes were read. It is read
+/// often, so never more than that, however long it is. When it runs out
+/// first, as just after it starts over, the reading goes on into
+/// [`PREVIOUS`] within the same limit.
 pub fn recent(directory: &Path, limit: usize) -> Vec<Row> {
     if limit == 0 {
         return Vec::new();
@@ -436,10 +436,12 @@ pub fn recent(directory: &Path, limit: usize) -> Vec<Row> {
     let mut rows = Vec::new();
     let mut room = READ_LIMIT;
     for file in [current, previous].into_iter().flatten() {
-        if rows.len() >= limit || room == 0 {
+        if room == 0 {
             break;
         }
-        read_back(file, limit, &mut room, &mut rows);
+        if !read_back(file, limit, &mut room, &mut rows) {
+            break;
+        }
     }
 
     rows.truncate(limit);
@@ -456,9 +458,10 @@ fn same_file(one: &fs::File, other: &fs::File) -> bool {
 }
 
 /// Add the rows of `file`, read from its end a [`TAIL`] at a time, to
-/// `rows`, older than those already there, until they number `limit` or
-/// `room` bytes are spent.
-fn read_back(mut file: fs::File, limit: usize, room: &mut u64, rows: &mut Vec<Row>) {
+/// `rows`, older than those already there, finishing the last admitted
+/// run within `room` bytes. Returns false once another group is found
+/// beyond `limit`.
+fn read_back(mut file: fs::File, limit: usize, room: &mut u64, rows: &mut Vec<Row>) -> bool {
     let wanted = limit.saturating_sub(rows.len()) as u64;
     let mut chunk = TAIL.max(ROW_BYTES.saturating_mul(wanted));
     let mut end = file.metadata().map(|m| m.len()).unwrap_or(0);
@@ -466,7 +469,7 @@ fn read_back(mut file: fs::File, limit: usize, room: &mut u64, rows: &mut Vec<Ro
     // part of the file before it.
     let mut partial = Vec::new();
 
-    while end > 0 && *room > 0 && rows.len() < limit {
+    while end > 0 && *room > 0 {
         let size = chunk.min(end).min(*room);
         let start = end - size;
         let mut bytes = Vec::new();
@@ -476,6 +479,7 @@ fn read_back(mut file: fs::File, limit: usize, room: &mut u64, rows: &mut Vec<Ro
             break;
         }
         bytes.append(&mut partial);
+        *room -= size;
 
         // Lines are cut at their newline only, so a character is never
         // split; the first line of a read that did not reach the file's
@@ -497,23 +501,24 @@ fn read_back(mut file: fs::File, limit: usize, room: &mut u64, rows: &mut Vec<Ro
             else {
                 continue;
             };
-            if !gathered(rows, row) && rows.len() == limit {
-                break;
+            if !gathered(rows, &row) {
+                if rows.len() == limit {
+                    return false;
+                }
+                rows.push(row);
             }
         }
 
         end = start;
-        *room -= size;
         chunk = TAIL;
     }
+    true
 }
 
-/// Add `row`, older than those in `rows`, to them: as a step of the
-/// command or the run of the person's input the newest of them stands for,
-/// when it is one, adding its actions to the run's; whether it was.
-fn gathered(rows: &mut Vec<Row>, row: Row) -> bool {
+/// Gather `row` into the last selected command or personal input run,
+/// adding its actions when it belongs to that run; whether it did.
+fn gathered(rows: &mut [Row], row: &Row) -> bool {
     let Some(newer) = rows.last_mut() else {
-        rows.push(row);
         return false;
     };
 
@@ -531,7 +536,6 @@ fn gathered(rows: &mut Vec<Row>, row: Row) -> bool {
         return true;
     }
 
-    rows.push(row);
     false
 }
 
@@ -686,6 +690,52 @@ mod tests {
             shown.iter().map(Row::failed).collect::<Vec<_>>(),
             [true, false],
             "a failure is never folded into input that worked"
+        );
+    }
+
+    #[test]
+    fn the_last_selected_input_run_counts_every_action_across_chunks_and_rotation() {
+        let dir = tempfile::tempdir().unwrap();
+        let count = 2_000;
+        let current = log((count..2 * count).map(persons));
+        assert!(current.len() as u64 > TAIL);
+        fs::write(dir.path().join(FILE), current).unwrap();
+        fs::write(
+            dir.path().join(PREVIOUS),
+            log([agents(0)].into_iter().chain((1..count).map(persons))),
+        )
+        .unwrap();
+
+        let one = recent(dir.path(), 1);
+        let several = recent(dir.path(), 5);
+        assert_eq!(one.len(), 1);
+        assert_eq!(one[0].action_count, Some(2 * count - 1));
+        assert_eq!(one[0].action_count, several[0].action_count);
+        assert_eq!(several.len(), 2);
+    }
+
+    #[test]
+    fn completing_the_last_input_run_stays_within_the_byte_budget() {
+        let dir = tempfile::tempdir().unwrap();
+        let line = log([persons(1)]);
+        fs::write(
+            dir.path().join(FILE),
+            line.repeat((READ_LIMIT as usize / line.len()) + 2),
+        )
+        .unwrap();
+        let mut room = READ_LIMIT;
+        let mut rows = Vec::new();
+        assert!(read_back(
+            fs::File::open(dir.path().join(FILE)).unwrap(),
+            1,
+            &mut room,
+            &mut rows
+        ));
+        assert_eq!(room, 0);
+        assert_eq!(rows.len(), 1);
+        assert_eq!(
+            rows[0].action_count,
+            Some((READ_LIMIT - 1) / line.len() as u64)
         );
     }
 
