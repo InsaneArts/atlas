@@ -36,7 +36,7 @@ pub(crate) struct Live<'a> {
 
 impl<'a> Live<'a> {
     /// Hands that only read, for a preview.
-    pub fn reading(client: &'a Client) -> Self {
+    pub(super) fn reading(client: &'a Client) -> Self {
         Self {
             client,
             ownership: None,
@@ -46,7 +46,7 @@ impl<'a> Live<'a> {
     }
 
     /// Hands that act under `ownership`.
-    pub fn acting(client: &'a Client, ownership: &'a Ownership) -> Self {
+    pub(super) fn acting(client: &'a Client, ownership: &'a Ownership) -> Self {
         Self {
             ownership: Some(ownership),
             ..Self::reading(client)
@@ -54,7 +54,7 @@ impl<'a> Live<'a> {
     }
 
     /// These hands, acting while an earlier outcome is `unknown`.
-    pub fn knowing(self, unknown: bool) -> Self {
+    pub(super) fn knowing(self, unknown: bool) -> Self {
         Self { unknown, ..self }
     }
 

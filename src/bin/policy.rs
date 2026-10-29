@@ -14,32 +14,32 @@ use atlas::{
 pub(super) struct Policy {
     /// What it does in the helper, as the activity log keeps it; none for a
     /// command that acts on nothing there.
-    pub doing: Option<Doing>,
+    pub(super) doing: Option<Doing>,
     /// What its host session's record keeps of it.
-    pub kind: Kind,
+    pub(super) kind: Kind,
     /// Whether it is its host session's work.
     attributed: bool,
     /// Whether it makes something its task's record claims, or cleans it up.
-    pub makes: bool,
+    pub(super) makes: bool,
     /// Whether it changes the helper, so an agent's is refused while the
     /// person has stopped agents.
-    pub changes_helper: bool,
+    pub(super) changes_helper: bool,
     /// Whether it takes control of the helper.
-    pub controls: bool,
+    pub(super) controls: bool,
     /// Whether another Atlas process reads its result.
-    pub machine_only: bool,
+    pub(super) machine_only: bool,
     /// What Ctrl-C at a terminal says when it stops it; none for a command
     /// a signal stops another way.
-    pub interrupted: Option<&'static str>,
+    pub(super) interrupted: Option<&'static str>,
     /// Whether it runs agent tools, which a stop ends with it.
-    pub runs_agents: bool,
+    pub(super) runs_agents: bool,
     /// How its result reads for a person.
-    pub view: View,
+    pub(super) view: View,
 }
 
 impl Policy {
     /// The policy of `command`.
-    pub fn of(command: &Command) -> Self {
+    pub(super) fn of(command: &Command) -> Self {
         let doing = doing(command);
         let changes_helper = changes_helper(command, doing.is_some());
         Self {
@@ -59,7 +59,7 @@ impl Policy {
     /// Whether the command, run by `actor`, is labelled with the host
     /// session it comes from: an agent's own work only. What the person
     /// does from the app, the menu bar or a viewer never is.
-    pub fn labelled(&self, actor: Actor) -> bool {
+    pub(super) fn labelled(&self, actor: Actor) -> bool {
         actor == Actor::Agent && self.attributed
     }
 
@@ -68,7 +68,7 @@ impl Policy {
     /// does. What the person does from the app answers at once, and so do
     /// servers, which take no control of their own: a wait blocks the
     /// thread it runs on.
-    pub fn waits(&self, actor: Actor) -> bool {
+    pub(super) fn waits(&self, actor: Actor) -> bool {
         self.controls && actor == Actor::Agent
     }
 }

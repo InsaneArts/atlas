@@ -7,7 +7,7 @@ use serde_json::Value;
 
 /// A job that was started or stopped: its ID and how far it got, then the
 /// processes that left its group, which still run.
-pub fn job(value: &Value) -> Rendered {
+pub(super) fn job(value: &Value) -> Rendered {
     if let Some(failure) = failed(value) {
         return failure;
     }
@@ -31,7 +31,7 @@ pub fn job(value: &Value) -> Rendered {
 }
 
 /// A task's jobs, one a line, with what each left running.
-pub fn jobs(value: &Value) -> Rendered {
+pub(super) fn jobs(value: &Value) -> Rendered {
     if let Some(failure) = failed(value) {
         return failure;
     }
@@ -71,7 +71,7 @@ pub fn jobs(value: &Value) -> Rendered {
 }
 
 /// The end of a job's output, as it is, and whether more came before it.
-pub fn log(value: &Value) -> Rendered {
+pub(super) fn log(value: &Value) -> Rendered {
     if let Some(failure) = failed(value) {
         return failure;
     }
@@ -87,7 +87,7 @@ pub fn log(value: &Value) -> Rendered {
 }
 
 /// What a collection kept, one copy a line, and what it did not.
-pub fn collect(value: &Value) -> Rendered {
+pub(super) fn collect(value: &Value) -> Rendered {
     let mut lines = Vec::new();
     for kept in value["collected"].as_array().into_iter().flatten() {
         lines.push(format!(

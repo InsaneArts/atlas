@@ -24,7 +24,7 @@ pub(super) struct Store {
 impl Store {
     /// The store in `home`, its lock held as `lock` says: shared to read,
     /// exclusive to change it, which makes its folder when it is not there.
-    pub fn open(home: &Path, lock: Lock) -> Result<Self> {
+    pub(super) fn open(home: &Path, lock: Lock) -> Result<Self> {
         Self::open_with_retry(home, lock, |deadline| std::time::Instant::now() < deadline)
     }
 
@@ -68,7 +68,7 @@ impl Store {
     /// happens only while there is nothing to lock yet, if another
     /// operation has since made the store or its lock: what was read may be
     /// part of that operation's change.
-    pub fn confirm_read(&self) -> Result<()> {
+    pub(super) fn confirm_read(&self) -> Result<()> {
         let appeared = |path: &Path| fs::symlink_metadata(path).is_ok();
         if self.lock.is_none()
             && ((!self.existed && appeared(&self.path)) || appeared(&self.path.join("lock")))
@@ -79,7 +79,7 @@ impl Store {
         Ok(())
     }
 
-    pub fn ledger(&self) -> Result<Ledger> {
+    pub(super) fn ledger(&self) -> Result<Ledger> {
         let ledger: Ledger = self
             .read(&self.path.join("files.json"))?
             .unwrap_or_default();
@@ -91,11 +91,11 @@ impl Store {
         Ok(ledger)
     }
 
-    pub fn save_ledger(&self, ledger: &Ledger) -> Result<()> {
+    pub(super) fn save_ledger(&self, ledger: &Ledger) -> Result<()> {
         self.write(&self.path.join("files.json"), ledger)
     }
 
-    pub fn transaction(&self, id: &str) -> Result<Option<Transaction>> {
+    pub(super) fn transaction(&self, id: &str) -> Result<Option<Transaction>> {
         validate_id(id)?;
         let transaction: Option<Transaction> =
             self.read(&self.folder(id).join("transaction.json"))?;
@@ -126,18 +126,18 @@ impl Store {
         Ok(transaction)
     }
 
-    pub fn save(&self, transaction: &Transaction) -> Result<()> {
+    pub(super) fn save(&self, transaction: &Transaction) -> Result<()> {
         self.write(
             &self.folder(&transaction.plan.id).join("transaction.json"),
             transaction,
         )
     }
 
-    pub fn folder(&self, id: &str) -> PathBuf {
+    pub(super) fn folder(&self, id: &str) -> PathBuf {
         self.path.join(format!("transaction-{id}"))
     }
 
-    pub fn blob(&self, id: &str, index: usize, before: bool) -> PathBuf {
+    pub(super) fn blob(&self, id: &str, index: usize, before: bool) -> PathBuf {
         self.folder(id).join(format!(
             "{}-{index}",
             if before { "before" } else { "after" }
@@ -147,7 +147,7 @@ impl Store {
     /// Delete a rolled-back transaction's file copies, which may hold
     /// secrets, and keep its small record. A copy that cannot be removed
     /// now is tried again by the next rollback of the same ID.
-    pub fn discard_copies(&self, transaction: &Transaction) {
+    pub(super) fn discard_copies(&self, transaction: &Transaction) {
         if self.lock.is_none() {
             return;
         }
@@ -162,7 +162,7 @@ impl Store {
     /// Delete the folders of transactions whose record was never written:
     /// copies a preparation left when it stopped part way. Only called
     /// under the write lock, so no preparation is running.
-    pub fn discard_unstarted(&self) {
+    pub(super) fn discard_unstarted(&self) {
         if self.lock.is_none() {
             return;
         }
@@ -191,7 +191,7 @@ impl Store {
 
     /// The transaction that must be resumed or rolled back before any
     /// other, when one must.
-    pub fn active(&self) -> Result<Option<String>> {
+    pub(super) fn active(&self) -> Result<Option<String>> {
         let active = self.read::<String>(&self.path.join("active.json"))?;
         if let Some(active) = &active {
             validate_id(active)?;
@@ -199,7 +199,7 @@ impl Store {
         Ok(active)
     }
 
-    pub fn require_available(&self, id: &str) -> Result<()> {
+    pub(super) fn require_available(&self, id: &str) -> Result<()> {
         if let Some(active) = self.active()?
             && active != id
         {
@@ -211,12 +211,12 @@ impl Store {
         Ok(())
     }
 
-    pub fn activate(&self, id: &str) -> Result<()> {
+    pub(super) fn activate(&self, id: &str) -> Result<()> {
         self.require_available(id)?;
         self.write(&self.path.join("active.json"), &id)
     }
 
-    pub fn finish(&self, id: &str) -> Result<()> {
+    pub(super) fn finish(&self, id: &str) -> Result<()> {
         let path = self.path.join("active.json");
         if let Some(active) = self.read::<String>(&path)? {
             if active != id {

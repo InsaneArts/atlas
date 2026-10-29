@@ -40,7 +40,7 @@ fn tasks(tasks: &Value) -> Vec<String> {
 }
 
 /// What a host session did, or one line for each session.
-pub fn activity(value: &Value) -> String {
+pub(super) fn activity(value: &Value) -> String {
     match value["sessions"].as_array() {
         Some(sessions) => everyone(sessions),
         None => one(value),

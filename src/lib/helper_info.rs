@@ -18,34 +18,34 @@ use tokio::sync::Mutex;
 
 /// The widest frame sent, and its JPEG quality; a smaller second try when
 /// the first is too large for a tool result.
-pub const FRAME: (u32, f64) = (1024, 0.6);
-pub const FRAME_SMALL: (u32, f64) = (768, 0.45);
+pub(crate) const FRAME: (u32, f64) = (1024, 0.6);
+pub(crate) const FRAME_SMALL: (u32, f64) = (768, 0.45);
 /// The most base64 characters a frame may take: well under the ~150,000
 /// characters an agent app hydrates into a view.
-pub const FRAME_BUDGET: usize = 120_000;
+pub(crate) const FRAME_BUDGET: usize = 120_000;
 /// The largest screen or screenshot read, in bytes: a 5K display's PNG
 /// takes well under it.
-pub const FRAME_LIMIT: usize = 16 << 20;
+pub(crate) const FRAME_LIMIT: usize = 16 << 20;
 /// A screenshot's thumbnail: its widest side and JPEG quality.
-pub const THUMB: (u32, f64) = (480, 0.6);
+pub(crate) const THUMB: (u32, f64) = (480, 0.6);
 /// App icons' size in pixels, the most sent in one answer, and the most
 /// kept made.
 const ICON: usize = 64;
-pub const ICONS: usize = 12;
-pub const ICON_CACHE: usize = 64;
+pub(crate) const ICONS: usize = 12;
+pub(crate) const ICON_CACHE: usize = 64;
 /// The bytes of a PNG that say its size: the signature and the IHDR chunk.
 const PNG_HEAD: u64 = 33;
 
 /// App icons made, as base64 PNGs, by bundle path; None when an app has
 /// none to read.
 #[derive(Default)]
-pub struct Icons(Mutex<HashMap<PathBuf, Option<String>>>);
+pub(crate) struct Icons(Mutex<HashMap<PathBuf, Option<String>>>);
 
 impl Icons {
     /// An app's icon as a base64 PNG, made once. Only apps installed where
     /// apps are (not files any app could have put in a shared folder) are
     /// read on the person's side.
-    pub async fn get(&self, bundle: PathBuf) -> Option<String> {
+    pub(crate) async fn get(&self, bundle: PathBuf) -> Option<String> {
         if !installed(&bundle) {
             return None;
         }
@@ -71,7 +71,7 @@ impl Icons {
 
 /// A PNG screen as the frame the view shows: a JPEG within the budget, as
 /// base64, with its size and an id that changes with its content.
-pub fn frame(png: &[u8]) -> Result<Value> {
+pub(crate) fn frame(png: &[u8]) -> Result<Value> {
     let mut encoded = jpeg(png, FRAME)?;
     if base64_length(encoded.0.len()) > FRAME_BUDGET {
         encoded = jpeg(png, FRAME_SMALL)?;
@@ -98,7 +98,7 @@ pub fn frame(png: &[u8]) -> Result<Value> {
 }
 
 /// A screenshot's thumbnail: a small JPEG, as base64, with its size.
-pub fn thumbnail(png: &[u8]) -> Result<Value> {
+pub(crate) fn thumbnail(png: &[u8]) -> Result<Value> {
     let (bytes, width, height) = jpeg(png, THUMB)?;
     use base64::{Engine, engine::general_purpose::STANDARD};
     Ok(json!({
@@ -112,7 +112,7 @@ pub fn thumbnail(png: &[u8]) -> Result<Value> {
 /// The regular apps in `apps`, each with its windows from `windows` (front
 /// to back): apps with a window first, in the order of their front one.
 /// A window carries its number, title and bounds in desktop points.
-pub fn open_apps(apps: &Value, windows: &Value) -> Result<Vec<Value>> {
+pub(crate) fn open_apps(apps: &Value, windows: &Value) -> Result<Vec<Value>> {
     // Reserve the added field names and null defaults per entry before
     // copying anything. Each source entry can contribute to the output once.
     let count = apps.as_array().map_or(0, Vec::len) + windows.as_array().map_or(0, Vec::len);
@@ -209,7 +209,7 @@ impl std::io::Write for ListBudget {
 
 /// When a screenshot named `name` was taken, in nanoseconds since 1970:
 /// only names an agent's capture writes have one.
-pub fn capture_time(name: &str) -> Option<u128> {
+pub(crate) fn capture_time(name: &str) -> Option<u128> {
     let digits = name.strip_suffix("-capture.png")?;
     if digits.is_empty() || !digits.bytes().all(|byte| byte.is_ascii_digit()) {
         return None;
@@ -235,7 +235,7 @@ impl Capture {
 /// The agents' screenshots in `output`, newest first, at most `limit`:
 /// each one's name and when it was taken, in nanoseconds since 1970. Only
 /// plain files a capture names count; links and other files never do.
-pub fn captures(output: &Path, limit: usize) -> Vec<(u128, String)> {
+pub(crate) fn captures(output: &Path, limit: usize) -> Vec<(u128, String)> {
     let Ok(entries) = std::fs::read_dir(output) else {
         return Vec::new();
     };
@@ -256,7 +256,7 @@ pub fn captures(output: &Path, limit: usize) -> Vec<(u128, String)> {
 /// The screenshot `name` in `output`, whole. Only a name a capture writes,
 /// and only a plain file the agent's capture wrote: never through a link,
 /// and no more of it than a screenshot takes.
-pub fn read_capture(output: &Path, name: &str) -> Result<Vec<u8>> {
+pub(crate) fn read_capture(output: &Path, name: &str) -> Result<Vec<u8>> {
     use std::io::Read;
 
     let unknown = || Error::new(Code::BadRequest, "No screenshot has that name");
@@ -279,7 +279,7 @@ pub fn read_capture(output: &Path, name: &str) -> Result<Vec<u8>> {
 
 /// The size in pixels of the screenshot `name` in `output`, read from its
 /// PNG header under [`read_capture`]'s rules.
-pub fn capture_size(output: &Path, name: &str) -> Option<(u32, u32)> {
+pub(crate) fn capture_size(output: &Path, name: &str) -> Option<(u32, u32)> {
     use std::io::Read;
 
     capture_time(name)?;
@@ -291,7 +291,7 @@ pub fn capture_size(output: &Path, name: &str) -> Option<(u32, u32)> {
 
 /// Whether `bundle` is an app installed where apps go: the system's and
 /// the person's Applications folders, nowhere any app could write.
-pub fn installed(bundle: &Path) -> bool {
+pub(crate) fn installed(bundle: &Path) -> bool {
     let home = std::env::var_os("HOME").map(|home| PathBuf::from(home).join("Applications"));
     let roots = [
         Some(PathBuf::from("/Applications")),
@@ -322,14 +322,14 @@ fn icon(_bundle: &Path) -> Option<String> {
 }
 
 /// How many base64 characters `bytes` bytes take.
-pub fn base64_length(bytes: usize) -> usize {
+pub(crate) fn base64_length(bytes: usize) -> usize {
     bytes.div_ceil(3) * 4
 }
 
 /// `png` as a JPEG at most `limit` pixels on its longest side, at
 /// `quality`, with its size.
 #[cfg(target_os = "macos")]
-pub fn jpeg(png: &[u8], (limit, quality): (u32, f64)) -> Result<(Vec<u8>, u32, u32)> {
+pub(crate) fn jpeg(png: &[u8], (limit, quality): (u32, f64)) -> Result<(Vec<u8>, u32, u32)> {
     crate::native::capture::jpeg(png, limit, quality)
 }
 

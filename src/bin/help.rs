@@ -9,7 +9,7 @@ use clap::{
 use std::{io::IsTerminal, process::ExitCode};
 
 /// Each visible command in exactly one group, in reading order.
-pub const GROUPS: &[(&str, &[&str])] = &[
+pub(super) const GROUPS: &[(&str, &[&str])] = &[
     ("Get started", &["init", "doctor", "agents", "menubar"]),
     (
         "Look at the helper",
@@ -173,7 +173,7 @@ fn examples(name: &str) -> &'static [&'static str] {
 }
 
 /// The command line with the grouped help.
-pub fn command() -> clap::Command {
+pub(super) fn command() -> clap::Command {
     let mut root = Cli::command();
 
     for (name, examples) in EXAMPLES {
@@ -207,7 +207,7 @@ pub fn command() -> clap::Command {
 /// A command line that does not parse, said plainly with an example of
 /// what works, as JSON when a program is reading. Help and --version print
 /// as usual.
-pub fn usage(error: clap::Error) -> ExitCode {
+pub(super) fn usage(error: clap::Error) -> ExitCode {
     if matches!(
         error.kind(),
         ErrorKind::DisplayHelp

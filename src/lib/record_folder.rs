@@ -86,7 +86,7 @@ pub(crate) struct RecordFolder<K> {
 }
 
 impl<K: RecordName> RecordFolder<K> {
-    pub fn at(output: &Path, records: &'static Records) -> Self {
+    pub(crate) fn at(output: &Path, records: &'static Records) -> Self {
         Self {
             directory: output.join(records.folder),
             records,
@@ -95,23 +95,23 @@ impl<K: RecordName> RecordFolder<K> {
     }
 
     /// Whether the folder is there, a real folder of this account.
-    pub fn exists(&self) -> bool {
+    pub(crate) fn exists(&self) -> bool {
         own_folder(&self.directory)
     }
 
     /// Where the record of `key` is.
-    pub fn path(&self, key: &K) -> PathBuf {
+    pub(crate) fn path(&self, key: &K) -> PathBuf {
         self.directory.join(format!("{key}.json"))
     }
 
     /// Whether anything is where the record of `key` goes, a record or not.
-    pub fn holds(&self, key: &K) -> bool {
+    pub(crate) fn holds(&self, key: &K) -> bool {
         self.exists() && fs::symlink_metadata(self.path(key)).is_ok()
     }
 
     /// The bytes of `key`'s record, when it is a plain file of this account
     /// no larger than its kind allows, in a folder of this account.
-    pub fn read(&self, key: &K) -> Option<Vec<u8>> {
+    pub(crate) fn read(&self, key: &K) -> Option<Vec<u8>> {
         self.exists()
             .then(|| read_own(&self.path(key), self.records.bytes))
             .flatten()
@@ -120,7 +120,7 @@ impl<K: RecordName> RecordFolder<K> {
     /// The keys of the newest `limit` records by when each was written, of
     /// the first [`LISTED`] records in the folder, newest first. Entries
     /// that are not `KEY.json` are never counted.
-    pub fn listed(&self, limit: usize) -> Vec<K> {
+    pub(crate) fn listed(&self, limit: usize) -> Vec<K> {
         if !self.exists() {
             return Vec::new();
         }
@@ -145,13 +145,13 @@ impl<K: RecordName> RecordFolder<K> {
     }
 
     /// `key`'s record read as a `T`, when it is there and reads as one.
-    pub fn read_json<T: DeserializeOwned>(&self, key: &K) -> Option<T> {
+    pub(crate) fn read_json<T: DeserializeOwned>(&self, key: &K) -> Option<T> {
         self.read(key)
             .and_then(|bytes| serde_json::from_slice(&bytes).ok())
     }
 
     /// Write `record` whole as `key`'s record.
-    pub fn write_json<T: Serialize>(&self, key: &K, record: &T) -> Result<()> {
+    pub(crate) fn write_json<T: Serialize>(&self, key: &K, record: &T) -> Result<()> {
         self.write(key, &serde_json::to_vec(record)?)
     }
 
@@ -159,7 +159,7 @@ impl<K: RecordName> RecordFolder<K> {
     /// only once the folder changed, or once `fresh` passed since, so
     /// readers that come often look at the folder once and nothing more.
     /// Nothing when the folder is not there.
-    pub fn cached<T>(
+    pub(crate) fn cached<T>(
         &self,
         kept: &Mutex<Option<Cached<T>>>,
         fresh: Duration,
@@ -187,7 +187,7 @@ impl<K: RecordName> RecordFolder<K> {
     }
 
     /// Write `bytes` as `key`'s record, as far as its kind asks.
-    pub fn write(&self, key: &K, bytes: &[u8]) -> Result<()> {
+    pub(crate) fn write(&self, key: &K, bytes: &[u8]) -> Result<()> {
         let path = self.path(key);
         let partial = path.with_extension("json.partial");
         write_private_with(&partial, bytes, self.records.durability)?;
@@ -199,7 +199,7 @@ impl<K: RecordName> RecordFolder<K> {
     }
 
     /// Remove `key`'s record.
-    pub fn remove(&self, key: &K) {
+    pub(crate) fn remove(&self, key: &K) {
         let _ = fs::remove_file(self.path(key));
     }
 
@@ -207,13 +207,13 @@ impl<K: RecordName> RecordFolder<K> {
     /// reader. A writer waits at most its kind's lock wait for another to
     /// let go of it, then is refused, so recording never holds a command
     /// up for long.
-    pub fn lock(&self) -> Result<File> {
+    pub(crate) fn lock(&self) -> Result<File> {
         self.lock_within(self.records.lock_wait)
     }
 
     /// [`RecordFolder::lock`], waiting at most `wait`: none at all tries
     /// once.
-    pub fn lock_within(&self, wait: Duration) -> Result<File> {
+    pub(crate) fn lock_within(&self, wait: Duration) -> Result<File> {
         let path = self.directory.join(".lock");
         let lock = OpenOptions::new()
             .create(true)
@@ -248,7 +248,7 @@ impl<K: RecordName> RecordFolder<K> {
     /// Make the folder, private to this account, refusing a link or another
     /// account's folder. A folder made here is written through to its
     /// parent as far as its kind asks.
-    pub fn make(&self) -> Result<()> {
+    pub(crate) fn make(&self) -> Result<()> {
         match fs::DirBuilder::new().mode(0o700).create(&self.directory) {
             Ok(()) if self.records.durability == Durability::Disk => {
                 if let Some(output) = self.directory.parent() {
@@ -275,14 +275,14 @@ impl<K: RecordName> RecordFolder<K> {
     }
 
     /// When the folder last changed, when it is a real folder.
-    pub fn modified(&self) -> Option<SystemTime> {
+    pub(crate) fn modified(&self) -> Option<SystemTime> {
         fs::symlink_metadata(&self.directory)
             .ok()
             .filter(|metadata| metadata.is_dir())
             .and_then(|metadata| metadata.modified().ok())
     }
 
-    pub fn directory(&self) -> &Path {
+    pub(crate) fn directory(&self) -> &Path {
         &self.directory
     }
 }

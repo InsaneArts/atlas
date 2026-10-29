@@ -64,6 +64,7 @@ default-members = [".", "xtask"]
 
 [workspace.lints.rust]
 unsafe_code = "deny"
+unreachable_pub = "warn"
 
 [workspace.lints.clippy]
 undocumented_unsafe_blocks = "deny"

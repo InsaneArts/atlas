@@ -41,7 +41,7 @@ impl Scope {
     /// What a command of `client` covers: the session `session` names, or
     /// its own; the task `task` names, or the one ATLAS_TASK names for its
     /// own session, or every task.
-    pub fn of(client: &Client, session: Option<&Key>, task: Option<&Key>) -> Result<Self> {
+    pub(crate) fn of(client: &Client, session: Option<&Key>, task: Option<&Key>) -> Result<Self> {
         let own = client.host_session.as_ref().map(|host| host.key());
         let session = session.or(own).cloned().ok_or_else(|| {
             Error::new(
@@ -65,7 +65,7 @@ impl Scope {
     }
 
     /// The person's cleanup of `session`'s work, through Atlas.app.
-    pub fn for_person(session: &Key) -> Self {
+    pub(crate) fn for_person(session: &Key) -> Self {
         Self {
             session: session.clone(),
             task: None,
@@ -85,7 +85,7 @@ pub(crate) enum Adopter {
 
 impl Adopter {
     /// The adopting session's key; none for the person.
-    pub fn key(&self) -> Option<Key> {
+    pub(crate) fn key(&self) -> Option<Key> {
         match self {
             Self::Session(key) => Some(key.clone()),
             Self::Person => None,
@@ -108,7 +108,7 @@ impl Loaded {
     /// The records of `scope`'s session in `output`; a key the command
     /// named that names no record is said. A task named by ATLAS_TASK with
     /// no record yet has nothing to clean up.
-    pub fn of(output: &Path, scope: &Scope) -> Result<Self> {
+    pub(crate) fn of(output: &Path, scope: &Scope) -> Result<Self> {
         let record = Sessions::at(output).read(&scope.session);
         let tasks = Tasks::at(output).of_session(&scope.session);
         let nothing = || {
@@ -143,7 +143,7 @@ impl Loaded {
 
     /// The background jobs the tasks in scope started that may still run,
     /// and the collections they made.
-    pub fn others(&self) -> Others {
+    pub(crate) fn others(&self) -> Others {
         let tasks = || {
             self.tasks
                 .iter()
@@ -179,7 +179,7 @@ impl Loaded {
     /// helper, with when it was claimed. A thing a step of an earlier
     /// cleanup already removed, undid or kept is not planned again, even
     /// while its claim is not yet settled.
-    pub fn undoable(&self) -> Vec<Undoable> {
+    pub(crate) fn undoable(&self) -> Vec<Undoable> {
         self.work
             .iter()
             .filter(|work| work.state.live())
@@ -223,7 +223,7 @@ impl Loaded {
     }
 
     /// The apps the scope's tasks opened by name, each once.
-    pub fn opened_by_name(&self) -> Vec<&str> {
+    pub(crate) fn opened_by_name(&self) -> Vec<&str> {
         let mut apps: Vec<&str> = Vec::new();
         for work in &self.work {
             if let Owned::Launch { app } = &work.owned
@@ -241,7 +241,7 @@ impl Loaded {
     /// The apps the scope's tasks opened by name that still run, by the
     /// helper's app list `running`: listed, never quit. With no list, each
     /// is listed, as it may still run.
-    pub fn left(&self, running: Option<&Value>) -> Vec<Value> {
+    pub(crate) fn left(&self, running: Option<&Value>) -> Vec<Value> {
         let runs = |app: &str| {
             running.is_none_or(|listed| {
                 listed["apps"]
@@ -261,7 +261,7 @@ impl Loaded {
 
     /// The newest receipt of `scope` that has not finished: one its tasks'
     /// records name, or one a run cut short before it named it.
-    pub fn unfinished(&self, scope: &Scope) -> Option<Receipt> {
+    pub(crate) fn unfinished(&self, scope: &Scope) -> Option<Receipt> {
         self.receipts
             .iter()
             .filter(|receipt| receipt.task == scope.task && receipt.state != CleanupState::Complete)
@@ -272,7 +272,7 @@ impl Loaded {
     /// The tasks whose records a cleanup of `scope` notes itself in: each
     /// task its work belongs to, else the task it names or the session's
     /// default task.
-    pub fn covered(&self, scope: &Scope) -> Vec<Task> {
+    pub(crate) fn covered(&self, scope: &Scope) -> Vec<Task> {
         let mut keys: Vec<&Key> = Vec::new();
         for work in &self.work {
             if !keys.contains(&&work.task) {

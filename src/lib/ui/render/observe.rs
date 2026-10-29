@@ -29,7 +29,7 @@ fn display(value: &Value) -> Option<String> {
 
 /// The last login, one step a line, then any plugin of macOS's account
 /// update that never finished.
-pub fn login_timing(value: &Value) -> String {
+pub(super) fn login_timing(value: &Value) -> String {
     if value["found"] != true {
         return format!("{} No login in the last 2 hours", style::unknown());
     }
@@ -111,7 +111,7 @@ pub fn login_timing(value: &Value) -> String {
 
 /// Ready in one line; otherwise each check and the numbered fixes. Verbose
 /// adds the facts behind them.
-pub fn doctor(value: &Value, verbose: bool) -> String {
+pub(super) fn doctor(value: &Value, verbose: bool) -> String {
     let facts: Vec<String> = [
         helper_name(value).map(|name| format!("helper {}", text::printable(name))),
         display(value),
@@ -245,7 +245,7 @@ fn details(value: &Value, native: &Value) -> Vec<String> {
 }
 
 /// Who the helper is, where it is, and what it may do.
-pub fn status(value: &Value) -> Rendered {
+pub(super) fn status(value: &Value) -> Rendered {
     if value["ok"] != true {
         return failed(&serde_json::json!({
             "ok": false,
@@ -305,7 +305,7 @@ pub fn status(value: &Value) -> Rendered {
 }
 
 /// The resolved settings, labelled in words.
-pub fn config(value: &Value) -> String {
+pub(super) fn config(value: &Value) -> String {
     let config = &value["config"];
     let rows = [
         ("Settings", path(&value["path"])),
@@ -329,7 +329,7 @@ fn path(value: &Value) -> String {
         .unwrap_or_else(|| "—".into())
 }
 
-pub fn capture(value: &Value) -> String {
+pub(super) fn capture(value: &Value) -> String {
     let said = if value["unchanged"] == true {
         "Screenshot unchanged"
     } else {
@@ -382,7 +382,7 @@ pub fn capture(value: &Value) -> String {
 
 /// The helper's apps as `atlas apps` chose them, and how many background
 /// processes it left out.
-pub fn apps(value: &Value) -> String {
+pub(super) fn apps(value: &Value) -> String {
     let shown: Vec<&Value> = value["apps"].as_array().into_iter().flatten().collect();
     let mut lines = Vec::new();
 
@@ -423,7 +423,7 @@ pub fn apps(value: &Value) -> String {
     lines.join("\n")
 }
 
-pub fn windows(value: &Value) -> String {
+pub(super) fn windows(value: &Value) -> String {
     let windows: Vec<&Value> = value["windows"].as_array().into_iter().flatten().collect();
     if windows.is_empty() {
         return "No windows. --all adds menus, the menu bar and the Dock.".to_owned();
@@ -457,7 +457,7 @@ pub fn windows(value: &Value) -> String {
     )
 }
 
-pub fn elements(value: &Value) -> String {
+pub(super) fn elements(value: &Value) -> String {
     let elements: Vec<&Value> = value["elements"].as_array().into_iter().flatten().collect();
     let matching = value["matching"].as_u64().unwrap_or(elements.len() as u64);
     let scanned = value["scanned"].as_u64().unwrap_or(matching);
@@ -547,7 +547,7 @@ fn listed_point(element: &Value) -> Option<(f64, f64)> {
     Some(((x + width / 2.0).round(), (y + height / 2.0).round()))
 }
 
-pub fn readiness(value: &Value) -> String {
+pub(super) fn readiness(value: &Value) -> String {
     let mut lines = Vec::new();
 
     for item in value["items"].as_array().into_iter().flatten() {

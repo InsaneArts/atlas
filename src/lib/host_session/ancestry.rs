@@ -4,7 +4,7 @@ use crate::process::{Own, Start, own};
 
 /// What macOS says of one of this account's processes.
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub struct Facts {
+pub(crate) struct Facts {
     pub parent: i32,
     /// Its command name, at most 16 bytes as the kernel keeps it.
     pub command: String,
@@ -13,13 +13,13 @@ pub struct Facts {
 
 /// One ancestor of this process.
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub struct Ancestor {
+pub(crate) struct Ancestor {
     pub pid: i32,
     pub command: String,
 }
 
 /// The facts of `pid`, when it is a live process of this account.
-pub fn process(pid: i32) -> Option<Facts> {
+pub(crate) fn process(pid: i32) -> Option<Facts> {
     match own(pid) {
         Own::Found(info) => Some(Facts {
             parent: info.ppid,
@@ -32,7 +32,7 @@ pub fn process(pid: i32) -> Option<Facts> {
 
 /// This process's ancestors, parent first, at most `limit`, ending at
 /// launchd or at the first that cannot be read.
-pub fn ancestors(limit: usize) -> Vec<Ancestor> {
+pub(crate) fn ancestors(limit: usize) -> Vec<Ancestor> {
     ancestors_from(nix::unistd::getppid().as_raw(), limit, process)
 }
 

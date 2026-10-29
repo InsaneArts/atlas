@@ -28,7 +28,7 @@ use std::{
 
 /// Why a step under the approval did not start, or did not finish.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub enum Refusal {
+pub(crate) enum Refusal {
     /// The person cancelled macOS's dialog.
     Cancelled,
     /// This macOS has no call that starts it; authorization was never requested.
@@ -89,7 +89,7 @@ pub(crate) fn without_authorization<T>(act: impl FnOnce() -> T) -> (T, usize) {
 /// Ask macOS for one administrator approval, `prompt` shown in its dialog,
 /// then run `program` with `arguments` as root. Gives the socket that is the
 /// approved program's standard input and output.
-pub fn run(program: &Path, arguments: &[&str], prompt: &str) -> Result<UnixStream, Refusal> {
+pub(crate) fn run(program: &Path, arguments: &[&str], prompt: &str) -> Result<UnixStream, Refusal> {
     #[cfg(test)]
     if AUTHORIZATION_CALLS.with(|calls| {
         calls.get().is_some_and(|count| {

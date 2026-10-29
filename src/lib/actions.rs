@@ -633,7 +633,7 @@ mod tests {
             )
         }
 
-        pub fn valid_key(value: &str) -> bool {
+        pub(super) fn valid_key(value: &str) -> bool {
             if value.is_empty() || value.len() > 80 {
                 return false;
             }
@@ -688,7 +688,7 @@ mod tests {
                 && parts.into_iter().all(modifier)
         }
 
-        pub fn modifier_flags(modifiers: &[String]) -> u64 {
+        pub(super) fn modifier_flags(modifiers: &[String]) -> u64 {
             modifiers.iter().fold(0, |flags, m| {
                 flags
                     | match m.as_str() {
@@ -782,7 +782,7 @@ mod tests {
         }
 
         /// What the engine sent for a key action.
-        pub fn engine(key: &str) -> Option<(u16, u64)> {
+        pub(super) fn engine(key: &str) -> Option<(u16, u64)> {
             let lower = key.to_lowercase();
             let mut parts: Vec<_> = lower.split('+').map(str::to_owned).collect();
             let mut key = parts.pop().unwrap_or_default();

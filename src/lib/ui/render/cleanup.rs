@@ -7,7 +7,7 @@ use serde_json::Value;
 /// A cleanup's preview or run: one line per step, then the apps opened by
 /// name it leaves to the agent. A run that did not finish says why on
 /// standard error, its steps still on standard output.
-pub fn cleanup(value: &Value) -> Rendered {
+pub(super) fn cleanup(value: &Value) -> Rendered {
     let steps = value["steps"].as_array().map_or(&[][..], Vec::as_slice);
     let preview = value["preview"] == true;
     let mut lines = Vec::new();
@@ -52,7 +52,7 @@ pub fn cleanup(value: &Value) -> Rendered {
 
 /// An app installed into the helper: where it went, whether it opens by
 /// its name yet, and what takes it away.
-pub fn install_app(value: &Value) -> String {
+pub(super) fn install_app(value: &Value) -> String {
     let app = text::printable(value["app"].as_str().unwrap_or("the app")).into_owned();
     let mut line = format!("{} Installed {app}", style::ok());
     if let Some(path) = value["path"].as_str() {

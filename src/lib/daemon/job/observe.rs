@@ -28,7 +28,7 @@ pub trait Kernel: Send + Sync {
 }
 
 /// The real kernel.
-pub struct Live;
+pub(super) struct Live;
 
 impl Kernel for Live {
     fn process(&self, pid: i32) -> Result<Option<Info>> {
@@ -59,7 +59,7 @@ impl Kernel for Live {
 /// most [`SEEN_MAX`] are kept. Best effort, and only ever used to report
 /// what left the group: a process whose parent exited between two looks is
 /// missed.
-pub fn observe(
+pub(super) fn observe(
     seen: &mut Vec<Instance>,
     job: &Instance,
     members: &[Info],
@@ -109,7 +109,7 @@ pub fn observe(
 
 /// The processes in `seen` that still run as the same process, as `uid`,
 /// outside group `pgid`: they left the job's group.
-pub fn left(seen: &[Instance], processes: &[Info], pgid: i32, uid: u32) -> Vec<Left> {
+pub(super) fn left(seen: &[Instance], processes: &[Info], pgid: i32, uid: u32) -> Vec<Left> {
     seen.iter()
         .filter_map(|instance| {
             processes
@@ -122,7 +122,7 @@ pub fn left(seen: &[Instance], processes: &[Info], pgid: i32, uid: u32) -> Vec<L
 }
 
 /// A process as a report names it.
-pub fn as_left(process: &Info) -> Left {
+pub(super) fn as_left(process: &Info) -> Left {
     Left {
         pid: process.instance.pid,
         name: process.name.clone(),

@@ -19,7 +19,7 @@ use std::time::{Duration, Instant};
 
 /// The most time one request spends checking; past it, the rest is refused
 /// rather than risk the controller's five-second deadline.
-pub const CHECK_BUDGET: Duration = Duration::from_millis(500);
+pub(super) const CHECK_BUDGET: Duration = Duration::from_millis(500);
 
 /// The longest one Accessibility question may take.
 const FOCUS_TIMEOUT: Duration = Duration::from_millis(250);
@@ -59,7 +59,7 @@ const NOT_SENT: &str = "so this action and the rest were not sent";
 
 /// What an action needs of its app before its first event.
 #[derive(Debug, Clone, Copy, PartialEq)]
-pub enum Need {
+pub(super) enum Need {
     /// Keyboard focus.
     Keys,
     /// The app's own window on top at this point.
@@ -75,7 +75,7 @@ impl Need {
     /// Type and Key need keys; Click, Scroll, Move and each pointer phase
     /// their point, since a move may carry what a press holds and a release
     /// drops it; Drag its start and its drop; Wait nothing.
-    pub fn of(action: &Action) -> Self {
+    pub(super) fn of(action: &Action) -> Self {
         match action {
             Action::Type { .. } | Action::Key { .. } => Self::Keys,
             Action::Click { x, y, .. }
@@ -296,7 +296,12 @@ impl Look for Live {
 }
 
 /// [`require`] against the live helper, taking until `deadline` at most.
-pub fn check(expect: &Expect, need: Need, display: &Bounds, deadline: Instant) -> Result<()> {
+pub(super) fn check(
+    expect: &Expect,
+    need: Need,
+    display: &Bounds,
+    deadline: Instant,
+) -> Result<()> {
     require(expect, need, display, &mut Live::until(deadline), deadline)
 }
 
@@ -679,7 +684,7 @@ fn menu_bar(expect: &Expect, look: &mut impl Look) -> Result<()> {
 }
 
 /// The refusal when what is in front could not be read in time.
-pub fn unreadable() -> Error {
+pub(super) fn unreadable() -> Error {
     refused(
         Reason::Unreadable,
         format!("Atlas could not tell which app is in front, {NOT_SENT}"),

@@ -25,7 +25,7 @@ use std::{
 };
 
 /// Where the copies live.
-pub const ROOT: &str = "/Users/Shared/Atlas/Open";
+pub(crate) const ROOT: &str = "/Users/Shared/Atlas/Open";
 
 /// How long a copy is kept once nothing of its name runs in the helper.
 const KEEP: Duration = Duration::from_secs(7 * 24 * 60 * 60);
@@ -219,7 +219,7 @@ pub(crate) struct Running {
 impl Running {
     /// The running apps of `apps`, an app list the helper gave; a name or
     /// executable it does not know is empty.
-    pub fn listed(apps: &Value) -> Vec<Self> {
+    pub(crate) fn listed(apps: &Value) -> Vec<Self> {
         apps["apps"]
             .as_array()
             .into_iter()
@@ -706,7 +706,7 @@ pub(crate) struct Failed {
 
 impl Removed {
     /// The tokens of the folders removed.
-    pub fn tokens(&self) -> Vec<Token> {
+    pub(crate) fn tokens(&self) -> Vec<Token> {
         self.folders
             .iter()
             .filter_map(|folder| folder_token(Path::new(folder)))
@@ -960,7 +960,7 @@ pub(crate) fn prune_in(root: &Path, running: &[Running]) -> Vec<Token> {
 }
 
 /// ROOT itself, for uninstall, when it and its parent are Atlas's own folders.
-pub fn root_if_owned() -> Option<PathBuf> {
+pub(crate) fn root_if_owned() -> Option<PathBuf> {
     root_if_owned_in(Path::new(ROOT))
 }
 

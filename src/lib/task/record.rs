@@ -65,7 +65,7 @@ pub(crate) struct Record {
 
 impl Record {
     /// A new record of `task`, first written `now`.
-    pub fn new(task: &Task, now: u64) -> Self {
+    pub(crate) fn new(task: &Task, now: u64) -> Self {
         Self {
             version: VERSION,
             key: task.key().clone(),
@@ -88,7 +88,7 @@ impl Record {
     /// identity seen now is that one. Room is made by forgetting the oldest
     /// ended job once [`JOBS`] are listed; a job that may still run is
     /// never forgotten, so with none ended the new one is refused.
-    pub fn noted_job(&mut self, job: JobEntry) -> Noted {
+    pub(crate) fn noted_job(&mut self, job: JobEntry) -> Noted {
         if let Some(known) = self.jobs.iter_mut().find(|known| known.id == job.id) {
             if known.expected != job.expected {
                 return Noted::Disagrees;
@@ -109,12 +109,12 @@ impl Record {
     }
 
     /// The job `id` this task started, when it is listed.
-    pub fn job(&self, id: &JobId) -> Option<&JobEntry> {
+    pub(crate) fn job(&self, id: &JobId) -> Option<&JobEntry> {
         self.jobs.iter().find(|job| job.id == *id)
     }
 
     /// Note a collection the task made, keeping the newest [`OUTPUTS`].
-    pub fn noted_output(&mut self, output: OutputEntry) {
+    pub(crate) fn noted_output(&mut self, output: OutputEntry) {
         if self.outputs.len() >= OUTPUTS {
             self.outputs.remove(0);
         }
@@ -126,7 +126,7 @@ impl Record {
     /// is full, room is made by forgetting the oldest thing that is gone,
     /// then the oldest app opened by name; with neither, the claim is
     /// refused.
-    pub fn claim(&mut self, owned: &Owned, state: State, now: u64) -> Result<()> {
+    pub(crate) fn claim(&mut self, owned: &Owned, state: State, now: u64) -> Result<()> {
         if self.settle(owned, state, now) {
             return Ok(());
         }
@@ -148,7 +148,7 @@ impl Record {
     }
 
     /// Note what became of `owned` `now`; whether this record lists it.
-    pub fn settle(&mut self, owned: &Owned, state: State, now: u64) -> bool {
+    pub(crate) fn settle(&mut self, owned: &Owned, state: State, now: u64) -> bool {
         let claim = self.owned.iter_mut().find_map(|entry| match entry {
             Entry::Known(claim) if claim.owned().is_some_and(|known| known.same(owned)) => {
                 Some(claim)
@@ -165,7 +165,7 @@ impl Record {
 
     /// Everything this record claims that this build understands, with its
     /// state.
-    pub fn claims(&self) -> impl Iterator<Item = (Owned, State)> + '_ {
+    pub(crate) fn claims(&self) -> impl Iterator<Item = (Owned, State)> + '_ {
         self.owned.iter().filter_map(|entry| match entry {
             Entry::Known(claim) => claim.owned().map(|owned| (owned, claim.state)),
             Entry::Later(_) => None,
@@ -174,7 +174,7 @@ impl Record {
 
     /// When the claim of `owned` was made or last settled, when this record
     /// lists it.
-    pub fn claimed_at(&self, owned: &Owned) -> Option<u64> {
+    pub(crate) fn claimed_at(&self, owned: &Owned) -> Option<u64> {
         self.owned.iter().find_map(|entry| match entry {
             Entry::Known(claim) if claim.owned().is_some_and(|known| known.same(owned)) => {
                 Some(claim.at)
@@ -188,7 +188,7 @@ impl Record {
     /// not finished, or anything a later build wrote that this one cannot
     /// read (a field of the record or of a claim, or a whole claim), which
     /// it never takes for finished.
-    pub fn holds_anything(&self) -> bool {
+    pub(crate) fn holds_anything(&self) -> bool {
         !self.later.is_empty()
             || self.unfinished_cleanup().is_some()
             || self.jobs.iter().any(|job| !job.ended())
@@ -201,7 +201,7 @@ impl Record {
     }
 
     /// The newest cleanup of this task's work that has not finished.
-    pub fn unfinished_cleanup(&self) -> Option<&CleanupNote> {
+    pub(crate) fn unfinished_cleanup(&self) -> Option<&CleanupNote> {
         self.cleanups
             .iter()
             .filter(|note| note.state != CleanupState::Complete)
@@ -211,7 +211,7 @@ impl Record {
     /// Note that cleanup `id` covered this task's work and got to `state`
     /// `now`. The oldest finished notes go first once there are more than
     /// [`CLEANUPS`]; unfinished ones are never forgotten.
-    pub fn noted_cleanup(&mut self, id: &Token, state: CleanupState, now: u64) {
+    pub(crate) fn noted_cleanup(&mut self, id: &Token, state: CleanupState, now: u64) {
         match self.cleanups.iter_mut().find(|note| note.id == *id) {
             Some(note) => {
                 note.state = state;
@@ -266,7 +266,7 @@ pub(crate) enum Owned {
 impl Owned {
     /// Whether `self` and `other` are the same thing: one copy, plan or
     /// install by its ID, one app by its name in any case.
-    pub fn same(&self, other: &Self) -> bool {
+    pub(crate) fn same(&self, other: &Self) -> bool {
         match (self, other) {
             (Self::Copy { id }, Self::Copy { id: other }) => id == other,
             (Self::Plan { id }, Self::Plan { id: other }) => id == other,
@@ -442,7 +442,7 @@ pub(crate) struct JobEntry {
 impl JobEntry {
     /// Whether it is known to have ended: a state a later build wrote is
     /// never taken for one.
-    pub fn ended(&self) -> bool {
+    pub(crate) fn ended(&self) -> bool {
         self.state == Lenient::Known(JobState::Ended)
     }
 }

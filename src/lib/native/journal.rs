@@ -16,7 +16,7 @@ use std::{
 
 #[derive(Clone, PartialEq, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
-pub struct Held {
+pub(super) struct Held {
     pub epoch: InputEpoch,
     pub button: Option<Button>,
     pub keys: Vec<u16>,
@@ -30,17 +30,17 @@ pub struct Held {
 
 /// The last successful replacement is cached only to avoid writing an unchanged
 /// record twice. A failed replacement preserves the last successful record.
-pub struct Journal {
+pub(super) struct Journal {
     path: PathBuf,
     saved: Option<Held>,
 }
 
 impl Journal {
-    pub fn new(path: PathBuf) -> Self {
+    pub(super) fn new(path: PathBuf) -> Self {
         Self { path, saved: None }
     }
 
-    pub fn write(&mut self, held: Held) -> Result<()> {
+    pub(super) fn write(&mut self, held: Held) -> Result<()> {
         if self.saved.as_ref() == Some(&held) {
             return Ok(());
         }
@@ -54,7 +54,7 @@ impl Journal {
 
 /// The input a crashed service left held in this login, if any. A journal
 /// from an earlier login is set aside, never returned.
-pub fn load(path: &Path, epoch: &InputEpoch) -> Result<Option<Held>> {
+pub(super) fn load(path: &Path, epoch: &InputEpoch) -> Result<Option<Held>> {
     let foreign = || {
         Error::new(
             Code::Identity,
@@ -162,7 +162,7 @@ fn set_aside(path: &Path, held: &Held) -> Result<PathBuf> {
 /// is for a service that crashed. A power cut ends the login whose input
 /// was held, and a journal from an earlier login is set aside, not
 /// replayed.
-pub fn store(path: &Path, held: &Held) -> Result<()> {
+pub(super) fn store(path: &Path, held: &Held) -> Result<()> {
     let temporary = path.with_extension("pending");
     write_private_with(&temporary, &serde_json::to_vec(held)?, Durability::Kernel)?;
     fs::rename(temporary, path)?;

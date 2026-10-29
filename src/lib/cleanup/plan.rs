@@ -59,7 +59,7 @@ impl Step {
     }
 
     /// The thing this step removes or undoes, when it is one.
-    pub fn owned(&self) -> Option<Owned> {
+    pub(crate) fn owned(&self) -> Option<Owned> {
         match self {
             Self::CheckOutputs { .. }
             | Self::Quit { .. }

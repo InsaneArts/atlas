@@ -23,7 +23,7 @@ pub(in crate::environment) struct Looks<'a> {
 
 impl Looks<'static> {
     /// What macOS itself says.
-    pub fn system() -> Self {
+    pub(crate) fn system() -> Self {
         Self {
             processes: &helper_processes,
             original: &super::translocate::original,

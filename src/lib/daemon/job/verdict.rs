@@ -9,7 +9,7 @@ use crate::{
 
 /// One look at a job's processes: its leader's PID now, and its group.
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub struct Observation {
+pub(super) struct Observation {
     /// The process with the leader's PID; none when there is none.
     pub leader: Option<Info>,
     /// Every process in the group, unreaped ones included.
@@ -21,7 +21,7 @@ pub struct Observation {
 
 /// What may be done to a job's group now.
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub enum Verdict {
+pub(super) enum Verdict {
     /// Its leader is still the job's and its group is the helper's: this
     /// group, and nothing else, may be signalled.
     Signal { pgid: i32 },
@@ -49,7 +49,7 @@ pub enum Verdict {
 
 impl Verdict {
     /// The reason a refusal gives for this verdict.
-    pub fn reason(&self) -> JobRefusal {
+    pub(super) fn reason(&self) -> JobRefusal {
         match self {
             Self::OtherAccount => JobRefusal::OtherAccount,
             Self::Unknown => JobRefusal::Unobserved,
@@ -85,7 +85,7 @@ fn consistent(leader: Option<&Info>, members: &[Info], pid: i32) -> bool {
 /// processes, or the error that look met) say, for the helper account
 /// `uid` in this boot. Checked in order: the record, the person's copy,
 /// the boot, the leader, every member.
-pub fn verdict(
+pub(super) fn verdict(
     record: &Record,
     expect: Option<&Expected>,
     boot: &str,

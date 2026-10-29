@@ -598,7 +598,7 @@ pub(crate) struct Everyone {
 impl Everyone {
     /// Add what this came to to `reply`: `jobsStopped`, and a warning for
     /// jobs still running or a helper that could not be told.
-    pub fn say(&self, reply: &mut Value) {
+    pub(crate) fn say(&self, reply: &mut Value) {
         reply["jobsStopped"] = json!(self.asked.saturating_sub(self.left));
         let warning = match (&self.error, self.left) {
             (Some(error), _) => Some(format!(

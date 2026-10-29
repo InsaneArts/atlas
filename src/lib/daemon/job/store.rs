@@ -48,7 +48,7 @@ pub(super) struct Store {
 impl Store {
     /// The `jobs` folder beside the daemon's socket in `daemon`, made
     /// private when it is missing.
-    pub fn open(daemon: &Path) -> Result<Self> {
+    pub(super) fn open(daemon: &Path) -> Result<Self> {
         let folder = RecordFolder::at(daemon, &JOB_RECORDS);
         folder.make()?;
         Ok(Self {
@@ -57,17 +57,17 @@ impl Store {
         })
     }
 
-    pub fn directory(&self) -> &Path {
+    pub(super) fn directory(&self) -> &Path {
         self.folder.directory()
     }
 
     /// Whether anything is where `id`'s record goes.
-    pub fn holds(&self, id: &JobId) -> bool {
+    pub(super) fn holds(&self, id: &JobId) -> bool {
         self.unwritten.contains_key(id) || self.folder.holds(id)
     }
 
     /// Every record, as read.
-    pub fn records(&self) -> Vec<Found> {
+    pub(super) fn records(&self) -> Vec<Found> {
         let mut ids = self.folder.listed(LISTED);
         for id in self.unwritten.keys() {
             if !ids.contains(id) {
@@ -80,7 +80,7 @@ impl Store {
     /// The record of `id`: none when there is none, unreadable when it does
     /// not parse, is of another version, never got a process, or names one
     /// whose identity is not sound.
-    pub fn read(&self, id: &JobId) -> Option<Found> {
+    pub(super) fn read(&self, id: &JobId) -> Option<Found> {
         if let Some(record) = self.unwritten.get(id) {
             return Some(Found::Record(Box::new(record.clone())));
         }
@@ -100,7 +100,7 @@ impl Store {
 
     /// Keep `record`: written whole, or held in memory when the write
     /// fails. Whether it reached the disk.
-    pub fn put(&mut self, record: &Record) -> bool {
+    pub(super) fn put(&mut self, record: &Record) -> bool {
         let written = serde_json::to_vec(record)
             .ok()
             .is_some_and(|bytes| self.folder.write(&record.id, &bytes).is_ok());
@@ -113,25 +113,25 @@ impl Store {
     }
 
     /// Write `record` whole, or say why not; nothing is held in memory.
-    pub fn write(&self, record: &Record) -> Result<()> {
+    pub(super) fn write(&self, record: &Record) -> Result<()> {
         self.folder.write(&record.id, &serde_json::to_vec(record)?)
     }
 
     /// Remove `id`'s record and log.
-    pub fn forget(&mut self, id: &JobId) {
+    pub(super) fn forget(&mut self, id: &JobId) {
         self.unwritten.remove(id);
         self.folder.remove(id);
         let _ = fs::remove_file(self.log_path(id));
     }
 
-    pub fn log_path(&self, id: &JobId) -> PathBuf {
+    pub(super) fn log_path(&self, id: &JobId) -> PathBuf {
         self.folder.directory().join(format!("{id}.log"))
     }
 
     /// Empty `id`'s log once it grows past `limit`, through a handle of the
     /// daemon's own: the appends of whatever still writes it go on at the
     /// new end. Whether it was emptied.
-    pub fn bound_log(&self, id: &JobId, limit: u64) -> bool {
+    pub(super) fn bound_log(&self, id: &JobId, limit: u64) -> bool {
         let path = self.log_path(id);
         let over = fs::symlink_metadata(&path)
             .is_ok_and(|metadata| metadata.is_file() && metadata.len() > limit);
@@ -146,7 +146,7 @@ impl Store {
     /// Remove ended records older than a week, with their logs, and the
     /// oldest ended ones past [`RECORDS_MAX`]. A record of a job that may
     /// still run, or one that cannot be read, is never removed.
-    pub fn prune(&mut self, now: u64) {
+    pub(super) fn prune(&mut self, now: u64) {
         let week = crate::time::ms(KEEP);
         let mut ended: Vec<(u64, JobId)> = self
             .records()

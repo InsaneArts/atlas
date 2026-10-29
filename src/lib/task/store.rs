@@ -48,7 +48,7 @@ enum Read {
 }
 
 impl Store {
-    pub fn at(output: &Path) -> Self {
+    pub(crate) fn at(output: &Path) -> Self {
         Self {
             folder: RecordFolder::at(output, &TASKS),
             output: output.to_owned(),
@@ -56,7 +56,7 @@ impl Store {
     }
 
     /// One task's record, when it is there and reads.
-    pub fn load(&self, key: &Key) -> Option<Record> {
+    pub(crate) fn load(&self, key: &Key) -> Option<Record> {
         match self.read(key) {
             Read::Record(record) => Some(*record),
             Read::Missing | Read::Kept => None,
@@ -65,7 +65,7 @@ impl Store {
 
     /// The records of `session`'s tasks, of the newest [`LISTED`] records
     /// in the folder, oldest first; nothing they name is looked at.
-    pub fn of_session(&self, session: &Key) -> Vec<Record> {
+    pub(crate) fn of_session(&self, session: &Key) -> Vec<Record> {
         let mut records: Vec<Record> = self
             .all()
             .into_iter()
@@ -78,7 +78,7 @@ impl Store {
     /// Change `task`'s record under the lock, making it when new, and write
     /// it through to the disk. A record this build cannot read or did not
     /// write the version of is never replaced: the change is refused.
-    pub fn update(
+    pub(crate) fn update(
         &self,
         task: &Task,
         now: u64,
@@ -109,7 +109,7 @@ impl Store {
 
     /// Note what became of each of `owned` in every record that lists it,
     /// under the lock: whoever undid it, the thing itself changed.
-    pub fn settle_everywhere(&self, owned: &[Owned], state: State, now: u64) -> Result<()> {
+    pub(crate) fn settle_everywhere(&self, owned: &[Owned], state: State, now: u64) -> Result<()> {
         if owned.is_empty() || !self.folder.exists() {
             return Ok(());
         }
@@ -141,12 +141,12 @@ impl Store {
     /// written (every write renames one into the folder, which changes it),
     /// so readers that come often, such as the viewer's session list and
     /// session pruning, do not read every record each time.
-    pub fn recent(&self) -> Arc<[Record]> {
+    pub(crate) fn recent(&self) -> Arc<[Record]> {
         self.folder.cached(&RECENT, Duration::MAX, || self.all())
     }
 
     /// The records among the newest [`LISTED`] in the folder.
-    pub fn all(&self) -> Vec<Record> {
+    pub(crate) fn all(&self) -> Vec<Record> {
         self.folder
             .listed(LISTED)
             .iter()

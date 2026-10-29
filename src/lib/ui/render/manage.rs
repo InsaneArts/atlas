@@ -12,7 +12,7 @@ fn agent_name(id: &str) -> &str {
     }
 }
 
-pub fn agents(value: &Value) -> String {
+pub(super) fn agents(value: &Value) -> String {
     let agents: Vec<&Value> = value["agents"].as_array().into_iter().flatten().collect();
     let rows: Vec<Vec<String>> = agents
         .iter()
@@ -55,7 +55,7 @@ pub fn agents(value: &Value) -> String {
 }
 
 /// Which instruction files now carry the Atlas section.
-pub fn agents_project(value: &Value) -> String {
+pub(super) fn agents_project(value: &Value) -> String {
     let mut lines = Vec::new();
     let mut changed = false;
 
@@ -94,7 +94,7 @@ pub fn agents_project(value: &Value) -> String {
     lines.join("\n")
 }
 
-pub fn agents_change(value: &Value) -> Rendered {
+pub(super) fn agents_change(value: &Value) -> Rendered {
     let mut out = Vec::new();
     let mut err = Vec::new();
     let mut connected = false;
@@ -146,7 +146,7 @@ pub fn agents_change(value: &Value) -> Rendered {
     }
 }
 
-pub fn switch(value: &Value) -> String {
+pub(super) fn switch(value: &Value) -> String {
     if let Some(accounts) = value["accounts"].as_array() {
         if accounts.is_empty() {
             return "No other account to switch to.".to_owned();
@@ -188,7 +188,7 @@ fn version(name: &str) -> &str {
         .unwrap_or(name)
 }
 
-pub fn update(value: &Value) -> Rendered {
+pub(super) fn update(value: &Value) -> Rendered {
     if value["updated"] == false {
         let installed = value["version"].as_str().unwrap_or("");
         let available = version(value["available"].as_str().unwrap_or(installed));
@@ -276,7 +276,7 @@ pub fn update(value: &Value) -> Rendered {
     }
 }
 
-pub fn uninstall(value: &Value) -> String {
+pub(super) fn uninstall(value: &Value) -> String {
     let mut lines = vec![format!("{} Atlas is removed", style::ok())];
 
     if let (Some(_), Some(command)) = (
@@ -292,7 +292,7 @@ pub fn uninstall(value: &Value) -> String {
     lines.join("\n")
 }
 
-pub fn login(value: &Value) -> String {
+pub(super) fn login(value: &Value) -> String {
     if value["available"] == false {
         return format!(
             "{} Open at Login needs Atlas.app in /Applications",
@@ -307,7 +307,7 @@ pub fn login(value: &Value) -> String {
     }
 }
 
-pub fn menubar(value: &Value) -> String {
+pub(super) fn menubar(value: &Value) -> String {
     if value["alreadyRunning"] != true {
         return String::new();
     }
@@ -318,7 +318,7 @@ pub fn menubar(value: &Value) -> String {
     )
 }
 
-pub fn monitor() -> String {
+pub(super) fn monitor() -> String {
     format!(
         "{} The viewer is open. Watch the helper there, or take control.",
         style::ok()

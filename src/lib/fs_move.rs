@@ -72,12 +72,12 @@ pub(crate) struct FileName(CString);
 
 impl FileName {
     /// `name` as a file name, when it is a plain one.
-    pub fn new(name: &str) -> Option<Self> {
+    pub(crate) fn new(name: &str) -> Option<Self> {
         let plain = !name.is_empty() && name != "." && name != ".." && !name.contains('/');
         plain.then(|| CString::new(name).ok()).flatten().map(Self)
     }
 
-    pub fn as_c_str(&self) -> &CStr {
+    pub(crate) fn as_c_str(&self) -> &CStr {
         &self.0
     }
 }

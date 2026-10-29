@@ -62,7 +62,7 @@ pub(crate) struct Record {
 
 impl Record {
     /// A new record of `session`, first seen `now`, working in `folder`.
-    pub fn new(session: &HostSession, now: u64, folder: Option<String>) -> Self {
+    pub(crate) fn new(session: &HostSession, now: u64, folder: Option<String>) -> Self {
         Self {
             version: VERSION,
             key: session.key().clone(),
@@ -83,7 +83,7 @@ impl Record {
 
     /// When the session ended: as recorded, or at its last command once
     /// the host process it names no longer runs.
-    pub fn ended_at(&self) -> Option<u64> {
+    pub(crate) fn ended_at(&self) -> Option<u64> {
         self.ended.or_else(|| {
             self.host_process
                 .filter(|process| !process.running())
@@ -93,14 +93,14 @@ impl Record {
 
     /// Whether the session has not ended and ran a command within
     /// [`ACTIVE_FOR`] of `now`.
-    pub fn active(&self, now: u64) -> bool {
+    pub(crate) fn active(&self, now: u64) -> bool {
         let within = crate::time::ms(ACTIVE_FOR);
         self.ended_at().is_none() && now.saturating_sub(self.last_seen) <= within
     }
 
     /// Note that `session` acted `now`, doing `verb` when its command was
     /// not refused.
-    pub fn seen(&mut self, session: &HostSession, now: u64, verb: Option<&str>) {
+    pub(crate) fn seen(&mut self, session: &HostSession, now: u64, verb: Option<&str>) {
         self.last_seen = now;
         self.ended = None;
         if session.process().is_some() {
@@ -120,7 +120,7 @@ impl Record {
     /// only the last seen time moves, at most every [`SEEN_WITHIN`], and an
     /// ended session stays ended: a command's word alone, as an id in its
     /// environment, never revives one. Whether anything changed.
-    pub fn touched(&mut self, ancestor: Option<Instance>, now: u64) -> bool {
+    pub(crate) fn touched(&mut self, ancestor: Option<Instance>, now: u64) -> bool {
         if let Some(process) = ancestor.filter(|process| self.host_process != Some(*process)) {
             self.host_process = Some(process);
             self.ended = None;
@@ -137,14 +137,14 @@ impl Record {
     }
 
     /// Note the screenshot saved as `capture`, newest first.
-    pub fn took(&mut self, capture: Capture) {
+    pub(crate) fn took(&mut self, capture: Capture) {
         self.screenshots.retain(|kept| *kept != capture);
         self.screenshots.insert(0, capture);
         self.screenshots.truncate(SCREENSHOTS);
     }
 
     /// Note the copy folders `tokens` name, made for this session.
-    pub fn copied(&mut self, tokens: impl IntoIterator<Item = Token>) {
+    pub(crate) fn copied(&mut self, tokens: impl IntoIterator<Item = Token>) {
         for token in tokens {
             if !self.copies.contains(&token) {
                 self.copies.insert(0, token);
@@ -154,13 +154,13 @@ impl Record {
     }
 
     /// Forget the copy folders `tokens` name, which are gone.
-    pub fn removed(&mut self, tokens: &[Token]) {
+    pub(crate) fn removed(&mut self, tokens: &[Token]) {
         self.copies.retain(|token| !tokens.contains(token));
     }
 
     /// Note that this session's change took plan `plan_id` to `phase` `at`;
     /// a rolled-back plan leaves the record.
-    pub fn planned(&mut self, plan_id: Token, phase: Phase, at: u64) {
+    pub(crate) fn planned(&mut self, plan_id: Token, phase: Phase, at: u64) {
         self.forget_plan(&plan_id);
         if phase != Phase::RolledBack {
             self.plans.insert(0, PlanNote { plan_id, phase, at });
@@ -169,7 +169,7 @@ impl Record {
     }
 
     /// Forget plan `plan_id`, rolled back by whoever; whether it was here.
-    pub fn forget_plan(&mut self, plan_id: &Token) -> bool {
+    pub(crate) fn forget_plan(&mut self, plan_id: &Token) -> bool {
         let before = self.plans.len();
         self.plans.retain(|plan| plan.plan_id != *plan_id);
         self.plans.len() != before
@@ -201,7 +201,7 @@ pub(crate) struct Leftovers {
 }
 
 impl Leftovers {
-    pub fn is_empty(&self) -> bool {
+    pub(crate) fn is_empty(&self) -> bool {
         self.copies.is_empty() && self.plans == 0 && self.uncertain == 0 && self.running == 0
     }
 }

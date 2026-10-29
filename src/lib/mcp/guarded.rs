@@ -15,13 +15,13 @@ pub(super) struct Reply {
 }
 
 impl Reply {
-    pub fn new(value: Value) -> Self {
+    pub(super) fn new(value: Value) -> Self {
         Self {
             value,
             _reservation: None,
         }
     }
-    pub fn delivered(&mut self) {
+    pub(super) fn delivered(&mut self) {
         if let Some(reservation) = &mut self._reservation {
             reservation.settled = true;
         }
@@ -76,7 +76,7 @@ impl Registry {
             .unwrap_or_else(|poisoned| poisoned.into_inner())
     }
 
-    pub fn is_empty(&self) -> bool {
+    pub(super) fn is_empty(&self) -> bool {
         self.locked().is_empty()
     }
 
@@ -162,7 +162,7 @@ impl Registry {
         ))
     }
 
-    pub async fn call(&self, root: &Server, id: &Value, params: &Value) -> Reply {
+    pub(super) async fn call(&self, root: &Server, id: &Value, params: &Value) -> Reply {
         let name = params["name"].as_str().unwrap_or_default();
         if !root.offers(name) {
             return Reply::new(failure(id, -32602, "Unknown tool"));
@@ -227,7 +227,7 @@ impl Registry {
         Reply::new(success(id, result))
     }
 
-    pub async fn sweep(&self, shutdown: bool) {
+    pub(super) async fn sweep(&self, shutdown: bool) {
         let candidates = {
             let mut entries = self.locked();
             entries

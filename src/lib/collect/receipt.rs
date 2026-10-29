@@ -111,7 +111,7 @@ pub(crate) struct Intact {
 
 impl Intact {
     /// Whether every copy is as it was collected.
-    pub fn whole(&self) -> bool {
+    pub(crate) fn whole(&self) -> bool {
         self.missing.is_empty() && self.changed.is_empty() && !self.unknown
     }
 }

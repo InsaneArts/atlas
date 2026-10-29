@@ -84,7 +84,7 @@ struct Source(CFRetained<CGEventSource>);
 // is never used from two threads at once.
 unsafe impl Send for Source {}
 
-pub struct Engine {
+pub(super) struct Engine {
     pub epoch: InputEpoch,
     pub grant: Option<Grant>,
     journal: Option<Journal>,
@@ -106,7 +106,7 @@ pub struct Engine {
 }
 
 impl Engine {
-    pub fn new(uid: u32) -> Result<Self> {
+    pub(super) fn new(uid: u32) -> Result<Self> {
         let source = CGEventSource::new(CGEventSourceStateID::Private)
             .map(Source)
             .ok_or_else(|| Error::new(Code::Native, "Could not create the event source"))?;
@@ -139,11 +139,11 @@ impl Engine {
     }
 
     /// Whether this process may use Accessibility.
-    pub fn trusted() -> bool {
+    pub(super) fn trusted() -> bool {
         accessibility_trusted()
     }
 
-    pub fn check(&mut self) -> Result<()> {
+    pub(super) fn check(&mut self) -> Result<()> {
         let current = InputEpoch::from_proof(&session_info()?, std::process::id())?;
         if current != self.epoch {
             return Err(Error::new(
@@ -179,7 +179,7 @@ impl Engine {
         Ok(())
     }
 
-    pub fn recover(&mut self, path: PathBuf) -> Result<()> {
+    pub(super) fn recover(&mut self, path: PathBuf) -> Result<()> {
         if let Some(held) = journal::load(&path, &self.epoch)? {
             self.held = held.button;
             self.held_keys = held.keys;
@@ -198,7 +198,7 @@ impl Engine {
         self.release()
     }
 
-    pub fn rebind(&mut self, current: InputEpoch) -> Result<()> {
+    pub(super) fn rebind(&mut self, current: InputEpoch) -> Result<()> {
         if current.uid != self.epoch.uid
             || current.security_session_id != self.epoch.security_session_id
         {
@@ -299,7 +299,7 @@ impl Engine {
         self.post(event, flags, point)
     }
 
-    pub fn release(&mut self) -> Result<()> {
+    pub(super) fn release(&mut self) -> Result<()> {
         self.grant = None;
 
         if !self.held_input() {
@@ -325,7 +325,7 @@ impl Engine {
         self.commit()
     }
 
-    pub fn held_input(&self) -> bool {
+    pub(super) fn held_input(&self) -> bool {
         self.held.is_some() || !self.held_keys.is_empty() || self.flags != 0
     }
 
@@ -490,7 +490,7 @@ impl Engine {
         }
     }
 
-    pub async fn perform(&mut self, action: Action) -> Result<()> {
+    pub(super) async fn perform(&mut self, action: Action) -> Result<()> {
         self.check()?;
 
         match action {

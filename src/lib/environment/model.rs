@@ -13,7 +13,7 @@ pub(super) struct Identity {
 }
 
 impl Identity {
-    pub fn from_epoch(epoch: &crate::session::Epoch) -> Self {
+    pub(super) fn from_epoch(epoch: &crate::session::Epoch) -> Self {
         Self {
             uid: epoch.uid,
             capture_pid: epoch.capture_pid,
@@ -24,7 +24,7 @@ impl Identity {
         }
     }
 
-    pub fn from_proof(proof: &Value) -> Result<Self> {
+    pub(super) fn from_proof(proof: &Value) -> Result<Self> {
         let epoch = crate::session::InputEpoch::from_proof(proof, 1)?;
         Ok(Self {
             uid: epoch.uid,
@@ -87,7 +87,7 @@ impl Request {
     /// Whether the worker may change the helper for this request. Every
     /// other request only reads, so it takes no control and leaves nothing
     /// pending; a new request must say which it is.
-    pub fn changes_helper(&self) -> bool {
+    pub(super) fn changes_helper(&self) -> bool {
         match self {
             Request::Preview { .. } | Request::Transactions { .. } | Request::Installs { .. } => {
                 false
@@ -141,7 +141,7 @@ impl PartialEq for Fingerprint {
 }
 
 impl Fingerprint {
-    pub fn same_contents_and_metadata(&self, other: &Self) -> bool {
+    pub(super) fn same_contents_and_metadata(&self, other: &Self) -> bool {
         let Self {
             node: _,
             sha256,

@@ -77,7 +77,7 @@ pub(crate) struct Transactions {
 
 impl Transactions {
     /// The transactions this build can read.
-    pub fn known(&self) -> impl Iterator<Item = &TransactionSummary> {
+    pub(super) fn known(&self) -> impl Iterator<Item = &TransactionSummary> {
         self.transactions
             .iter()
             .filter_map(|transaction| match transaction {
@@ -119,7 +119,7 @@ pub(crate) struct InstallState {
 impl InstallState {
     /// Install `id` in `phase`, verified as `verified` says, with nothing
     /// more said of it.
-    pub fn of(id: &str, phase: InstallSeen, verified: Option<bool>) -> Self {
+    pub(crate) fn of(id: &str, phase: InstallSeen, verified: Option<bool>) -> Self {
         Self {
             install_id: id.to_owned(),
             phase: phase.into(),
@@ -130,7 +130,7 @@ impl InstallState {
     }
 
     /// Whether the helper verified it is still the folder Atlas placed.
-    pub fn verified(&self) -> bool {
+    pub(crate) fn verified(&self) -> bool {
         self.verified == Some(true)
     }
 }

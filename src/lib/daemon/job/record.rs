@@ -23,7 +23,7 @@ const BOOT_MAX: usize = 64;
 /// [`JobIdentity::new`] makes one, so every identity in hand is in bounds
 /// and names a group led by its own leader.
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub struct JobIdentity {
+pub(super) struct JobIdentity {
     boot: String,
     leader: Instance,
 }
@@ -32,7 +32,7 @@ impl JobIdentity {
     /// The identity these say, when the boot is named, the PID is a user
     /// process's, the start time is a real one, and the group is the
     /// leader's own.
-    pub fn new(boot: &str, pid: i32, start: Start, pgid: i32) -> Option<Self> {
+    pub(super) fn new(boot: &str, pid: i32, start: Start, pgid: i32) -> Option<Self> {
         let sound = !boot.is_empty()
             && boot.len() <= BOOT_MAX
             && (2..=PID_MAX).contains(&pid)
@@ -46,35 +46,35 @@ impl JobIdentity {
     }
 
     /// The identity the person's side sent, when it is a sound one.
-    pub fn expected(expected: &Expected) -> Option<Self> {
+    pub(super) fn expected(expected: &Expected) -> Option<Self> {
         Self::new(&expected.boot, expected.pid, expected.start, expected.pgid)
     }
 
-    pub fn boot(&self) -> &str {
+    pub(super) fn boot(&self) -> &str {
         &self.boot
     }
 
     /// The leader's PID.
-    pub fn pid(&self) -> i32 {
+    pub(super) fn pid(&self) -> i32 {
         self.leader.pid
     }
 
     /// The job's process group: always its leader's PID.
-    pub fn pgid(&self) -> i32 {
+    pub(super) fn pgid(&self) -> i32 {
         self.leader.pid
     }
 
-    pub fn start(&self) -> Start {
+    pub(super) fn start(&self) -> Start {
         self.leader.start
     }
 
     /// The leader as a process instance.
-    pub fn leader(&self) -> Instance {
+    pub(super) fn leader(&self) -> Instance {
         self.leader
     }
 
     /// As the person's side keeps it.
-    pub fn as_expected(&self) -> Expected {
+    pub(super) fn as_expected(&self) -> Expected {
         Expected {
             boot: self.boot.clone(),
             pid: self.leader.pid,
@@ -87,7 +87,7 @@ impl JobIdentity {
 /// A stop under way.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub struct Stopping {
+pub(super) struct Stopping {
     /// How the job ends once nothing of it is left.
     pub why: How,
     /// When the stop began, in milliseconds since 1970: the grace runs from
@@ -134,7 +134,7 @@ impl Stopping {
 /// How a job ended, and what it left.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub struct Ended {
+pub(super) struct Ended {
     pub how: How,
     /// When, in milliseconds since 1970.
     pub at: u64,
@@ -153,7 +153,7 @@ pub struct Ended {
 /// The daemon's record of one job: the truth about its process.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub struct Record {
+pub(super) struct Record {
     pub version: u32,
     pub id: JobId,
     /// The agent's name for it, or its program's file name.
@@ -187,7 +187,7 @@ pub struct Record {
 
 impl Record {
     /// Its identity, when it has a process and the identity is sound.
-    pub fn identity(&self) -> Option<JobIdentity> {
+    pub(super) fn identity(&self) -> Option<JobIdentity> {
         JobIdentity::new(&self.boot, self.pid?, self.start?, self.pgid?)
     }
 
@@ -206,7 +206,7 @@ impl Record {
     }
 
     /// What the job is, when it has a process.
-    pub fn expected(&self) -> Option<Expected> {
+    pub(super) fn expected(&self) -> Option<Expected> {
         self.identity().map(|identity| identity.as_expected())
     }
 
@@ -216,7 +216,7 @@ impl Record {
     }
 
     /// The job as replies show it.
-    pub fn view(&self) -> JobView {
+    pub(super) fn view(&self) -> JobView {
         let progress = match (&self.ended, &self.stopping) {
             (Some(ended), _) => Progress::Ended(EndedView {
                 how: ended.how,

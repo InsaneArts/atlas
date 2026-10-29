@@ -5,7 +5,7 @@ use crate::error::Code;
 use serde_json::Value;
 
 /// An input action, said as done; a failure says how far it got.
-pub fn action(done: &str, value: &Value) -> Rendered {
+pub(super) fn action(done: &str, value: &Value) -> Rendered {
     if value["ok"] == false
         && let Some(performed) = value["performed"].as_u64()
         && performed > 0
@@ -40,7 +40,7 @@ pub fn action(done: &str, value: &Value) -> Rendered {
     Rendered::out(format!("{} {done}", style::ok()))
 }
 
-pub fn typed(value: &Value) -> Rendered {
+pub(super) fn typed(value: &Value) -> Rendered {
     let characters = value["typed"].as_u64().unwrap_or(0) as usize;
 
     if value["ok"] == false {
@@ -66,7 +66,7 @@ pub fn typed(value: &Value) -> Rendered {
 }
 
 /// The command's own output, as it printed it; a note only when it failed.
-pub fn run(value: &Value) -> Rendered {
+pub(super) fn run(value: &Value) -> Rendered {
     if let Some(failure) = failed(value) {
         return failure;
     }
@@ -120,7 +120,7 @@ pub fn run(value: &Value) -> Rendered {
     rendered
 }
 
-pub fn wait(value: &Value, gone: bool) -> String {
+pub(super) fn wait(value: &Value, gone: bool) -> String {
     let after = value["waitedMs"]
         .as_f64()
         .map(|ms| format!(" after {}", text::duration(ms)))
@@ -144,7 +144,7 @@ pub fn wait(value: &Value, gone: bool) -> String {
     format!("{} {name} appeared{after}", style::ok())
 }
 
-pub fn restart(value: &Value) -> String {
+pub(super) fn restart(value: &Value) -> String {
     let mut line = format!("{} The helper restarted and is ready", style::ok());
 
     if value["inputReplaced"] == true {
@@ -154,7 +154,7 @@ pub fn restart(value: &Value) -> String {
     line
 }
 
-pub fn logout(_: &Value) -> String {
+pub(super) fn logout(_: &Value) -> String {
     format!(
         "{} The helper is logged out  {}",
         style::ok(),
@@ -162,7 +162,7 @@ pub fn logout(_: &Value) -> String {
     )
 }
 
-pub fn start_input(value: &Value) -> String {
+pub(super) fn start_input(value: &Value) -> String {
     let how = if value["alreadyRunning"] == true {
         "was already running"
     } else if value["recovered"] == true {
@@ -176,7 +176,7 @@ pub fn start_input(value: &Value) -> String {
     format!("{} The input service {how}", style::ok())
 }
 
-pub fn install(value: &Value) -> String {
+pub(super) fn install(value: &Value) -> String {
     let path = value["path"].as_str().map(text::tilde).unwrap_or_default();
 
     if value["alreadyInstalled"] == true {
@@ -196,7 +196,7 @@ pub fn install(value: &Value) -> String {
 
 /// The copies into the helper `environment list` found: each plan's ID,
 /// state and the files it copies.
-pub fn plans(value: &Value) -> String {
+pub(super) fn plans(value: &Value) -> String {
     let plans = value["plans"].as_array().map_or(&[][..], Vec::as_slice);
     let count = |field: &str| value[field].as_u64().unwrap_or(0);
     let (hidden, more, unreadable) = (count("hidden"), count("more"), count("unreadable"));
@@ -268,7 +268,7 @@ fn plan_state(state: &str) -> &str {
 
 /// An environment preview, copy or undo: what changes in the helper's home,
 /// and the one command that comes next.
-pub fn environment(value: &Value) -> Rendered {
+pub(super) fn environment(value: &Value) -> Rendered {
     let Some(files) = value["files"].as_array() else {
         return failed(value).unwrap_or_else(|| Rendered::out(super::generic(value)));
     };
@@ -441,7 +441,7 @@ pub fn environment(value: &Value) -> Rendered {
 }
 
 /// An app closed in the helper, and whether its copy went with it.
-pub fn close(value: &Value) -> String {
+pub(super) fn close(value: &Value) -> String {
     // `close --all` names every app it quit.
     if let Some(apps) = value["apps"].as_array() {
         let names: Vec<String> = apps
@@ -530,7 +530,7 @@ fn copies_left(value: &Value) -> String {
 }
 
 /// What `environment discover` found, here and in the helper.
-pub fn discover(value: &Value) -> String {
+pub(super) fn discover(value: &Value) -> String {
     let mut rows: Vec<Vec<String>> = Vec::new();
 
     for item in value["selections"].as_array().into_iter().flatten() {
@@ -619,7 +619,7 @@ pub fn discover(value: &Value) -> String {
 }
 
 /// `setup` without --apply: whether anything needs doing.
-pub fn setup_preview(value: &Value) -> String {
+pub(super) fn setup_preview(value: &Value) -> String {
     let steps: Vec<&str> = value["nextSteps"]
         .as_array()
         .into_iter()

@@ -60,7 +60,7 @@ pub(crate) struct Receipt {
 
 impl Receipt {
     /// A new, empty receipt of `session`'s work (or `task`'s), started now.
-    pub fn new(session: Key, task: Option<Key>, actor: Actor) -> Self {
+    pub(crate) fn new(session: Key, task: Option<Key>, actor: Actor) -> Self {
         let now = now_ms();
         Self {
             version: VERSION,
@@ -79,7 +79,7 @@ impl Receipt {
     /// The overall state its steps add up to, worst first: uncertain when
     /// any step is, blocked when any is, incomplete while any has not been
     /// done or kept, complete otherwise.
-    pub fn summed(&self) -> CleanupState {
+    pub(crate) fn summed(&self) -> CleanupState {
         let any = |state: StepState| self.steps.iter().any(|step| step.state == state);
         if any(StepState::Uncertain) {
             CleanupState::Uncertain
@@ -97,7 +97,7 @@ impl Receipt {
     }
 
     /// The step numbered `n`.
-    pub fn step(&self, n: u32) -> Option<&Entry> {
+    pub(crate) fn step(&self, n: u32) -> Option<&Entry> {
         self.steps.iter().find(|step| step.n == n)
     }
 }
@@ -135,7 +135,7 @@ pub(crate) struct Entry {
 }
 
 impl Entry {
-    pub fn new(n: u32, step: Step, after: Vec<u32>) -> Self {
+    pub(crate) fn new(n: u32, step: Step, after: Vec<u32>) -> Self {
         Self {
             n,
             step,
@@ -152,7 +152,7 @@ impl Entry {
 
     /// Note that it got to `state` now, for `reason`, with nothing else
     /// known of it yet.
-    pub fn set(&mut self, state: StepState, reason: Option<Reason>) {
+    pub(crate) fn set(&mut self, state: StepState, reason: Option<Reason>) {
         self.state = state;
         self.retry = reason.is_some_and(Reason::retried) && state == StepState::Failed;
         self.reason = reason;
@@ -213,7 +213,7 @@ pub(crate) struct NotKept {
 
 impl CameTo {
     /// A failure said in `words`, bounded.
-    pub fn failed(words: &str) -> Self {
+    pub(crate) fn failed(words: &str) -> Self {
         Self {
             error: Some(words.chars().take(SAID).collect()),
             ..Self::default()
@@ -246,7 +246,7 @@ pub(crate) enum StepState {
 
 impl StepState {
     /// Whether nothing is left to do for it.
-    pub fn finished(self) -> bool {
+    pub(crate) fn finished(self) -> bool {
         matches!(self, Self::Done | Self::Kept)
     }
 }
@@ -316,7 +316,7 @@ impl Reason {
     }
 
     /// The reason's name, as replies and receipts give it.
-    pub fn as_str(self) -> &'static str {
+    pub(crate) fn as_str(self) -> &'static str {
         match self {
             Self::Changed => "changed",
             Self::Replaced => "replaced",
@@ -347,14 +347,14 @@ pub(crate) struct Receipts {
 }
 
 impl Receipts {
-    pub fn at(output: &Path) -> Self {
+    pub(super) fn at(output: &Path) -> Self {
         Self {
             folder: RecordFolder::at(output, &RECEIPTS),
         }
     }
 
     /// One receipt, when it is there and reads.
-    pub fn load(&self, id: &Token) -> Option<Receipt> {
+    pub(super) fn load(&self, id: &Token) -> Option<Receipt> {
         self.folder
             .read(id)
             .and_then(|bytes| serde_json::from_slice::<Receipt>(&bytes).ok())
@@ -364,7 +364,7 @@ impl Receipts {
     /// The receipts of `session`'s work among the newest in the folder:
     /// those its tasks' records name, and any a run cut short before it
     /// named them.
-    pub fn of_session(&self, session: &Key) -> Vec<Receipt> {
+    pub(super) fn of_session(&self, session: &Key) -> Vec<Receipt> {
         self.folder
             .listed(LISTED)
             .iter()
@@ -374,7 +374,7 @@ impl Receipts {
     }
 
     /// Write `receipt` whole, through to the disk, as its state is now.
-    pub fn save(&self, receipt: &mut Receipt) -> Result<()> {
+    pub(super) fn save(&self, receipt: &mut Receipt) -> Result<()> {
         receipt.updated = now_ms();
         receipt.state = receipt.summed();
         self.folder.make()?;
@@ -387,7 +387,7 @@ impl Receipts {
     /// belong to a session `recorded` no longer knows of; the one `keep`,
     /// and any with a finished step its records have not yet acknowledged,
     /// stay.
-    pub fn prune(&self, keep: &Token, recorded: impl Fn(&Key) -> bool) {
+    pub(super) fn prune(&self, keep: &Token, recorded: impl Fn(&Key) -> bool) {
         let Ok(_lock) = self.folder.lock() else {
             return;
         };

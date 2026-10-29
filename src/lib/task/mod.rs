@@ -145,7 +145,7 @@ pub(crate) struct Claims {
 
 impl Claims {
     /// The claims of `client`'s command.
-    pub fn of(client: &Client) -> Self {
+    pub(crate) fn of(client: &Client) -> Self {
         let task = client
             .task
             .clone()
@@ -166,13 +166,13 @@ impl Claims {
     /// Record that the task is about to make `owned` (`intent`), or has
     /// made it (`made`), written through to the disk before the caller goes
     /// on.
-    pub fn claim(&self, owned: &Owned, state: State) -> Result<()> {
+    pub(crate) fn claim(&self, owned: &Owned, state: State) -> Result<()> {
         self.claim_all(std::slice::from_ref(owned), state)
     }
 
     /// [`Claims::claim`] for each of `owned`, in one write. When the record
     /// is full, the claims that fit are kept and the rest are refused.
-    pub fn claim_all(&self, owned: &[Owned], state: State) -> Result<()> {
+    pub(crate) fn claim_all(&self, owned: &[Owned], state: State) -> Result<()> {
         let Some((store, task)) = self.task.as_ref().filter(|_| !owned.is_empty()) else {
             return Ok(());
         };
@@ -192,7 +192,7 @@ impl Claims {
 
     /// Record what became of each of `settled`, which this task claimed, in
     /// one write.
-    pub fn settle_all(&self, settled: &[(Owned, State)]) -> Result<()> {
+    pub(crate) fn settle_all(&self, settled: &[(Owned, State)]) -> Result<()> {
         let Some((store, task)) = self.task.as_ref().filter(|_| !settled.is_empty()) else {
             return Ok(());
         };

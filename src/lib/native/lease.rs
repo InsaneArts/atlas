@@ -7,16 +7,16 @@ use std::time::Instant;
 /// Who asks for control: an agent, or the person through a viewer. A stop
 /// refuses agents only, so the person can still take over.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum Who {
+pub(super) enum Who {
     Agent,
     Person,
 }
 
 #[derive(Default)]
-pub struct Gate(Mutex<State>);
+pub(super) struct Gate(Mutex<State>);
 
 #[derive(Default)]
-pub struct State {
+pub(super) struct State {
     owner: Option<String>,
     previous: Option<String>,
     expires: Option<Instant>,
@@ -80,7 +80,7 @@ impl Gate {
             .map_err(|_| Error::new(Code::Native, "Input ownership failed"))
     }
 
-    pub fn active(&self) -> Result<bool> {
+    pub(super) fn active(&self) -> Result<bool> {
         let mut state = self.lock()?;
         state.expire();
         Ok(state.owner.is_some())
@@ -88,7 +88,7 @@ impl Gate {
 
     /// Who holds control now, if anyone: the person through a viewer, or
     /// an agent. Read under one lock, so the two never disagree.
-    pub fn holder(&self) -> Result<Option<Holder>> {
+    pub(super) fn holder(&self) -> Result<Option<Holder>> {
         let mut state = self.lock()?;
         state.expire();
         Ok(match (state.owner.is_some(), state.person) {
@@ -98,7 +98,7 @@ impl Gate {
         })
     }
 
-    pub fn acquire(self: &Arc<Self>, owner: &str, who: Who) -> Result<Grant> {
+    pub(super) fn acquire(self: &Arc<Self>, owner: &str, who: Who) -> Result<Grant> {
         let mut state = self.lock()?;
         state.expire();
 
@@ -144,7 +144,7 @@ impl Gate {
 
     /// The grant for an input request: the action under way, so it hears
     /// of a cancel or a stop that came since control was taken.
-    pub fn grant(self: &Arc<Self>, owner: &str) -> Result<Grant> {
+    pub(super) fn grant(self: &Arc<Self>, owner: &str) -> Result<Grant> {
         self.lock()?.require(owner, true)?;
         Ok(Grant {
             gate: self.clone(),
@@ -152,7 +152,7 @@ impl Gate {
         })
     }
 
-    pub fn renew(&self, owner: &str) -> Result<()> {
+    pub(super) fn renew(&self, owner: &str) -> Result<()> {
         let mut state = self.lock()?;
         state.require(owner, false)?;
         state.expires = Some(Instant::now() + super::GRANT_TTL);
@@ -161,7 +161,7 @@ impl Gate {
 
     /// End ownership on purpose: the person stopped, or the controller
     /// released it. What was under way then reads as cancelled.
-    pub fn cancel(&self, owner: Option<&str>) -> Result<()> {
+    pub(super) fn cancel(&self, owner: Option<&str>) -> Result<()> {
         let mut state = self.lock()?;
         if let Some(owner) = owner
             && state.previous.as_deref() != Some(owner)
@@ -182,7 +182,7 @@ impl Gate {
     /// Stop agents (`on`) or let them go on. Stopping ends an agent's
     /// control as a cancel does, so what it had under way reads as
     /// cancelled; the person's own control is left alone.
-    pub fn hold(&self, on: bool) -> Result<()> {
+    pub(super) fn hold(&self, on: bool) -> Result<()> {
         let mut state = self.lock()?;
         state.held = on;
 
@@ -197,20 +197,20 @@ impl Gate {
     }
 
     /// Whether the person has stopped agents.
-    pub fn held(&self) -> Result<bool> {
+    pub(super) fn held(&self) -> Result<bool> {
         Ok(self.lock()?.held)
     }
 
     /// End ownership for a cause that is nobody's doing (the session
     /// changed, an action failed). What was under way reads as lost.
-    pub fn revoke(&self) -> Result<()> {
+    pub(super) fn revoke(&self) -> Result<()> {
         let mut state = self.lock()?;
         state.owner = None;
         state.cancelled = None;
         Ok(())
     }
 
-    pub fn close(&self) -> Result<()> {
+    pub(super) fn close(&self) -> Result<()> {
         let mut state = self.lock()?;
         state.closed = true;
         state.owner = None;
@@ -219,13 +219,13 @@ impl Gate {
 }
 
 #[derive(Clone)]
-pub struct Grant {
+pub(super) struct Grant {
     gate: Arc<Gate>,
     owner: String,
 }
 
 impl Grant {
-    pub fn authorize(&self) -> Result<MutexGuard<'_, State>> {
+    pub(super) fn authorize(&self) -> Result<MutexGuard<'_, State>> {
         let mut state = self.gate.lock()?;
         state.require(&self.owner, true)?;
         Ok(state)
