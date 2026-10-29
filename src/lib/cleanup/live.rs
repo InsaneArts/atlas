@@ -142,13 +142,12 @@ impl Hands for Live<'_> {
         crate::jobs::show(self.client, id).await
     }
 
-    async fn jobs_of(&self, session: &Key, task: Option<&Key>) -> Vec<Job> {
-        crate::jobs::of_session(self.client, session, task)
-            .await
-            .unwrap_or_default()
+    async fn jobs_of(&self, session: &Key, task: Option<&Key>) -> Result<Vec<Job>> {
+        Ok(crate::jobs::of_session(self.client, session, task)
+            .await?
             .into_iter()
             .map(|(id, task, name)| Job { id, task, name })
-            .collect()
+            .collect())
     }
 
     async fn stop_job(&self, task: &Key, id: &JobId) -> Result<Value> {

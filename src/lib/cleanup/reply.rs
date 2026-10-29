@@ -31,6 +31,7 @@ pub(super) fn described(copies: &Path, entry: &Entry) -> Value {
             value["id"] = json!(job);
             value["name"] = json!(name);
         }
+        Step::FindJobs => value["do"] = json!("find-jobs"),
         Step::Quit { .. } => value["do"] = json!("quit"),
         Step::UndoPlan { plan } => {
             value["do"] = json!("undo-plan");

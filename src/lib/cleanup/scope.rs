@@ -171,6 +171,7 @@ impl Loaded {
                     })
                 })
                 .collect(),
+            unlisted: None,
         }
     }
 

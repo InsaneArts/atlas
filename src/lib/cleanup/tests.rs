@@ -44,6 +44,8 @@ struct Fake {
     job_stops: RefCell<BTreeMap<String, Result<Value>>>,
     /// The jobs the helper's own records give the session.
     daemon_jobs: RefCell<Vec<plan::Job>>,
+    /// Whether the helper's list of its jobs cannot be read.
+    unlisted: Cell<bool>,
     stopped: Cell<bool>,
     log: RefCell<Vec<String>>,
 }
@@ -169,13 +171,17 @@ impl Hands for Fake {
             .unwrap_or_else(|| json!({"id": id, "state": "running"})))
     }
 
-    async fn jobs_of(&self, _: &Key, task: Option<&Key>) -> Vec<plan::Job> {
-        self.daemon_jobs
+    async fn jobs_of(&self, _: &Key, task: Option<&Key>) -> Result<Vec<plan::Job>> {
+        if self.unlisted.get() {
+            return Err(Error::new("transport", "The helper did not answer"));
+        }
+        Ok(self
+            .daemon_jobs
             .borrow()
             .iter()
             .filter(|job| task.is_none_or(|task| job.task == *task))
             .cloned()
-            .collect()
+            .collect())
     }
 
     async fn stop_job(&self, _: &Key, id: &crate::daemon::protocol::JobId) -> Result<Value> {
@@ -2008,4 +2014,50 @@ async fn a_source_named_in_another_case_is_kept_all_the_same() {
     let reply = place.apply(&fake, &own(&key)).await;
     assert_eq!(reply["steps"][1]["state"], "blocked", "{reply}");
     assert!(!fake.logged().contains(&format!("undo {plan}")));
+}
+
+#[tokio::test]
+async fn a_job_list_that_cannot_be_read_holds_every_removal_back_until_it_can() {
+    let place = Place::new();
+    let key = session("unlisted");
+    let task = default_task(&key);
+    let plan = plan_claimed(&place, &task);
+    let known = job_started(&place, &task, "web");
+    let fake = Fake::at(&place.root);
+    fake.unlisted.set(true);
+    let unknown = crate::daemon::protocol::JobId::new();
+    fake.daemon_jobs.borrow_mut().push(plan::Job {
+        id: unknown.clone(),
+        task: task.key().clone(),
+        name: "worker".into(),
+    });
+
+    let reply = place.apply(&fake, &own(&key)).await;
+    assert_eq!(reply["ok"], false, "{reply}");
+    assert_eq!(kinds(&reply), ["find-jobs", "stop-job", "undo-plan"]);
+    assert_eq!(states(&reply), ["failed", "done", "failed"]);
+    assert_eq!(reply["steps"][0]["reason"], "daemon");
+    assert!(
+        reply["steps"][0]["error"]
+            .as_str()
+            .unwrap()
+            .contains("could not be read"),
+        "{reply}"
+    );
+    assert_eq!(reply["steps"][2]["reason"], "needs-step");
+    assert!(
+        fake.logged().contains(&format!("stop job {known}")),
+        "a known job still stops"
+    );
+    assert!(
+        !fake.logged().contains(&format!("undo {plan}")),
+        "nothing was removed"
+    );
+
+    // Readable again: the job it alone knows is stopped, then the rest runs.
+    fake.unlisted.set(false);
+    let reply = place.apply(&fake, &own(&key)).await;
+    assert_eq!(reply["ok"], true, "{reply}");
+    assert!(fake.logged().contains(&format!("stop job {unknown}")));
+    assert!(fake.logged().contains(&format!("undo {plan}")));
 }

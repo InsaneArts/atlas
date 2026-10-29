@@ -670,7 +670,12 @@ pub(crate) async fn of_session(
     session: &Key,
     task: Option<&Key>,
 ) -> Result<Vec<(JobId, Key, String)>> {
-    let jobs = shown_all(client).await?;
+    let jobs = match shown_all(client).await {
+        Ok(jobs) => jobs,
+        // A daemon from before jobs keeps none.
+        Err(error) if error.code == "daemon" && error.error == OLDER => Vec::new(),
+        Err(error) => return Err(error),
+    };
     Ok(jobs
         .iter()
         .filter(|job| {

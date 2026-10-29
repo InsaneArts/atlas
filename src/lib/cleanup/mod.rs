@@ -199,6 +199,7 @@ pub(crate) async fn preview(
                         value["jobState"] = state.clone();
                     }
                 }
+                Step::FindJobs => {}
             }
             value
         })
@@ -349,12 +350,19 @@ async fn running_named(
 /// What `scope`'s cleanup covers beside the things its tasks claim: the
 /// jobs and collections its records name, and the jobs the helper's own
 /// records give its tasks that the task records never noted.
+/// A listing that fails is said, and every removal then waits for a step
+/// that lists them again.
 async fn others(hands: &impl Hands, scope: &Scope, loaded: &Loaded) -> plan::Others {
     let mut others = loaded.others();
-    for job in hands.jobs_of(&scope.session, scope.task.as_ref()).await {
-        if !others.jobs.iter().any(|known| known.id == job.id) {
-            others.jobs.push(job);
+    match hands.jobs_of(&scope.session, scope.task.as_ref()).await {
+        Ok(listed) => {
+            for job in listed {
+                if !others.jobs.iter().any(|known| known.id == job.id) {
+                    others.jobs.push(job);
+                }
+            }
         }
+        Err(error) => others.unlisted = Some(error.error),
     }
     others
 }

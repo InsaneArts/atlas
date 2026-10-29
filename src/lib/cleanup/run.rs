@@ -65,7 +65,7 @@ pub(crate) trait Hands {
     /// `task` only, when there is one) that may still run, so a job its
     /// task's record never noted is stopped too. None when the helper
     /// cannot say.
-    async fn jobs_of(&self, session: &Key, task: Option<&Key>) -> Vec<Job>;
+    async fn jobs_of(&self, session: &Key, task: Option<&Key>) -> Result<Vec<Job>>;
     /// Stop job `id` of `task` by its identity, under the control the
     /// cleanup holds, and wait for it to end: the helper's word on it then.
     async fn stop_job(&self, task: &Key, id: &JobId) -> Result<Value>;
@@ -126,7 +126,10 @@ pub(crate) async fn run(
 
         receipt.steps[place].set(StepState::Started, None);
         save(receipt)?;
-        let outcome = act(hands, &step, session).await;
+        let outcome = match step {
+            Step::FindJobs => find_jobs(hands, receipt, session).await,
+            _ => act(hands, &step, session).await,
+        };
         let entry = &mut receipt.steps[place];
         entry.set(outcome.state, outcome.reason);
         entry.already_gone = outcome.already_gone;
@@ -267,6 +270,8 @@ fn within(path: &str, folder: &str) -> bool {
 async fn act(hands: &impl Hands, step: &Step, session: &Key) -> Outcome {
     match step {
         Step::CheckOutputs { outputs } => check_outputs(hands, outputs),
+        // Listed by the run itself, which knows the receipt's job stops.
+        Step::FindJobs => Outcome::failed(Reason::NeedsStep),
         Step::StopJob { job, task, .. } => stop_job(hands, task, job).await,
         Step::Quit { bundles } => quit(hands, bundles, session).await,
         Step::UndoPlan { plan } => match hands.undo_plan(plan).await {
@@ -288,6 +293,39 @@ async fn act(hands: &impl Hands, step: &Step, session: &Key) -> Outcome {
         Step::RemoveInstall { install, .. } => remove_install(hands, install).await,
         Step::RemoveCopy { copy } => remove_copy(hands, copy, session).await,
     }
+}
+
+/// List the helper's own jobs of `receipt`'s tasks again: done once the
+/// list is read and a step of `receipt` stops each job on it; failed,
+/// saying why, while it cannot be read or names a job no step stops yet,
+/// which the next cleanup plans.
+async fn find_jobs(hands: &impl Hands, receipt: &Receipt, session: &Key) -> Outcome {
+    let listed = match hands.jobs_of(session, receipt.task.as_ref()).await {
+        Ok(listed) => listed,
+        Err(error) => {
+            return Outcome::failed(Reason::Daemon).with(CameTo::failed(&format!(
+                "The helper's list of this task's background jobs could not be read ({}), so \
+                 nothing that may hold one was removed",
+                error.error
+            )));
+        }
+    };
+    let unstopped: Vec<&Job> = listed
+        .iter()
+        .filter(|job| {
+            !receipt.steps.iter().any(
+                |entry| matches!(&entry.step, Step::StopJob { job: known, .. } if *known == job.id),
+            )
+        })
+        .collect();
+    if unstopped.is_empty() {
+        return Outcome::done();
+    }
+    let names: Vec<&str> = unstopped.iter().map(|job| job.name.as_str()).collect();
+    Outcome::failed(Reason::NeedsStep).with(CameTo::failed(&format!(
+        "The helper lists background jobs no step stops yet ({}); run atlas cleanup --apply again",
+        names.join(", ")
+    )))
 }
 
 /// Check that every copy `outputs` kept is still as collected: done when

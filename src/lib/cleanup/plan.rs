@@ -24,6 +24,11 @@ pub(crate) enum Step {
     /// Stop one background job of a task by its identity; its name is for
     /// replies only.
     StopJob { job: JobId, task: Key, name: String },
+    /// List the helper's own jobs of the tasks again, after a listing
+    /// failed: done once the list is read and a step stops each job on it.
+    /// Until then, every step that removes something waits for it, since a
+    /// job nobody knows of may still run from or write there.
+    FindJobs,
     /// Undo one copy into the helper, by its plan ID.
     UndoPlan {
         #[serde(rename = "planId")]
@@ -46,7 +51,7 @@ impl Step {
         match self {
             Self::CheckOutputs { .. } => 0,
             Self::Quit { .. } => 1,
-            Self::StopJob { .. } => 2,
+            Self::StopJob { .. } | Self::FindJobs => 2,
             Self::UndoPlan { .. } => PLANS,
             Self::RemoveInstall { .. } => 4,
             Self::RemoveCopy { .. } => 5,
@@ -56,7 +61,10 @@ impl Step {
     /// The thing this step removes or undoes, when it is one.
     pub fn owned(&self) -> Option<Owned> {
         match self {
-            Self::CheckOutputs { .. } | Self::Quit { .. } | Self::StopJob { .. } => None,
+            Self::CheckOutputs { .. }
+            | Self::Quit { .. }
+            | Self::StopJob { .. }
+            | Self::FindJobs => None,
             Self::UndoPlan { plan } => Some(Owned::Plan { id: plan.clone() }),
             Self::RemoveInstall { install, app } => Some(Owned::Install {
                 id: install.clone(),
@@ -91,6 +99,9 @@ pub(crate) struct Job {
 pub(crate) struct Others {
     pub jobs: Vec<Job>,
     pub outputs: Vec<Collection>,
+    /// Why the helper's own list of the tasks' jobs could not be read, when
+    /// it could not: jobs it alone knows of are not known yet.
+    pub unlisted: Option<String>,
 }
 
 /// A bundle the task owns, which processes may run from.
@@ -141,12 +152,15 @@ pub(crate) fn merge_with(steps: &mut Vec<Entry>, work: &[Undoable], others: &Oth
 /// and every step keeps its number.
 fn rewire(steps: &mut [Entry]) {
     let quits = numbers(steps, |step| matches!(step, Step::Quit { .. }));
-    let jobs = numbers(steps, |step| matches!(step, Step::StopJob { .. }));
+    let jobs = numbers(steps, |step| {
+        matches!(step, Step::StopJob { .. } | Step::FindJobs)
+    });
     let plans = numbers(steps, |step| matches!(step, Step::UndoPlan { .. }));
     for entry in steps.iter_mut().filter(|entry| !entry.state.finished()) {
         entry.after = match entry.step {
             Step::CheckOutputs { .. } | Step::Quit { .. } => Vec::new(),
             Step::StopJob { .. } => quits.clone(),
+            Step::FindJobs => Vec::new(),
             Step::UndoPlan { .. } | Step::RemoveCopy { .. } => {
                 quits.iter().chain(&jobs).copied().collect()
             }
@@ -193,6 +207,29 @@ fn add_others(steps: &mut Vec<Entry>, others: &Others) {
                 };
                 steps.insert(0, Entry::new(number(), step, Vec::new()));
             }
+        }
+    }
+
+    // A listing that failed is tried again by a step of its own, which
+    // every removal waits for; one already done is run again. With no
+    // removal left to hold back, there is nothing for it to protect.
+    let removes = steps.iter().any(|entry| {
+        !entry.state.finished()
+            && matches!(
+                entry.step,
+                Step::UndoPlan { .. } | Step::RemoveInstall { .. } | Step::RemoveCopy { .. }
+            )
+    });
+    if others.unlisted.is_some() && removes {
+        match steps
+            .iter_mut()
+            .find(|entry| matches!(entry.step, Step::FindJobs))
+        {
+            Some(entry) if entry.state.finished() => {
+                entry.set(super::receipt::StepState::Pending, None);
+            }
+            Some(_) => {}
+            None => place(steps, Entry::new(number(), Step::FindJobs, Vec::new())),
         }
     }
 
