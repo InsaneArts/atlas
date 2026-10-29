@@ -811,6 +811,48 @@ mod tests {
         assert!(Recovery::OwnOnceCommandEnds.own());
     }
 
+    /// The guide tells an agent whose command its host stopped to run
+    /// doctor and restart only when it says every unknown action is its
+    /// own. Doctor's step is [`Recovery::step`]: it names a restart only for
+    /// a session that owns every unknown change, never for mixed sessions'
+    /// changes or one whose session is not known, and a command stopped
+    /// while it only waited left nothing to recover.
+    #[test]
+    fn the_guide_restarts_after_a_stopped_command_only_when_recovery_says_so() {
+        let core = crate::agent::CORE
+            .split_whitespace()
+            .collect::<Vec<_>>()
+            .join(" ");
+        assert!(core.contains(
+            "If your host stopped a command of yours, run `atlas doctor`; restart only when it says all is yours."
+        ));
+
+        let (own, other) = (Key::of(Host::Pi, "own"), Key::of(Host::Pi, "other"));
+        let cause = |session: Option<&Key>| Cause {
+            generation: crate::control::token(),
+            running: false,
+            command: false,
+            session: session.cloned(),
+        };
+        let asker = Asker::Agent(Some(&own));
+        assert_eq!(Recovery::of(&[], asker), None, "only waiting");
+        for (causes, yours) in [
+            (vec![cause(Some(&own))], true),
+            (vec![cause(Some(&own)), cause(Some(&other))], false),
+            (vec![cause(Some(&own)), cause(None)], false),
+            (vec![cause(Some(&other))], false),
+        ] {
+            let recovery = Recovery::of(&causes, asker).unwrap();
+            assert_eq!(recovery.own(), yours, "{recovery:?}");
+            assert_eq!(
+                recovery.step().contains("atlas restart"),
+                yours,
+                "{}",
+                recovery.step()
+            );
+        }
+    }
+
     #[test]
     fn only_the_session_that_claimed_every_unknown_change_recovers_it_itself() {
         let (own, other) = (Key::of(Host::Pi, "own"), Key::of(Host::Pi, "other"));

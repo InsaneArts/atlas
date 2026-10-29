@@ -562,6 +562,59 @@ mod tests {
         }
     }
 
+    /// Every key and pointer example the guide or the error reference shows
+    /// parses as this CLI takes it, so a named click is never shown with a
+    /// window check it cannot take. Placeholders become values, `[…]`
+    /// groups are left out and input from a file is dropped.
+    #[test]
+    fn every_input_example_the_guide_shows_parses() {
+        let shown = [atlas::agent::GUIDE, atlas::agent::ERRORS];
+        let mut parsed = 0;
+        for span in shown
+            .iter()
+            .flat_map(|text| text.split('`').skip(1).step_by(2))
+        {
+            let mut words: Vec<String> = Vec::new();
+            let mut optional = false;
+            for word in span
+                .split(" < ")
+                .next()
+                .unwrap_or_default()
+                .split_whitespace()
+            {
+                if word.starts_with('[') {
+                    optional = !word.ends_with(']');
+                    continue;
+                }
+                if optional {
+                    optional = !word.ends_with(']');
+                    continue;
+                }
+                words.push(match word.trim_matches('"') {
+                    "X" => "100".to_owned(),
+                    "Y" => "200".to_owned(),
+                    "N" => "1".to_owned(),
+                    other => other.to_owned(),
+                });
+            }
+            let input = matches!(
+                words.get(1).map(String::as_str),
+                Some("type" | "key" | "scroll" | "drag" | "click")
+            );
+            if words.first().map(String::as_str) != Some("atlas")
+                || !input
+                || words[2..].iter().all(|word| word.starts_with('-'))
+            {
+                continue;
+            }
+            if let Err(error) = command().try_get_matches_from(&words) {
+                panic!("`{span}` does not parse: {error}");
+            }
+            parsed += 1;
+        }
+        assert!(parsed >= 10, "{parsed}");
+    }
+
     #[test]
     fn the_agent_guide_options_are_visible() {
         let help = command()

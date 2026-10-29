@@ -21,3 +21,18 @@ test('every reference the skill links to exists in its folder', () => {
     assert.ok(fs.statSync(file, { throwIfNoEntry: false })?.isFile(), `${link} is missing`);
   }
 });
+
+test('every file in the references folder is linked from the skill', () => {
+  const linked = new Set(linkedReferences());
+  for (const file of fs.readdirSync(path.join(skillFolder, 'references'))) {
+    assert.ok(linked.has(`references/${file}`), `references/${file} is not linked`);
+  }
+});
+
+test('Pi and opencode load the whole skill folder, references included', () => {
+  const pluginRoot = fileURLToPath(new URL('../agents/atlas/', import.meta.url));
+  const manifest = JSON.parse(fs.readFileSync(path.join(pluginRoot, 'package.json'), 'utf8'));
+  assert.deepEqual(manifest.pi.skills, ['./skills/atlas']);
+  const opencode = fs.readFileSync(path.join(pluginRoot, 'opencode/atlas.js'), 'utf8');
+  assert.ok(opencode.includes("join(root, 'skills/atlas')"));
+});

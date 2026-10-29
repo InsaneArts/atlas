@@ -11,7 +11,8 @@ never ask the person to do it:
    `.local/bin`, where `atlas run -- TOOL ARGS` finds them). Copy only what
    the app needs, never credentials, keychains or tokens.
 2. Quit the app in the helper first (`atlas close --app NAME`), so it does not
-   overwrite the files while they arrive.
+   overwrite the files while they arrive, but only when you alone use it. If
+   another agent has windows in it, stop and tell the person instead.
 3. `atlas environment MANIFEST` previews without changing anything, even while
    someone else is acting in the helper. Read each file's `operation`:
    `conflict` means the helper already has a file Atlas did not put there, so
@@ -57,6 +58,9 @@ count records it could not read or did not look at: when either is above 0,
 an empty list does not mean nothing was copied. To keep one part of a long
 session's copies apart, run that part's commands with `ATLAS_TASK=NAME`.
 
-`atlas cleanup` shows everything this task left; `--apply` rolls its copies
-back newest first, with the rest. A part of a long session run with
-`ATLAS_TASK=NAME` is cleaned up on its own.
+`atlas cleanup` shows everything this session left, every task included;
+check that it names your session, task and only steps you expect, then
+`--apply` rolls its copies back newest first, with the rest. Only a cleanup
+run with `ATLAS_TASK=NAME` covers that task alone, so a subagent beside
+sibling subagents puts the same `ATLAS_TASK` on every command, cleanup
+included.

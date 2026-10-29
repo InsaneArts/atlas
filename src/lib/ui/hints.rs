@@ -402,7 +402,9 @@ mod tests {
     #[test]
     fn busy_says_who_to_wait_for() {
         assert!(next("busy", Some(Holder::Person)).contains("the person gives control back"));
-        assert!(next("busy", Some(Holder::Agent)).contains("Another Atlas command"));
+        let agent = next("busy", Some(Holder::Agent));
+        assert!(agent.contains("Another Atlas command"), "{agent}");
+        assert!(agent.contains("waited"), "{agent}");
         let unknown = next("busy", None);
         assert!(unknown.contains("Never take control"), "{unknown}");
         assert_ne!(next("busy", None), fix("busy").unwrap(), "not the person's");

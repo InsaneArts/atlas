@@ -2458,6 +2458,10 @@ mod tests {
             "run",
             "restart",
             "close",
+            "cleanup",
+            "activity",
+            "install-app",
+            "environment list",
         ] {
             assert!(GUIDE.contains(&format!("atlas {command}")), "{command}");
         }
@@ -2473,7 +2477,8 @@ mod tests {
             "run",
             "restart",
             "close",
-            "environment rollback",
+            "cleanup",
+            "activity",
             "monitor",
         ] {
             assert!(CORE.contains(&format!("atlas {command}")), "{command}");
@@ -2533,15 +2538,187 @@ mod tests {
             "atlas switch",
             "atlas logout",
             "Never repeat",
-            "this task opened",
+            "each app you opened",
             "unsaved work",
             "without a screenshot that shows it",
             "show_screen",
             "&&",
             "unchanged: true",
+            "focus-changed",
+            "Do what `next` says, then send only what was not.",
+            "--app A",
+            "`atlas click --app A --window N X Y`",
+            "--wait",
+            "`waited` says how long Atlas waited",
+            "if `heldBy` is you, wait for your own command",
+            "your shell tool's limit",
+            "never end your turn with an Atlas command still running",
+            "If your host stopped a command of yours, run `atlas doctor`; restart only when it says all is yours.",
+            "yours: true",
+            "Touch only windows you opened",
+            "`unread: withheld`",
+            "ask the person to unlock",
+            "`ATLAS_SESSION=NAME` before every `atlas` command",
+            "put `ATLAS_TASK=NAME` on every command too, cleanup included",
+            "atlas activity",
+            "atlas job start",
+            "atlas collect",
+            "check it, then `atlas cleanup --apply` stops its jobs",
         ] {
             assert!(core.contains(rule), "{rule}");
         }
+    }
+
+    /// Spans in backticks in the full guide and the error reference.
+    fn shown_spans() -> impl Iterator<Item = &'static str> {
+        [GUIDE, ERRORS]
+            .into_iter()
+            .flat_map(|text| text.split('`').skip(1).step_by(2))
+    }
+
+    /// Between two of an agent's commands another may bring its own window
+    /// forward, so every keyboard or pointer example names the app it is for,
+    /// and every save or close names the window too, unless it is Finder's
+    /// or a sheet's.
+    #[test]
+    fn every_keyboard_and_pointer_example_the_guide_shows_names_its_app() {
+        let examples: Vec<&str> = shown_spans()
+            .filter(|span| {
+                let mut words = span.split_whitespace();
+                let command = matches!(
+                    (words.next(), words.next()),
+                    (
+                        Some("atlas"),
+                        Some("type" | "key" | "scroll" | "drag" | "click")
+                    )
+                );
+                // A command named in prose, with at most its flags, shows
+                // no input.
+                command && words.any(|word| !word.starts_with('-'))
+            })
+            .collect();
+        assert!(examples.len() >= 10, "{examples:?}");
+        for span in &examples {
+            assert!(span.contains(" --app "), "`{span}` names no app");
+            if span.contains("cmd+s") || span.contains("cmd+w") {
+                assert!(span.contains(" --window N "), "`{span}` names no window");
+            }
+        }
+
+        // A key named on its own (`key escape`) is an example too.
+        for span in shown_spans() {
+            assert!(!span.starts_with("key "), "`{span}` names no app");
+        }
+    }
+
+    /// Every code the core gives its own bullet is one Atlas reports.
+    #[test]
+    fn every_code_the_core_bullets_is_a_real_code() {
+        let (_, section) = CORE.split_once("## When something goes wrong").unwrap();
+        let (section, _) = section.split_once("\n## ").unwrap();
+        let mut codes = Vec::new();
+        for bullet in section.lines().filter(|line| line.starts_with("- ")) {
+            // Up to the first colon outside backticks.
+            let mut quoted = false;
+            let end = bullet
+                .char_indices()
+                .find(|&(_, c)| {
+                    quoted ^= c == '`';
+                    c == ':' && !quoted
+                })
+                .map_or(bullet.len(), |(index, _)| index);
+            let head = &bullet[..end];
+            codes.extend(
+                head.split('`')
+                    .skip(1)
+                    .step_by(2)
+                    .filter(|span| span.chars().all(|c| c.is_ascii_lowercase() || c == '-')),
+            );
+        }
+        for code in ["uncertain", "busy", "focus-changed", "stopped", "cancelled"] {
+            assert!(codes.contains(&code), "{code}: {codes:?}");
+        }
+        for code in codes {
+            assert!(crate::error::CODES.contains(&code), "{code}");
+        }
+    }
+
+    /// What an agent sharing the helper reads only when it needs it: how
+    /// long Atlas waits, each host's time limit, and what not to touch.
+    #[test]
+    fn the_limits_say_how_long_to_wait_and_how_to_work_beside_another_agent() {
+        let guide = GUIDE.split_whitespace().collect::<Vec<_>>().join(" ");
+        for section in ["Time limits", "Working beside another agent"] {
+            assert!(GUIDE.contains(&format!("\n### {section}\n")), "{section}");
+        }
+        for said in [
+            "`ATLAS_WAIT`",
+            "128 plus the signal's number",
+            "a command that finished in time prints its ordinary result",
+            "a longer `--wait` does not change that",
+            "about 10 seconds to stop what is left",
+            "Never end your turn with an Atlas command still running.",
+            "`--app` checks the app, not the window.",
+            "`click --name` takes no `--window`",
+            "Your window is the one `atlas windows` did not list before you opened it.",
+            "`causedBy`",
+            "An `uncertain` you did not cause is not yours to recover",
+            "Never restart over `yours: false`",
+        ] {
+            assert!(guide.contains(said), "{said}");
+        }
+    }
+
+    /// A cleanup with no task named covers every task of the session, so
+    /// the guide never calls it this task's.
+    #[test]
+    fn a_cleanup_with_no_task_is_said_to_cover_the_whole_session() {
+        let guide = GUIDE.split_whitespace().collect::<Vec<_>>().join(" ");
+        assert!(
+            core_text().contains("`atlas cleanup` shows what else this session left (with `ATLAS_TASK`, that task's alone)")
+        );
+        assert!(guide.contains("A plain `atlas cleanup` covers the whole session"));
+        assert!(guide.contains("keep the same `ATLAS_TASK` through cleanup"));
+        for wrong in [
+            "cleanup` shows what else this task",
+            "cleanup` shows everything this task",
+        ] {
+            assert!(!guide.contains(wrong), "{wrong}");
+        }
+    }
+
+    /// The hosts whose time limits the guide gives are the ones the public
+    /// connection guide lists, and the other way round.
+    #[test]
+    fn the_guide_and_the_connection_docs_list_the_same_host_limits() {
+        let (_, limits) = GUIDE.split_once("\n### Time limits\n").unwrap();
+        let (limits, _) = limits.split_once("\n### ").unwrap();
+        let mut in_guide: Vec<&str> = limits
+            .lines()
+            .filter_map(|line| line.strip_prefix("- "))
+            .filter_map(|line| line.split_once(':').map(|(host, _)| host))
+            .collect();
+        in_guide.sort_unstable();
+
+        let docs = std::fs::read_to_string(
+            std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("docs/agents.md"),
+        )
+        .unwrap();
+        let (_, table) = docs
+            .split_once("## Several agents and time limits")
+            .unwrap();
+        let (table, _) = table.split_once("\n## ").unwrap();
+        let mut in_docs: Vec<&str> = table
+            .lines()
+            .filter_map(|line| line.strip_prefix('|'))
+            .filter_map(|line| line.split('|').next())
+            .map(str::trim)
+            .filter(|host| !host.is_empty() && *host != "Host" && !host.starts_with('-'))
+            .collect();
+        in_docs.sort_unstable();
+
+        assert_eq!(in_guide, in_docs);
+        assert_eq!(in_guide.len(), 5, "{in_guide:?}");
     }
 
     #[test]

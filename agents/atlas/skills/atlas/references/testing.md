@@ -48,5 +48,5 @@ for you.
 
 ### Finder windows
 
-Atlas never quits Finder: close Finder windows you opened with
-`atlas key cmd+w`.
+Atlas never quits Finder: close each Finder window you opened with
+`atlas key --app Finder --window N cmd+w`, `N` from `atlas windows`.
