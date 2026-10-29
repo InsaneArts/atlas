@@ -23,7 +23,8 @@ extension ViewerWords {
   /// A session nothing names any longer, as after its record was pruned.
   static let unnamedSession = "Another session"
   /// The reason under the action that may not have finished.
-  static let unfinishedReason = "May not have finished. Every session waits until you recover."
+  static let unfinishedReason =
+    "\(Words.leadingCapital(Words.mayNotHaveFinished)). Every session waits until you recover."
   /// One session's Activity holds nothing yet: the sentence.
   static let noSessionActivityMessage = "What this session does in the helper shows up here."
   /// One session's Screenshots holds nothing: the sentence.
@@ -61,18 +62,26 @@ extension ViewerWords {
   static func sessionSubtitle(_ session: ViewerStatus.HostSession, line: SessionLine, now: Date) -> String {
     switch line {
     case .acting:
-      return "Acting · has the helper"
+      return stated(.acting, Words.sessionLine(.acting(says: nil), now: now))
     case .waitingForHelper, .waitingForRecovery, .ended, .lastSeen:
       return Words.sessionLine(line, now: now)
-    case .mayNotHaveFinished(let verb):
-      let noun = Words.actionNoun(verb)
-        .lowercased()
-      return "Needs you · \(noun) may not have finished"
+    case .mayNotHaveFinished:
+      return stated(.needsYou, Words.sessionLine(line, now: now))
     case .last(_, let age):
       return idle(age ?? session.lastSeenAt.map { now.timeIntervalSince($0) })
     case .none:
       return idle(session.lastSeenAt.map { now.timeIntervalSince($0) })
     }
+  }
+
+  /// A state's word, then its line, as one subtitle.
+  ///
+  /// - Parameters:
+  ///   - state: The session's state.
+  ///   - line: Its line, as the panel says it.
+  /// - Returns: "Needs you · a click may not have finished".
+  private static func stated(_ state: HostSessionState, _ line: String) -> String {
+    "\(Words.sessionState(state)) · \(Words.leadingLower(line))"
   }
 
   /// An ended session's line, as its menu item and Details say it.

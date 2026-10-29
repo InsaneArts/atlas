@@ -49,10 +49,7 @@ extension ViewerPresenter {
     case .working:
       if let holder = holderLeads(snapshot), !summary.line.isEmpty { summary.line = "\(holder) · \(summary.line)" }
     case .needsYou:
-      // Input that stopped is the helper's, not a session's: its own line says so.
-      if !reading.inputStopped, let causer = reading.causer {
-        summary.line = Words.unfinishedLine(verb: causer.uncertainVerb, by: Words.hostName(causer))
-      }
+      if let line = reading.causerLine { summary.line = line }
     case .idle, .control, .stopped, .inUseElsewhere, .notReady, .loggedOut, .connecting:
       break
     }

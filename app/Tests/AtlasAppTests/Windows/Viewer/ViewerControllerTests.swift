@@ -77,7 +77,7 @@ struct ViewerControllerTests {
     let viewer = ViewerController.scripted(service)
     await viewer.setStopped(true)
     #expect(service.log == ["stop"])
-    #expect(viewer.session.notice == "Agent stopped.")
+    #expect(viewer.session.notice == "Agents stopped.")
     await viewer.setStopped(false)
     #expect(service.log == ["stop", "resume"])
     #expect(viewer.session.notice == ViewerWords.agentResumed)

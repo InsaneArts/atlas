@@ -29,15 +29,15 @@ extension Words {
   static func sessionLine(_ line: SessionLine, now: Date) -> String {
     switch line {
     case .acting(let says):
-      guard let says, let first = says.first else { return "Has the helper" }
-      return first.uppercased() + says.dropFirst()
+      guard let says, !says.isEmpty else { return "Has the helper" }
+      return leadingCapital(says)
     case .waitingForHelper(let seconds):
       guard let seconds, seconds >= 1 else { return "Waiting for the helper" }
       return "Waiting for the helper · \(shortAgo(seconds))"
     case .waitingForRecovery:
       return "Waits until you recover"
     case .mayNotHaveFinished(let verb):
-      return "\(actionNoun(verb)) may not have finished"
+      return "\(actionNoun(verb)) \(mayNotHaveFinished)"
     case .last(let says, let age):
       return idleLine(last: says, ago: age.map(ago) ?? "")
     case .ended(let at):
@@ -63,8 +63,8 @@ extension Words {
   ///   - verb: The action's verb, such as `click`; nil when unknown.
   ///   - host: The host's name, such as "Claude Code".
   /// - Returns: "A click by Claude Code may not have finished".
-  static func unfinishedLine(verb: String?, by host: String) -> String {
-    "\(actionNoun(verb)) by \(host) may not have finished"
+  static func unfinishedBy(verb: String?, host: String) -> String {
+    "\(actionNoun(verb)) by \(host) \(mayNotHaveFinished)"
   }
 
   /// An action named by its verb, to lead a sentence.

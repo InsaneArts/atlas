@@ -54,11 +54,7 @@ extension PanelPresenter {
   /// - Returns: The line, or nil.
   static func sessionLine(_ reading: StatusReading, mode: Mode) -> String? {
     guard reading.showsSessions, !hidesRecent(mode) else { return nil }
-    if mode.kind == .needsYou {
-      // Input that stopped is the helper's, not a session's: its own line says so.
-      guard !reading.inputStopped, let causer = reading.causer else { return nil }
-      return Words.unfinishedLine(verb: causer.uncertainVerb, by: Words.hostName(causer))
-    }
+    if mode.kind == .needsYou { return reading.causerLine }
     return reading.holder.map { Words.holderLine($0.name) }
   }
 }

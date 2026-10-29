@@ -43,11 +43,13 @@ enum Words {
   static let startingLine = "Starting the helper…"
   /// No answer has come since the helper's answers stopped: the line beside the word.
   static let reconnectingLine = "Reconnecting…"
+  /// What every line about an action of unknown outcome says of it, after naming the action.
+  static let mayNotHaveFinished = "may not have finished"
   /// An action's outcome is unknown: the line beside the word.
-  static let unfinishedLine = "An action may not have finished"
+  static let unfinishedLine = "An action \(mayNotHaveFinished)"
   /// An action's outcome is unknown while a command an agent started still runs, which recovery waits for: the line
   /// beside the word.
-  static let unfinishedBesideCommandLine = "An action may not have finished; recovery waits for a running command"
+  static let unfinishedBesideCommandLine = "\(unfinishedLine); recovery waits for a running command"
   /// The helper's input stopped, which Recover starts again: the line beside the word.
   static let inputStoppedLine = "Mouse and keyboard stopped in the helper"
   /// Nothing is happening and no agent has acted yet: the reason a window gives.

@@ -38,8 +38,7 @@ extension StatusReading {
   ///   - isNewest: Whether it is the newest in its list.
   /// - Returns: The entry.
   private static func entry(_ item: ActivityItem, isNewest: Bool) -> ActivityEntry {
-    let first = item.text.prefix(1)
-    let line = item.actor == .agent ? first.uppercased() + item.text.dropFirst() : item.line
+    let line = item.actor == .agent ? Words.leadingCapital(item.text) : item.line
     let mark: ActivityMarkKind =
       switch item.row.outcome {
       case .running, .worked: .quiet

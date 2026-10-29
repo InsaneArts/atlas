@@ -53,7 +53,7 @@ extension ViewerWords {
   /// - Parameter apps: The apps it quits, by name; none when the service names none.
   /// - Returns: "Quits Probe and Notes", or "Quits what runs from its copies".
   static func quits(_ apps: [String]) -> String {
-    apps.isEmpty ? "Quits what runs from its copies" : "Quits \(listed(apps))"
+    "Quits \(quitted(apps))"
   }
 
   /// The alert's line for undoing plans, each a change to the helper's environment.
@@ -69,7 +69,7 @@ extension ViewerWords {
   /// - Parameter app: The app's name; nil when the service names none.
   /// - Returns: "Moves Probe aside in the helper; removed after 7 days".
   static func holdsInstall(_ app: String?) -> String {
-    "Moves \(app ?? "an app") aside in the helper; removed after 7 days"
+    "Moves \(app ?? "an app") \(heldAside)"
   }
 
   /// The alert's line for an installed app the cleanup leaves, as it changed since it was installed.
@@ -114,7 +114,7 @@ extension ViewerWords {
   /// - Parameter apps: The apps it quit, by name; none when the service names none.
   /// - Returns: "Quit Probe", or "Quit what runs from its copies".
   static func quit(_ apps: [String]) -> String {
-    apps.isEmpty ? "Quit what runs from its copies" : "Quit \(listed(apps))"
+    "Quit \(quitted(apps))"
   }
 
   /// What a plan's step did, in the receipt.
@@ -177,7 +177,7 @@ extension ViewerWords {
   /// A step that worked.
   static let stepDone = "Done"
   /// An installed app's step that moved it aside in the helper, which removes it after 7 days.
-  static let stepHeld = "Moved aside in the helper; removed after 7 days"
+  static let stepHeld = "Moved \(heldAside)"
   /// A step whose app or copy was gone before it ran.
   static let stepAlreadyGone = "Done: it was already gone"
   /// A step that did not run.
@@ -245,6 +245,17 @@ extension ViewerWords {
     case .leaderGone: "the job's first process is gone"
     case .uncertain, .unknown, nil: nil
     }
+  }
+
+  /// Where an installed app goes, as the alert and the receipt both say it.
+  private static let heldAside = "aside in the helper; removed after 7 days"
+
+  /// What a quit step quits, as the alert and the receipt both name it.
+  ///
+  /// - Parameter apps: The apps, by name; none when the service names none.
+  /// - Returns: "Probe and Notes", or "what runs from its copies".
+  private static func quitted(_ apps: [String]) -> String {
+    apps.isEmpty ? "what runs from its copies" : listed(apps)
   }
 
   /// A background job, by its name when the service gives one, as the alert and the receipt both name it.
