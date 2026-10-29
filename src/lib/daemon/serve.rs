@@ -1244,6 +1244,7 @@ mod tests {
                 "bundleId",
                 "executable",
                 "hidden",
+                "launchedAt",
                 "name",
                 "pid",
                 "policy"

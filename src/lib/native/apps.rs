@@ -1,6 +1,6 @@
 //! Applications running in the helper login, as the helper daemon reports
-//! them: name, bundle identifier, process and its executable, and whether
-//! each is frontmost, hidden or a background agent.
+//! them: name, bundle identifier, process and its executable, when it was
+//! launched, and whether each is frontmost, hidden or a background agent.
 use objc2_app_kit::{NSApplicationActivationPolicy, NSRunningApplication, NSWorkspace};
 use serde_json::{Value, json};
 
@@ -35,6 +35,7 @@ pub fn running() -> Vec<Value> {
                     "active": app.isActive(),
                     "hidden": app.isHidden(),
                     "policy": policy(app.activationPolicy()),
+                    "launchedAt": launched_at(&app),
                 })
             })
             .collect()
@@ -53,6 +54,13 @@ pub fn bundle_id(pid: i64) -> Option<String> {
     })
 }
 
+/// When `app` was launched, in milliseconds since 1970; none for an app
+/// LaunchServices did not launch.
+fn launched_at(app: &NSRunningApplication) -> Option<u64> {
+    let seconds = app.launchDate()?.timeIntervalSince1970();
+    (seconds.is_finite() && seconds > 0.0).then_some((seconds * 1000.0) as u64)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -68,6 +76,7 @@ mod tests {
                 ["regular", "accessory", "prohibited", "unknown"]
                     .contains(&app["policy"].as_str().unwrap())
             );
+            assert!(app["launchedAt"].is_null() || app["launchedAt"].is_u64());
         }
     }
 

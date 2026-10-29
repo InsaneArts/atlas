@@ -7,6 +7,7 @@ mod control;
 mod frames;
 mod http;
 mod local;
+mod origins;
 mod reads;
 mod settings;
 

@@ -23,7 +23,7 @@ use crate::{
 use axum::{body::Body, response::Response};
 use serde_json::{Map, Value, json};
 use std::{
-    collections::{BTreeMap, BTreeSet},
+    collections::{BTreeMap, BTreeSet, HashMap},
     path::{Path, PathBuf},
     sync::Arc,
     time::Duration,
@@ -165,9 +165,10 @@ impl Viewer {
         Ok(json!({"ok": true, "sessions": history, "live": live}))
     }
 
-    /// The apps open in the helper with their windows, front to back, and
-    /// the icons of those installed where apps go. It only reads: nothing
-    /// is recorded and no control is taken.
+    /// The apps open in the helper with their windows, front to back, the
+    /// icons of those installed where apps go, and which agent's session
+    /// opened each, with those sessions' names. It only reads: nothing is
+    /// recorded and no control is taken.
     pub(super) async fn apps(&self) -> Result<Value> {
         let client = self.client();
         let read = async {
@@ -178,11 +179,34 @@ impl Viewer {
                 all: false,
             };
             let windows = crate::agent::list(&client, &filter).await?;
-            listed_apps(&apps["apps"], &windows["windows"])
+            Ok::<_, Error>((listed_apps(&apps["apps"], &windows["windows"])?, apps))
         };
-        let mut apps = tokio::time::timeout(READ_DEADLINE, read)
+        let (mut apps, running) = tokio::time::timeout(READ_DEADLINE, read)
             .await
             .map_err(|_| late())??;
+
+        let opened = tokio::task::spawn_blocking(move || {
+            let Ok(output) = client.output_dir() else {
+                return (HashMap::new(), Arc::from([]));
+            };
+            let tasks = crate::task::store::Store::at(output).recent();
+            let rows = crate::activity_log::recent(output, ACTIVITY_ROWS);
+            let copies = Path::new(crate::handoff::ROOT);
+            let origins = super::origins::origins(&running["apps"], &tasks, &rows, copies);
+            (origins, Store::at(output).recent())
+        });
+        let (origins, records) = opened
+            .await
+            .unwrap_or_else(|_| (HashMap::new(), Arc::from([])));
+        for app in &mut apps {
+            let origin = app["pid"].as_u64().and_then(|pid| origins.get(&pid));
+            app["origin"] = json!(origin);
+        }
+        let opened_by: Vec<Value> = origins
+            .values()
+            .map(|origin| json!(origin.session))
+            .collect();
+        let sessions = sessions_named(&records, opened_by.iter());
 
         for app in apps.iter_mut().take(helper_info::ICON_CACHE) {
             if let Some(bundle) = app["bundle"].as_str().map(PathBuf::from)
@@ -192,7 +216,7 @@ impl Viewer {
             }
         }
 
-        Ok(json!({"ok": true, "apps": apps}))
+        Ok(json!({"ok": true, "apps": apps, "sessions": sessions}))
     }
 
     /// The screenshots agents took, newest first: each one's name, when it
@@ -384,11 +408,15 @@ pub(super) async fn account_title(
 }
 
 /// A logged row as the app's activity lists it: what was done in words, by
-/// whom, how long ago, whether it worked and how many actions it sent.
-/// Only these fields go, through [`crate::overview::shown`]: never typed
-/// text, argv, coordinates or titles, which the log never keeps either.
+/// whom, how long ago, whether it worked and how many actions it sent, and
+/// the app, control and keys its words name. Only these fields go, through
+/// [`crate::overview::shown`]: never typed text, argv, coordinates or
+/// titles, which the log never keeps either.
 pub(super) fn activity_row(row: &crate::activity_log::Row, now: u128) -> Value {
     let shown = crate::overview::shown(row, now);
+    // A key press's keys as keycaps, read from its label.
+    let keys = (shown.verb.as_deref() == Some("key"))
+        .then(|| crate::doing::chords(shown.label.as_deref().unwrap_or_default()));
     json!({
         "id": shown.id,
         // When it started, in milliseconds since 1970, so its time never
@@ -405,6 +433,10 @@ pub(super) fn activity_row(row: &crate::activity_log::Row, now: u128) -> Value {
         "session": shown.session,
         "capture": shown.capture,
         "verb": shown.verb,
+        "app": shown.app,
+        "label": shown.label,
+        "bundleId": shown.bundle_id,
+        "keys": keys,
         "nothingSent": shown.nothing_sent,
         "partial": shown.partial,
         "uncertain": shown.uncertain,
@@ -447,7 +479,9 @@ fn capture_sessions(seen: &[Seen]) -> BTreeMap<&str, &Key> {
 }
 
 /// The helper's regular apps as the app lists them, front to back, each
-/// with its windows front to back. A window's id is its window number.
+/// with its bundle identifier, whether it is hidden, when it was launched
+/// and its windows front to back. A window's id is its window number, and
+/// its order its place among every app's windows, front to back.
 pub(super) fn listed_apps(apps: &Value, windows: &Value) -> Result<Vec<Value>> {
     Ok(helper_info::open_apps(apps, windows)?
         .into_iter()
@@ -456,7 +490,10 @@ pub(super) fn listed_apps(apps: &Value, windows: &Value) -> Result<Vec<Value>> {
                 "pid": app["pid"],
                 "name": app["name"],
                 "bundle": app["bundle"],
+                "bundleId": app["bundleId"],
                 "front": app["active"],
+                "hidden": app["hidden"],
+                "launchedAt": app["launchedAt"],
                 "windows": app["windows"],
             })
         })

@@ -1155,9 +1155,13 @@ async fn activity_json_never_carries_typed_text() {
         [
             "actor",
             "ageSeconds",
+            "app",
+            "bundleId",
             "capture",
             "count",
             "id",
+            "keys",
+            "label",
             "nothingSent",
             "ok",
             "operation",
@@ -1320,15 +1324,101 @@ fn apps_json_lists_windows_front_to_back() {
     assert_eq!(
         listed[1],
         json!({
-            "pid": 3, "name": "Opie", "bundle": "/Applications/Opie.app", "front": true,
+            "pid": 3, "name": "Opie", "bundle": "/Applications/Opie.app", "bundleId": null,
+            "front": true, "hidden": false, "launchedAt": null,
             "windows": [
-                {"id": 12, "title": "Ring", "x": 10.0, "y": 40.0, "width": 520.0, "height": 860.0},
-                {"id": 7, "title": "Starter", "x": 10.0, "y": 40.0, "width": 520.0, "height": 860.0},
+                {"id": 12, "title": "Ring", "x": 10.0, "y": 40.0, "width": 520.0, "height": 860.0,
+                    "order": 1},
+                {"id": 7, "title": "Starter", "x": 10.0, "y": 40.0, "width": 520.0, "height": 860.0,
+                    "order": 2},
             ],
         })
     );
     assert_eq!(listed[2]["windows"], json!([]), "Finder has none");
     assert_eq!(listed[2]["front"], false);
+}
+
+#[test]
+fn apps_name_their_bundle_id_whether_hidden_when_launched_and_their_windows_order() {
+    let apps = json!([
+        {"name": "Notes", "pid": 4, "policy": "regular", "hidden": true,
+            "bundleId": "com.apple.Notes", "launchedAt": 1_800_000_000_000_u64,
+            "executable": "/System/Applications/Notes.app/Contents/MacOS/Notes"},
+        {"name": "Probe", "pid": 5, "policy": "regular", "bundleId": "not an id",
+            "executable": "/Users/helper/Applications/Probe.app/Contents/MacOS/Probe"},
+    ]);
+    let window = |number: i64, pid: i64| {
+        json!({"number": number, "pid": pid, "title": "Secret plans", "layer": 0,
+            "bounds": {"x": 0.0, "y": 0.0, "width": 100.0, "height": 100.0}})
+    };
+    let windows = json!([window(9, 5), window(8, 4), window(7, 5)]);
+
+    let listed = listed_apps(&apps, &windows).unwrap();
+    assert_eq!(listed[0]["name"], "Probe");
+    assert_eq!(listed[0]["bundleId"], Value::Null, "only an identifier");
+    assert_eq!(listed[0]["hidden"], false);
+    let orders = |app: &Value| {
+        app["windows"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|window| window["order"].clone())
+            .collect::<Vec<_>>()
+    };
+    assert_eq!(orders(&listed[0]), [json!(0), json!(2)]);
+    assert_eq!(listed[1]["bundleId"], "com.apple.Notes");
+    assert_eq!(listed[1]["hidden"], true);
+    assert_eq!(listed[1]["launchedAt"], 1_800_000_000_000_u64);
+    assert_eq!(
+        orders(&listed[1]),
+        [json!(1)],
+        "behind Probe's front window"
+    );
+}
+
+#[test]
+fn an_activity_row_as_the_app_lists_it_holds_exactly_these_fields() {
+    let dir = tempfile::tempdir().unwrap();
+    let line = r#"{"at":"90000000000","operation":"input","ok":true,"verb":"key","app":"TextEdit","bundleId":"com.apple.TextEdit","label":"⇧⌘Z Page Up","actionCount":2,"actor":"agent","command":"c1","text":"hunter2"}"#;
+    std::fs::write(
+        dir.path().join(crate::activity_log::FILE),
+        format!("{line}\n"),
+    )
+    .unwrap();
+    let rows = crate::activity_log::recent(dir.path(), 5);
+    let shown = activity_row(&rows[0], 100_000_000_000);
+    let keys = shown.as_object().unwrap().keys().collect::<Vec<_>>();
+    assert_eq!(
+        keys,
+        [
+            "actor",
+            "ageSeconds",
+            "app",
+            "bundleId",
+            "capture",
+            "count",
+            "id",
+            "keys",
+            "label",
+            "nothingSent",
+            "ok",
+            "operation",
+            "partial",
+            "reason",
+            "says",
+            "session",
+            "started",
+            "startedAt",
+            "uncertain",
+            "verb"
+        ],
+        "a field added here is added on purpose"
+    );
+    assert_eq!(shown["app"], "TextEdit");
+    assert_eq!(shown["bundleId"], "com.apple.TextEdit");
+    assert_eq!(shown["label"], "⇧⌘Z Page Up");
+    assert_eq!(shown["keys"], json!([["⇧", "⌘", "Z"], ["Page Up"]]));
+    assert!(!shown.to_string().contains("hunter2"));
 }
 
 #[tokio::test]
@@ -1381,8 +1471,8 @@ fn the_apps_activity_row_keeps_its_fields_and_values() {
     assert_eq!(
         shown,
         [
-            r#"{"actor":"agent","ageSeconds":99,"capture":null,"count":null,"id":"18919a007a04e825","nothingSent":false,"ok":false,"operation":"run","partial":false,"reason":null,"says":"couldn't run a command","session":null,"started":false,"startedAt":0,"uncertain":false,"verb":null}"#,
-            r#"{"actor":"agent","ageSeconds":10,"capture":"1-capture.png","count":1,"id":"405a9bc9382e3946","nothingSent":true,"ok":false,"operation":"input","partial":true,"reason":"Another window was in front","says":"didn't click Save in Opie","session":"0123456789ab","started":false,"startedAt":90000,"uncertain":false,"verb":"click"}"#,
+            r#"{"actor":"agent","ageSeconds":99,"app":null,"bundleId":null,"capture":null,"count":null,"id":"18919a007a04e825","keys":null,"label":null,"nothingSent":false,"ok":false,"operation":"run","partial":false,"reason":null,"says":"couldn't run a command","session":null,"started":false,"startedAt":0,"uncertain":false,"verb":null}"#,
+            r#"{"actor":"agent","ageSeconds":10,"app":"Opie","bundleId":null,"capture":"1-capture.png","count":1,"id":"405a9bc9382e3946","keys":null,"label":"Save","nothingSent":true,"ok":false,"operation":"input","partial":true,"reason":"Another window was in front","says":"didn't click Save in Opie","session":"0123456789ab","started":false,"startedAt":90000,"uncertain":false,"verb":"click"}"#,
         ]
     );
 }

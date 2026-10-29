@@ -109,9 +109,11 @@ pub(crate) fn thumbnail(png: &[u8]) -> Result<Value> {
     }))
 }
 
-/// The regular apps in `apps`, each with its windows from `windows` (front
-/// to back): apps with a window first, in the order of their front one.
-/// A window carries its number, title and bounds in desktop points.
+/// The regular apps in `apps`, each with its bundle identifier, when it was
+/// launched and its windows from `windows` (front to back): apps with a
+/// window first, in the order of their front one. A window carries its
+/// number, title, bounds in desktop points and its place among every
+/// app's windows, front to back.
 pub(crate) fn open_apps(apps: &Value, windows: &Value) -> Result<Vec<Value>> {
     // Reserve the added field names and null defaults per entry before
     // copying anything. Each source entry can contribute to the output once.
@@ -154,27 +156,25 @@ pub(crate) fn open_apps(apps: &Value, windows: &Value) -> Result<Vec<Value>> {
                 .and_then(|pid| grouped.remove(&pid))
                 .unwrap_or_default();
             let front = own.first().map_or(usize::MAX, |(at, _)| *at);
-            // The app the executable is in: the innermost, for a helper app
-            // inside another.
-            let bundle = app["executable"].as_str().and_then(|path| {
-                path.rfind(".app/Contents/MacOS/")
-                    .map(|end| &path[..end + 4])
-            });
+            let bundle = app["executable"].as_str().and_then(bundle_of);
             let listed = json!({
                 "name": app["name"],
                 "pid": app["pid"],
                 "active": app["active"] == true,
                 "hidden": app["hidden"] == true,
                 "bundle": bundle,
+                "bundleId": app["bundleId"].as_str().and_then(crate::doing::bundle_id),
+                "launchedAt": app["launchedAt"].as_u64(),
                 "windows": own
                     .iter()
-                    .map(|(_, window)| json!({
+                    .map(|(at, window)| json!({
                         "id": window["number"],
                         "title": window["title"],
                         "x": window["bounds"]["x"],
                         "y": window["bounds"]["y"],
                         "width": window["bounds"]["width"],
                         "height": window["bounds"]["height"],
+                        "order": at,
                     }))
                     .collect::<Vec<_>>(),
             });
@@ -188,6 +188,13 @@ pub(crate) fn open_apps(apps: &Value, windows: &Value) -> Result<Vec<Value>> {
 
     listed.sort_by(|a, b| (a.0, &a.1).cmp(&(b.0, &b.1)));
     Ok(listed.into_iter().map(|(_, _, app)| app).collect())
+}
+
+/// The app bundle the executable at `path` is in: the innermost, for a
+/// helper app inside another.
+pub(crate) fn bundle_of(path: &str) -> Option<&str> {
+    path.rfind(".app/Contents/MacOS/")
+        .map(|end| &path[..end + 4])
 }
 
 /// Count serialized source bytes without allocating another copy of them.
@@ -385,7 +392,7 @@ mod tests {
         assert_eq!(listed[0]["bundle"], "/Applications/Opie.app");
         assert_eq!(
             listed[0]["windows"][1],
-            json!({"id": 13, "title": "Ring", "x": 700.0, "y": 80.0, "width": 520.0, "height": 860.0})
+            json!({"id": 13, "title": "Ring", "x": 700.0, "y": 80.0, "width": 520.0, "height": 860.0, "order": 2})
         );
         assert_eq!(
             listed[2]["windows"],
