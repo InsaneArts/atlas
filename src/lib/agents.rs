@@ -586,24 +586,43 @@ fn probe(agent: Agent) -> Value {
     }
 }
 
-/// Connect (or `remove` from) the chosen agents, or every installed one.
-/// Only a marketplace named atlas that is Atlas's own is replaced or
-/// removed; an agent whose is someone else's is refused when connecting and
-/// left alone when removing.
-pub fn change(chosen: &[Agent], remove: bool) -> Result<Value> {
-    // The Claude app comes along when no agent was named: it has no
-    // command line of its own to choose it by.
-    let app = chosen.is_empty() && crate::claude_app::installed();
-    let all = chosen.is_empty();
-    change_these(chosen, all, app, remove)
+/// Whether a change connects Atlas or disconnects it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Change {
+    Connect,
+    Disconnect,
 }
 
-/// [`change`] for exactly `chosen` (every installed agent when `all`) and
-/// the Claude app when `app`.
-pub fn change_these(chosen: &[Agent], all: bool, app: bool, remove: bool) -> Result<Value> {
+/// What a change covers beside the agents it names.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct Covering {
+    /// Every installed agent, whichever are named.
+    pub every_agent: bool,
+    /// The Claude app.
+    pub app: bool,
+}
+
+/// Make `change` for the chosen agents, or every installed one. Only a
+/// marketplace named atlas that is Atlas's own is replaced or removed; an
+/// agent whose is someone else's is refused when connecting and left alone
+/// when disconnecting.
+pub fn change(chosen: &[Agent], change: Change) -> Result<Value> {
+    // The Claude app comes along when no agent was named: it has no
+    // command line of its own to choose it by.
+    let covering = Covering {
+        every_agent: chosen.is_empty(),
+        app: chosen.is_empty() && crate::claude_app::installed(),
+    };
+    change_these(chosen, covering, change)
+}
+
+/// [`change`] for exactly `chosen` and what `covering` adds.
+pub fn change_these(chosen: &[Agent], covering: Covering, change: Change) -> Result<Value> {
+    let remove = change == Change::Disconnect;
+    let Covering { every_agent, app } = covering;
     let marketplace = if remove { None } else { Some(marketplace()?) };
 
-    let present: Vec<(Agent, Presence)> = if all {
+    let present: Vec<(Agent, Presence)> = if every_agent {
         Agent::ALL
             .into_iter()
             .map(|agent| (agent, agent.presence_for_change(remove)))

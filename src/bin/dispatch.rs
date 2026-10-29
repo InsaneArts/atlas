@@ -1,7 +1,7 @@
 //! Command execution, activity attribution and helper-change policy.
 use super::{
     cli::{
-        AgentsCommand, Command, CursorHookEvent, EnvironmentCommand, JobCommand, OnOff,
+        AgentPicks, AgentsCommand, Command, CursorHookEvent, EnvironmentCommand, JobCommand, OnOff,
         OnboardingCommand, WindowState,
     },
     doctor, help,
@@ -11,6 +11,7 @@ use super::{
 };
 use atlas::{
     agent,
+    agents::{Change, Covering},
     client::{Actor, Client, Size},
     config::Config,
     doing::Doing,
@@ -42,53 +43,25 @@ pub(super) fn screenshot_size(given: Option<u32>) -> Size {
     }
 }
 
-/// Connect or disconnect the named agents and Claude app; none
-/// named means every installed one, the Claude app included.
-fn changed(
-    claude: bool,
-    codex: bool,
-    opencode: bool,
-    pi: bool,
-    cursor: bool,
-    app: bool,
-    remove: bool,
-) -> Result<Value> {
+/// Make `change` for the picked agents and Claude app; none picked means
+/// every installed one, the Claude app included.
+fn changed(picks: &AgentPicks, change: Change) -> Result<Value> {
     // Connecting an app that isn't here would only leave its settings behind.
-    if app && !remove && !atlas::claude_app::installed() {
+    if picks.app && change == Change::Connect && !atlas::claude_app::installed() {
         return Err(Error::new("agents", "The Claude app isn't installed"));
     }
-    if app {
+    if picks.app {
         atlas::agents::change_these(
-            &chosen(claude, codex, opencode, pi, cursor),
-            false,
-            true,
-            remove,
+            &picks.agents(),
+            Covering {
+                every_agent: false,
+                app: true,
+            },
+            change,
         )
     } else {
-        atlas::agents::change(&chosen(claude, codex, opencode, pi, cursor), remove)
+        atlas::agents::change(&picks.agents(), change)
     }
-}
-
-/// The coding agents selected by flags (none means every installed one).
-fn chosen(
-    claude: bool,
-    codex: bool,
-    opencode: bool,
-    pi: bool,
-    cursor: bool,
-) -> Vec<atlas::agents::Agent> {
-    use atlas::agents::Agent;
-
-    [
-        (claude, Agent::Claude),
-        (codex, Agent::Codex),
-        (opencode, Agent::Opencode),
-        (pi, Agent::Pi),
-        (cursor, Agent::Cursor),
-    ]
-    .into_iter()
-    .filter_map(|(on, agent)| on.then_some(agent))
-    .collect()
 }
 
 /// The task a command from host session `host` belongs to, as `name`
@@ -379,27 +352,13 @@ async fn carry_out(
                 AgentsCommand::Forget { dir } => {
                     atlas::agents::forget(&dir.unwrap_or_else(|| PathBuf::from(".")))
                 }
-                AgentsCommand::Install {
-                    claude,
-                    codex,
-                    opencode,
-                    pi,
-                    cursor,
-                    app,
-                } => {
+                AgentsCommand::Install { picks } => {
                     let _spinner = Spinner::new("Connecting…");
-                    changed(claude, codex, opencode, pi, cursor, app, false)
+                    changed(&picks, Change::Connect)
                 }
-                AgentsCommand::Remove {
-                    claude,
-                    codex,
-                    opencode,
-                    pi,
-                    cursor,
-                    app,
-                } => {
+                AgentsCommand::Remove { picks } => {
                     let _spinner = Spinner::new("Disconnecting…");
-                    changed(claude, codex, opencode, pi, cursor, app, true)
+                    changed(&picks, Change::Disconnect)
                 }
             }
         }
@@ -1027,13 +986,24 @@ mod tests {
         );
     }
 
+    /// The agents `flags` pick for a connect.
+    fn picked(flags: &[&str]) -> Vec<atlas::agents::Agent> {
+        let args: Vec<&str> = ["agents", "install"].iter().chain(flags).copied().collect();
+        match parse(&args).unwrap().command.unwrap() {
+            Command::Agents {
+                action: Some(AgentsCommand::Install { picks }),
+            } => picks.agents(),
+            _ => panic!("a connect"),
+        }
+    }
+
     #[test]
     fn pi_and_opencode_can_be_selected_independently_or_together() {
         use atlas::agents::Agent;
-        assert_eq!(chosen(false, false, false, true, false), [Agent::Pi]);
-        assert_eq!(chosen(false, false, true, false, false), [Agent::Opencode]);
+        assert_eq!(picked(&["--pi"]), [Agent::Pi]);
+        assert_eq!(picked(&["--opencode"]), [Agent::Opencode]);
         assert_eq!(
-            chosen(false, false, true, true, false),
+            picked(&["--pi", "--opencode"]),
             [Agent::Opencode, Agent::Pi]
         );
         for verb in ["install", "remove"] {
@@ -1043,10 +1013,7 @@ mod tests {
 
     #[test]
     fn cursor_has_its_own_selector_and_internal_hooks_stay_out_of_help() {
-        assert_eq!(
-            chosen(false, false, false, false, true),
-            [atlas::agents::Agent::Cursor]
-        );
+        assert_eq!(picked(&["--cursor"]), [atlas::agents::Agent::Cursor]);
         for verb in ["install", "remove"] {
             assert!(parse(&["agents", verb, "--cursor", "--codex"]).is_ok());
         }

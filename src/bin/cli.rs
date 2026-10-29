@@ -806,48 +806,58 @@ pub(super) enum AgentsCommand {
     /// Use --claude --app together to connect both Claude parts. Select only
     /// the parts installed on this Mac. JSON reports each part's result by id.
     Install {
-        /// Only Claude Code.
-        #[arg(long)]
-        claude: bool,
-        /// Only Codex.
-        #[arg(long)]
-        codex: bool,
-        /// Only opencode.
-        #[arg(long)]
-        opencode: bool,
-        /// Only Pi.
-        #[arg(long)]
-        pi: bool,
-        /// Only Cursor.
-        #[arg(long)]
-        cursor: bool,
-        /// Only the Claude app.
-        #[arg(long)]
-        app: bool,
+        #[command(flatten)]
+        picks: AgentPicks,
     },
     /// Disconnect Atlas from coding agents.
     ///
     /// Use --claude --app together to disconnect both Claude parts.
     Remove {
-        /// Only Claude Code.
-        #[arg(long)]
-        claude: bool,
-        /// Only Codex.
-        #[arg(long)]
-        codex: bool,
-        /// Only opencode.
-        #[arg(long)]
-        opencode: bool,
-        /// Only Pi.
-        #[arg(long)]
-        pi: bool,
-        /// Only Cursor.
-        #[arg(long)]
-        cursor: bool,
-        /// Only the Claude app.
-        #[arg(long)]
-        app: bool,
+        #[command(flatten)]
+        picks: AgentPicks,
     },
+}
+
+/// The agents and Claude app a connect or disconnect names; none named
+/// means every installed one.
+#[derive(clap::Args)]
+pub(super) struct AgentPicks {
+    /// Only Claude Code.
+    #[arg(long)]
+    claude: bool,
+    /// Only Codex.
+    #[arg(long)]
+    codex: bool,
+    /// Only opencode.
+    #[arg(long)]
+    opencode: bool,
+    /// Only Pi.
+    #[arg(long)]
+    pi: bool,
+    /// Only Cursor.
+    #[arg(long)]
+    cursor: bool,
+    /// Only the Claude app.
+    #[arg(long)]
+    pub(super) app: bool,
+}
+
+impl AgentPicks {
+    /// The coding agents picked.
+    pub(super) fn agents(&self) -> Vec<atlas::agents::Agent> {
+        use atlas::agents::Agent;
+
+        [
+            (self.claude, Agent::Claude),
+            (self.codex, Agent::Codex),
+            (self.opencode, Agent::Opencode),
+            (self.pi, Agent::Pi),
+            (self.cursor, Agent::Cursor),
+        ]
+        .into_iter()
+        .filter_map(|(on, agent)| on.then_some(agent))
+        .collect()
+    }
 }
 
 #[derive(Clone, Copy, ValueEnum)]

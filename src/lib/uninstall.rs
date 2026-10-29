@@ -1180,7 +1180,7 @@ fn disconnect(
     warnings: &mut Vec<String>,
 ) -> Result<()> {
     // An error here means no agent is installed, so there is nothing to remove.
-    if let Ok(reply) = crate::agents::change(&[], true) {
+    if let Ok(reply) = crate::agents::change(&[], crate::agents::Change::Disconnect) {
         let changed = reply["agents"]
             .as_array()
             .into_iter()

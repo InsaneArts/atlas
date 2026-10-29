@@ -194,7 +194,7 @@ fn cursor_refresh_and_default_removal_include_an_owned_copy_without_the_host() {
             snapshot(&Store::new(&root).target).unwrap(),
             expected.entries
         );
-        let removed = crate::agents::change(&[], true).unwrap();
+        let removed = crate::agents::change(&[], crate::agents::Change::Disconnect).unwrap();
         let cursor = removed["agents"]
             .as_array()
             .unwrap()

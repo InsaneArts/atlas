@@ -740,8 +740,15 @@ fn finish(done_steps: &mut Vec<Value>, settings: &Path) -> Result<()> {
         // Setup is already done; this step can only be skipped, never fail it.
         let connected = {
             let _spinner = Spinner::new("Connecting…");
-            crate::agents::change_these(&found, false, app, false)
-                .unwrap_or_else(|error| json!({"ok": false, "error": error.error}))
+            crate::agents::change_these(
+                &found,
+                crate::agents::Covering {
+                    every_agent: false,
+                    app,
+                },
+                crate::agents::Change::Connect,
+            )
+            .unwrap_or_else(|error| json!({"ok": false, "error": error.error}))
         };
         if connected["ok"] == true {
             done(
