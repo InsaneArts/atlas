@@ -5,30 +5,44 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Atlas</title>
 <style>
-/* Atlas's viewer, as in the app and on the website: dark, the helper's
-   screen first, frosted captions over it and capsule buttons under it. */
+/* Atlas's viewer, as in the app and on the website: the helper's screen
+   first, frosted captions over it and capsule buttons under it. It follows
+   the app's light or dark theme, or the Mac's when the app names none: each
+   colour is light-dark(light, dark), picked where it is used, so the screen
+   and what floats over it stay dark in either. */
 :root {
-  --ground: #161618;
-  --deep: #0d0d10;
-  --ink: #f5f5f7;
-  --ink-2: #a1a1a6;
-  --ink-3: #8e8e93;
-  --line: rgba(255, 255, 255, 0.08);
-  --line-2: rgba(255, 255, 255, 0.16);
-  --fill: rgba(255, 255, 255, 0.08);
-  --fill-on: rgba(255, 255, 255, 0.16);
-  --card: rgba(255, 255, 255, 0.045);
-  --glass: rgba(22, 22, 24, 0.75);
-  --menu: rgba(40, 40, 44, 0.92);
-  --blue: #0a84ff;
-  --link: #4ea6ff;
-  --orange: #ff9f0a;
-  --orange-ink: #ffb340;
-  --red: #ff6961;
-  --idle: #8e8e93;
+  --orbit-gap: var(--ground);
+  --ground: light-dark(#f5f5f7, #161618);
+  --deep: light-dark(#e8e8ed, #0d0d10);
+  --ink: light-dark(#1d1d1f, #f5f5f7);
+  --ink-2: light-dark(#515154, #a1a1a6);
+  --ink-3: light-dark(#636366, #8e8e93);
+  --line: light-dark(rgba(0, 0, 0, 0.09), rgba(255, 255, 255, 0.08));
+  --line-2: light-dark(rgba(0, 0, 0, 0.14), rgba(255, 255, 255, 0.16));
+  --line-selected: light-dark(rgba(0, 0, 0, 0.16), rgba(255, 255, 255, 0.22));
+  --fill: light-dark(rgba(0, 0, 0, 0.05), rgba(255, 255, 255, 0.08));
+  --fill-on: light-dark(rgba(0, 0, 0, 0.11), rgba(255, 255, 255, 0.16));
+  --fill-raised: light-dark(rgba(0, 0, 0, 0.06), rgba(255, 255, 255, 0.1));
+  --card: light-dark(#ffffff, rgba(255, 255, 255, 0.045));
+  --glass: light-dark(rgba(250, 250, 252, 0.82), rgba(22, 22, 24, 0.75));
+  --menu: light-dark(rgba(246, 246, 248, 0.94), rgba(40, 40, 44, 0.92));
+  --menu-quiet: light-dark(rgba(60, 60, 67, 0.7), rgba(235, 235, 245, 0.45));
+  --menu-off: light-dark(rgba(60, 60, 67, 0.35), rgba(235, 235, 245, 0.3));
+  --menu-rule: light-dark(rgba(0, 0, 0, 0.1), rgba(255, 255, 255, 0.14));
+  --alert: light-dark(rgba(250, 250, 252, 0.96), rgba(44, 44, 48, 0.94));
+  --alert-words: light-dark(#515154, rgba(235, 235, 245, 0.7));
+  --scrim: light-dark(rgba(0, 0, 0, 0.25), rgba(0, 0, 0, 0.42));
+  --quiet-dot: light-dark(rgba(0, 0, 0, 0.25), rgba(255, 255, 255, 0.28));
+  --blue: light-dark(#0071e3, #0a84ff);
+  --blue-wash: light-dark(rgba(0, 113, 227, 0.12), rgba(10, 132, 255, 0.16));
+  --link: light-dark(#0066cc, #4ea6ff);
+  --orange: light-dark(#ff9500, #ff9f0a);
+  --orange-ink: light-dark(#a84b00, #ffb340);
+  --red: light-dark(#c00013, #ff6961);
+  --idle: light-dark(#636366, #8e8e93);
   --rim-control: inset 0 0 0 1.5px rgba(10, 132, 255, 0.9), 0 0 14px rgba(10, 132, 255, 0.3);
-  --screen-shadow: 0 14px 28px rgba(0, 0, 0, 0.5);
-  --menu-shadow: 0 0 0 0.5px rgba(0, 0, 0, 0.6), inset 0 0 0 0.5px var(--line-2), 0 16px 40px rgba(0, 0, 0, 0.5);
+  --screen-shadow: 0 14px 28px light-dark(rgba(0, 0, 0, 0.16), rgba(0, 0, 0, 0.5));
+  --menu-shadow: 0 0 0 0.5px light-dark(rgba(0, 0, 0, 0.12), rgba(0, 0, 0, 0.6)), inset 0 0 0 0.5px var(--line-2), 0 16px 40px light-dark(rgba(0, 0, 0, 0.18), rgba(0, 0, 0, 0.5));
   --blur: blur(20px) saturate(1.6);
   --font: -apple-system, BlinkMacSystemFont, "SF Pro Text", system-ui, sans-serif;
   --radius-card: 22px;
@@ -67,9 +81,12 @@
 /* The view fills the app's frame edge to edge; the app rounds and clips
    that frame itself, so the view draws no corners, edge or shadow of its own. */
 html, body { margin: 0; background: var(--ground); }
-/* Dark on its own parts only: on the page it would paint the app's
-   conversation dark behind the card. */
-html { color-scheme: dark; }
+/* The app's theme when it names one (data-theme, from its host context),
+   else the Mac's. Matching the app's scheme keeps its conversation behind
+   the card as it is. */
+html { color-scheme: light dark; }
+html[data-theme="light"] { color-scheme: light; }
+html[data-theme="dark"] { color-scheme: dark; }
 body { font: 400 var(--text-m)/1.35 var(--font); color: var(--ink); letter-spacing: -0.01em; -webkit-font-smoothing: antialiased; }
 [hidden] { display: none !important; }
 button { font: inherit; color: inherit; cursor: pointer; }
@@ -77,7 +94,7 @@ button:focus-visible, a:focus-visible, [tabindex]:focus-visible { outline: 2px s
 button[disabled] { opacity: 0.35; cursor: default; }
 .spoken { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
 
-/* Buttons: a capsule, its primary white, and a round icon button. */
+/* Buttons: a capsule, its primary in the ink colour, and a round icon button. */
 .pill { flex: none; height: var(--control); padding: 0 18px; border: 0; border-radius: 999px; display: inline-flex; align-items: center; justify-content: center; gap: 6px; font-weight: 600; white-space: nowrap; background: var(--fill); color: var(--ink); box-shadow: inset 0 0 0 0.5px var(--line-2); }
 .pill.primary { background: var(--ink); color: var(--ground); box-shadow: none; }
 .pill[aria-expanded="true"] { background: var(--fill-on); }
@@ -97,7 +114,10 @@ button[disabled] { opacity: 0.35; cursor: default; }
 .hint { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--ink-3); }
 .orbit { flex: none; color: var(--ink); }
 
-/* The screen, with frosted captions over it. */
+/* The screen, with frosted captions over it. The screen is framed in black
+   in either theme, and so the chips over it and its edge stay dark; with no
+   picture yet, its empty stage follows the theme. */
+.screen .rim, .chip { color-scheme: dark; }
 .screen { position: relative; overflow: hidden; border-radius: var(--radius-screen); background: #000000; box-shadow: var(--screen-shadow); }
 .screen img.frame { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: fill; user-select: none; -webkit-user-drag: none; }
 .screen img.frame.dim { opacity: 0.45; }
@@ -120,7 +140,7 @@ button[disabled] { opacity: 0.35; cursor: default; }
 .topchip { position: absolute; left: 0; right: 0; top: 14px; display: flex; justify-content: center; pointer-events: none; padding: 0 var(--space-l); }
 .note { position: absolute; right: 14px; top: 14px; }
 
-/* Inline: a dark card in the conversation. */
+/* Inline: a card in the conversation. */
 .card { background: var(--ground); padding: 10px; }
 .card .screen { width: 100%; aspect-ratio: 16 / 10; }
 .card .footer { display: flex; align-items: center; gap: 10px; padding: var(--space-s) var(--space-2xs) var(--space-2xs) 10px; min-height: 52px; }
@@ -153,7 +173,7 @@ body.inline-expanded .content { min-height: 180px; overflow: auto; }
 /* The tabs: Screen, Activity, Apps, Screenshots. */
 .tabs { display: inline-flex; align-items: center; gap: var(--space-2xs); padding: 3px; border-radius: 999px; background: var(--fill); box-shadow: inset 0 0 0 0.5px var(--line-2); }
 .tabs button { height: 28px; padding: 0 14px; border: 0; border-radius: 999px; background: none; color: var(--ink-2); font-weight: 500; white-space: nowrap; }
-.tabs button[aria-selected="true"] { background: var(--fill-on); color: var(--ink); box-shadow: inset 0 0 0 0.5px rgba(255, 255, 255, 0.22); }
+.tabs button[aria-selected="true"] { background: var(--fill-on); color: var(--ink); box-shadow: inset 0 0 0 0.5px var(--line-selected); }
 .tabs.small button { height: 24px; padding: 0 11px; font-size: var(--text-s); }
 
 /* The panels a tab shows in place of the screen. */
@@ -169,7 +189,7 @@ body.inline-expanded .content { min-height: 180px; overflow: auto; }
 .row { display: grid; grid-template-columns: 64px 16px minmax(0, 1fr) auto; align-items: center; column-gap: var(--space-m); min-height: 44px; padding: var(--space-xs) var(--space-xl); border-top: 0.5px solid var(--line); }
 .row .time { color: var(--ink-3); font-size: var(--text-s); font-variant-numeric: tabular-nums; }
 .row .mark { display: flex; justify-content: center; }
-.row .mark i { width: 6px; height: 6px; border-radius: 50%; background: rgba(255, 255, 255, 0.28); }
+.row .mark i { width: 6px; height: 6px; border-radius: 50%; background: var(--quiet-dot); }
 .row .mark i.you { background: var(--blue); }
 .row .mark i.live { width: var(--dot); height: var(--dot); background: var(--blue); box-shadow: 0 0 8px var(--blue); }
 .row .text { min-width: 0; display: flex; flex-direction: column; gap: 3px; }
@@ -183,7 +203,7 @@ body.inline-expanded .content { min-height: 180px; overflow: auto; }
 .app-head img, .app-head .tile { width: var(--icon); height: var(--icon); flex: none; }
 .app-head .tile { border-radius: 8px; background: var(--fill); display: inline-flex; align-items: center; justify-content: center; font-weight: 600; color: var(--ink-2); }
 .app-head .name { font: 600 14px/1 var(--font); }
-.tag { font: 600 var(--text-xs)/1 var(--font); color: var(--link); background: rgba(10, 132, 255, 0.16); border-radius: 999px; padding: var(--space-xs) var(--space-s); }
+.tag { font: 600 var(--text-xs)/1 var(--font); color: var(--link); background: var(--blue-wash); border-radius: 999px; padding: var(--space-xs) var(--space-s); }
 .window { display: flex; align-items: center; gap: 10px; min-height: 36px; padding: 0 var(--space-l) 0 62px; border-top: 0.5px solid var(--line); }
 .window .size { font-size: var(--text-s); color: var(--ink-3); font-variant-numeric: tabular-nums; }
 .window.none { color: var(--ink-3); font-size: var(--text-s); }
@@ -194,26 +214,26 @@ body.inline-expanded .content { min-height: 180px; overflow: auto; }
 .shot .words { display: flex; flex-direction: column; gap: 3px; padding: 0 var(--space-2xs); }
 .shot .words span:last-child { font-size: var(--text-s); color: var(--ink-3); font-variant-numeric: tabular-nums; }
 
-/* Menus, as Atlas's own: dark frosted glass, blue under the pointer. */
+/* Menus, as Atlas's own: frosted glass, blue under the pointer. */
 .menu { position: fixed; z-index: 20; width: var(--menu-width); padding: 5px; border-radius: var(--radius-menu); background: var(--menu); -webkit-backdrop-filter: blur(24px) saturate(1.6); backdrop-filter: blur(24px) saturate(1.6); box-shadow: var(--menu-shadow); display: flex; flex-direction: column; }
-.menu .head { padding: 6px 10px 3px; font: 600 var(--text-xs)/1.3 var(--font); color: rgba(235, 235, 245, 0.45); }
-.menu .note { position: static; padding: var(--space-xs) 10px 6px; font: 400 var(--text-xs)/1.4 var(--font); color: rgba(235, 235, 245, 0.45); }
-.menu hr { border: 0; height: 1px; margin: 5px 10px; background: rgba(255, 255, 255, 0.14); }
+.menu .head { padding: 6px 10px 3px; font: 600 var(--text-xs)/1.3 var(--font); color: var(--menu-quiet); }
+.menu .note { position: static; padding: var(--space-xs) 10px 6px; font: 400 var(--text-xs)/1.4 var(--font); color: var(--menu-quiet); }
+.menu hr { border: 0; height: 1px; margin: 5px 10px; background: var(--menu-rule); }
 .menu button { display: flex; align-items: center; gap: 7px; width: 100%; height: var(--menu-row); padding: 0 10px; border: 0; border-radius: var(--radius-row); background: none; color: var(--ink); text-align: left; }
-.menu button:hover:not([disabled]), .menu button:focus-visible { background: var(--blue); outline: none; }
-.menu button .key { margin-left: auto; color: rgba(235, 235, 245, 0.45); }
+.menu button:hover:not([disabled]), .menu button:focus-visible { background: var(--blue); color: #ffffff; outline: none; }
+.menu button .key { margin-left: auto; color: var(--menu-quiet); }
 .menu button:hover .key { color: #ffffff; }
 .menu button .check { width: 11px; flex: none; }
-.menu button[disabled] { opacity: 1; color: rgba(235, 235, 245, 0.3); }
+.menu button[disabled] { opacity: 1; color: var(--menu-off); }
 
 /* A macOS-style alert over the view, and a screenshot opened large. */
-.scrim { position: fixed; inset: 0; z-index: 30; display: flex; align-items: center; justify-content: center; padding: var(--space-xl); background: rgba(0, 0, 0, 0.42); }
-.alert { width: var(--alert-width); padding: 22px var(--space-l) var(--space-l); border-radius: var(--radius-card); background: rgba(44, 44, 48, 0.94); -webkit-backdrop-filter: blur(30px) saturate(1.6); backdrop-filter: blur(30px) saturate(1.6); box-shadow: var(--menu-shadow); display: flex; flex-direction: column; align-items: center; gap: var(--space-s); text-align: center; }
+.scrim { position: fixed; inset: 0; z-index: 30; display: flex; align-items: center; justify-content: center; padding: var(--space-xl); background: var(--scrim); }
+.alert { width: var(--alert-width); padding: 22px var(--space-l) var(--space-l); border-radius: var(--radius-card); background: var(--alert); -webkit-backdrop-filter: blur(30px) saturate(1.6); backdrop-filter: blur(30px) saturate(1.6); box-shadow: var(--menu-shadow); display: flex; flex-direction: column; align-items: center; gap: var(--space-s); text-align: center; }
 .alert .badge { --orbit-gap: #ffffff; width: 64px; height: 64px; border-radius: 14px; background: #ffffff; display: flex; align-items: center; justify-content: center; margin-bottom: 6px; color: #1d1d1f; }
 .alert h2 { margin: 0; font: 700 14px/1.3 var(--font); }
-.alert p { margin: 0; font-size: var(--text-s); line-height: 1.45; color: rgba(235, 235, 245, 0.7); }
+.alert p { margin: 0; font-size: var(--text-s); line-height: 1.45; color: var(--alert-words); }
 .alert .buttons { align-self: stretch; display: flex; flex-direction: column; gap: var(--space-s); margin-top: 10px; }
-.alert .buttons button { height: var(--control-small); border: 0; border-radius: 999px; font-weight: 500; background: rgba(255, 255, 255, 0.1); color: var(--ink); }
+.alert .buttons button { height: var(--control-small); border: 0; border-radius: 999px; font-weight: 500; background: var(--fill-raised); color: var(--ink); }
 .alert .buttons button.default { background: var(--blue); color: #ffffff; }
 .alert .buttons button.destructive { color: var(--red); }
 .lightbox { flex-direction: column; gap: var(--space-m); }
@@ -225,7 +245,7 @@ body.inline-expanded .content { min-height: 180px; overflow: auto; }
 .recent-head .link { margin-left: auto; padding: 0; border: 0; background: none; color: var(--link); font: 500 var(--text-xs)/1 var(--font); }
 .recent ol { list-style: none; margin: 0; padding: 0; }
 .recent li { display: flex; align-items: center; gap: 10px; min-height: 36px; padding: 0 14px; border-top: 0.5px solid var(--line); }
-.recent li i { flex: none; width: 6px; height: 6px; border-radius: 50%; background: rgba(255, 255, 255, 0.28); }
+.recent li i { flex: none; width: 6px; height: 6px; border-radius: 50%; background: var(--quiet-dot); }
 .recent li i.you { background: var(--blue); }
 .recent li .what { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .recent li .when { margin-left: auto; flex: none; color: var(--ink-3); }

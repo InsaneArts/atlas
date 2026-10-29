@@ -1711,3 +1711,54 @@ test('the activity names another session under its words and draws a refusal qui
   ]);
   assert.equal(rows[1].children[1].children[0].className || '', '', 'a grey mark, not a warning');
 });
+
+test('the view takes the theme the app names, and follows the Mac when it names none', () => {
+  assert.equal(view.themeOf({ theme: 'light' }), 'light');
+  assert.equal(view.themeOf({ theme: 'dark' }), 'dark');
+  assert.equal(view.themeOf({}), null);
+  assert.equal(view.themeOf({ theme: 'sepia' }), null, 'an unknown theme is no theme');
+  assert.equal(view.themeOf(undefined), null);
+});
+
+test('every colour of the page follows the theme, and the screen stays dark in either', () => {
+  const page = readFileSync(new URL('../src/lib/mcp/screen.html', import.meta.url), 'utf8');
+  const style = page.slice(page.indexOf('<style>'), page.indexOf('</style>'));
+  assert.match(style, /html \{ color-scheme: light dark; \}/, 'the page is not forced dark');
+  assert.match(style, /\.screen \.rim, \.chip \{ color-scheme: dark; \}/);
+  const tokens = style.slice(
+    style.indexOf(':root {'),
+    style.indexOf('}', style.indexOf(':root {')),
+  );
+  for (const name of [
+    '--ground',
+    '--ink',
+    '--ink-2',
+    '--ink-3',
+    '--line',
+    '--fill',
+    '--card',
+    '--glass',
+  ]) {
+    assert.match(tokens, new RegExp(`${name}: light-dark\\(`), name);
+  }
+  const rules = style.slice(style.indexOf('}', style.indexOf(':root {')));
+  assert.doesNotMatch(
+    rules,
+    /rgba\((?:255, 255, 255|235, 235, 245)/,
+    'no white ink outside the tokens',
+  );
+});
+
+test('a theme in the host context marks the page, and none clears the mark', async () => {
+  const page = screenView();
+  const initialize = page.messages.find((message) => message.method === 'ui/initialize');
+  await page.receive({ id: initialize.id, result: { hostContext: { theme: 'light' } } });
+  assert.equal(page.node('html').dataset.theme, 'light');
+  await page.receive({
+    method: 'ui/notifications/host-context-changed',
+    params: { theme: 'dark' },
+  });
+  assert.equal(page.node('html').dataset.theme, 'dark');
+  await page.receive({ method: 'ui/notifications/host-context-changed', params: { theme: null } });
+  assert.equal(page.node('html').dataset.theme, undefined);
+});

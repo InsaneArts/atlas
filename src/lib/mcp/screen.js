@@ -544,6 +544,13 @@ function fills(context) {
   return (context && context.displayMode === 'fullscreen') || typeof dimensions.height === 'number';
 }
 
+/** The theme the app names in its host context, 'light' or 'dark', or null
+ * when it names none, so the view follows the Mac's appearance. */
+function themeOf(context) {
+  const theme = context && context.theme;
+  return theme === 'light' || theme === 'dark' ? theme : null;
+}
+
 /** The words for an app's window: its title and size. */
 function windowWords(window) {
   const title = window.title && String(window.title).trim() ? String(window.title) : 'Untitled';
@@ -1585,6 +1592,9 @@ if (typeof document !== 'undefined') {
 
   const applyContext = (changed) => {
     context = { ...context, ...changed };
+    const theme = themeOf(context);
+    if (theme) document.documentElement.dataset.theme = theme;
+    else delete document.documentElement.dataset.theme;
     document.body.classList.toggle('full', fills(context) || inlineExpanded);
     document.body.classList.toggle('inline-expanded', inlineExpanded && !fills(context));
     const maximum = context.containerDimensions?.maxHeight;
@@ -1835,6 +1845,7 @@ if (typeof module !== 'undefined') {
     batched,
     portion,
     fills,
+    themeOf,
     windowWords,
   };
 }
