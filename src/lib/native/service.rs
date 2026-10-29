@@ -542,6 +542,10 @@ pub async fn serve(uid: u32, controller_uid: u32, socket: PathBuf) -> Result<()>
     }
 
     let mut engine = Engine::new(uid)?;
+    // Until this process has listed the window server's windows, asking
+    // Accessibility which app has keyboard focus fails at once, so the first
+    // checked keys would be refused. Listing them only reads; nothing is posted.
+    let _ = super::windows::windows();
     let (listener, _endpoint) = super::endpoint::bind(
         &socket,
         uid,
