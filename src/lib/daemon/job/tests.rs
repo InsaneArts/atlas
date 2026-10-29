@@ -1,6 +1,7 @@
 use super::{
     observe::{left, observe},
-    record::{Ended, VERSION},
+    record::{Ended, JobIdentity, Record, VERSION},
+    reply::unconfirmed,
     verdict::{Observation, verdict},
     *,
 };
