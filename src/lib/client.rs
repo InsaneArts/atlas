@@ -21,6 +21,7 @@ pub(crate) use capture::prune_captures;
 pub use capture::{Frame, SCREENSHOT_SIDE, Size, png_dimensions};
 pub use input::Check;
 pub use mutate::validate_completion;
+pub(crate) use record::PersonInput;
 pub(crate) use run::Run;
 pub use run::{RUN_TIMEOUT, RUN_TIMEOUT_MAX};
 
@@ -103,6 +104,9 @@ pub struct Client {
     /// The task of that session the command belongs to, for its rows and
     /// the task's record; never for a decision.
     pub task: Option<Task>,
+    /// Where the person's input through a viewer gathers before it is
+    /// logged; none for every other client, whose rows are written at once.
+    pub(crate) person_input: Option<record::PersonInput>,
     installed: BuildCache,
 }
 
@@ -131,6 +135,7 @@ impl Client {
             doing: None,
             host_session: None,
             task: None,
+            person_input: None,
             config,
         })
     }

@@ -791,6 +791,31 @@ async fn ending_control_reaches_the_helper_it_was_taken_on() {
     assert!(viewer.lease_client.lock().unwrap().is_none());
 }
 
+#[tokio::test]
+async fn the_persons_input_is_logged_once_they_give_control_back() {
+    let dir = tempfile::tempdir().unwrap();
+    let viewer = unreachable(dir.path()).await;
+    let taken = viewer.client();
+    viewer
+        .lease
+        .lock()
+        .await
+        .acquire(&taken.controller)
+        .unwrap();
+    *viewer.lease_client.lock().unwrap() = Some(taken.clone());
+    let output = taken.output_dir().unwrap().to_path_buf();
+    let clicked = json!({"op": "input", "actions": [{"type": "click", "x": 1, "y": 2}]});
+    for _ in 0..4 {
+        taken.record_for_test(&clicked, &json!({"ok": true}));
+    }
+    assert!(crate::activity_log::recent(&output, 5).is_empty());
+
+    let _ = viewer.release(None).await;
+    let rows = crate::activity_log::recent(&output, 5);
+    assert_eq!(rows.len(), 1);
+    assert_eq!((rows[0].actor(), rows[0].action_count), ("viewer", Some(4)));
+}
+
 /// While the helper has not answered an acquire, control stays held:
 /// the settings naming another helper end it, but only in the helper it
 /// was asked of, and the viewer moves only once the acquire settled. A

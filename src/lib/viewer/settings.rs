@@ -47,6 +47,7 @@ impl Viewer {
             return;
         };
         next.actor = current.actor;
+        next.person_input = current.person_input.clone();
 
         let ending = self.release_in_background();
         let _ = tokio::time::timeout(Duration::from_secs(1), ending).await;

@@ -6,7 +6,7 @@ use super::{
     apps::app_list,
     capture::{Cropped, capture_name, cropped, meets, placement, screenshot_request},
     input::expectation,
-    record::worked,
+    record::{PERSON_INPUT_SPAN, PersonInput, worked},
     service::process_exists,
     session::gone_within,
 };
@@ -2356,6 +2356,100 @@ fn input_names_the_app_it_landed_in_and_a_command_its_start() {
         "the end stands for the start"
     );
     assert_eq!(rows.len(), 2, "one row per command");
+}
+
+/// A viewer's client for `dir`, gathering the person's input as a viewer
+/// does.
+fn persons_client(dir: &Path) -> Client {
+    let mut client = client_in(dir);
+    client.actor = Actor::Viewer;
+    client.person_input = Some(PersonInput::default());
+    client
+}
+
+#[test]
+fn the_persons_input_through_a_viewer_is_one_row_a_span_counting_every_action() {
+    let dir = tempfile::tempdir().unwrap();
+    let client = persons_client(dir.path());
+    let clicked = json!({"op": "input", "actions": [{"type": "click", "x": 412, "y": 96}, {"type": "type", "text": "hunter2"}]});
+    for _ in 0..30 {
+        client
+            .record_blocking(
+                &clicked,
+                &json!({"ok": true, "performed": 2}),
+                Duration::ZERO,
+            )
+            .unwrap();
+    }
+    let output = client.output_dir().unwrap().to_path_buf();
+    assert!(
+        activity_log::recent(&output, 5).is_empty(),
+        "gathered until its span ends"
+    );
+
+    let refused = json!({"ok": false, "code": "busy"});
+    client
+        .record_blocking(&clicked, &refused, Duration::ZERO)
+        .unwrap();
+    let rows = activity_log::recent(&output, 5);
+    assert_eq!(
+        rows.iter()
+            .map(|row| (row.failed(), row.action_count))
+            .collect::<Vec<_>>(),
+        [(true, Some(2)), (false, Some(60))],
+        "a failure is written at once, after the input before it"
+    );
+
+    client
+        .record_blocking(&clicked, &json!({"ok": true}), Duration::ZERO)
+        .unwrap();
+    client.person_input.as_ref().unwrap().flush().unwrap();
+    let text = std::fs::read_to_string(output.join(activity_log::FILE)).unwrap();
+    assert_eq!(text.lines().count(), 3);
+    for secret in ["412", "96", "hunter2"] {
+        assert!(!text.contains(secret), "{secret}");
+    }
+
+    // An agent's input, and the person's elsewhere, are written at once.
+    let agent = client_in(dir.path()).doing(Doing::new("click"));
+    agent
+        .record_blocking(&clicked, &json!({"ok": true}), Duration::ZERO)
+        .unwrap();
+    let mut unshared = persons_client(dir.path());
+    unshared.person_input = None;
+    unshared
+        .record_blocking(&clicked, &json!({"ok": true}), Duration::ZERO)
+        .unwrap();
+    let text = std::fs::read_to_string(output.join(activity_log::FILE)).unwrap();
+    assert_eq!(text.lines().count(), 5);
+}
+
+#[tokio::test]
+async fn the_persons_gathered_input_is_written_once_its_span_ends_with_nothing_after_it() {
+    let dir = tempfile::tempdir().unwrap();
+    let client = persons_client(dir.path());
+    let output = client.output_dir().unwrap().to_path_buf();
+    let clicked = json!({"op": "input", "actions": [{"type": "click", "x": 1, "y": 2}]});
+    for _ in 0..3 {
+        client
+            .record(&clicked, &json!({"ok": true}), Duration::ZERO)
+            .await
+            .unwrap();
+    }
+    assert!(activity_log::recent(&output, 5).is_empty());
+
+    tokio::time::sleep(PERSON_INPUT_SPAN).await;
+    let mut rows = Vec::new();
+    for _ in 0..300 {
+        rows = activity_log::recent(&output, 5);
+        if !rows.is_empty() {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
+    assert_eq!(rows.len(), 1);
+    assert_eq!(rows[0].action_count, Some(3));
+    assert_eq!(rows[0].actor(), "viewer");
 }
 
 #[test]

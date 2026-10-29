@@ -33,6 +33,8 @@ impl Viewer {
 
         if let Some(previous) = previous {
             let completion = release_native(&client, &previous, false).await;
+            // The input sent under it is logged once control ends.
+            let _ = client.flush_person_input().await;
 
             {
                 let mut lease = self.lease.lock().await;

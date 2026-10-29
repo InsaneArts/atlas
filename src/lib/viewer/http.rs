@@ -45,8 +45,10 @@ pub(super) async fn bind(
     port: u16,
     settings: Option<&Path>,
 ) -> Result<(TcpListener, Arc<Viewer>)> {
-    // Everything this viewer does in the helper is the person's doing.
+    // Everything this viewer does in the helper is the person's doing, and
+    // their input is gathered into a row a span.
     client.actor = crate::client::Actor::Viewer;
+    client.person_input = Some(crate::client::PersonInput::default());
 
     let listener = TcpListener::bind((std::net::Ipv4Addr::LOCALHOST, port))
         .await

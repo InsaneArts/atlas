@@ -7,7 +7,83 @@ use crate::{
     error::{Code, Error, Result},
 };
 use serde_json::{Value, json};
-use std::time::Duration;
+use std::{
+    path::{Path, PathBuf},
+    sync::{Arc, Mutex, PoisonError},
+    time::{Duration, Instant},
+};
+
+/// How long the person's input through a viewer gathers into one row
+/// before the row is written.
+pub(crate) const PERSON_INPUT_SPAN: Duration = Duration::from_secs(5);
+
+/// The person's input through a viewer, gathered into one row a
+/// [`PERSON_INPUT_SPAN`]: their mouse and keyboard send a message every few
+/// milliseconds, and a row for each would push everyone else's work out of
+/// the log's reach. The row counts the actions and takes the newest one's
+/// time; like every row, it keeps no coordinates or text. Clones share it.
+#[derive(Clone, Default)]
+pub(crate) struct PersonInput(Arc<Mutex<Gathering>>);
+
+/// The row being gathered, where it goes and since when, and whether its
+/// writing is already timed.
+#[derive(Default)]
+struct Gathering {
+    row: Option<(PathBuf, Row, Instant)>,
+    timed: bool,
+}
+
+impl PersonInput {
+    /// Gather `row`, one input that worked, for `directory`'s log: written
+    /// once its span ends, with the earlier gathered row first when that
+    /// span has ended or it is for another log.
+    fn gather(&self, directory: &Path, row: Row) -> Result<()> {
+        let mut gathering = self.lock();
+        if let Some((into, gathered, since)) = gathering.row.as_mut()
+            && into == directory
+            && since.elapsed() < PERSON_INPUT_SPAN
+        {
+            gathered.action_count =
+                Some(gathered.action_count.unwrap_or(0) + row.action_count.unwrap_or(0));
+            gathered.elapsed_ms =
+                Some(gathered.elapsed_ms.unwrap_or(0.0) + row.elapsed_ms.unwrap_or(0.0));
+            gathered.at = row.at;
+            return Ok(());
+        }
+
+        let earlier = gathering
+            .row
+            .replace((directory.to_owned(), row, Instant::now()));
+        gathering.timed = false;
+        match earlier {
+            Some((into, gathered, _)) => activity_log::append(&into, &gathered),
+            None => Ok(()),
+        }
+    }
+
+    /// Write the row gathered so far, when there is one.
+    pub(crate) fn flush(&self) -> Result<()> {
+        let mut gathering = self.lock();
+        gathering.timed = false;
+        match gathering.row.take() {
+            Some((into, gathered, _)) => activity_log::append(&into, &gathered),
+            None => Ok(()),
+        }
+    }
+
+    /// Whether a row is gathering whose writing is not yet timed; it is
+    /// from now on.
+    fn untimed(&self) -> bool {
+        let mut gathering = self.lock();
+        let untimed = gathering.row.is_some() && !gathering.timed;
+        gathering.timed |= untimed;
+        untimed
+    }
+
+    fn lock(&self) -> std::sync::MutexGuard<'_, Gathering> {
+        self.0.lock().unwrap_or_else(PoisonError::into_inner)
+    }
+}
 
 /// The code a failure is recorded with: `uncertain` when it may have
 /// finished in the helper all the same, so the activity never says it
@@ -95,7 +171,32 @@ impl Client {
         step: Step,
     ) -> Result<()> {
         let (client, request, reply) = (self.clone(), request.clone(), reply.clone());
-        tokio::task::spawn_blocking(move || client.write_row(&request, &reply, elapsed, step))
+        let written =
+            tokio::task::spawn_blocking(move || client.write_row(&request, &reply, elapsed, step))
+                .await
+                .map_err(|_| Error::new(Code::State, "The activity row could not be written"))?;
+
+        // The person's gathered input is written once its span ends, even
+        // when no more comes.
+        if let Some(gathering) = self.person_input.clone()
+            && gathering.untimed()
+        {
+            tokio::spawn(async move {
+                tokio::time::sleep(PERSON_INPUT_SPAN).await;
+                let _ = tokio::task::spawn_blocking(move || gathering.flush()).await;
+            });
+        }
+
+        written
+    }
+
+    /// Write the person's input gathered so far, as when they give control
+    /// back.
+    pub(crate) async fn flush_person_input(&self) -> Result<()> {
+        let Some(gathering) = self.person_input.clone() else {
+            return Ok(());
+        };
+        tokio::task::spawn_blocking(move || gathering.flush())
             .await
             .map_err(|_| Error::new(Code::State, "The activity row could not be written"))?
     }
@@ -214,6 +315,18 @@ impl Client {
             {
                 row.app = Some(crate::doing::bounded(app));
             }
+        }
+
+        // The person's input through a viewer is gathered; a failure is
+        // written at once, after the input gathered before it.
+        if let Some(gathering) = &self.person_input
+            && row.persons_input()
+            && !start
+        {
+            if ok && row.code.is_none() {
+                return gathering.gather(directory, row);
+            }
+            gathering.flush()?;
         }
 
         activity_log::append(directory, &row)
