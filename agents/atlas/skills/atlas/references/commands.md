@@ -946,7 +946,7 @@ Examples:
 ```text
 Keep a server or worker running in the helper, and stop it.
 
-A job starts in the helper's home like run, in a session and process group of its own, and keeps running after this command returns, for up to --timeout seconds. Atlas also ends it when the person stops agents and when the helper comes on screen. Stopping checks that it is still the same process, then ends its group and says what is left.
+A job starts in the helper's home like run, in a session and process group of its own, and keeps running after this command returns, for up to --timeout seconds. Atlas also ends it when the person stops agents and when the helper comes on screen. Stopping checks that it is still the same process, then ends its group and says what is left. A process the job starts that calls setsid leaves both its group and its session: Atlas neither stops it nor can always report it.
 
 Usage: atlas job [OPTIONS] <COMMAND>
 
