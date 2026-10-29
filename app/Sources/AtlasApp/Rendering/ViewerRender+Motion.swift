@@ -33,8 +33,8 @@
     /// Draws one key frame of `pose` to its PNG in `folder`: the window shows the pose's first state held well before
     /// the change and settles there, so every animation it makes is posed, a row's way out included; then it takes its
     /// second, in the animation the change runs in, while every animation is held at the change, and the held moment
-    /// moves on a tick at a time to the step's, letting what each finished animation starts begin on the way, before
-    /// the frame is drawn. The window is offscreen and its own, so nothing of one frame carries into the next.
+    /// moves on a tick at a time to the step's, synchronously rendering each tick so every animation samples it
+    /// before it advances. The window is offscreen and its own, so nothing of one frame carries into the next.
     ///
     /// - Parameters:
     ///   - pose: The transition.
@@ -81,28 +81,25 @@
       return (try? data.write(to: folder.appendingPathComponent("\(pose.file(at: step)).png"))) != nil
     }
 
-    /// Lets the window's content take what changed: it lays out again and the main run loop turns for a display
-    /// frame, so the animations are drawn at the moment held, and a change handler's own change and a finished
-    /// animation's completion run.
+    /// Renders the held moment synchronously, including the changes its handlers and animation completions make.
+    /// Waiting for a display frame on the real run loop can skip a held tick or first sample an animation on a later
+    /// one, shifting its start. SwiftUI's test renderer advances explicitly; the zero interval drains the resulting
+    /// changes without advancing that clock again.
     ///
     /// - Parameter hosting: The window's content.
-    private static func turn(_ hosting: NSView) {
+    private static func turn(_ hosting: NSHostingView<AnyView>) {
       hosting.needsLayout = true
       hosting.layoutSubtreeIfNeeded()
-      RunLoop.main
-        .run(until: Date(timeIntervalSinceNow: turnLength))
+      hosting._renderForTest(interval: ViewerMotionPose.tick)
+      hosting._renderForTest(interval: .zero)
       hosting.layoutSubtreeIfNeeded()
     }
 
     /// 5 s: how long before the change the first state is drawn, past the end of any animation it starts.
     private static let before: TimeInterval = 5
 
-    /// 3: how many more times the run loop turns once the frame's moment is held, so what the last tick ended, and
+    /// 3: how many more times the content renders once the frame's moment is held, so what the last tick ended, and
     /// what that started, is drawn.
     private static let settleTurns = 3
-
-    /// 20 ms: how long the run loop turns for at each tick, past one frame of a 60 Hz display, whose refresh is when
-    /// SwiftUI draws its animations as they stand.
-    private static let turnLength: TimeInterval = 0.02
   }
 #endif

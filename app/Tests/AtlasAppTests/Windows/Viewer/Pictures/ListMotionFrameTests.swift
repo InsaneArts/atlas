@@ -12,10 +12,12 @@ struct ListMotionFrameTests {
   @Test("a moment's title in the first frame of its fold stands where it stood, drawn as it was")
   func aFoldingHeaderStandsWhereItStood() throws {
     let pose = try #require(PreviewStates.viewerMotion.first { $0.name == "moment-fold" })
-    let settled = try ViewerHost(pose.from)
+    let settled = try ViewerHost(pose.from, animatesArrivals: false)
       .brightness(at: Self.titlePoints)
     #expect(settled.contains { $0 < Self.ink }, "Notes' title is drawn where the frames are read")
-    let first = try ViewerHost.firstFrame(from: pose.from, to: pose.to) { try $0.brightness(at: Self.titlePoints) }
+    let first = try ViewerHost.firstFrame(from: pose.from, to: pose.to, animatesArrivals: false) {
+      try $0.brightness(at: Self.titlePoints)
+    }
     // Notes' title is drawn in the same place in the change's first frame: the header neither jumps nor is drawn
     // anew beside the one leaving.
     #expect(first == settled)
@@ -65,8 +67,36 @@ struct ListMotionFrameTests {
       let shown = (edge - (edges.first ?? edge)) / travel
       guard (opens ? shown : 1 - shown) >= Self.mostlyOpen else { continue }
       let drawn = try #require(centre, "Notes' first step is drawn while the moment is mostly open")
-      // Down the list is where a drop or a slide would show; across, a fading word's faint edges move its centre.
+      // Down the list is where a drop or a slide would show.
       #expect(abs(drawn.y - resting.y) <= Self.stillness, "Notes' first step moved")
+    }
+  }
+
+  @Test(
+    "held disclosure frames draw identical pixels when repeated in reverse order after the real clock advances",
+    arguments: ["moment-open", "moment-fold"]
+  )
+  func heldDisclosureFramesDrawIdenticalPixels(name: String) throws {
+    let pose = try #require(PreviewStates.viewerMotion.first { $0.name == name })
+    let folder = FileManager.default.temporaryDirectory
+      .appendingPathComponent("atlas-repeated-disclosure-\(UUID().uuidString)")
+    try FileManager.default
+      .createDirectory(at: folder, withIntermediateDirectories: true)
+    defer {
+      try? FileManager.default
+        .removeItem(at: folder)
+    }
+    var frames: [Double: Data] = [:]
+    for step in pose.steps {
+      #expect(ViewerRender.draw(pose, at: step, to: folder, appearance: Appearance.light))
+      frames[step] = try Data(contentsOf: folder.appendingPathComponent("\(pose.file(at: step)).png"))
+    }
+    RunLoop.main
+      .run(until: Date(timeIntervalSinceNow: ViewerMotionPose.tick))
+    for step in pose.steps.reversed() {
+      #expect(ViewerRender.draw(pose, at: step, to: folder, appearance: Appearance.light))
+      let repeated = try Data(contentsOf: folder.appendingPathComponent("\(pose.file(at: step)).png"))
+      #expect(repeated == frames[step], "\(name) at \(step) changed pixels")
     }
   }
 
@@ -92,15 +122,21 @@ struct ListMotionFrameTests {
       .brightnessComponent ?? .zero
   }
 
-  /// Where words' ink stands among `points`, as the centre of the dark points weighted by how dark they are, so a
-  /// capsule fading under the words, or the words fading, leaves it where it is.
+  /// Where words' ink stands among `points`, weighted by contrast against their ground. The ink cutoff only decides
+  /// whether words are visible: subtracting it from every sample discards different antialiased edges as words fade,
+  /// moving the measured centre even when every glyph stands still. Contrast keeps those edges and scales with a fade.
   ///
   /// - Parameters:
   ///   - frame: The key frame.
   ///   - points: The points the words stand among.
   /// - Returns: The centre, or nil when no ink is drawn there.
   static func inkCentre(of frame: NSBitmapImageRep, in points: [CGPoint]) -> CGPoint? {
-    let weighed = points.map { ($0, max(ink - brightness(of: frame, at: $0), .zero)) }
+    let shades = points.map { ($0, brightness(of: frame, at: $0)) }
+    guard shades.contains(where: { $0.1 < ink }) else { return nil }
+    let ground =
+      shades.map(\.1)
+      .max() ?? .zero
+    let weighed = shades.map { ($0.0, max(ground - $0.1, .zero)) }
     let total = weighed.reduce(.zero) { $0 + $1.1 }
     guard total > .zero else { return nil }
     let x = weighed.reduce(.zero) { $0 + $1.0.x * $1.1 } / total

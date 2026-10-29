@@ -16,8 +16,10 @@ final class ViewerHost {
 
   /// Hosts `state`, laid out once, with nothing to move from.
   ///
-  /// - Parameter state: What the window shows first.
-  init(_ state: ViewerState) {
+  /// - Parameters:
+  ///   - state: What the window shows first.
+  ///   - animatesArrivals: Whether the first pane plays its arrival; false for a settled reference.
+  init(_ state: ViewerState, animatesArrivals: Bool = true) {
     window = NSWindow(
       contentRect: NSRect(origin: .zero, size: PreviewStates.viewerSize),
       styleMask: [.borderless],
@@ -25,7 +27,7 @@ final class ViewerHost {
       defer: false
     )
     window.isReleasedWhenClosed = false
-    hosting = NSHostingView(rootView: ViewerHostContent(state: state))
+    hosting = NSHostingView(rootView: ViewerHostContent(state: state, animatesArrivals: animatesArrivals))
     hosting.frame = NSRect(origin: .zero, size: PreviewStates.viewerSize)
     window.contentView = hosting
     hosting.layoutSubtreeIfNeeded()
@@ -101,18 +103,20 @@ final class ViewerHost {
   /// - Parameters:
   ///   - first: What the window shows before the change.
   ///   - next: What it shows after.
+  ///   - animatesArrivals: Whether the first pane plays its arrival; false for a settled reference.
   ///   - read: Reads the frame.
   /// - Returns: What `read` found.
   /// - Throws: What `read` throws.
   static func firstFrame<Found>(
     from first: ViewerState,
     to next: ViewerState,
+    animatesArrivals: Bool = true,
     read: (ViewerHost) throws -> Found
   ) throws -> Found {
     let clock = ContinuousClock()
     var found: Found?
     for _ in 0..<firstFrameTries {
-      let host = ViewerHost(first)
+      let host = ViewerHost(first, animatesArrivals: animatesArrivals)
       let started = clock.now
       host.show(next)
       found = try read(host)
