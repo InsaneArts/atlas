@@ -31,23 +31,26 @@ impl Viewer {
             (lease.begin_release(owner)?, self.holder())
         };
 
-        if let Some(previous) = previous {
-            let completion = release_native(&client, &previous, false).await;
-            // The input sent under it is logged once control ends.
-            let _ = client.flush_person_input().await;
+        let completion = match previous.as_deref() {
+            Some(previous) => release_native(&client, previous, false).await,
+            None => Ok(()),
+        };
 
-            {
-                let mut lease = self.lease.lock().await;
-                lease.end_release();
-                if !lease.active() {
-                    *unpoisoned(&self.lease_client) = None;
-                }
+        // Native execution can end before its background recording does.
+        // Shutdown also flushes when ownership has already ended.
+        let _recording = self.input_recording.lock().await;
+        let recorded = client.flush_person_input().await;
+
+        if previous.is_some() {
+            let mut lease = self.lease.lock().await;
+            lease.end_release();
+            if !lease.active() {
+                *unpoisoned(&self.lease_client) = None;
             }
-
-            completion?;
         }
 
-        Ok(())
+        completion?;
+        recorded
     }
 
     /// End whichever control is held in a task of its own, which finishes
@@ -222,6 +225,10 @@ impl Viewer {
                     return Ok(json!({"ok": true}));
                 }
 
+                let _recording = self
+                    .input_recording
+                    .try_lock()
+                    .map_err(|_| Error::new(Code::Busy, "Wait for the current input to finish"))?;
                 let _permit = ActionPermit::begin(self.lease.clone(), owner).await?;
                 let client = self.holder();
                 let result = client

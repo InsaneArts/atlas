@@ -792,6 +792,49 @@ async fn ending_control_reaches_the_helper_it_was_taken_on() {
 }
 
 #[tokio::test]
+async fn giving_control_back_waits_for_the_final_input_recording() {
+    let dir = tempfile::tempdir().unwrap();
+    let viewer = http::configured(client(dir.path()), "127.0.0.1:1".into(), None);
+    let client = viewer.client();
+    let recording = viewer.input_recording.lock().await;
+    let giving_back = viewer.release(None);
+    tokio::pin!(giving_back);
+    std::future::poll_fn(|cx| {
+        assert!(std::future::Future::poll(giving_back.as_mut(), cx).is_pending());
+        std::task::Poll::Ready(())
+    })
+    .await;
+    client.record_for_test(
+        &json!({"op": "input", "actions": [{"type": "click"}]}),
+        &json!({"ok": true}),
+    );
+    assert!(crate::activity_log::recent(client.output_dir().unwrap(), 1).is_empty());
+    drop(recording);
+    giving_back.await.unwrap();
+    assert_eq!(
+        crate::activity_log::recent(client.output_dir().unwrap(), 1)[0].action_count,
+        Some(1)
+    );
+}
+
+#[tokio::test]
+async fn shutdown_flushes_buffered_input_even_without_a_control_token() {
+    let dir = tempfile::tempdir().unwrap();
+    let viewer = http::configured(client(dir.path()), "127.0.0.1:1".into(), None);
+    let client = viewer.client();
+    client.record_for_test(
+        &json!({"op": "input", "actions": [{"type": "click"}]}),
+        &json!({"ok": true}),
+    );
+    viewer.close().await;
+    viewer.release(None).await.unwrap();
+    assert_eq!(
+        crate::activity_log::recent(client.output_dir().unwrap(), 1)[0].action_count,
+        Some(1)
+    );
+}
+
+#[tokio::test]
 async fn the_persons_input_is_logged_once_they_give_control_back() {
     let dir = tempfile::tempdir().unwrap();
     let viewer = unreachable(dir.path()).await;

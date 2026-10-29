@@ -51,6 +51,9 @@ struct Viewer {
     /// The helper the lease was taken on. Control ends there, and input
     /// goes there, even once the settings name another helper.
     lease_client: std::sync::Mutex<Option<Arc<Client>>>,
+    /// Held from before native input begins until its activity recording
+    /// ends. Release cancels ownership first, then waits here to flush.
+    input_recording: Mutex<()>,
     /// Shared by each change being made in the helper (taking or ending
     /// control, input, recovery) for as long as it runs. Shutdown takes it
     /// whole, so it waits for those in progress, and sets it to true, so no

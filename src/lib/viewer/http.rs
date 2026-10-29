@@ -41,15 +41,10 @@ const MAX_BODY: usize = 32768;
 /// Bind the viewer for `client` on `port` (0 picks a free one). With
 /// `settings`, it follows that file when it names another helper.
 pub(super) async fn bind(
-    mut client: Client,
+    client: Client,
     port: u16,
     settings: Option<&Path>,
 ) -> Result<(TcpListener, Arc<Viewer>)> {
-    // Everything this viewer does in the helper is the person's doing, and
-    // their input is gathered into a row a span.
-    client.actor = crate::client::Actor::Viewer;
-    client.person_input = Some(crate::client::PersonInput::default());
-
     let listener = TcpListener::bind((std::net::Ipv4Addr::LOCALHOST, port))
         .await
         .map_err(|error| match error.kind() {
@@ -61,14 +56,29 @@ pub(super) async fn bind(
         })?;
 
     let authority = listener.local_addr()?.to_string();
+    Ok((listener, configured(client, authority, settings)))
+}
+
+/// Configure the viewer independently of its listener, so control and
+/// recording can be checked without networking.
+pub(super) fn configured(
+    mut client: Client,
+    authority: String,
+    settings: Option<&Path>,
+) -> Arc<Viewer> {
+    // Everything this viewer does in the helper is the person's doing, and
+    // their input is gathered into a row a span.
+    client.actor = crate::client::Actor::Viewer;
+    client.person_input = Some(crate::client::PersonInput::default());
     let prefix = format!("/{}/", files::token());
-    let viewer = Arc::new(Viewer {
+    Arc::new(Viewer {
         client: std::sync::Mutex::new(Arc::new(client)),
         settings: settings.map(Path::to_path_buf),
         settings_text: std::sync::Mutex::new(None),
         lease: Arc::new(Mutex::new(Lease::new(Duration::from_secs(LEASE_SECONDS)))),
         lease_epoch: Mutex::new(None),
         lease_client: std::sync::Mutex::new(None),
+        input_recording: Mutex::new(()),
         closed: RwLock::new(false),
         frames: Mutex::new(Frames::default()),
         capture: std::sync::Mutex::new(None),
@@ -82,9 +92,7 @@ pub(super) async fn bind(
         input_started: std::sync::Mutex::new(None),
         record: std::sync::Mutex::new(None),
         icons: helper_info::Icons::default(),
-    });
-
-    Ok((listener, viewer))
+    })
 }
 
 /// Answer requests on `listener` until `shutdown` resolves. A connection
