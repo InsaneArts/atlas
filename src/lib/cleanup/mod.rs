@@ -90,7 +90,11 @@ pub(crate) async fn preview(
         .as_ref()
         .map(|receipt| receipt.steps.clone())
         .unwrap_or_default();
-    merge_with(&mut steps, &loaded.undoable(), &loaded.others());
+    merge_with(
+        &mut steps,
+        &loaded.undoable(),
+        &others(hands, scope, loaded).await,
+    );
     if steps.is_empty() {
         let running = running_named(hands, loaded, None).await;
         return Ok(reply::nothing(
@@ -271,7 +275,11 @@ pub(crate) async fn apply(
     let mut receipt = loaded
         .unfinished(scope)
         .unwrap_or_else(|| Receipt::new(scope.session.clone(), scope.task.clone(), actor));
-    merge_with(&mut receipt.steps, &loaded.undoable(), &loaded.others());
+    merge_with(
+        &mut receipt.steps,
+        &loaded.undoable(),
+        &others(hands, scope, loaded).await,
+    );
     if receipt.steps.is_empty() {
         let running = running_named(hands, loaded, None).await;
         return Ok(reply::nothing(
@@ -336,6 +344,19 @@ async fn running_named(
         Some(listed) => Some(listed.clone()),
         None => hands.apps().await.ok().filter(|apps| apps["ok"] == true),
     }
+}
+
+/// What `scope`'s cleanup covers beside the things its tasks claim: the
+/// jobs and collections its records name, and the jobs the helper's own
+/// records give its tasks that the task records never noted.
+async fn others(hands: &impl Hands, scope: &Scope, loaded: &Loaded) -> plan::Others {
+    let mut others = loaded.others();
+    for job in hands.jobs_of(&scope.session, scope.task.as_ref()).await {
+        if !others.jobs.iter().any(|known| known.id == job.id) {
+            others.jobs.push(job);
+        }
+    }
+    others
 }
 
 /// Settle every step of the session's receipts that finished but whose

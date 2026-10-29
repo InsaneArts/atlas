@@ -164,9 +164,10 @@ impl std::fmt::Display for JobId {
 }
 
 /// What the person's side knows a job to be: the boot it started in, its
-/// leader's PID and exact start time, and its process group.
+/// leader's PID and exact start time, and its process group. A record a
+/// later build wrote may hold more beside it; a request names exactly
+/// these.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
 pub struct Expected {
     pub boot: String,
     pub pid: i32,
@@ -494,9 +495,18 @@ fn job(request: &Value) -> Result<JobRequest, Value> {
         }
         "stop" => Ok(JobRequest::Stop {
             id: job_id(request)?,
-            expect: Expected::deserialize(&request["expect"]).map_err(|_| {
-                bad("\"expect\" must name the job's boot, pid, start and pgid, and nothing else")
-            })?,
+            expect: request["expect"]
+                .as_object()
+                .filter(|expect| {
+                    expect.len() == 4
+                        && ["boot", "pid", "start", "pgid"]
+                            .iter()
+                            .all(|field| expect.contains_key(*field))
+                })
+                .and_then(|_| Expected::deserialize(&request["expect"]).ok())
+                .ok_or_else(|| {
+                    bad("\"expect\" must name the job's boot, pid, start and pgid, and nothing else")
+                })?,
             grace: millis(
                 request,
                 "graceMs",

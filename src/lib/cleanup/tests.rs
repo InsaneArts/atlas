@@ -42,6 +42,8 @@ struct Fake {
     jobs: RefCell<BTreeMap<String, Value>>,
     /// What stopping each job answers; one not here ends.
     job_stops: RefCell<BTreeMap<String, Result<Value>>>,
+    /// The jobs the helper's own records give the session.
+    daemon_jobs: RefCell<Vec<plan::Job>>,
     stopped: Cell<bool>,
     log: RefCell<Vec<String>>,
 }
@@ -165,6 +167,15 @@ impl Hands for Fake {
             .get(id.as_str())
             .cloned()
             .unwrap_or_else(|| json!({"id": id, "state": "running"})))
+    }
+
+    async fn jobs_of(&self, _: &Key, task: Option<&Key>) -> Vec<plan::Job> {
+        self.daemon_jobs
+            .borrow()
+            .iter()
+            .filter(|job| task.is_none_or(|task| job.task == *task))
+            .cloned()
+            .collect()
     }
 
     async fn stop_job(&self, _: &Key, id: &crate::daemon::protocol::JobId) -> Result<Value> {
@@ -1514,7 +1525,7 @@ fn job_started(place: &Place, task: &Task, name: &str) -> crate::daemon::protoco
             start: [1, 2],
             pgid: 4312,
         },
-        state: JobState::Running,
+        state: JobState::Running.into(),
         how: None,
         ended_at: None,
         later: serde_json::Map::new(),
@@ -1778,11 +1789,12 @@ async fn a_copy_of_a_file_no_step_removes_lets_every_step_run() {
 }
 
 #[tokio::test]
-async fn a_receipt_that_is_gone_is_said_without_holding_every_step_back() {
+async fn a_receipt_that_is_gone_keeps_every_source_and_job_stops_go_on() {
     let place = Place::new();
     let key = session("receipt-gone");
     let task = default_task(&key);
     let plan = plan_claimed(&place, &task);
+    let job = job_started(&place, &task, "web");
     let receipt = collected(&place, &task);
     let fake = Fake::at(&place.root);
     fake.intact.borrow_mut().insert(
@@ -1793,14 +1805,106 @@ async fn a_receipt_that_is_gone_is_said_without_holding_every_step_back() {
         },
     );
     let reply = place.apply(&fake, &own(&key)).await;
-    assert_eq!(states(&reply), ["failed", "done"], "{reply}");
+    assert_eq!(kinds(&reply), ["check-outputs", "stop-job", "undo-plan"]);
+    assert_eq!(states(&reply), ["failed", "done", "blocked"], "{reply}");
+    assert_eq!(reply["steps"][2]["reason"], "output-not-kept");
     assert!(
         reply["steps"][0]["error"]
             .as_str()
             .unwrap()
             .contains("receipt")
     );
-    assert!(fake.logged().contains(&format!("undo {plan}")));
+    assert!(fake.logged().contains(&format!("stop job {job}")));
+    assert!(
+        !fake.logged().contains(&format!("undo {plan}")),
+        "nothing that may be the only copy's source is rolled back"
+    );
+}
+
+/// Note in `task`'s record a collection made at `at` milliseconds.
+fn collected_at(place: &Place, task: &Task, at: u64) -> crate::collect::ReceiptId {
+    let receipt = crate::collect::ReceiptId::parse(&format!("{at}-a1b2c3")).unwrap();
+    Tasks::at(&place.output)
+        .update(task, 1, |record| {
+            record.noted_output(crate::task::record::OutputEntry {
+                receipt: receipt.clone(),
+                at,
+                files: 1,
+                bytes: 3,
+                later: serde_json::Map::new(),
+            });
+            Ok(())
+        })
+        .unwrap();
+    receipt
+}
+
+#[tokio::test]
+async fn the_newest_collection_of_a_file_is_the_one_that_counts() {
+    const SOURCE: &str = "/Users/atlas/.config/probe/settings.toml";
+    const IN_HOME: &str = ".config/probe/settings.toml";
+    let version = |sha256: &str| crate::collect::Kept {
+        sha256: sha256.into(),
+        ..copy_of(SOURCE, IN_HOME)
+    };
+    for (newer, kept) in [("bb", false), ("aa", true)] {
+        let place = Place::new();
+        let key = session("versions");
+        let task = default_task(&key);
+        let plan = plan_claimed(&place, &task);
+        let older = collected_at(&place, &task, 1_000);
+        let newest = collected_at(&place, &task, 2_000);
+        let fake = Fake::at(&place.root);
+        fake.intact.borrow_mut().insert(
+            older.to_string(),
+            crate::collect::Intact {
+                kept: vec![version("aa")],
+                ..Default::default()
+            },
+        );
+        fake.intact.borrow_mut().insert(
+            newest.to_string(),
+            crate::collect::Intact {
+                missing: vec![version(newer)],
+                ..Default::default()
+            },
+        );
+        let reply = place.apply(&fake, &own(&key)).await;
+        let undone = fake.logged().contains(&format!("undo {plan}"));
+        if kept {
+            assert_eq!(reply["ok"], true, "the same bytes are still kept: {reply}");
+            assert!(undone);
+        } else {
+            assert_eq!(states(&reply), ["failed", "blocked"], "{reply}");
+            assert!(
+                reply["steps"][0]["error"]
+                    .as_str()
+                    .unwrap()
+                    .contains("newest copy"),
+                "{reply}"
+            );
+            assert!(!undone, "an older version never stands in for the newest");
+        }
+    }
+}
+
+#[tokio::test]
+async fn a_job_only_the_helpers_record_knows_is_stopped_too() {
+    let place = Place::new();
+    let key = session("unnoted");
+    let task = default_task(&key);
+    place.claim(&task, Owned::Plan { id: Token::new() });
+    let fake = Fake::at(&place.root);
+    let id = crate::daemon::protocol::JobId::new();
+    fake.daemon_jobs.borrow_mut().push(plan::Job {
+        id: id.clone(),
+        task: task.key().clone(),
+        name: "worker".into(),
+    });
+    let reply = place.apply(&fake, &own(&key)).await;
+    assert_eq!(kinds(&reply), ["stop-job", "undo-plan"], "{reply}");
+    assert_eq!(reply["steps"][0]["name"], "worker");
+    assert!(fake.logged().contains(&format!("stop job {id}")));
 }
 
 #[tokio::test]

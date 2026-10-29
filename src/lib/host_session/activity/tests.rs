@@ -435,7 +435,7 @@ fn a_sessions_jobs_and_collections_are_listed_without_their_names_or_arguments()
                     start: [1, 2],
                     pgid: 4312,
                 },
-                state: JobState::Running,
+                state: JobState::Running.into(),
                 how: None,
                 ended_at: None,
                 later: serde_json::Map::new(),

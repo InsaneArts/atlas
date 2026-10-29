@@ -983,7 +983,9 @@ async fn carry_out(
                     argv,
                 } => atlas::jobs::start(&client, argv, Duration::from_secs(timeout), name).await,
                 JobCommand::List { all } => atlas::jobs::list(&client, all).await,
-                JobCommand::Log { id, bytes } => atlas::jobs::log(&client, &id, bytes).await,
+                JobCommand::Log { id, bytes, task } => {
+                    atlas::jobs::log(&client, &id, bytes, task.as_ref()).await
+                }
                 JobCommand::Stop { id, grace, task } => {
                     atlas::jobs::stop(&client, &id, Duration::from_secs(grace), task.as_ref()).await
                 }

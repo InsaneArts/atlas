@@ -155,7 +155,7 @@ impl Loaded {
                     record
                         .jobs
                         .iter()
-                        .filter(|job| job.state != crate::daemon::job::JobState::Ended)
+                        .filter(|job| !job.ended())
                         .map(|job| Job {
                             id: job.id.clone(),
                             task: record.key.clone(),

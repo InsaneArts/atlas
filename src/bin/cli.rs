@@ -943,6 +943,9 @@ pub(super) enum JobCommand {
         /// Bytes from the end, at most 1048576.
         #[arg(long, default_value_t = 16384, value_parser = log_bytes)]
         bytes: usize,
+        /// Read a job of another task, after that task's session was lost.
+        #[arg(long, value_name = "KEY", value_parser = session_key)]
+        task: Option<Key>,
     },
     /// Stop a job: TERM, then KILL after --grace seconds.
     Stop {

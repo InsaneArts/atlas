@@ -1045,6 +1045,9 @@ Options:
           
           [default: 16384]
 
+      --task <KEY>
+          Read a job of another task, after that task's session was lost
+
   -h, --help
           Print help
 

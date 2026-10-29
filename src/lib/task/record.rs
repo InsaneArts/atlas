@@ -85,28 +85,30 @@ impl Record {
         }
     }
 
-    /// Note that the task started `job`, or what became of it: an entry of
-    /// the same ID takes its place. Room is made by forgetting the oldest
-    /// ended job once [`JOBS`] are listed; a job that may still run is never
-    /// forgotten, so with none ended the new one is refused. Whether it was
-    /// noted.
-    pub fn noted_job(&mut self, job: JobEntry) -> bool {
+    /// Note that the task started `job`, or what became of it. A job
+    /// already listed keeps the identity first noted for it, which a stop
+    /// must agree with: only how far it got changes, and only when the
+    /// identity seen now is that one. Room is made by forgetting the oldest
+    /// ended job once [`JOBS`] are listed; a job that may still run is
+    /// never forgotten, so with none ended the new one is refused.
+    pub fn noted_job(&mut self, job: JobEntry) -> Noted {
         if let Some(known) = self.jobs.iter_mut().find(|known| known.id == job.id) {
-            *known = job;
-            return true;
+            if known.expected != job.expected {
+                return Noted::Disagrees;
+            }
+            known.state = job.state;
+            known.how = job.how;
+            known.ended_at = job.ended_at;
+            return Noted::Yes;
         }
         if self.jobs.len() >= JOBS {
-            let Some(place) = self
-                .jobs
-                .iter()
-                .position(|known| known.state == JobState::Ended)
-            else {
-                return false;
+            let Some(place) = self.jobs.iter().position(JobEntry::ended) else {
+                return Noted::Full;
             };
             self.jobs.remove(place);
         }
         self.jobs.push(job);
-        true
+        Noted::Yes
     }
 
     /// The job `id` this task started, when it is listed.
@@ -192,7 +194,7 @@ impl Record {
     pub fn holds_anything(&self) -> bool {
         !self.later.is_empty()
             || self.unfinished_cleanup().is_some()
-            || self.jobs.iter().any(|job| job.state != JobState::Ended)
+            || self.jobs.iter().any(|job| !job.ended())
             || self.owned.iter().any(|entry| match entry {
                 Entry::Known(claim) => {
                     !claim.later.is_empty()
@@ -397,16 +399,49 @@ pub(crate) struct JobEntry {
     pub started_at: u64,
     /// What it is: its boot, leader, start time and group.
     pub expected: Expected,
-    pub state: JobState,
+    pub state: Lenient<JobState>,
     /// How it ended, once it did.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub how: Option<How>,
+    pub how: Option<Lenient<How>>,
     /// When it ended, in milliseconds since 1970.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub ended_at: Option<u64>,
     /// Fields a later build keeps on an entry, as it wrote them.
     #[serde(flatten)]
     pub later: Map<String, Value>,
+}
+
+impl JobEntry {
+    /// Whether it is known to have ended: a state a later build wrote is
+    /// never taken for one.
+    pub fn ended(&self) -> bool {
+        self.state == Lenient::Known(JobState::Ended)
+    }
+}
+
+/// What noting a job came to.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum Noted {
+    Yes,
+    /// The record already lists the job with another identity, which was
+    /// kept.
+    Disagrees,
+    /// The record is full of jobs that may still run.
+    Full,
+}
+
+/// A value this build knows, or one a later build wrote, kept as it was.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(untagged)]
+pub(crate) enum Lenient<T> {
+    Known(T),
+    Later(Value),
+}
+
+impl<T> From<T> for Lenient<T> {
+    fn from(known: T) -> Self {
+        Self::Known(known)
+    }
 }
 
 /// One collection of files a task made: its receipt, when, and how many

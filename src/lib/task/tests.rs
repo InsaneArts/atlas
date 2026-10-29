@@ -1,5 +1,5 @@
 use super::{
-    record::{Entry, OWNED, Record, VERSION},
+    record::{Entry, Noted, OWNED, Record, VERSION},
     *,
 };
 use crate::host_session::{Host, store::Store as Sessions};
@@ -500,7 +500,7 @@ fn job_entry(id: &str, state: crate::daemon::job::JobState) -> record::JobEntry 
             start: [1, 2],
             pgid: 4312,
         },
-        state,
+        state: state.into(),
         how: None,
         ended_at: None,
         later: serde_json::Map::new(),
@@ -543,15 +543,66 @@ fn a_job_that_may_still_run_is_never_forgotten_to_make_room() {
 
     let mut record = Record::new(&task("full", None), 1);
     for n in 0..64 {
-        assert!(record.noted_job(job_entry(&format!("{n:012x}"), JobState::Running)));
+        assert_eq!(
+            record.noted_job(job_entry(&format!("{n:012x}"), JobState::Running)),
+            Noted::Yes
+        );
     }
-    assert!(!record.noted_job(job_entry("ffffffffffff", JobState::Running)));
+    assert_eq!(
+        record.noted_job(job_entry("ffffffffffff", JobState::Running)),
+        Noted::Full
+    );
     assert_eq!(record.jobs.len(), 64);
-    assert!(record.noted_job(job_entry("000000000000", JobState::Ended)));
-    assert!(record.noted_job(job_entry("ffffffffffff", JobState::Running)));
+    assert_eq!(
+        record.noted_job(job_entry("000000000000", JobState::Ended)),
+        Noted::Yes
+    );
+    assert_eq!(
+        record.noted_job(job_entry("ffffffffffff", JobState::Running)),
+        Noted::Yes
+    );
     assert!(
         record
             .job(&crate::daemon::protocol::JobId::parse("000000000000").unwrap())
             .is_none()
     );
+}
+
+#[test]
+fn a_jobs_first_identity_is_kept_and_only_how_far_it_got_changes() {
+    use crate::daemon::job::JobState;
+
+    let mut record = Record::new(&task("identity", None), 1);
+    record.noted_job(job_entry("7c2e91a04b3f", JobState::Running));
+    let mut other = job_entry("7c2e91a04b3f", JobState::Ended);
+    other.expected.start = [9, 9];
+    assert_eq!(record.noted_job(other), Noted::Disagrees);
+    assert_eq!(record.jobs[0].expected.start, [1, 2]);
+    assert_eq!(record.jobs[0].state, JobState::Running.into());
+
+    assert_eq!(
+        record.noted_job(job_entry("7c2e91a04b3f", JobState::Ended)),
+        Noted::Yes
+    );
+    assert!(record.jobs[0].ended());
+}
+
+#[test]
+fn a_job_state_a_later_build_wrote_is_kept_and_never_taken_for_ended() {
+    let mut written = serde_json::to_value(job_entry(
+        "7c2e91a04b3f",
+        crate::daemon::job::JobState::Running,
+    ))
+    .unwrap();
+    written["state"] = json!("paused");
+    written["how"] = json!("leader-gone");
+    written["expected"]["since"] = json!(5);
+    let read: record::JobEntry = serde_json::from_value(written.clone()).unwrap();
+    assert!(!read.ended());
+    assert_eq!(serde_json::to_value(&read).unwrap()["state"], "paused");
+    assert_eq!(serde_json::to_value(&read).unwrap()["how"], "leader-gone");
+
+    let mut record = Record::new(&task("later", None), 1);
+    record.noted_job(read);
+    assert!(record.holds_anything());
 }

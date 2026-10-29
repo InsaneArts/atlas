@@ -110,7 +110,7 @@ async fn a_job_start_holds_control_only_until_it_is_acknowledged_and_notes_the_j
         .unwrap();
     let entry = record.job(&id()).unwrap();
     assert_eq!(entry.expected.pid, 4312);
-    assert_eq!(entry.state, JobState::Running);
+    assert_eq!(entry.state, JobState::Running.into());
     assert!(record.holds_anything(), "a running job keeps its record");
 }
 
@@ -419,6 +419,7 @@ fn stopping_every_job_says_how_many_and_which_are_left() {
         asked: 3,
         left: 1,
         refused: 0,
+        unknown: 0,
         error: None,
     }
     .say(&mut reply);
@@ -433,6 +434,7 @@ fn stopping_every_job_says_how_many_and_which_are_left() {
         asked: 0,
         left: 0,
         refused: 0,
+        unknown: 0,
         error: Some("Connection refused".into()),
     }
     .say(&mut reply);
@@ -458,13 +460,230 @@ async fn a_jobs_log_is_read_without_control_and_an_older_helper_says_so() {
                 "uncertain": false}),
         })
     });
-    let reply = log(&client, &id(), 8).await.unwrap();
+    let reply = log(&client, &id(), 8, None).await.unwrap();
     assert_eq!(reply["output"], "hello \u{fffd}\n");
     assert_eq!(reply["size"], 81234);
     assert_eq!(reply["outputTruncated"], true);
 
     let other = JobId::parse("000000000000").unwrap();
-    let error = log(&client, &other, 8).await.unwrap_err();
+    let error = log(&client, &other, 8, None).await.unwrap_err();
     assert_eq!(error.code, "daemon");
     assert!(error.error.contains("run atlas restart"));
+}
+
+#[tokio::test]
+async fn a_stop_the_client_leaves_is_finished_by_the_daemon() {
+    let dir = tempfile::tempdir().unwrap();
+    let client = agent(client_in(dir.path()), "job-stop");
+    let ended = Arc::new(Mutex::new(false));
+    let shown = ended.clone();
+    stand_in(&client.config.socket_path, move |request| {
+        Some(match request["action"].as_str() {
+            Some("stop") => json!({"ok": true, "op": "job", "action": "stop",
+                "job": job_view(ID, "stopping"), "signalled": "SIGTERM"}),
+            _ => {
+                let mut view = job_view(
+                    ID,
+                    if *shown.lock().unwrap() {
+                        "ended"
+                    } else {
+                        "stopping"
+                    },
+                );
+                view["how"] = json!("stopped");
+                json!({"ok": true, "op": "job", "action": "show", "job": view})
+            }
+        })
+    });
+    let expected: Expected = serde_json::from_value(
+        json!({"boot": "B", "pid": 4312, "start": [1761650000, 123456], "pgid": 4312}),
+    )
+    .unwrap();
+    let ownership = client.controller.acquire_beside_commands().unwrap();
+    let acknowledged = stop_held(&client, &id(), &expected, Duration::from_secs(5))
+        .await
+        .unwrap();
+    drop(ownership);
+    let job = id();
+    let waiting = waited_for(
+        &client,
+        &job,
+        Duration::from_secs(5),
+        &acknowledged,
+        Found {
+            expected,
+            owner: None,
+            checked: Checked::Task,
+        },
+    );
+    // The client goes away while it waits.
+    assert!(
+        tokio::time::timeout(Duration::from_millis(300), waiting)
+            .await
+            .is_err()
+    );
+    assert!(
+        client.controller.pending().unwrap().is_empty(),
+        "an acknowledged stop leaves nothing pending"
+    );
+    *ended.lock().unwrap() = true;
+    assert_eq!(show(&client, &job).await.unwrap()["state"], "ended");
+}
+
+#[tokio::test]
+async fn listing_never_rewrites_the_identity_the_task_first_noted() {
+    let dir = tempfile::tempdir().unwrap();
+    let client = agent(client_in(dir.path()), "job-start");
+    let mut view = job_view(ID, "running");
+    view["task"] = json!(client.task.as_ref().unwrap().key());
+    note(&client, None, entry(&view).unwrap()).unwrap();
+    let mut other = view.clone();
+    other["start"] = json!([1761650001, 0]);
+    other["state"] = json!("ended");
+    other["how"] = json!("exited");
+    let listed = other.clone();
+    stand_in(&client.config.socket_path, move |_| {
+        Some(json!({"ok": true, "op": "job", "action": "show", "jobs": [listed]}))
+    });
+    let reply = list(&client, false).await.unwrap();
+    assert_eq!(reply["jobs"][0]["mismatch"], true, "{reply}");
+    let record = Store::at(client.output_dir().unwrap())
+        .load(client.task.as_ref().unwrap().key())
+        .unwrap();
+    let kept = record.job(&id()).unwrap();
+    assert_eq!(kept.expected.start, [1761650000, 123456]);
+    assert_eq!(
+        kept.state,
+        JobState::Running.into(),
+        "nothing of it was rewritten"
+    );
+}
+
+#[tokio::test]
+async fn listing_notes_how_far_a_job_got_when_its_identity_agrees() {
+    let dir = tempfile::tempdir().unwrap();
+    let client = agent(client_in(dir.path()), "job-start");
+    let mut view = job_view(ID, "running");
+    view["task"] = json!(client.task.as_ref().unwrap().key());
+    note(&client, None, entry(&view).unwrap()).unwrap();
+    view["state"] = json!("ended");
+    view["how"] = json!("leader-gone");
+    view["left"] = json!([{"pid": 9, "name": "node"}]);
+    let listed = view.clone();
+    stand_in(&client.config.socket_path, move |_| {
+        Some(json!({"ok": true, "op": "job", "action": "show", "jobs": [listed]}))
+    });
+    let reply = list(&client, false).await.unwrap();
+    assert_eq!(reply["jobs"][0]["left"][0]["name"], "node");
+    assert!(reply["jobs"][0].get("mismatch").is_none());
+    let record = Store::at(client.output_dir().unwrap())
+        .load(client.task.as_ref().unwrap().key())
+        .unwrap();
+    assert!(record.job(&id()).unwrap().ended());
+    assert!(!record.holds_anything());
+}
+
+#[tokio::test]
+async fn another_tasks_log_is_read_only_with_its_key() {
+    let dir = tempfile::tempdir().unwrap();
+    let client = agent(client_in(dir.path()), "job-start");
+    let theirs = crate::host_session::Key::parse("3f9a1c07b2e4").unwrap();
+    let task = theirs.clone();
+    stand_in(&client.config.socket_path, move |request| {
+        Some(match request["action"].as_str() {
+            Some("show") => {
+                let mut view = job_view(ID, "running");
+                view["task"] = json!(task);
+                json!({"ok": true, "op": "job", "action": "show", "job": view})
+            }
+            _ => json!({"ok": true, "op": "job", "action": "log", "id": ID, "data": "",
+                "size": 0, "outputTruncated": false, "logResets": 0}),
+        })
+    });
+    let error = log(&client, &id(), 8, None).await.unwrap_err();
+    assert_eq!(error.details["reason"], "other-task");
+    assert!(
+        error
+            .error
+            .contains("atlas job log 7c2e91a04b3f --task 3f9a1c07b2e4")
+    );
+    assert_eq!(
+        log(&client, &id(), 8, Some(&theirs)).await.unwrap()["ok"],
+        true
+    );
+}
+
+#[tokio::test]
+async fn a_stop_the_helper_could_not_carry_out_for_every_job_is_said() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut person = client_in(dir.path());
+    person.actor = crate::client::Actor::Viewer;
+    stand_in(&person.config.socket_path, |_| {
+        Some(
+            json!({"ok": true, "op": "job", "action": "stop-all", "stopping": 1,
+            "refused": [{"id": ID, "reason": "identity"}], "unknown": [{"id": "000000000000"}]}),
+        )
+    });
+    let reply = person.hold(true).await.unwrap();
+    assert!(
+        reply["warnings"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|warning| warning
+                .as_str()
+                .unwrap()
+                .starts_with("The helper did not stop 2 background jobs")),
+        "{reply}"
+    );
+}
+
+#[test]
+fn a_log_out_or_uninstall_counts_what_it_stopped_and_says_what_it_could_not() {
+    let mut reply = json!({"ok": true, "loggedOut": true});
+    Everyone {
+        asked: 2,
+        left: 0,
+        refused: 1,
+        unknown: 1,
+        error: None,
+    }
+    .say(&mut reply);
+    assert_eq!(reply["jobsStopped"], 2);
+    let warnings = reply["warnings"].as_array().unwrap();
+    assert_eq!(warnings.len(), 2, "{reply}");
+    assert!(
+        warnings[0]
+            .as_str()
+            .unwrap()
+            .contains("nothing was signalled")
+    );
+    assert!(
+        warnings[1]
+            .as_str()
+            .unwrap()
+            .contains("could not see the processes")
+    );
+}
+
+#[tokio::test]
+async fn a_job_no_tasks_record_lists_is_checked_against_the_helper() {
+    let dir = tempfile::tempdir().unwrap();
+    let client = agent(client_in(dir.path()), "job-stop");
+    let mine = client.task.as_ref().unwrap().key().clone();
+    stand_in(&client.config.socket_path, move |_| {
+        let mut view = job_view(ID, "running");
+        view["task"] = json!(mine);
+        Some(json!({"ok": true, "op": "job", "action": "show", "job": view}))
+    });
+    let found = expected_for(&client, &id(), None).await.unwrap();
+    assert_eq!(
+        found.checked,
+        Checked::Helper,
+        "its own task, but no record of it"
+    );
+    assert_eq!(
+        found.owner.as_ref(),
+        client.task.as_ref().map(|task| task.key())
+    );
 }

@@ -2,7 +2,7 @@
 //! script, the environment worker, and the copy root, under the control
 //! the cleanup holds.
 use super::{
-    plan::Collection,
+    plan::{Collection, Job},
     run::{Hands, Quitted},
     targets::{still_in_installs, still_running},
 };
@@ -140,6 +140,15 @@ impl Hands for Live<'_> {
 
     async fn job(&self, id: &JobId) -> Result<Value> {
         crate::jobs::show(self.client, id).await
+    }
+
+    async fn jobs_of(&self, session: &Key, task: Option<&Key>) -> Vec<Job> {
+        crate::jobs::of_session(self.client, session, task)
+            .await
+            .unwrap_or_default()
+            .into_iter()
+            .map(|(id, task, name)| Job { id, task, name })
+            .collect()
     }
 
     async fn stop_job(&self, task: &Key, id: &JobId) -> Result<Value> {

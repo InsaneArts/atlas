@@ -5,13 +5,13 @@
 //! kept in the receipt itself. Nothing here lists the copy root or the
 //! helper's stores.
 use super::{
-    plan::{Bundle, Collection, Step},
+    plan::{Bundle, Collection, Job, Step},
     receipt::{CameTo, NotKept, Reason, Receipt, SideEffect, StepState},
     targets::{install_in, installs_of, targets},
 };
 use crate::{
     app_selection::Process,
-    collect::Intact,
+    collect::{Intact, Kept},
     control::Token,
     daemon::{job::Left, protocol::JobId},
     environment::{PlanState, Undone},
@@ -61,6 +61,11 @@ pub(crate) trait Hands {
     /// Background job `id` as the helper shows it now, read without
     /// control.
     async fn job(&self, id: &JobId) -> Result<Value>;
+    /// The jobs the helper's own records give to `session`'s work (to
+    /// `task` only, when there is one) that may still run, so a job its
+    /// task's record never noted is stopped too. None when the helper
+    /// cannot say.
+    async fn jobs_of(&self, session: &Key, task: Option<&Key>) -> Vec<Job>;
     /// Stop job `id` of `task` by its identity, under the control the
     /// cleanup holds, and wait for it to end: the helper's word on it then.
     async fn stop_job(&self, task: &Key, id: &JobId) -> Result<Value>;
@@ -289,40 +294,68 @@ async fn act(hands: &impl Hands, step: &Step, session: &Key) -> Outcome {
 /// all are; otherwise failed, saying which files' copies are missing or
 /// changed, so no later step removes those files.
 fn check_outputs(hands: &impl Hands, outputs: &[Collection]) -> Outcome {
-    let found: Vec<Intact> = outputs
+    let mut found: Vec<(&Collection, Intact)> = outputs
         .iter()
-        .map(|collection| hands.intact(collection))
+        .map(|collection| (collection, hands.intact(collection)))
         .collect();
-    // A file collected again since is kept by its newer copy.
-    let kept_again = |source: &str| {
-        found
-            .iter()
-            .flat_map(|intact| &intact.kept)
-            .any(|kept| kept.source == source)
-    };
+    // Oldest first, so the last collection of a file is its newest.
+    found.sort_by_key(|(collection, _)| collected_at(collection));
+
     let mut not_kept = Vec::new();
     let mut said = Vec::new();
-    for (collection, intact) in outputs.iter().zip(&found) {
-        // A receipt that is gone names no file to keep: said, without
-        // holding every later step back for good.
+    for (collection, intact) in &found {
+        // A receipt that is gone leaves which files it kept unknown: every
+        // step that removes files in the helper waits until it is known.
         if intact.unknown {
+            not_kept.push(NotKept {
+                source: String::new(),
+                in_home: None,
+            });
             said.push(format!(
                 "the receipt of collection {} is gone, so Atlas cannot tell which files it kept",
                 collection.receipt
             ));
         }
-        for (file, how) in intact
-            .missing
+    }
+
+    // The newest collection of each file is the one that counts: an older
+    // copy stands in for it only when it is the very same bytes.
+    let mut sources: Vec<&str> = Vec::new();
+    for (_, intact) in &found {
+        for file in intact
+            .kept
             .iter()
-            .map(|file| (file, "is gone"))
-            .chain(intact.changed.iter().map(|file| (file, "changed")))
-            .filter(|(file, _)| !kept_again(&file.source))
+            .chain(&intact.missing)
+            .chain(&intact.changed)
         {
+            if !sources.contains(&file.source.as_str()) {
+                sources.push(&file.source);
+            }
+        }
+    }
+    for source in sources {
+        let newest = found.iter().rev().find_map(|(_, intact)| {
+            let of = |files: &'_ [Kept]| files.iter().find(|file| file.source == source).cloned();
+            of(&intact.kept)
+                .map(|file| (file, None))
+                .or_else(|| of(&intact.missing).map(|file| (file, Some("is gone"))))
+                .or_else(|| of(&intact.changed).map(|file| (file, Some("changed"))))
+        });
+        let Some((file, Some(how))) = newest else {
+            continue;
+        };
+        let same_kept = found.iter().any(|(_, intact)| {
+            intact
+                .kept
+                .iter()
+                .any(|kept| kept.source == source && kept.sha256 == file.sha256)
+        });
+        if !same_kept {
             not_kept.push(NotKept {
                 source: file.source.clone(),
                 in_home: file.in_home.clone(),
             });
-            said.push(format!("the copy of {} {how}", file.source));
+            said.push(format!("the newest copy of {} {how}", file.source));
         }
     }
     if said.is_empty() {
@@ -335,6 +368,18 @@ fn check_outputs(hands: &impl Hands, outputs: &[Collection]) -> Outcome {
             said.join("; ")
         ))
     })
+}
+
+/// When `collection` was made, in milliseconds since 1970, as its receipt
+/// says; 0 when it does not say.
+fn collected_at(collection: &Collection) -> u64 {
+    collection
+        .receipt
+        .as_str()
+        .split('-')
+        .next()
+        .and_then(|at| at.parse().ok())
+        .unwrap_or(0)
 }
 
 /// Stop one job: found ended without a signal when a stop sent before

@@ -828,7 +828,7 @@ impl Client {
     /// Stop, within two seconds and never under control, so the person is
     /// never queued: why it could not be told, when it could not be. A
     /// daemon that is not running, or that keeps no jobs, has none to end.
-    async fn end_jobs_for_stop(&self) -> Option<&'static str> {
+    async fn end_jobs_for_stop(&self) -> Option<String> {
         let daemon = Transport {
             path: self.config.socket_path.clone(),
             timeout: Duration::from_secs(2),
@@ -836,9 +836,21 @@ impl Client {
         };
         let request = json!({"op": "job", "action": "stop-all", "reason": "person"});
         match daemon.call(&request).await {
-            Ok(reply) if reply["ok"] == true || reply["code"] == "bad-request" => None,
+            // A job it would not signal, or could not see, may still run.
+            Ok(reply) if reply["ok"] == true => {
+                let count = |field: &str| reply[field].as_array().map_or(0, Vec::len);
+                let left = count("refused") + count("unknown");
+                (left > 0).then(|| {
+                    format!(
+                        "The helper did not stop {}, as it could not tell they are still Atlas's; atlas job list --all shows {}",
+                        crate::ui::text::count(left, "background job"),
+                        if left == 1 { "it" } else { "them" }
+                    )
+                })
+            }
+            Ok(reply) if reply["code"] == "bad-request" => None,
             Err(error) if error.code == "io" && !self.config.socket_path.exists() => None,
-            _ => Some("Atlas could not reach the helper to end its background jobs"),
+            _ => Some("Atlas could not reach the helper to end its background jobs".to_owned()),
         }
     }
 
