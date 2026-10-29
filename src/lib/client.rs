@@ -686,7 +686,7 @@ impl Client {
             Ok(saved) => json!({"ok": true, "capture": capture_name(saved)}),
             Err(error) => json!({"ok": false, "code": recorded_code(error)}),
         };
-        let _ = self.record(&request, &reply, started.elapsed());
+        let _ = self.record(&request, &reply, started.elapsed()).await;
 
         captured
     }
@@ -2062,7 +2062,7 @@ impl Client {
         let finishing = pending.finish();
         let cut = interrupt.cut();
         let mut reply = if cuttable {
-            let _ = self.record_start(&request);
+            let _ = self.record_start(&request).await;
             let ended = tokio::select! {
                 biased;
                 reply = finishing => reply,
@@ -2082,7 +2082,7 @@ impl Client {
                         self.controller.abandon_command(claim);
                     }
                     let failed = json!({"ok": false, "code": recorded_code(&error)});
-                    let _ = self.record(&request, &failed, started.elapsed());
+                    let _ = self.record(&request, &failed, started.elapsed()).await;
                     return Err(error);
                 }
             }
@@ -2113,7 +2113,11 @@ impl Client {
             ));
         }
 
-        if self.record(&request, &reply, started.elapsed()).is_err() {
+        if self
+            .record(&request, &reply, started.elapsed())
+            .await
+            .is_err()
+        {
             warnings
                 .push("Operation result is valid; local metadata could not be recorded".to_owned());
         }
@@ -2153,12 +2157,45 @@ impl Client {
 
     /// Record that a command began, so what it does shows while it runs;
     /// the row it ends with stands for it after.
-    fn record_start(&self, request: &Value) -> Result<()> {
-        self.write_row(request, &json!({"ok": null}), Duration::ZERO, true)
+    async fn record_start(&self, request: &Value) -> Result<()> {
+        self.recorded(request, &json!({"ok": null}), Duration::ZERO, true)
+            .await
     }
 
     /// Write the activity row of a command that ended as `reply` says.
-    pub(crate) fn record(&self, request: &Value, reply: &Value, elapsed: Duration) -> Result<()> {
+    pub(crate) async fn record(
+        &self,
+        request: &Value,
+        reply: &Value,
+        elapsed: Duration,
+    ) -> Result<()> {
+        self.recorded(request, reply, elapsed, false).await
+    }
+
+    /// [`Client::write_row`] on a blocking thread: a row waits its turn
+    /// behind another command's, which must not hold up the runtime.
+    async fn recorded(
+        &self,
+        request: &Value,
+        reply: &Value,
+        elapsed: Duration,
+        start: bool,
+    ) -> Result<()> {
+        let (client, request, reply) = (self.clone(), request.clone(), reply.clone());
+        tokio::task::spawn_blocking(move || client.write_row(&request, &reply, elapsed, start))
+            .await
+            .map_err(|_| Error::new("state", "The activity row could not be written"))?
+    }
+
+    /// [`Client::record_start`] on this thread, for tests.
+    #[cfg(test)]
+    fn record_start_blocking(&self, request: &Value) -> Result<()> {
+        self.write_row(request, &json!({"ok": null}), Duration::ZERO, true)
+    }
+
+    /// [`Client::record`] on this thread, for tests.
+    #[cfg(test)]
+    fn record_blocking(&self, request: &Value, reply: &Value, elapsed: Duration) -> Result<()> {
         self.write_row(request, reply, elapsed, false)
     }
 
@@ -2166,7 +2203,8 @@ impl Client {
     /// the crate.
     #[cfg(test)]
     pub(crate) fn record_for_test(&self, request: &Value, reply: &Value) {
-        self.record(request, reply, Duration::ZERO).unwrap();
+        self.record_blocking(request, reply, Duration::ZERO)
+            .unwrap();
     }
 
     fn write_row(
@@ -4850,7 +4888,7 @@ mod tests {
         let client = client_in(dir.path()).doing(Doing::new("type"));
         let typed = json!({"op": "input", "actions": [{"type": "type", "text": "x"}]});
         client
-            .record(
+            .record_blocking(
                 &typed,
                 &json!({"ok": true, "app": "TextEdit"}),
                 Duration::ZERO,
@@ -4861,11 +4899,11 @@ mod tests {
 
         let client = client.doing(Doing::new("open").app(Some("Calculator")));
         let run = json!({"op": "run", "argv": ["open", "-a", "Calculator"]});
-        client.record_start(&run).unwrap();
+        client.record_start_blocking(&run).unwrap();
         let rows = crate::overview::activity(client.output_dir().unwrap(), 5);
         assert_eq!(crate::doing::says(&rows[0]), "opening Calculator…");
         client
-            .record(&run, &json!({"ok": true, "exitCode": 0}), Duration::ZERO)
+            .record_blocking(&run, &json!({"ok": true, "exitCode": 0}), Duration::ZERO)
             .unwrap();
         let rows = crate::overview::activity(client.output_dir().unwrap(), 5);
         assert_eq!(
@@ -4896,8 +4934,10 @@ mod tests {
         let request = json!({"op": "run", "argv": ["tool"]});
         let reply = json!({"ok": true, "exitCode": null, "timedOut": false, "signal": "SIGTERM"});
         validate_completion(&request, &reply).unwrap();
-        client.record_start(&request).unwrap();
-        client.record(&request, &reply, Duration::ZERO).unwrap();
+        client.record_start_blocking(&request).unwrap();
+        client
+            .record_blocking(&request, &reply, Duration::ZERO)
+            .unwrap();
 
         let rows = crate::overview::activity(client.output_dir().unwrap(), 5);
         assert_eq!(rows.len(), 1);
@@ -5127,7 +5167,7 @@ mod tests {
         for reply in [&refused, &odd, &failed] {
             client_in(dir.path())
                 .doing(Doing::new("click").app(Some("Opie")))
-                .record(&click, reply, Duration::ZERO)
+                .record_blocking(&click, reply, Duration::ZERO)
                 .unwrap();
         }
 
@@ -5158,12 +5198,12 @@ mod tests {
         let ok = json!({"ok": true});
 
         client
-            .record(&typed, &ok, Duration::from_millis(5))
+            .record_blocking(&typed, &ok, Duration::from_millis(5))
             .unwrap();
         client.doing = None;
         client.actor = Actor::Viewer;
         client
-            .record(&json!({"op": "restart"}), &ok, Duration::ZERO)
+            .record_blocking(&json!({"op": "restart"}), &ok, Duration::ZERO)
             .unwrap();
 
         let directory = client.output_dir().unwrap();
@@ -5194,7 +5234,7 @@ mod tests {
         const WORKER: &str = "ATLAS_TEST_METADATA_DIRECTORY";
         if let Some(directory) = std::env::var_os(WORKER) {
             let client = client_in(Path::new(&directory));
-            assert!(client.record_start(&json!({"op": "run"})).is_err());
+            assert!(client.record_start_blocking(&json!({"op": "run"})).is_err());
             return;
         }
 
@@ -5276,9 +5316,9 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let client = client_in(dir.path()).doing(Doing::new("run"));
         let request = json!({"op": "run"});
-        client.record_start(&request).unwrap();
+        client.record_start_blocking(&request).unwrap();
         client
-            .record(&request, &json!({"ok": true}), Duration::ZERO)
+            .record_blocking(&request, &json!({"ok": true}), Duration::ZERO)
             .unwrap();
         let output = client.output_dir().unwrap();
         let path = output.join("metadata.jsonl");
@@ -5292,7 +5332,7 @@ mod tests {
 
         let full = vec![b'x'; 1024 * 1024 + 1];
         fs::write(&path, &full).unwrap();
-        client.record_start(&request).unwrap();
+        client.record_start_blocking(&request).unwrap();
         assert_eq!(
             fs::read(output.join("metadata.previous.jsonl")).unwrap(),
             full

@@ -334,12 +334,14 @@ async fn collected(
         }
     }
 
-    let _ = client.record(
-        &json!({"op": "collect"}),
-        &json!({"ok": failed.is_empty(), "count": kept.len(), "bytes": total,
+    let _ = client
+        .record(
+            &json!({"op": "collect"}),
+            &json!({"ok": failed.is_empty(), "count": kept.len(), "bytes": total,
             "code": (!failed.is_empty()).then_some("collect")}),
-        started.elapsed(),
-    );
+            started.elapsed(),
+        )
+        .await;
 
     let mut reply = json!({
         "ok": failed.is_empty(),

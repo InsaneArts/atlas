@@ -471,7 +471,16 @@ impl Jobs {
                         self.forget(&record.id).await;
                         failure("spawn-failed", said)
                     }
-                    Err(_) => self.keep_unconfirmed(record, child, &said),
+                    Err(_) => {
+                        let jobs = self.clone();
+                        tokio::task::spawn_blocking(move || {
+                            jobs.keep_unconfirmed(record, child, &said)
+                        })
+                        .await
+                        .unwrap_or_else(|_| {
+                            failure("job", "The job's start could not be confirmed")
+                        })
+                    }
                 };
             }
             // After it, its group may hold the program's processes too: it

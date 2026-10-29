@@ -483,9 +483,16 @@ impl Server {
         let (status, _) = crate::watch::read(&self.client, &output, self.port)
             .await
             .ok_or_else(|| Error::new("menubar", "Atlas's menu bar is busy; try again"))?;
-        let recent = Store::at(&output).recent();
+        // The records and notes are read under their locks, off the runtime.
+        let client = self.client.clone();
+        let (recent, unrecorded) = tokio::task::spawn_blocking(move || {
+            let recent = Store::at(&output).recent();
+            let unrecorded = crate::overview::first_command_running(&client, &recent);
+            (recent, unrecorded)
+        })
+        .await
+        .map_err(|_| Error::new("state", "Atlas could not read its sessions"))?;
         let named = names(recent.iter().map(|seen| &seen.record));
-        let unrecorded = crate::overview::first_command_running(&self.client, &recent);
         let own = own_session(
             self.host_session.as_ref(),
             &recent,

@@ -214,9 +214,7 @@ fn last_used_by(
         })
         .find_map(|row| {
             let session = row["session"].as_str().and_then(Key::parse)?;
-            let used = row["app"]
-                .as_str()
-                .is_some_and(|used| same_text(used, app));
+            let used = row["app"].as_str().is_some_and(|used| same_text(used, app));
             (used && Some(&session) != own).then_some(session)
         });
 
