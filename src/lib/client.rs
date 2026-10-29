@@ -2402,14 +2402,14 @@ pub fn validate_completion(request: &Value, reply: &Value) -> Result<()> {
         return Ok(());
     }
 
-    let valid = match request["op"].as_str() {
+    let valid = match Op::of(request) {
         // A checked batch is confirmed only with its expectation echoed: a
         // service that ignored it posted the input unchecked.
-        Some("input") => {
+        Some(Op::Input) => {
             reply["performed"].as_u64() == request["actions"].as_array().map(|v| v.len() as u64)
                 && (request["expect"].is_null() || reply["expect"] == request["expect"])
         }
-        Some("job") => match (request["action"].as_str(), JobReply::deserialize(reply)) {
+        Some(Op::Job) => match (request["action"].as_str(), JobReply::deserialize(reply)) {
             (Some("start"), Ok(JobReply::Start { job })) => job_started(request, &job),
             (Some("start"), _) => false,
             (Some("stop"), Ok(JobReply::Stop(Stopped { job, came_to }))) => {
@@ -2423,7 +2423,7 @@ pub fn validate_completion(request: &Value, reply: &Value) -> Result<()> {
             (Some("stop"), _) => false,
             _ => true,
         },
-        Some("run") => {
+        Some(Op::Run) => {
             reply["timedOut"].is_boolean()
                 && reply.get("exitCode").is_some()
                 && (reply["exitCode"].is_i64()
