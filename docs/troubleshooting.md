@@ -40,7 +40,11 @@ For `transport`, check whether the helper is logged in and read `doctor`. If the
 
 `interrupted` means a signal stopped the command, usually an agent tool's timeout. What it finished stands. When it is `uncertain`, the step under way was cut: treat it as any unknown outcome below.
 
-`stopped` means the person stopped agents. Ask them what they want next; only they resume agent work. Pausing the picture is different: the helper continues working while its displayed image is paused. See [Using Atlas](using-atlas.md#take-control-or-stop-agents).
+`job` means a background job was refused or is still stopping; `reason` says why. `other-task` names the task whose job it is: stop it with `--task KEY` only to clean up after that task's session was lost. After `identity` or `other-account`, nothing was signalled: the process is no longer the one Atlas started, or part of it runs as another account. Tell the person, and never end it another way. `still-stopping` means Atlas keeps stopping it; `atlas job list` shows when it has ended.
+
+`collect` means a file was not collected; `reason` says why, and nothing in the helper changed. Give a path relative to the helper's home (your own shell turns `~` into your home), allow a larger file with `--max-size`, wait until whatever writes a `changing` file is done, and archive a folder with `ditto -c -k` before collecting it. Files under `collected` in the reply were kept.
+
+`stopped` means the person stopped agents. Their Stop also ends background jobs. Ask them what they want next; only they resume agent work. Pausing the picture is different: the helper continues working while its displayed image is paused. See [Using Atlas](using-atlas.md#take-control-or-stop-agents).
 
 ## An action's outcome is unknown
 

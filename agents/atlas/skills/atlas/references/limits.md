@@ -40,8 +40,10 @@
   whole Mac's: `pgrep -f` and `pkill -f` in `run` also match the person's
   processes and your own command line. Match the helper's by exact name,
   `atlas run -- /bin/sh -c 'pgrep -l -U "$(id -u)" -x NAME'`, or quit apps
-  with `atlas close`. A disk image mounted in the helper shows in /Volumes
-  for the person too: give it a distinct name and detach it.
+  with `atlas close`. For a process you start yourself, use `atlas job start`
+  and `atlas job stop` rather than finding it by name. A disk image mounted
+  in the helper shows in /Volumes for the person too: give it a distinct name
+  and detach it.
 - The helper cannot read the unified log (`log show`); it is a standard
   account. The log holds the helper's messages too, so read it from your own
   shell (outside your sandbox, if it blocks this):
@@ -164,9 +166,11 @@ A command is stopped after 20 seconds; `--timeout SECONDS` allows up to 600.
 If the helper stops while it runs, it fails with the code `restart`; if the
 helper comes on screen, the command is stopped with `on-console`. Both are
 uncertain. Other agents can act while it runs; recovery, restart and updates
-answer `busy` until it ends. Use `--timeout` up to 600 rather than starting
-it in the background: Atlas ends a command it started when the person stops
-agents, when the helper comes on screen and at its timeout. Keep `--timeout`
+answer `busy` until it ends. A command must end within its `--timeout`; for a
+server or worker that must keep running, use a background job (below), never
+`nohup … &`, which Atlas cannot find or stop. Atlas ends a command it started
+when the person stops agents, when the helper comes on screen and at its
+timeout. Keep `--timeout`
 under your own tool timeout, and never leave an Atlas command running when
 your turn ends: a host that ends its turn may kill a command still running,
 and its outcome is then unknown for every agent until `atlas restart`.
@@ -186,6 +190,34 @@ more, at most 10). If your tool's timeout is shorter than both, pass a shorter
 stops a command anyway, Atlas lets the step under way finish for up to 3
 seconds and reports how far it got (`interrupted`). A step still going then,
 such as a long `run`, is left unknown, and only `atlas restart` clears it.
+
+### Background jobs
+
+`atlas job start [--name NAME] [--timeout SECONDS] -- PROGRAM ARGS` starts
+a server or worker in the helper, as `run` would, and returns its `id` at
+once. It keeps running after the command, and after your session, for up
+to `--timeout` (an hour unless given, at most a day). `atlas job list`
+shows this task's jobs, `atlas job log ID` the end of a job's output, and
+`atlas job stop ID` ends it: TERM, then KILL after `--grace` seconds. Stop
+every job you started before you finish. `left` lists processes that
+left the job's group and still run; Atlas does not stop them, so say so in
+your report. Atlas also ends jobs when the person stops agents or the
+helper comes on screen. A job never sends keys or clicks itself; use
+Atlas's commands for that. After a lost session, `atlas job list --all`
+shows every job, and `atlas job stop ID --task KEY` stops one of an
+earlier task.
+
+### Keeping output files
+
+`atlas collect FILE...` copies files the task made in the helper (a path
+relative to its home, or in /tmp) into Atlas's private folder and replies
+with each copy's `path`, `size` and `sha256`. Use it for a PDF, image or
+export you will report or keep, before cleanup deletes anything. Only
+regular files the helper owns are copied, up to 64 MiB each unless
+`--max-size` allows up to 1G, and only once nothing has written them for 2
+seconds. For a folder, archive it first:
+`atlas run -- /usr/bin/ditto -c -k --keepParent DIR DIR.zip`. The file in
+the helper is left as it is.
 
 ### Finding your own work
 

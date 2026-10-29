@@ -1,6 +1,6 @@
 # Helper files and environment
 
-The helper has its own home, tools and application state. Atlas can copy an explicit set of files into that home and later undo the copy. It takes a one-way snapshot; it does not mirror your account or keep files synchronized.
+The helper has its own home, tools and application state. Atlas can copy an explicit set of files into that home and later undo the copy. It takes a one-way snapshot; it does not mirror your account or keep files synchronized. To bring a result back, use `atlas collect`: it copies chosen files out and never changes what a snapshot owns.
 
 Use small, task-specific selections. Do not select credentials, browser profiles, account databases or files an app is currently writing. Sign in to an app separately in the helper when the task needs it.
 
