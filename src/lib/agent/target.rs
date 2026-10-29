@@ -13,7 +13,9 @@ use serde_json::Value;
 /// to exactly one process with a window of its own on screen.
 #[derive(Debug, Clone)]
 pub enum Target {
+    /// The app with this name, whatever its case.
     Name(String),
+    /// The process with this ID.
     Pid(i64),
 }
 

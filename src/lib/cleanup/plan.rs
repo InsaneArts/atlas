@@ -123,22 +123,23 @@ pub(crate) struct Undoable {
     pub claimed: u64,
 }
 
-/// Add to `steps` (a receipt's, possibly empty) a step for each of `work`
-/// that no step covers yet, each placed by the order steps run in: a new
-/// quit before any new removal, new plans newest first ahead of those
-/// already planned. Steps already planned keep their numbers and places,
-/// and nothing a step already covers is planned twice. Then every step not
-/// yet done or kept waits for what its kind waits for among all the steps,
-/// old and new. Pure: it decides from what it is given only.
+/// [`merge_with`] for `work` alone, with no other jobs or collections.
 #[cfg(test)]
 pub(crate) fn merge(steps: &mut Vec<Entry>, work: &[Undoable]) {
     merge_with(steps, work, &Others::default());
 }
 
-/// [`merge`], with a step to stop each of `others`' jobs that no step
-/// covers yet, after the quits, and one check of every collection first.
-/// A check that already ran is run again whenever another step is left to
-/// run: a copy may have gone since.
+/// Add to `steps` (a receipt's, possibly empty) a step for each of `work`
+/// that no step covers yet, each placed by the order steps run in: a new
+/// quit before any new removal, new plans newest first ahead of those
+/// already planned. Steps already planned keep their numbers and places,
+/// and nothing a step already covers is planned twice. A step to stop each
+/// of `others`' jobs that no step covers yet comes after the quits, and one
+/// check of every collection first; a check that already ran is run again
+/// whenever another step is left to run, since a copy may have gone since.
+/// Then every step not yet done or kept waits for what its kind waits for
+/// among all the steps, old and new. Pure: it decides from what it is given
+/// only.
 pub(crate) fn merge_with(steps: &mut Vec<Entry>, work: &[Undoable], others: &Others) {
     add(steps, work);
     add_others(steps, others);
