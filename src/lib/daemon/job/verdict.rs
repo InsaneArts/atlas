@@ -55,6 +55,28 @@ impl Verdict {
     }
 }
 
+/// Whether the group's own entry for the leader's PID tells the same
+/// process as the leader read after it: the same start time and owner, or
+/// no entry when the leader is gone. Two reads that disagree saw the
+/// leader replaced in between, and say nothing reliable about the group.
+fn consistent(leader: Option<&Info>, members: &[Info], pid: i32) -> bool {
+    let listed = members.iter().find(|member| member.instance.pid == pid);
+    match (leader, listed) {
+        (Some(leader), Some(listed)) => {
+            listed.instance == leader.instance
+                && (listed.uid, listed.ruid, listed.svuid)
+                    == (leader.uid, leader.ruid, leader.svuid)
+                && listed.pgid == leader.pgid
+        }
+        // Listed in its group, then gone: it ended in between.
+        (None, Some(_)) => true,
+        // Read alive after a listing that lacked it: alive only in its own
+        // group's listing can be trusted.
+        (Some(leader), None) => leader.zombie || leader.pgid != pid,
+        (None, None) => true,
+    }
+}
+
 /// What may be done to the job `record` names, as `expect` (the person's
 /// side's copy, when there is one) and `seen` (one fresh look at its
 /// processes, or the error that look met) say, for the helper account
@@ -84,12 +106,16 @@ pub fn verdict(
     let Some(seen) = seen else {
         return Verdict::Unknown;
     };
+    if !consistent(seen.leader.as_ref(), &seen.members, identity.pid()) {
+        return Verdict::Unknown;
+    }
 
     let leader = match &seen.leader {
         Some(leader) if leader.instance.start != identity.start() => return Verdict::Reused,
         Some(leader) if leader.pgid != identity.pgid() => return Verdict::Identity,
-        // A process that exited and is not this daemon's to collect is
-        // gone as far as the job is concerned.
+        // A leader this daemon has not reaped counts as live: its unreaped
+        // PID, and so its group's ID, cannot go to another process. Any
+        // other zombie leader counts as gone.
         Some(leader) if leader.zombie && !seen.own_child => None,
         Some(leader) if !leader.owned_by(uid) => return Verdict::OtherAccount,
         leader => leader.as_ref(),

@@ -85,7 +85,7 @@ impl Daemon {
 
     /// The daemon's hello: its facts, and the background jobs it keeps.
     fn hello(&self) -> Value {
-        facts::hello(&self.manager, self.jobs.as_deref().map(Jobs::running))
+        facts::hello(&self.manager, self.jobs.as_deref().map(Jobs::census))
     }
 
     /// Completes once the daemon has begun to stop.
@@ -731,35 +731,29 @@ async fn serve_read(
         Err(error) => return write(&mut writer, &refused(error)).await,
     };
 
-    let (events, mut queue) = mpsc::channel(8);
-    let delivery = tokio::spawn(async move {
-        while let Some(event) = queue.recv().await {
-            if on_console() {
-                return Ok::<_, Error>((writer, true));
-            }
-            write(&mut writer, &event).await?;
-        }
-        Ok((writer, false))
-    });
-    let uid = nix::unistd::getuid().as_raw();
+    // Off screen, and in the session and display it was in when the
+    // request came: asked by the worker before it reads and by the writer
+    // before it delivers each part already read.
     let screened = Request::Read(request.clone());
-    let delivered = screened.clone();
+    let guard = move || {
+        if let Some(refusal) = allowed(&screened, on_console()) {
+            return Err(refusal);
+        }
+        let current = InputEpoch::from_proof(&session().map_err(refused)?, std::process::id())
+            .map_err(refused)?;
+        if current == epoch {
+            Ok(())
+        } else {
+            Err(failure(
+                "session-changed",
+                "The helper changed since Atlas checked it; look again",
+            ))
+        }
+    };
+    let (events, queue) = mpsc::channel(8);
+    let delivery = tokio::spawn(deliver(queue, writer, guard.clone()));
+    let uid = nix::unistd::getuid().as_raw();
     let reply = tokio::task::spawn_blocking(move || {
-        let guard = || {
-            if let Some(refusal) = allowed(&screened, on_console()) {
-                return Err(refusal);
-            }
-            let current = InputEpoch::from_proof(&session().map_err(refused)?, std::process::id())
-                .map_err(refused)?;
-            if current == epoch {
-                Ok(())
-            } else {
-                Err(failure(
-                    "session-changed",
-                    "The helper changed since Atlas checked it; look again",
-                ))
-            }
-        };
         guard()?;
         let Some(places) = read::Places::here() else {
             return Ok(failure("collect", "The helper's home could not be found"));
@@ -776,12 +770,24 @@ async fn serve_read(
     let (mut writer, cut) = delivery
         .await
         .map_err(|_| Error::new("transport", "The event writer failed"))??;
-    let reply = if cut {
-        allowed(&delivered, true).unwrap_or(reply)
-    } else {
-        reply
-    };
-    write(&mut writer, &reply).await
+    write(&mut writer, &cut.unwrap_or(reply)).await
+}
+
+/// Write each event of `queue` to `writer` while `gate` allows it; the
+/// first refusal ends delivery, and nothing still queued is written. The
+/// writer, and the refusal that ended it if one did.
+async fn deliver<W: AsyncWrite + Unpin>(
+    mut queue: mpsc::Receiver<Value>,
+    mut writer: W,
+    gate: impl Fn() -> std::result::Result<(), Value>,
+) -> Result<(W, Option<Value>)> {
+    while let Some(event) = queue.recv().await {
+        if let Err(refusal) = gate() {
+            return Ok((writer, Some(refusal)));
+        }
+        write(&mut writer, &event).await?;
+    }
+    Ok((writer, None))
 }
 
 #[cfg(test)]
@@ -1582,7 +1588,10 @@ mod tests {
             hello["daemon"]["capabilities"],
             json!(["session-pin", "read", "jobs"])
         );
-        assert_eq!(hello["daemon"]["jobs"], json!({"running": 0}));
+        assert_eq!(
+            hello["daemon"]["jobs"],
+            json!({"running": 0, "launching": 0, "unresolved": 0})
+        );
         let shown = &exchange(daemon, r#"{"op":"job","action":"show"}"#).await[0];
         assert_eq!(shown["jobs"], json!([]));
     }
@@ -1667,5 +1676,36 @@ mod tests {
             assert_eq!(reply[0]["code"], "on-console");
             assert_eq!(reply[0]["uncertain"], false);
         });
+    }
+
+    #[tokio::test]
+    async fn parts_waiting_to_be_delivered_are_dropped_once_the_session_changes() {
+        let (events, queue) = mpsc::channel(8);
+        for n in 0..3 {
+            events
+                .send(json!({"event": "data", "data": n.to_string()}))
+                .await
+                .unwrap();
+        }
+        drop(events);
+        let checks = std::sync::atomic::AtomicUsize::new(0);
+        let gate = || {
+            if checks.fetch_add(1, std::sync::atomic::Ordering::SeqCst) == 0 {
+                Ok(())
+            } else {
+                Err(failure(
+                    "session-changed",
+                    "The helper changed since Atlas checked it; look again",
+                ))
+            }
+        };
+        let (written, cut) = deliver(queue, Vec::new(), gate).await.unwrap();
+        let lines = String::from_utf8(written).unwrap();
+        assert_eq!(
+            lines.lines().count(),
+            1,
+            "only the part before the change: {lines}"
+        );
+        assert_eq!(cut.unwrap()["code"], "session-changed");
     }
 }

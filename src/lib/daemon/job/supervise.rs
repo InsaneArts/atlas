@@ -86,15 +86,22 @@ impl Jobs {
     /// Count again, from the records, the jobs that may still run and
     /// whether one is stopping.
     pub(super) fn count(&self, state: &mut State) {
-        let (mut running, mut stopping) = (0, false);
+        let (mut running, mut stopping, mut unresolved) = (0, false, 0);
         for read in state.store.records() {
-            if let Found::Record(record) = read {
-                running += usize::from(record.live());
-                stopping |= record.state == JobState::Stopping;
+            match read {
+                // A job still launching is counted as launching.
+                Found::Record(record) if state.launching.contains(&record.id) => {}
+                Found::Unreadable(id) if state.launching.contains(&id) => {}
+                Found::Record(record) => {
+                    running += usize::from(record.live());
+                    stopping |= record.state == JobState::Stopping;
+                }
+                Found::Unreadable(_) => unresolved += 1,
             }
         }
         state.running = running;
         state.stopping = stopping;
+        state.unresolved = unresolved;
     }
 
     /// Look at one job: stop a running one when it must stop, note its

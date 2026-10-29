@@ -612,8 +612,9 @@ pub fn manager_name() -> String {
 
 /// The full `hello` reply.
 /// The daemon's hello: who and where the helper is, what it may do, and,
-/// when it keeps background jobs, how many may still run (`jobs`).
-pub fn hello(manager: &str, jobs: Option<usize>) -> Value {
+/// when it keeps background jobs, how many may still run, are launching,
+/// or have records it cannot read (`jobs`).
+pub fn hello(manager: &str, jobs: Option<Value>) -> Value {
     use crate::daemon::protocol::{JOBS, READ, SESSION_PIN};
 
     let mut capabilities = vec![SESSION_PIN, READ];
@@ -634,8 +635,8 @@ pub fn hello(manager: &str, jobs: Option<usize>) -> Value {
         "daemon": {"protocol": 1, "pid": std::process::id(), "version": env!("CARGO_PKG_VERSION"),
             "capabilities": capabilities},
     });
-    if let Some(running) = jobs {
-        hello["daemon"]["jobs"] = json!({"running": running});
+    if let Some(jobs) = jobs {
+        hello["daemon"]["jobs"] = jobs;
     }
     hello
 }

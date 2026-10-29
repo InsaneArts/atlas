@@ -21,11 +21,14 @@ pub(super) enum Signalled {
 
 impl Jobs {
     /// One fresh look at `record`'s leader and group; none when the kernel
-    /// could not say.
+    /// could not say. The group is listed first and the leader read after
+    /// it, so the leader the verdict trusts is the latest fact before a
+    /// signal, and a group listed while the leader was replaced shows the
+    /// change as a disagreement.
     pub(super) fn observe(&self, state: &State, record: &Record) -> Option<Observation> {
         let identity = record.identity()?;
-        let leader = self.kernel.process(identity.pid()).ok()?;
         let members = self.kernel.group(identity.pgid()).ok()?;
+        let leader = self.kernel.process(identity.pid()).ok()?;
         Some(Observation {
             leader,
             members,

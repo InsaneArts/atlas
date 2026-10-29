@@ -782,7 +782,13 @@ pub fn overview(
         "commands": pending.commands,
         "nativeDialogs": report["capabilities"]["nativeDialogs"]["state"],
         // Background jobs that may still run, as the helper's daemon says.
-        "jobs": {"running": session["daemon"]["jobs"]["running"].as_u64().unwrap_or(0)},
+        // Records the daemon cannot read are counted apart: their jobs may
+        // still run, so the person's Stop stays offered.
+        "jobs": {
+            "running": session["daemon"]["jobs"]["running"].as_u64().unwrap_or(0),
+            "launching": session["daemon"]["jobs"]["launching"].as_u64().unwrap_or(0),
+            "unresolved": session["daemon"]["jobs"]["unresolved"].as_u64().unwrap_or(0),
+        },
         "activity": activity.iter().map(|row| shown(row, now)).collect::<Vec<_>>(),
     })
 }
@@ -2119,12 +2125,13 @@ mod tests {
         let mut ready = report(true, true);
         assert_eq!(
             overview(&ready, false, unresolved(0), &[], NOW)["jobs"],
-            json!({"running": 0})
+            json!({"running": 0, "launching": 0, "unresolved": 0})
         );
-        ready["session"]["daemon"] = json!({"jobs": {"running": 3}});
+        ready["session"]["daemon"] =
+            json!({"jobs": {"running": 3, "launching": 1, "unresolved": 2}});
         assert_eq!(
             overview(&ready, false, unresolved(0), &[], NOW)["jobs"],
-            json!({"running": 3})
+            json!({"running": 3, "launching": 1, "unresolved": 2})
         );
         let refused = json!({"ok": false, "code": "job", "operation": "job"});
         assert_eq!(reason(&refused), Some("A background job was refused"));

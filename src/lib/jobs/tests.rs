@@ -87,7 +87,7 @@ async fn a_job_start_holds_control_only_until_it_is_acknowledged_and_notes_the_j
     let reply = started(
         &client,
         None,
-        vec!["/usr/bin/nc".into(), "-lk".into(), "8765".into()],
+        vec!["/usr/bin/nc".into(), "-lk".into(), "8790".into()],
         Duration::from_secs(60),
         Some("web".into()),
     )
@@ -352,6 +352,8 @@ async fn the_persons_stop_asks_the_helper_to_end_every_job() {
     });
     let reply = person.hold(true).await.unwrap();
     assert_eq!(reply["held"], true);
+    assert_eq!(reply["jobs"]["stopping"], 1, "{reply}");
+    assert_eq!(reply["jobs"]["unresolved"], json!([]));
     let asked = heard.lock().unwrap().clone();
     assert_eq!(
         asked,
@@ -685,5 +687,20 @@ async fn a_job_no_tasks_record_lists_is_checked_against_the_helper() {
     assert_eq!(
         found.owner.as_ref(),
         client.task.as_ref().map(|task| task.key())
+    );
+}
+
+#[test]
+fn a_stop_says_what_still_runs_after_the_jobs_leader_went_whatever_group_it_is_in() {
+    let mut gone = job_view(ID, "ended");
+    gone["how"] = json!("leader-gone");
+    gone["left"] = json!([{"pid": 4313, "name": "sleep"}]);
+    let reply = stopped(&id(), &gone, Duration::ZERO);
+    assert_eq!(reply["next"], LEADER_GONE);
+    assert!(
+        !reply["next"]
+            .as_str()
+            .unwrap()
+            .contains("left the job's group")
     );
 }

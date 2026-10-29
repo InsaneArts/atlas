@@ -79,7 +79,7 @@ fn a_matching_job_is_signalled_only_through_its_own_group() {
 }
 
 #[test]
-fn a_job_whose_leader_is_gone_is_never_signalled() {
+fn a_leader_this_daemon_has_not_reaped_counts_as_live_and_any_other_zombie_leader_counts_as_gone() {
     let member = process(4313, later(1), 4312, 4312);
     assert_eq!(
         judged(None, None, std::slice::from_ref(&member)),
@@ -334,6 +334,9 @@ struct Table {
     failing: AtomicBool,
     /// After this many reads of one process, its PID is another process's.
     reused_after: AtomicUsize,
+    /// Whether the table's leader is replaced, with a group of its own,
+    /// while a group is being listed.
+    replace_during_group: AtomicBool,
     reads: AtomicUsize,
     signals: Mutex<Vec<(i32, Signal)>>,
 }
@@ -379,12 +382,19 @@ impl Kernel for Shared {
     }
 
     fn group(&self, pgid: i32) -> Result<Vec<Info>> {
-        Ok(self
+        let listed = self
             .0
             .read()?
             .into_iter()
             .filter(|info| info.pgid == pgid)
-            .collect())
+            .collect();
+        if self.0.replace_during_group.swap(false, Ordering::SeqCst) {
+            *self.0.processes.lock().unwrap() = vec![
+                process(4312, later(90), 4312, 1),
+                process(4500, later(91), 4312, 4312),
+            ];
+        }
+        Ok(listed)
     }
 
     fn of_user(&self, _: u32) -> Result<Vec<Info>> {
@@ -569,4 +579,77 @@ fn every_job_is_counted_from_the_records() {
     jobs.watch_once(false, false);
     assert_eq!(jobs.running(), 0);
     assert_eq!(shown(&jobs)["how"], "exited");
+}
+
+#[test]
+fn two_reads_that_disagree_on_the_leader_say_nothing_about_the_group() {
+    let listed = leader();
+    let mut read_after = leader();
+    read_after.instance.start = later(90);
+    let seen = Observation {
+        leader: Some(read_after),
+        members: vec![listed],
+        own_child: false,
+    };
+    assert_eq!(
+        verdict(&record(), None, BOOT, UID, Some(&seen)),
+        Verdict::Unknown
+    );
+
+    let mut owner = leader();
+    owner.ruid = 501;
+    owner.svuid = 501;
+    let seen = Observation {
+        leader: Some(owner),
+        members: vec![leader()],
+        own_child: false,
+    };
+    assert_eq!(
+        verdict(&record(), None, BOOT, UID, Some(&seen)),
+        Verdict::Unknown
+    );
+
+    // Read alive after a listing of its group that lacked it.
+    let seen = Observation {
+        leader: Some(leader()),
+        members: vec![process(4313, later(1), 4312, 4312)],
+        own_child: false,
+    };
+    assert_eq!(
+        verdict(&record(), None, BOOT, UID, Some(&seen)),
+        Verdict::Unknown
+    );
+}
+
+#[test]
+fn a_leader_replaced_while_its_group_is_listed_is_never_signalled() {
+    let table = Table::with(vec![leader(), process(4313, later(1), 4312, 4312)]);
+    let (_folder, jobs) = jobs_with(&record(), &table);
+    table.replace_during_group.store(true, Ordering::SeqCst);
+    let reply = jobs.stop(
+        &JobId::parse(ID).unwrap(),
+        &record().expected().unwrap(),
+        Duration::from_secs(1),
+    );
+    assert!(reply.get("signalled").is_none(), "{reply}");
+    for _ in 0..3 {
+        jobs.watch_once(true, false);
+    }
+    assert!(table.signals().is_empty(), "{:?}", table.signals());
+}
+
+#[test]
+fn a_record_that_cannot_be_read_is_counted_unresolved_and_named_by_a_stop_of_every_job() {
+    let table = Table::with(vec![leader()]);
+    let (folder, jobs) = jobs_with(&record(), &table);
+    let other = JobId::parse("0123456789ab").unwrap();
+    std::fs::write(folder.path().join(format!("jobs/{other}.json")), b"{").unwrap();
+    jobs.watch_once(false, false);
+    assert_eq!(
+        jobs.census(),
+        json!({"running": 1, "launching": 0, "unresolved": 1})
+    );
+    let reply = jobs.stop_all(StopReason::Person);
+    assert_eq!(reply["unresolved"], json!([{"id": other}]), "{reply}");
+    assert_eq!(table.signals(), [(4312, Signal::SIGTERM)]);
 }

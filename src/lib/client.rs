@@ -815,7 +815,11 @@ impl Client {
         // the input service's saved stop, so one that is down ends them
         // itself once it starts; one that cannot be told is said.
         let mut reply = held?;
-        if let Some(warning) = self.end_jobs_for_stop().await {
+        let (jobs, warning) = self.end_jobs_for_stop().await;
+        if let Some(jobs) = jobs {
+            reply["jobs"] = jobs;
+        }
+        if let Some(warning) = warning {
             match reply["warnings"].as_array_mut() {
                 Some(warnings) => warnings.push(json!(warning)),
                 None => reply["warnings"] = json!([warning]),
@@ -826,9 +830,11 @@ impl Client {
 
     /// Ask the helper daemon to end every background job for the person's
     /// Stop, within two seconds and never under control, so the person is
-    /// never queued: why it could not be told, when it could not be. A
-    /// daemon that is not running, or that keeps no jobs, has none to end.
-    async fn end_jobs_for_stop(&self) -> Option<String> {
+    /// never queued: what it said of the jobs (stopping, ended, refused,
+    /// unknown and unresolved), and a warning when some may still run or it
+    /// could not be told. A daemon that is not running, or that keeps no
+    /// jobs, has none to end.
+    async fn end_jobs_for_stop(&self) -> (Option<Value>, Option<String>) {
         let daemon = Transport {
             path: self.config.socket_path.clone(),
             timeout: Duration::from_secs(2),
@@ -836,21 +842,33 @@ impl Client {
         };
         let request = json!({"op": "job", "action": "stop-all", "reason": "person"});
         match daemon.call(&request).await {
-            // A job it would not signal, or could not see, may still run.
+            // A job it would not signal, could not see, or whose record it
+            // cannot read may still run.
             Ok(reply) if reply["ok"] == true => {
-                let count = |field: &str| reply[field].as_array().map_or(0, Vec::len);
-                let left = count("refused") + count("unknown");
-                (left > 0).then(|| {
+                let list = |field: &str| reply[field].as_array().cloned().unwrap_or_default();
+                let jobs = json!({
+                    "stopping": reply["stopping"].as_u64().unwrap_or(0),
+                    "ended": reply["ended"].as_u64().unwrap_or(0),
+                    "refused": list("refused"),
+                    "unknown": list("unknown"),
+                    "unresolved": list("unresolved"),
+                });
+                let left = list("refused").len() + list("unknown").len() + list("unresolved").len();
+                let warning = (left > 0).then(|| {
                     format!(
                         "The helper did not stop {}, as it could not tell they are still Atlas's; atlas job list --all shows {}",
                         crate::ui::text::count(left, "background job"),
                         if left == 1 { "it" } else { "them" }
                     )
-                })
+                });
+                (Some(jobs), warning)
             }
-            Ok(reply) if reply["code"] == "bad-request" => None,
-            Err(error) if error.code == "io" && !self.config.socket_path.exists() => None,
-            _ => Some("Atlas could not reach the helper to end its background jobs".to_owned()),
+            Ok(reply) if reply["code"] == "bad-request" => (None, None),
+            Err(error) if error.code == "io" && !self.config.socket_path.exists() => (None, None),
+            _ => (
+                None,
+                Some("Atlas could not reach the helper to end its background jobs".to_owned()),
+            ),
         }
     }
 
