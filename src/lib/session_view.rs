@@ -42,7 +42,7 @@ const HISTORY_SHOTS: usize = 12;
 /// A session's state, in the order the apps list sessions.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize)]
 #[serde(rename_all = "camelCase")]
-pub(crate) enum State {
+pub(crate) enum SessionState {
     /// An action of its own may not have finished: the person recovers.
     NeedsYou,
     /// It has the helper, or a command it started with `run` still runs.
@@ -120,7 +120,7 @@ pub(crate) struct Shown {
     /// Whether it counts among the sessions at work: not ended, or ended
     /// with an action of its own whose outcome is unknown.
     pub live: bool,
-    pub state: State,
+    pub state: SessionState,
     pub holds_helper: bool,
     pub waiting_for: Option<WaitingFor>,
     /// How long it has waited for the helper, in seconds.
@@ -139,7 +139,7 @@ impl Shown {
     /// helper, or it acted just now and waits for recovery. Either way it
     /// has neither ended nor gone quiet, whatever its record says.
     pub(crate) fn at_work(&self) -> bool {
-        matches!(self.state, State::Acting | State::Waiting)
+        matches!(self.state, SessionState::Acting | SessionState::Waiting)
     }
 }
 
@@ -172,17 +172,17 @@ impl Scene<'_> {
             .is_some_and(|age| age < RECOVERY_WAIT.as_nanos());
 
         let (state, waiting_for) = if needs_you {
-            (State::NeedsYou, None)
+            (SessionState::NeedsYou, None)
         } else if holds || running {
-            (State::Acting, None)
+            (SessionState::Acting, None)
         } else if self.pending && (note.is_some() || (recently && !ended)) {
-            (State::Waiting, Some(WaitingFor::Recovery))
+            (SessionState::Waiting, Some(WaitingFor::Recovery))
         } else if note.is_some() {
-            (State::Waiting, Some(WaitingFor::Helper))
+            (SessionState::Waiting, Some(WaitingFor::Helper))
         } else if ended {
-            (State::Ended, None)
+            (SessionState::Ended, None)
         } else {
-            (State::Idle, None)
+            (SessionState::Idle, None)
         };
 
         let waiting_seconds = note
@@ -194,7 +194,7 @@ impl Scene<'_> {
         let uncertain = needs_you.then(|| self.cause_row(who)).flatten();
 
         Shown {
-            live: state != State::Ended,
+            live: state != SessionState::Ended,
             state,
             holds_helper: holds,
             waiting_for,
@@ -322,9 +322,9 @@ pub(crate) struct Past {
     /// When it ended, as its record or its host's process says; none for
     /// one that only went quiet.
     pub ended_at: Option<u64>,
-    /// [`State::Ended`] once ended or quiet for [`LIVE_FOR`], else
-    /// [`State::Idle`]: the status says how a live one is doing.
-    pub state: State,
+    /// [`SessionState::Ended`] once ended or quiet for [`LIVE_FOR`], else
+    /// [`SessionState::Idle`]: the status says how a live one is doing.
+    pub state: SessionState,
     /// How many actions it did.
     pub actions: u64,
     pub apps: Vec<PastApp>,
@@ -412,9 +412,9 @@ impl Records<'_> {
                     last_seen_at: record.last_seen,
                     ended_at,
                     state: if ended_at.is_some() || quiet {
-                        State::Ended
+                        SessionState::Ended
                     } else {
-                        State::Idle
+                        SessionState::Idle
                     },
                     actions: record.counts.values().sum(),
                     apps: self.apps(record, &copies),

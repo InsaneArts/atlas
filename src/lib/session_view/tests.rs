@@ -73,19 +73,19 @@ fn a_session_holding_the_helper_acts_and_one_with_a_waiting_note_waits() {
     };
 
     let acting = scene.shown(&Who::Host(left), false);
-    assert_eq!(acting.state, State::Acting);
+    assert_eq!(acting.state, SessionState::Acting);
     assert!(acting.holds_helper && acting.live);
     assert_eq!(acting.latest.unwrap()["says"], "clicked in Opie");
 
     let waits = scene.shown(&Who::Host(right), false);
-    assert_eq!(waits.state, State::Waiting);
+    assert_eq!(waits.state, SessionState::Waiting);
     assert_eq!(waits.waiting_for, Some(WaitingFor::Helper));
     assert_eq!(waits.waiting_seconds, Some(8));
     assert!(!waits.holds_helper);
     assert_eq!(waits.latest.unwrap()["says"], "opened Notes");
 
     let idle = scene.shown(&Who::Host(quiet), false);
-    assert_eq!(idle.state, State::Idle);
+    assert_eq!(idle.state, SessionState::Idle);
     assert_eq!(idle.waiting_for, None);
     assert_eq!(idle.latest.unwrap()["ageSeconds"], 300);
 }
@@ -114,12 +114,12 @@ fn a_running_command_is_its_sessions_work_while_another_holds_the_helper() {
     };
 
     let running = busy.shown(&Who::Host(left.clone()), false);
-    assert_eq!(running.state, State::Acting);
+    assert_eq!(running.state, SessionState::Acting);
     assert!(!running.holds_helper, "the lock is the other session's");
     assert_eq!(running.latest.unwrap()["says"], "running a command…");
 
     let typing = busy.shown(&Who::Host(right), false);
-    assert_eq!(typing.state, State::Acting);
+    assert_eq!(typing.state, SessionState::Acting);
     assert!(typing.holds_helper);
 
     let unmarked = [Cause {
@@ -132,7 +132,7 @@ fn a_running_command_is_its_sessions_work_while_another_holds_the_helper() {
     };
     assert_eq!(
         quiet.shown(&Who::Host(left), false).state,
-        State::Idle,
+        SessionState::Idle,
         "only a marked command is work of its own"
     );
 }
@@ -151,8 +151,14 @@ fn a_holder_note_whose_command_ended_holds_nothing_and_a_row_under_way_stands_fo
         ..scene(&rows)
     };
 
-    assert_eq!(scene.shown(&Who::Host(left), false).state, State::Idle);
-    assert_eq!(scene.shown(&Who::Host(right), false).state, State::Acting);
+    assert_eq!(
+        scene.shown(&Who::Host(left), false).state,
+        SessionState::Idle
+    );
+    assert_eq!(
+        scene.shown(&Who::Host(right), false).state,
+        SessionState::Acting
+    );
 
     let later = Scene {
         now: NOW + 10 * SECOND,
@@ -160,7 +166,7 @@ fn a_holder_note_whose_command_ended_holds_nothing_and_a_row_under_way_stands_fo
     };
     assert_eq!(
         later.shown(&Who::Host(key("right")), false).state,
-        State::Idle,
+        SessionState::Idle,
         "a row begun long ago stands for nobody"
     );
 }
@@ -186,19 +192,19 @@ fn the_session_whose_action_is_unknown_needs_the_person_and_the_rest_wait_for_re
     };
 
     let causer = scene.shown(&Who::Host(left), false);
-    assert_eq!(causer.state, State::NeedsYou);
+    assert_eq!(causer.state, SessionState::NeedsYou);
     assert_eq!(causer.uncertain_row.as_deref(), Some(rows[1].id.as_str()));
     assert_eq!(causer.uncertain_verb.as_deref(), Some("type"));
 
     let other = scene.shown(&Who::Host(right), false);
-    assert_eq!(other.state, State::Waiting);
+    assert_eq!(other.state, SessionState::Waiting);
     assert_eq!(other.waiting_for, Some(WaitingFor::Recovery));
     assert_eq!(other.waiting_seconds, None);
     assert_eq!(other.uncertain_row, None);
 
     assert_eq!(
         scene.shown(&Who::Host(quiet), false).state,
-        State::Idle,
+        SessionState::Idle,
         "one that did nothing lately is idle"
     );
 
@@ -208,7 +214,7 @@ fn the_session_whose_action_is_unknown_needs_the_person_and_the_rest_wait_for_re
     };
     assert_eq!(
         settled.shown(&Who::Host(key("left")), false).state,
-        State::Idle,
+        SessionState::Idle,
         "a cause the marker no longer counts blames nobody"
     );
 }
@@ -229,7 +235,7 @@ fn a_command_killed_without_a_row_blames_no_session() {
 
     for who in [Who::Host(left), Who::Host(right)] {
         let shown = scene.shown(&who, false);
-        assert_eq!(shown.state, State::Waiting);
+        assert_eq!(shown.state, SessionState::Waiting);
         assert_eq!(shown.waiting_for, Some(WaitingFor::Recovery));
     }
     assert_eq!(scene.terminal(), None, "no Terminal row, so no Terminal");
@@ -255,7 +261,7 @@ fn a_change_no_host_claimed_blames_nobody_even_after_a_kill_left_a_row_under_way
 
     for who in [Who::Terminal, Who::Host(left)] {
         let shown = scene.shown(&who, false);
-        assert_eq!(shown.state, State::Waiting, "{who:?}");
+        assert_eq!(shown.state, SessionState::Waiting, "{who:?}");
         assert_eq!(shown.waiting_for, Some(WaitingFor::Recovery));
         assert_eq!(shown.uncertain_row, None);
     }
@@ -284,7 +290,7 @@ fn a_row_under_way_holds_nothing_while_an_outcome_is_unknown() {
 
     let terminal = scene.shown(&Who::Terminal, false);
     assert!(!terminal.holds_helper, "its killed command holds nothing");
-    assert_eq!(terminal.state, State::Waiting);
+    assert_eq!(terminal.state, SessionState::Waiting);
     assert_eq!(terminal.waiting_for, Some(WaitingFor::Recovery));
     assert_eq!(
         scene.shown(&Who::Host(left), false).waiting_for,
@@ -328,7 +334,10 @@ fn a_row_under_way_holds_nothing_while_an_outcome_is_unknown() {
         pending: false,
         ..nothing
     };
-    assert_eq!(settled.shown(&Who::Terminal, false).state, State::Acting);
+    assert_eq!(
+        settled.shown(&Who::Terminal, false).state,
+        SessionState::Acting
+    );
 }
 
 #[test]
@@ -365,7 +374,7 @@ fn the_row_named_for_an_unknown_outcome_is_the_one_that_left_it() {
     };
 
     let shown = scene.shown(&Who::Host(left), false);
-    assert_eq!(shown.state, State::NeedsYou);
+    assert_eq!(shown.state, SessionState::NeedsYou);
     assert_eq!(
         shown.uncertain_row.as_deref(),
         Some(rows[2].id.as_str()),
@@ -384,13 +393,13 @@ fn an_agent_no_host_named_holding_the_helper_is_terminal_acting() {
     };
 
     let terminal = scene.shown(&Who::Terminal, false);
-    assert_eq!(terminal.state, State::Acting);
+    assert_eq!(terminal.state, SessionState::Acting);
     assert!(terminal.holds_helper);
     let now = u64::try_from(NOW / 1_000_000).unwrap();
     assert_eq!(scene.terminal(), Some((now, now)), "listed with no row yet");
     assert_eq!(
         scene.shown(&Who::Host(left.clone()), false).state,
-        State::Idle
+        SessionState::Idle
     );
 
     let holder = note(Some(&left), 1);
@@ -400,10 +409,10 @@ fn an_agent_no_host_named_holding_the_helper_is_terminal_acting() {
     };
     assert_eq!(
         named.shown(&Who::Host(left), false).state,
-        State::Acting,
+        SessionState::Acting,
         "a note naming a session wins"
     );
-    assert_eq!(named.shown(&Who::Terminal, false).state, State::Idle);
+    assert_eq!(named.shown(&Who::Terminal, false).state, SessionState::Idle);
 }
 
 #[test]
@@ -455,7 +464,7 @@ fn rows_without_a_session_gather_under_terminal() {
         "from its rows since one named a session"
     );
     let terminal = listed.shown(&Who::Terminal, false);
-    assert_eq!(terminal.state, State::Idle);
+    assert_eq!(terminal.state, SessionState::Idle);
     assert_eq!(
         terminal.latest.unwrap()["says"],
         "opened Notes",
@@ -475,7 +484,7 @@ fn an_ended_session_is_not_live_unless_it_still_matters_now() {
     let left = key("left");
     let rows = [row(Some(&left), 30, json!({}))];
     let ended = scene(&rows).shown(&Who::Host(left.clone()), true);
-    assert_eq!(ended.state, State::Ended);
+    assert_eq!(ended.state, SessionState::Ended);
     assert!(!ended.live);
 
     let causes = [cause(Some(&left))];
@@ -487,7 +496,7 @@ fn an_ended_session_is_not_live_unless_it_still_matters_now() {
     let shown = blamed.shown(&Who::Host(left), true);
     assert_eq!(
         shown.state,
-        State::NeedsYou,
+        SessionState::NeedsYou,
         "its unknown action outlives it"
     );
     assert!(shown.live);
@@ -514,23 +523,23 @@ fn sessions_show_only_while_two_are_live() {
 #[test]
 fn states_order_as_the_apps_list_them() {
     let mut states = [
-        State::Ended,
-        State::Idle,
-        State::Waiting,
-        State::Acting,
-        State::NeedsYou,
+        SessionState::Ended,
+        SessionState::Idle,
+        SessionState::Waiting,
+        SessionState::Acting,
+        SessionState::NeedsYou,
     ];
     states.sort();
     assert_eq!(
         states,
         [
-            State::NeedsYou,
-            State::Acting,
-            State::Waiting,
-            State::Idle,
-            State::Ended
+            SessionState::NeedsYou,
+            SessionState::Acting,
+            SessionState::Waiting,
+            SessionState::Idle,
+            SessionState::Ended
         ]
     );
-    assert_eq!(json!(State::NeedsYou), "needsYou");
+    assert_eq!(json!(SessionState::NeedsYou), "needsYou");
     assert_eq!(json!(WaitingFor::Recovery), "recovery");
 }
