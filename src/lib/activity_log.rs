@@ -29,6 +29,10 @@ const TAIL: u64 = 64 * 1024;
 const ROW_BYTES: u64 = 512;
 /// The most of the log one read goes through, from its end.
 const READ_LIMIT: u64 = 4 * 1024 * 1024;
+/// Personal input belongs to another run after two minutes without it,
+/// or on another UTC day.
+const INPUT_GAP_MS: u64 = 120_000;
+const DAY_MS: u64 = 86_400_000;
 
 /// What a request asked of the helper, as its `op` names it. One this
 /// build does not know is kept as it was written.
@@ -434,12 +438,13 @@ pub fn recent(directory: &Path, limit: usize) -> Vec<Row> {
     });
 
     let mut rows = Vec::new();
+    let mut oldest_at = None;
     let mut room = READ_LIMIT;
     for file in [current, previous].into_iter().flatten() {
         if room == 0 {
             break;
         }
-        if !read_back(file, limit, &mut room, &mut rows) {
+        if !read_back(file, limit, &mut room, &mut rows, &mut oldest_at) {
             break;
         }
     }
@@ -461,7 +466,13 @@ fn same_file(one: &fs::File, other: &fs::File) -> bool {
 /// `rows`, older than those already there, finishing the last admitted
 /// run within `room` bytes. Returns false once another group is found
 /// beyond `limit`.
-fn read_back(mut file: fs::File, limit: usize, room: &mut u64, rows: &mut Vec<Row>) -> bool {
+fn read_back(
+    mut file: fs::File,
+    limit: usize,
+    room: &mut u64,
+    rows: &mut Vec<Row>,
+    oldest_at: &mut Option<u64>,
+) -> bool {
     let wanted = limit.saturating_sub(rows.len()) as u64;
     let mut chunk = TAIL.max(ROW_BYTES.saturating_mul(wanted));
     let mut end = file.metadata().map(|m| m.len()).unwrap_or(0);
@@ -501,12 +512,14 @@ fn read_back(mut file: fs::File, limit: usize, room: &mut u64, rows: &mut Vec<Ro
             else {
                 continue;
             };
-            if !gathered(rows, &row) {
+            let at = row.at_ms();
+            if !gathered(rows, &row, *oldest_at) {
                 if rows.len() == limit {
                     return false;
                 }
                 rows.push(row);
             }
+            *oldest_at = at;
         }
 
         end = start;
@@ -517,7 +530,7 @@ fn read_back(mut file: fs::File, limit: usize, room: &mut u64, rows: &mut Vec<Ro
 
 /// Gather `row` into the last selected command or personal input run,
 /// adding its actions when it belongs to that run; whether it did.
-fn gathered(rows: &mut [Row], row: &Row) -> bool {
+fn gathered(rows: &mut [Row], row: &Row, oldest_at: Option<u64>) -> bool {
     let Some(newer) = rows.last_mut() else {
         return false;
     };
@@ -528,6 +541,9 @@ fn gathered(rows: &mut [Row], row: &Row) -> bool {
     if row.persons_input()
         && newer.persons_input()
         && (row.ok, &row.code) == (newer.ok, &newer.code)
+        && row.at_ms().zip(oldest_at).is_some_and(|(older, newer)| {
+            older <= newer && newer - older <= INPUT_GAP_MS && older / DAY_MS == newer / DAY_MS
+        })
     {
         newer.action_count = match (newer.action_count, row.action_count) {
             (None, None) => None,
@@ -694,6 +710,42 @@ mod tests {
     }
 
     #[test]
+    fn personal_input_on_separate_days_or_after_a_pause_remains_separate() {
+        let dir = tempfile::tempdir().unwrap();
+        for times in [[DAY_MS - 1, DAY_MS], [1, INPUT_GAP_MS + 2]] {
+            let rows = times.map(|at| {
+                let mut row = persons(0);
+                row["at"] = json!((u128::from(at) * 1_000_000).to_string());
+                row
+            });
+            fs::write(dir.path().join(FILE), log(rows)).unwrap();
+            let shown = recent(dir.path(), 5);
+            assert_eq!(shown.len(), 2, "{times:?}");
+            assert!(shown.iter().all(|row| row.action_count == Some(1)));
+        }
+    }
+
+    #[test]
+    fn continuous_personal_input_compares_adjacent_times_across_rotation() {
+        let dir = tempfile::tempdir().unwrap();
+        let row = |at: u64| {
+            let mut row = persons(0);
+            row["at"] = json!((u128::from(at) * 1_000_000).to_string());
+            row
+        };
+        fs::write(dir.path().join(PREVIOUS), log([row(0), row(INPUT_GAP_MS)])).unwrap();
+        fs::write(
+            dir.path().join(FILE),
+            log([row(2 * INPUT_GAP_MS), row(3 * INPUT_GAP_MS)]),
+        )
+        .unwrap();
+        let shown = recent(dir.path(), 1);
+        assert_eq!(shown.len(), 1);
+        assert_eq!(shown[0].action_count, Some(4));
+        assert_eq!(shown[0].at_ms(), Some(3 * INPUT_GAP_MS));
+    }
+
+    #[test]
     fn the_last_selected_input_run_counts_every_action_across_chunks_and_rotation() {
         let dir = tempfile::tempdir().unwrap();
         let count = 2_000;
@@ -729,7 +781,8 @@ mod tests {
             fs::File::open(dir.path().join(FILE)).unwrap(),
             1,
             &mut room,
-            &mut rows
+            &mut rows,
+            &mut None,
         ));
         assert_eq!(room, 0);
         assert_eq!(rows.len(), 1);
