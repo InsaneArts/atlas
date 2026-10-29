@@ -34,49 +34,18 @@ struct ActivityGroupingSessionTests {
     ActivityLog.Entry(id: id, says: says, outcome: outcome, actor: actor, ageSeconds: age, session: session)
   }
 
-  @Test("rows group by session in the order the status gives")
-  func rowsGroupInTheStatusOrder() {
-    let rules = Self.rules([
-      Self.row("c1", "codex", 1, says: "typed in Notes"),
-      Self.row("a1", "claude", 2, says: "clicked Save"),
-      Self.row("c2", "codex", 3, says: "opened Notes"),
-      Self.row("a2", "claude", 4, says: "scrolled"),
-      Self.row("a3", "claude", 5, says: "pressed a key"),
-      Self.row("a4", "claude", 6, says: "opened Opie"),
-      Self.row("a5", "claude", 7, says: "dragged"),
-    ])
-    let groups = rules.sessionGroups(filter: .all, query: "", captures: [], order: ["claude", "codex"], lines: 4)
-    #expect(groups.map(\.key) == ["claude", "codex"])
-    #expect(groups.first?.runs.map(\.id) == ["a1", "a2", "a3", "a4"], "the newest four lines")
-    #expect(groups.map(\.total) == [5, 2])
-  }
-
-  @Test("the person's rows come after the agents' and Terminal last")
-  func thePersonsRowsComeAfterTheAgents() {
+  @Test("Terminal's moment scope excludes the person's own rows")
+  func terminalScopeExcludesThePerson() {
     let rules = Self.rules([
       Self.row("t1", nil, 1, says: "took a screenshot"),
       Self.row("y1", nil, 2, says: "clicked in Opie", actor: .you),
-      Self.row("e1", "ended", 3, says: "opened Notes"),
       Self.row("a1", "claude", 4, says: "clicked Save"),
     ])
-    let groups = rules.sessionGroups(filter: .all, query: "", captures: [], order: ["claude"], lines: 4)
-    #expect(groups.map(\.key) == ["claude", "ended", nil, ""], "a session the status no longer lists follows")
-    let terminal = rules.groups(filter: .all, query: "", captures: [], scope: .session(""))
+    let terminal = ActivityMoments(rules, captures: [], scope: .session(""))
+      .shown(filter: .all, query: "")
       .flatMap(\.runs)
       .map(\.id)
-    #expect(terminal == ["t1"], "Terminal's scope holds the agents' rows no host named, never the person's")
-  }
-
-  @Test("Terminal keeps the status's place for it, before the sessions it does not list and the person's rows")
-  func terminalKeepsTheStatusPlace() {
-    let rules = Self.rules([
-      Self.row("a1", "claude", 1, says: "clicked Save"),
-      Self.row("y1", nil, 2, says: "clicked in Opie", actor: .you),
-      Self.row("e1", "ended", 3, says: "opened Notes"),
-      Self.row("t1", nil, 4, says: "took a screenshot"),
-    ])
-    let groups = rules.sessionGroups(filter: .all, query: "", captures: [], order: ["", "claude"], lines: 4)
-    #expect(groups.map(\.key) == ["", "claude", "ended", nil])
+    #expect(terminal == ["t1"])
   }
 
   @Test("a refused row is never a problem")
@@ -97,7 +66,8 @@ struct ActivityGroupingSessionTests {
       now: ActivityGroupingTests.readAt,
       calendar: ActivityGroupingTests.calendar
     )
-    let problems = rules.groups(filter: .problems, query: "", captures: [])
+    let problems = ActivityMoments(rules, captures: [], scope: .all)
+      .shown(filter: .problems, query: "")
       .flatMap(\.runs)
       .map(\.id)
     #expect(problems == ["r2"])
@@ -147,7 +117,8 @@ struct ActivityGroupingSessionTests {
       Self.row("a1", "claude", 2, says: "scrolled in Opie"),
       Self.row("a2", "claude", 3, says: "scrolled in Opie"),
     ])
-    let lines = rules.groups(filter: .all, query: "", captures: [])
+    let lines = ActivityMoments(rules, captures: [], scope: .all)
+      .shown(filter: .all, query: "")
       .flatMap(\.runs)
     #expect(lines.map(\.id) == ["c1", "a2"])
     #expect(lines.map(\.count) == [1, 2])

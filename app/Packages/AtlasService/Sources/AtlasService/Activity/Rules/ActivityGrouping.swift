@@ -1,14 +1,9 @@
 import Foundation
 
-/// The Activity tab's rules, all pure: when each row started, which stretch of time it falls in, what the filters and
-/// the search keep, which repeats read as one line, how many actions were done today, what a line says, and which
-/// capture a screenshot row took. Time comes in and is never read: when the log was read, the time now and the
+/// Shared Activity rules, all pure: when each row started, what the search keeps, which repeats read as one line,
+/// how many actions were done today, what a line says, and which capture a screenshot row took. Time comes in and is never read: when the log was read, the time now and the
 /// person's calendar.
 public struct ActivityGrouping: Sendable {
-  /// 120 s: how recent a row is to read as Now. An agent's run of work is a string of actions seconds apart;
-  /// two minutes holds that run whole, while a pause longer than a glance away moves it to Earlier today. The
-  /// app's `Words.ago` stops counting in seconds at 90, so Now never outlasts "1 min ago" by much.
-  static let nowSpan: TimeInterval = 120
   /// 3 s: how far a capture's time may lie from its screenshot row's start and still be that row's. The service writes
   /// the row a moment after the capture's file, and a row's age comes in whole seconds, so its start reads up to a
   /// second late; three seconds holds both with room. The nearest capture wins and each is taken once, so two
@@ -21,7 +16,7 @@ public struct ActivityGrouping: Sendable {
   var log: ActivityLog
   /// When the log was read: each row's age counts back from here.
   var readAt: Date
-  /// The time now, which Now and today are measured from.
+  /// The time now, which today is measured from.
   var now: Date
   /// The calendar that says which day a time falls on, in the person's time zone.
   var calendar: Calendar
@@ -47,22 +42,6 @@ public struct ActivityGrouping: Sendable {
   /// - Returns: Its start, or nil when the row gives neither.
   func start(of entry: ActivityLog.Entry) -> Date? {
     entry.startedAt ?? entry.ageSeconds.map { readAt.addingTimeInterval(-$0) }
-  }
-
-  /// The stretch of time a start falls in: Now within ``nowSpan`` (a start ahead of the clock included), else
-  /// earlier today, yesterday or the day it was.
-  ///
-  /// - Parameter start: When a row started.
-  /// - Returns: The period.
-  func period(of start: Date) -> ActivityPeriod {
-    if now.timeIntervalSince(start) < Self.nowSpan { return .now }
-    if calendar.isDate(start, inSameDayAs: now) { return .earlierToday }
-    if let yesterday = calendar.date(byAdding: .day, value: -1, to: now),
-      calendar.isDate(start, inSameDayAs: yesterday)
-    {
-      return .yesterday
-    }
-    return .day(calendar.startOfDay(for: start))
   }
 
   /// How many rows started today, whatever the filter or the search: the pane's count.
@@ -118,89 +97,13 @@ public struct ActivityGrouping: Sendable {
     return found
   }
 
-  /// The groups the tab lists: each row under its stretch of time (a row with no time stays with the row before it),
-  /// the same action repeated one after another in the log as one line, and the lines the filter and the search
-  /// keep. Repeats are found in the log's own order, so actions with another between them never read as one, whatever
-  /// the filter or the search hides.
-  ///
-  /// - Parameters:
-  ///   - filter: Which rows to list.
-  ///   - query: What to search for in what was done; empty keeps every row.
-  ///   - captures: The screenshots the service lists, for the screenshot rows.
-  ///   - scope: Whose rows to list; every row by default.
-  /// - Returns: The groups, newest first, each period once.
-  public func groups(
-    filter: ActivityFilter,
-    query: String,
-    captures: [Screenshot],
-    scope: ActivityScope = .all
-  ) -> [ActivityGroup] {
-    var groups: [ActivityGroup] = []
-    for (period, run) in runs(captures: captures)
-    where scope.admits(run.entry) && filter.admits(run.entry) && Self.matches(run.entry, query: query) {
-      if let index = groups.firstIndex(where: { $0.period == period }) {
-        groups[index].runs.append(run)
-      } else {
-        groups.append(ActivityGroup(period: period, runs: [run]))
-      }
-    }
-    return groups
-  }
-
-  /// The lines the pane lists while it shows every host session: a group for each session in `order`, Terminal's
-  /// included where `order` names it, then for any other session the log names, newest first, then the person's own
-  /// rows as You, and the rows no host named as Terminal last while `order` leaves it out; each with its newest `lines`
-  /// lines and its total. The filter and the search apply inside every group, and a group they leave empty is left out.
-  /// Repeats are found in the log's own order, as ``groups(filter:query:captures:scope:)`` finds them.
-  ///
-  /// - Parameters:
-  ///   - filter: Which rows to list.
-  ///   - query: What to search for in what was done; empty keeps every row.
-  ///   - captures: The screenshots the service lists, for the screenshot rows.
-  ///   - order: The sessions' keys in the order to list them, the status's; empty for Terminal.
-  ///   - lines: The most lines a group shows.
-  /// - Returns: The groups, in order.
-  public func sessionGroups(
-    filter: ActivityFilter,
-    query: String,
-    captures: [Screenshot],
-    order: [String],
-    lines: Int
-  ) -> [ActivitySessionGroup] {
-    var found: [String?: [ActivityRun]] = [:]
-    var named: [String] = []
-    for (_, run) in runs(captures: captures) where filter.admits(run.entry) && Self.matches(run.entry, query: query) {
-      let key = run.entry.groupKey
-      if let key, !key.isEmpty, found[key] == nil { named.append(key) }
-      found[key, default: []].append(run)
-    }
-    var keys: [String?] = []
-    for key in order + named where !keys.contains(key) { keys.append(key) }
-    keys.append(nil)
-    if !keys.contains("") { keys.append("") }
-    return keys.compactMap { key in
-      guard let runs = found[key], !runs.isEmpty else { return nil }
-      return ActivitySessionGroup(key: key, runs: Array(runs.prefix(lines)), total: runs.count)
-    }
-  }
-
-  /// Every line of the log in its own order, each with its stretch of time: a row with no time stays with the row
-  /// before it, and a row that repeats the line just above it in the same stretch joins it.
-  ///
-  /// - Parameter captures: The screenshots the service lists, for the screenshot rows.
-  /// - Returns: The lines, newest first.
-  func runs(captures: [Screenshot]) -> [(period: ActivityPeriod, run: ActivityRun)] {
-    runs(captures: captures, first: .now) { period(of: $0) }
-      .map { (period: $0.part, run: $0.run) }
-  }
-
   /// Every line of the log in its own order, each with the part of time it falls in: a row with no time stays with
   /// the row before it, and a row that repeats the line just above it in the same part joins it.
   ///
   /// - Parameters:
   ///   - captures: The screenshots the service lists, for the screenshot rows.
   ///   - first: The part a row with no time falls in before any row has one.
-  ///   - part: The part a start falls in, such as its stretch of time or its day.
+  ///   - part: The part a start falls in, such as its day.
   /// - Returns: The lines, newest first.
   func runs<Part: Equatable>(
     captures: [Screenshot],

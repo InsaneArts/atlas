@@ -44,22 +44,6 @@ struct ActivityGroupingTests {
     ActivityLog.Entry(id: id, says: says, outcome: outcome, actor: actor, ageSeconds: age, operation: operation)
   }
 
-  @Test("rows group by Now, Earlier today and Yesterday")
-  func rowsGroupByPeriod() {
-    let rules = Self.rules([
-      Self.row("now", 119, says: "scrolled"),
-      Self.row("today", 121, says: "typed"),
-      Self.row("untimed", nil, says: "pressed a key"),
-      Self.row("yesterday", 12 * 3600, says: "opened Opie"),
-      Self.row("older", 3 * 86_400, says: "ran a command"),
-    ])
-    let groups = rules.groups(filter: .all, query: "", captures: [])
-    let older = Self.calendar
-      .startOfDay(for: Self.readAt.addingTimeInterval(-3 * 86_400))
-    #expect(groups.map(\.period) == [.now, .earlierToday, .yesterday, .day(older)])
-    #expect(groups.map { $0.runs.map(\.id) } == [["now"], ["today", "untimed"], ["yesterday"], ["older"]])
-  }
-
   @Test("Problems shows only rows that did not work")
   func problemsShowsOnlyFailures() {
     let rules = Self.rules([
@@ -68,7 +52,8 @@ struct ActivityGroupingTests {
       Self.row("worked", 9, says: "clicked Ring"),
       Self.row("yours", 12, says: "couldn't type", outcome: .failed, actor: .you),
     ])
-    let shown = rules.groups(filter: .problems, query: "", captures: [])
+    let shown = ActivityMoments(rules, captures: [], scope: .all)
+      .shown(filter: .problems, query: "")
       .flatMap(\.runs)
       .map(\.id)
     #expect(shown == ["failed", "yours"])
@@ -108,9 +93,10 @@ struct ActivityGroupingTests {
       Self.row("agent", 160),
       Self.row("0", 170, actor: .you),
     ])
-    let runs = rules.groups(filter: .all, query: "", captures: [])
+    let runs = ActivityMoments(rules, captures: [], scope: .all)
+      .shown(filter: .all, query: "")
       .flatMap(\.runs)
-    #expect(runs.map(\.id) == ["running", "1", "agent", "0"])
+    #expect(runs.map(\.id) == ["running", "1", "0", "agent"])
     #expect(runs.map(\.count) == [1, 3, 1, 1])
     #expect(runs[1].startedAt == Self.readAt.addingTimeInterval(-157), "a run starts when its first row did")
   }
@@ -147,8 +133,8 @@ struct ActivityGroupingTests {
     ] as [([ActivityLog.Entry], ActivityFilter, String)]
   )
   func hiddenGapsKeepRunsApart(entries: [ActivityLog.Entry], filter: ActivityFilter, query: String) {
-    let runs = Self.rules(entries)
-      .groups(filter: filter, query: query, captures: [])
+    let runs = ActivityMoments(Self.rules(entries), captures: [], scope: .all)
+      .shown(filter: filter, query: query)
       .flatMap(\.runs)
     #expect(runs.map(\.id) == ["2", "0"])
     #expect(runs.map(\.count) == [1, 1])
@@ -161,7 +147,8 @@ struct ActivityGroupingTests {
       Self.row("agent", 9, says: "scrolled in Safari"),
     ])
     let found = { (query: String) in
-      rules.groups(filter: .all, query: query, captures: [])
+      ActivityMoments(rules, captures: [], scope: .all)
+        .shown(filter: .all, query: query)
         .flatMap(\.runs)
         .map(\.id)
     }
