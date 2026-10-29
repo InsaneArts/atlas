@@ -801,9 +801,8 @@ fn reason(row: &Value) -> Option<&'static str> {
         }
         "focus-changed" if row["reason"] == "window" => "Another window was in front",
         "focus-changed" if row["reason"] == "sheet" => "A sheet was open over the window",
-        "focus-changed" if matches!(row["reason"].as_str(), Some("field" | "disabled")) => {
-            "Another field had focus"
-        }
+        "focus-changed" if row["reason"] == "field" => "Another field had focus",
+        "focus-changed" if row["reason"] == "disabled" => "That field is disabled",
         "focus-changed" => "Another app was in front",
         "lease-lost" => "Control ended before it finished",
         "cancelled" => "It was cancelled",

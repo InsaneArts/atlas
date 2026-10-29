@@ -169,7 +169,7 @@ fn failed(value: &Value) -> Option<Rendered> {
         .or_else(|| value["failure"]["error"].as_str())
         .unwrap_or("It did not finish. Run it again with --json to see why.");
 
-    let shown = card(message, value["code"].as_str(), value["uncertain"] == true);
+    let shown = advised_card(message, value);
     let shown = with_sessions(shown, value);
     Some(Rendered::err(with_candidates(shown, &value["candidates"])))
 }
@@ -180,7 +180,7 @@ pub fn error(error: &Error) -> String {
         return format!("{} {}", style::unknown(), error.error);
     }
 
-    let shown = card(&error.error, Some(error.code), error.uncertain);
+    let shown = advised_card(&error.error, &serde_json::json!(error));
     let shown = with_sessions(shown, &Value::Object(error.details.clone()));
     let candidates = error.details.get("candidates").unwrap_or(&Value::Null);
     with_candidates(shown, candidates)
@@ -262,14 +262,6 @@ fn point(at: &Value) -> Option<(f64, f64)> {
 /// to do`. Messages can carry text from the helper, so each line is made
 /// safe to print.
 pub fn card(message: &str, code: Option<&str>, uncertain: bool) -> String {
-    let message = message
-        .trim()
-        .lines()
-        .map(text::printable)
-        .collect::<Vec<_>>()
-        .join("\n");
-    let mut lines = vec![format!("{} {message}", style::fail())];
-
     let fix = if uncertain {
         Some(hints::UNCERTAIN)
     } else if message.to_lowercase().contains("run atlas ") {
@@ -279,6 +271,31 @@ pub fn card(message: &str, code: Option<&str>, uncertain: bool) -> String {
         code.and_then(hints::fix)
     };
 
+    card_with(message, fix)
+}
+
+/// [`card`] for a failed `result`: a focus refusal says what to do as JSON
+/// output says it, by what was in the way and what was sent first.
+pub(super) fn advised_card(message: &str, result: &Value) -> String {
+    match hints::focus_advice(result) {
+        Some(advice) => card_with(message, Some(&advice)),
+        None => card(
+            message,
+            result["code"].as_str(),
+            result["uncertain"] == true,
+        ),
+    }
+}
+
+/// `✗ message`, then `→ fix` when there is one.
+fn card_with(message: &str, fix: Option<&str>) -> String {
+    let message = message
+        .trim()
+        .lines()
+        .map(text::printable)
+        .collect::<Vec<_>>()
+        .join("\n");
+    let mut lines = vec![format!("{} {message}", style::fail())];
     if let Some(fix) = fix {
         lines.push(format!("  {} {fix}", style::dim("→")));
     }

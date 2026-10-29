@@ -205,6 +205,35 @@ fn focus_changed_names_who_last_used_the_app_in_front() {
     assert_eq!(last_used(&[row(5, &codex, "TextEdit")], "Calculator"), None);
 }
 
+/// A refusal for a window, sheet or field of the app itself names no one:
+/// whoever last used the app may never have touched that window.
+#[test]
+fn a_refusal_inside_the_app_names_no_last_user() {
+    let directory = tempfile::tempdir().unwrap();
+    let client = client(directory.path());
+    let (claude, codex) = (session(Host::Claude, "left"), session(Host::Codex, "right"));
+    for each in [&claude, &codex] {
+        recorded(&client, each);
+    }
+    logged(&client, &[row(30, &codex, "TextEdit")]);
+
+    for reason in ["window", "sheet", "field", "disabled", "unreadable"] {
+        let refused = Ok(
+            json!({"ok": false, "code": "focus-changed", "reason": reason,
+            "found": {"app": "TextEdit", "pid": 812, "window": 4121}, "performed": 0}),
+        );
+        let value = reply(refused, || Some(client.clone()), Some(&claude)).unwrap();
+        assert!(value.get("lastUsedBy").is_none(), "{reason}");
+    }
+    let value = reply(
+        focus_changed("TextEdit"),
+        || Some(client.clone()),
+        Some(&claude),
+    )
+    .unwrap();
+    assert_eq!(value["lastUsedBy"]["session"], codex.key.as_str());
+}
+
 /// A pending change claimed for `session`, left with no process carrying
 /// it out.
 fn abandoned(client: &Client, session: Option<&HostSession>) {

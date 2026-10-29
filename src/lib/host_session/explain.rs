@@ -35,12 +35,16 @@ enum Refusal {
 }
 
 impl Refusal {
-    /// What `code`, `holder`, `uncertain`, `found` and `running` of a
-    /// refusal say.
+    /// What `code`, `holder`, `uncertain`, `reason`, `found` and
+    /// `running` of a refusal say. Only another app in front is named by
+    /// its last user: a refusal for a window, sheet or field of the app
+    /// itself names no one, since Atlas does not know who last used that
+    /// window.
     fn of(
         code: &str,
         holder: Option<Holder>,
         uncertain: bool,
+        reason: Option<&str>,
         found: &Value,
         running: &Value,
     ) -> Option<Self> {
@@ -49,7 +53,7 @@ impl Refusal {
                 Some(Self::CommandRunning)
             }
             "busy" if holder == Some(Holder::Agent) => Some(Self::Busy),
-            "focus-changed" => found["app"]
+            "focus-changed" if matches!(reason, None | Some("app" | "point")) => found["app"]
                 .as_str()
                 .map(|app| Self::FocusChanged(app.to_owned())),
             "uncertain" if !uncertain => Some(Self::Uncertain),
@@ -73,6 +77,7 @@ pub fn reply(
             error.code,
             error.holder,
             error.uncertain,
+            error.details.get("reason").and_then(Value::as_str),
             error.details.get("found").unwrap_or(&Value::Null),
             error.details.get("running").unwrap_or(&Value::Null),
         ),
@@ -80,6 +85,7 @@ pub fn reply(
             value["code"].as_str().unwrap_or_default(),
             value["holder"].as_str().and_then(Holder::parse),
             value["uncertain"] == true,
+            value["reason"].as_str(),
             &value["found"],
             &value["running"],
         ),

@@ -169,8 +169,8 @@ pub(super) fn failure(error: &Error, advised: bool) -> Value {
 }
 
 /// Add `next` to a failed result (`ok: false` with a code) that has none,
-/// as [`hints::step`] says, or for a focus refusal [`hints::focus_changed`]
-/// from what the result says was sent before it.
+/// as [`hints::step`] says, or for a focus refusal [`hints::focus_advice`]
+/// from what was in the way and what the result says was sent before it.
 fn advise(value: &mut Value) {
     if value["ok"] != false || value.get("next").is_some() {
         return;
@@ -180,22 +180,11 @@ fn advise(value: &mut Value) {
         return;
     };
 
-    let uncertain = value["uncertain"] == true;
-    let next = if code == "focus-changed" && !uncertain {
-        let in_the_way = hints::InTheWay::of(value["reason"].as_str());
-        hints::focus_changed(sent_before(value), in_the_way)
-    } else {
+    let next = hints::focus_advice(value).unwrap_or_else(|| {
         let holder = value["holder"].as_str().and_then(Holder::parse);
-        hints::step(code, holder, uncertain)
-    };
+        hints::step(code, holder, value["uncertain"] == true).to_owned()
+    });
     value["next"] = json!(next);
-}
-
-/// Whether a failed result says some of its command was sent: actions
-/// performed or characters typed, or the failing action partly sent.
-fn sent_before(value: &Value) -> bool {
-    let counted = |field: &str| value[field].as_u64().is_some_and(|count| count > 0);
-    counted("performed") || counted("typed") || value["partial"] == true
 }
 
 /// Write `text` as it is. A reader that went away (`| head`) ends the
@@ -336,7 +325,7 @@ mod tests {
             (
                 json!({"reason": "unreadable", "performed": 0}),
                 false,
-                hints::InTheWay::Unknown,
+                hints::InTheWay::Unknown(hints::Unsure::Front),
             ),
             (
                 json!({"reason": "app", "performed": 2}),
@@ -356,7 +345,7 @@ mod tests {
             (
                 json!({"reason": "unreadable", "performed": 1}),
                 true,
-                hints::InTheWay::Unknown,
+                hints::InTheWay::Unknown(hints::Unsure::Front),
             ),
             (
                 json!({"reason": "sheet", "performed": 0}),
@@ -385,7 +374,7 @@ mod tests {
             .with("reason", "unreadable");
         assert_eq!(
             failure(&error, true)["next"],
-            hints::focus_changed(false, hints::InTheWay::Unknown)
+            hints::focus_changed(false, hints::InTheWay::Unknown(hints::Unsure::Front))
         );
     }
 

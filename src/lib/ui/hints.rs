@@ -100,7 +100,7 @@ pub fn next(code: &str, holder: Option<Holder>) -> &'static str {
         ("not-ready", _) => "Tell the person what the error says. Don't try again in a loop.",
         ("switch", _) => "Ask the person to lock the screen from the Apple menu and switch there.",
         ("update", _) => "Show the error to the person. Never bypass the signature checks.",
-        ("focus-changed", _) => focus_changed(false, InTheWay::App),
+        ("focus-changed", _) => FOCUS_CHANGED,
         ("interrupted", _) => {
             "Atlas was stopped partway, and nothing it did is left unknown. Look at the helper before going on."
         }
@@ -111,32 +111,116 @@ pub fn next(code: &str, holder: Option<Holder>) -> &'static str {
     }
 }
 
+/// What an agent does about an action refused because another app was in
+/// front, when nothing of it was sent.
+const FOCUS_CHANGED: &str = "Another app was in front, maybe another agent's, and nothing of the command was sent. Click where your app shows, then run it again.";
+
 /// What was in the way of an action refused because focus was elsewhere,
-/// from the refusal's `reason`.
+/// from the refusal's `reason` and, when Atlas could not tell, its
+/// `unread`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum InTheWay {
     /// Another app had keyboard focus, or its window was at the point.
     App,
-    /// Another window of the app had keyboard focus, or was at the point.
+    /// Another window of the app had keyboard focus, was in front of the
+    /// named one or was at the point.
     Window,
     /// A sheet over the window had keyboard focus.
     Sheet,
-    /// Another field had keyboard focus, or the named one was disabled.
+    /// Another field had keyboard focus, or none did.
     Field,
-    /// Atlas could not tell what had keyboard focus.
-    Unknown,
+    /// The named field had keyboard focus but was disabled.
+    Disabled,
+    /// Atlas could not tell what had keyboard focus, for this reason.
+    Unknown(Unsure),
+}
+
+/// Why Atlas could not tell what had keyboard focus.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Unsure {
+    /// Which app was in front, or what it said, could not be read.
+    Front,
+    /// Two windows of the app look the same.
+    Alike,
+    /// The focused window was not listed yet.
+    Unlisted,
+    /// A title or name was too long to read whole.
+    Cut,
+    /// The focused element sits deeper than Atlas reads.
+    Deep,
+    /// The app did not answer in time.
+    Slow,
 }
 
 impl InTheWay {
-    /// What a refusal's `reason` says was in the way; another app for a
-    /// reason this build does not know.
-    pub fn of(reason: Option<&str>) -> Self {
+    /// What a refusal's `reason` and `unread` say was in the way; another
+    /// app for a reason this build does not know.
+    pub fn of(reason: Option<&str>, unread: Option<&str>) -> Self {
         match reason {
             Some("window") => Self::Window,
             Some("sheet") => Self::Sheet,
-            Some("field" | "disabled") => Self::Field,
-            Some("unreadable") => Self::Unknown,
+            Some("field") => Self::Field,
+            Some("disabled") => Self::Disabled,
+            Some("unreadable") => Self::Unknown(match unread {
+                Some("alike") => Unsure::Alike,
+                Some("unlisted") => Unsure::Unlisted,
+                Some("cut") => Unsure::Cut,
+                Some("deep") => Unsure::Deep,
+                Some("slow") => Unsure::Slow,
+                _ => Unsure::Front,
+            }),
             _ => Self::App,
+        }
+    }
+
+    /// What was in the way, as the start of a sentence.
+    fn what(self) -> &'static str {
+        match self {
+            Self::App => "Another app was in front, maybe another agent's",
+            Self::Window => {
+                "Another window of your app had keyboard focus, was in front of yours or was at the point"
+            }
+            Self::Sheet => "A sheet or dialog was open over your window",
+            Self::Field => "Another field had keyboard focus, or none did",
+            Self::Disabled => "That field is disabled",
+            Self::Unknown(Unsure::Front) => {
+                "Atlas couldn't tell what was in front, often because the active app has no window"
+            }
+            Self::Unknown(Unsure::Alike) => {
+                "Two windows of your app look the same to Atlas (one place, size and title), so it couldn't tell which has focus"
+            }
+            Self::Unknown(Unsure::Unlisted) => {
+                "The window with keyboard focus was not listed yet, as when it is still opening"
+            }
+            Self::Unknown(Unsure::Cut) => "A title or name Atlas checks was too long to read whole",
+            Self::Unknown(Unsure::Deep) => {
+                "The focused element sits deeper in your app than Atlas reads"
+            }
+            Self::Unknown(Unsure::Slow) => {
+                "Your app did not say in time where its focus is, as when it is busy"
+            }
+        }
+    }
+
+    /// What to do about it before going on, in lowercase.
+    fn remedy(self) -> &'static str {
+        match self {
+            Self::App => "click where your app shows",
+            Self::Window => "click in your window",
+            Self::Sheet => "take a screenshot and deal with the sheet",
+            Self::Field => {
+                "click in your field (if this keeps happening, the app does not say which field has focus, as browsers and custom views often don't: use --window instead)"
+            }
+            Self::Disabled => "wait until it is enabled, or choose another field",
+            Self::Unknown(Unsure::Front) => {
+                "click where your app shows, or open the app if none of it shows"
+            }
+            Self::Unknown(Unsure::Alike) => "move or close one of them",
+            Self::Unknown(Unsure::Unlisted) => "take a screenshot",
+            Self::Unknown(Unsure::Cut | Unsure::Deep) => {
+                "check this window or field with --app alone"
+            }
+            Self::Unknown(Unsure::Slow) => "wait a moment",
         }
     }
 }
@@ -144,39 +228,34 @@ impl InTheWay {
 /// What an agent does about an action refused because focus was
 /// elsewhere: `sent` says whether any of the command went before it, and
 /// `in_the_way` what was there instead.
-pub fn focus_changed(sent: bool, in_the_way: InTheWay) -> &'static str {
-    match (sent, in_the_way) {
-        (false, InTheWay::App) => {
-            "Another app was in front, maybe another agent's, and nothing of the command was sent. Click where your app shows, then run it again."
-        }
-        (false, InTheWay::Window) => {
-            "Another window of your app had keyboard focus or was at the point, and nothing of the command was sent. Click in your window, then run it again."
-        }
-        (false, InTheWay::Sheet) => {
-            "A sheet or dialog was open over your window, and nothing of the command was sent. Take a screenshot, deal with the sheet, then run it again."
-        }
-        (false, InTheWay::Field) => {
-            "Another field had keyboard focus, or yours was disabled, and nothing of the command was sent. Click in your field, then run it again. If it keeps happening, the app may not say which field has focus (browsers and custom views often don't): use --window instead."
-        }
-        (false, InTheWay::Unknown) => {
-            "Atlas couldn't tell what was in front, often because the active app has no window, and nothing of the command was sent. Click where your app shows, or open the app if none of it shows, then run it again."
-        }
-        (true, InTheWay::App) => {
-            "Another app was in front, maybe another agent's. Earlier actions were sent: check typed or performed and what landed, click where your app shows, then send only the rest."
-        }
-        (true, InTheWay::Window) => {
-            "Another window of your app took keyboard focus. Earlier actions were sent: check typed or performed and what landed, click in your window, then send only the rest."
-        }
-        (true, InTheWay::Sheet) => {
-            "A sheet or dialog opened over your window. Earlier actions were sent: check typed or performed and what landed, deal with the sheet, then send only the rest."
-        }
-        (true, InTheWay::Field) => {
-            "Focus left your field. Earlier actions were sent: check typed or performed and what landed, click in your field, then send only the rest."
-        }
-        (true, InTheWay::Unknown) => {
-            "Atlas couldn't tell what was in front, often because the active app has no window. Earlier actions were sent: check typed or performed and what landed, click where your app shows or open the app if none of it shows, then send only the rest."
-        }
+pub fn focus_changed(sent: bool, in_the_way: InTheWay) -> String {
+    let (what, remedy) = (in_the_way.what(), in_the_way.remedy());
+    if sent {
+        return format!(
+            "{what}. Earlier actions were sent: check typed or performed and what landed, {remedy}, then send only the rest."
+        );
     }
+
+    let mut letters = remedy.chars();
+    let remedy: String = letters
+        .next()
+        .map(|first| first.to_uppercase().chain(letters).collect())
+        .unwrap_or_default();
+    format!("{what}, and nothing of the command was sent. {remedy}, then run it again.")
+}
+
+/// The next step for a failed result that is a focus refusal, its outcome
+/// known: by what was in the way and whether some of the command was sent
+/// first. None for anything else, which [`step`] or [`fix`] advise on.
+pub fn focus_advice(result: &serde_json::Value) -> Option<String> {
+    if result["code"] != "focus-changed" || result["uncertain"] == true {
+        return None;
+    }
+
+    let counted = |field: &str| result[field].as_u64().is_some_and(|count| count > 0);
+    let sent = counted("performed") || counted("typed") || result["partial"] == true;
+    let in_the_way = InTheWay::of(result["reason"].as_str(), result["unread"].as_str());
+    Some(focus_changed(sent, in_the_way))
 }
 
 /// The next step for a failure with `code`.
@@ -345,7 +424,7 @@ mod tests {
                 let said = focus_changed(sent, in_the_way);
                 assert!(!said.contains("atlas open"), "{said}");
             }
-            for in_the_way in [InTheWay::App, InTheWay::Unknown] {
+            for in_the_way in [InTheWay::App, InTheWay::Unknown(Unsure::Front)] {
                 let said = focus_changed(sent, in_the_way);
                 assert!(
                     said.to_lowercase().contains("click where your app shows"),
@@ -364,33 +443,52 @@ mod tests {
     }
 
     /// Every kind of thing a focus refusal can find in the way.
-    const EVERY_WAY: [InTheWay; 5] = [
+    const EVERY_WAY: [InTheWay; 11] = [
         InTheWay::App,
         InTheWay::Window,
         InTheWay::Sheet,
         InTheWay::Field,
-        InTheWay::Unknown,
+        InTheWay::Disabled,
+        InTheWay::Unknown(Unsure::Front),
+        InTheWay::Unknown(Unsure::Alike),
+        InTheWay::Unknown(Unsure::Unlisted),
+        InTheWay::Unknown(Unsure::Cut),
+        InTheWay::Unknown(Unsure::Deep),
+        InTheWay::Unknown(Unsure::Slow),
     ];
 
-    /// A refusal for the window, a sheet or the field says what was in the
-    /// way in its own words, and how to put it right.
+    /// A refusal for the window, a sheet or the field, or one Atlas could
+    /// not tell, says what was in the way in its own words.
     #[test]
     fn a_focus_refusal_says_what_was_in_the_way() {
-        for (reason, said) in [
-            (Some("app"), "Another app"),
-            (Some("point"), "Another app"),
-            (Some("window"), "Another window of your app"),
-            (Some("sheet"), "A sheet or dialog"),
-            (Some("field"), "Another field"),
-            (Some("disabled"), "yours was disabled"),
-            (Some("unreadable"), "Atlas couldn't tell"),
-            (Some("made-up"), "Another app"),
-            (None, "Another app"),
+        for (reason, unread, said) in [
+            (Some("app"), None, "Another app"),
+            (Some("point"), None, "Another app"),
+            (Some("window"), None, "Another window of your app"),
+            (Some("sheet"), None, "A sheet or dialog"),
+            (Some("field"), None, "Another field"),
+            (Some("disabled"), None, "That field is disabled"),
+            (
+                Some("unreadable"),
+                None,
+                "Atlas couldn't tell what was in front",
+            ),
+            (
+                Some("unreadable"),
+                Some("failed"),
+                "Atlas couldn't tell what",
+            ),
+            (Some("unreadable"), Some("alike"), "look the same"),
+            (Some("unreadable"), Some("unlisted"), "not listed yet"),
+            (Some("unreadable"), Some("cut"), "too long to read whole"),
+            (Some("unreadable"), Some("deep"), "deeper in your app"),
+            (Some("unreadable"), Some("slow"), "did not say in time"),
+            (Some("made-up"), None, "Another app"),
+            (None, None, "Another app"),
         ] {
-            let hint = focus_changed(false, InTheWay::of(reason));
-            assert!(hint.contains(said), "{reason:?}: {hint}");
+            let hint = focus_changed(false, InTheWay::of(reason, unread));
+            assert!(hint.contains(said), "{reason:?} {unread:?}: {hint}");
         }
-        assert!(focus_changed(true, InTheWay::Field).starts_with("Focus left your field"));
     }
 
     /// Only a refusal after something of the command was sent says so, and
@@ -410,6 +508,11 @@ mod tests {
                 "{nothing}"
             );
             assert!(nothing.contains("run it again"), "{nothing}");
+            let remedy = nothing.split(". ").nth(1).unwrap_or_default();
+            assert!(
+                remedy.starts_with(char::is_uppercase),
+                "a sentence: {nothing}"
+            );
         }
     }
 
@@ -418,7 +521,7 @@ mod tests {
     #[test]
     fn an_unreadable_front_asks_for_the_app_to_be_clicked_or_opened_first() {
         for sent in [false, true] {
-            let said = focus_changed(sent, InTheWay::Unknown);
+            let said = focus_changed(sent, InTheWay::Unknown(Unsure::Front));
             assert!(
                 said.starts_with("Atlas couldn't tell what was in front"),
                 "{said}"
@@ -428,6 +531,31 @@ mod tests {
             assert!(!other.contains("open the app"));
             assert!(other.starts_with("Another app was in front"), "{other}");
         }
+    }
+
+    /// The advice for a refused result reads what it says was sent and what
+    /// was in the way; anything else is advised by its code.
+    #[test]
+    fn a_focus_refusals_advice_reads_its_reason_and_what_was_sent() {
+        use serde_json::json;
+
+        let advice = |fields: serde_json::Value| {
+            let mut result = json!({"ok": false, "code": "focus-changed"});
+            if let Some(fields) = fields.as_object() {
+                result.as_object_mut().unwrap().extend(fields.clone());
+            }
+            focus_advice(&result)
+        };
+        assert_eq!(
+            advice(json!({"reason": "field", "typed": 16, "partial": true})),
+            Some(focus_changed(true, InTheWay::Field))
+        );
+        assert_eq!(
+            advice(json!({"reason": "unreadable", "unread": "alike", "performed": 0})),
+            Some(focus_changed(false, InTheWay::Unknown(Unsure::Alike)))
+        );
+        assert_eq!(advice(json!({"uncertain": true})), None);
+        assert_eq!(focus_advice(&json!({"ok": false, "code": "busy"})), None);
     }
 
     /// A command a signal stopped while its change was under way left that

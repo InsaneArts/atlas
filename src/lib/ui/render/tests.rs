@@ -985,6 +985,26 @@ fn a_refusal_names_the_session_it_is_about_in_words() {
     assert!(!error(&Error::new("busy", "Wait")).contains("by"));
 }
 
+/// A person reading a focus refusal is told what JSON tells an agent: what
+/// was in the way, and to send only the rest when part was sent.
+#[test]
+fn a_focus_refusal_card_advises_by_what_was_in_the_way_and_what_was_sent() {
+    let left = show(
+        View::Type,
+        json!({"ok": false, "code": "focus-changed", "reason": "field", "typed": 16,
+            "partial": true, "error": "The field with keyboard focus is not the one named First"}),
+    );
+    let advice = crate::ui::hints::focus_changed(true, crate::ui::hints::InTheWay::Field);
+    assert!(left.err.contains(&advice), "{}", left.err);
+    assert!(left.err.contains("send only the rest"), "{}", left.err);
+
+    let sheet = error(
+        &Error::new("focus-changed", "A sheet is open over window 4120").with("reason", "sheet"),
+    );
+    assert!(sheet.contains("deal with the sheet"), "{sheet}");
+    assert!(!sheet.contains("Bring the app to the front"), "{sheet}");
+}
+
 #[test]
 fn activity_reads_as_words_for_one_session_or_each() {
     let one = show(
