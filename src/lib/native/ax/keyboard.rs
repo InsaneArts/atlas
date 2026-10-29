@@ -76,6 +76,9 @@ pub(crate) enum Unread {
     Alike,
     /// The focused window is not in the window list.
     Unlisted,
+    /// The app gave its own element as its focused window, as apps do
+    /// while the Mac's screen is locked: it withheld its windows.
+    Withheld,
 }
 
 impl Unread {
@@ -88,6 +91,9 @@ impl Unread {
             Self::Slow => "The app did not say in time where its focus is",
             Self::Alike => "Two windows of the app look the same",
             Self::Unlisted => "The window with keyboard focus is not in the window list",
+            Self::Withheld => {
+                "The app withheld its windows, as apps do while the Mac's screen is locked"
+            }
         };
         Error::new("native", said).with("unread", self)
     }

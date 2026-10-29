@@ -432,6 +432,11 @@ fn in_window(wanted: i64, pid: i64, keyboard: &Keyboard, listed: &[Window]) -> V
             "No window of the app has keyboard focus".to_owned(),
         );
     };
+    // The app itself in place of its window: it withholds its windows, as
+    // apps do while the Mac's screen is locked, and no list can show one.
+    if window.role.as_deref() == Some("AXApplication") {
+        return Verdict::Unknown(Unread::Withheld);
+    }
     let sheet = window.role.as_deref() == Some("AXSheet") || keyboard.within == Within::Sheet;
 
     match number(listed, pid, window) {
@@ -1536,6 +1541,21 @@ mod tests {
         let error = expecting(&in_document(), &mut look).unwrap_err();
         assert_eq!(error.details["reason"], "unreadable");
         assert_eq!(error.details["unread"], "unlisted");
+    }
+
+    #[test]
+    fn an_app_that_gives_itself_as_its_focused_window_withheld_its_windows() {
+        let keyboard = Keyboard {
+            window: Some(Element {
+                frame: None,
+                ..element("AXApplication", (0.0, 0.0, 0.0, 0.0))
+            }),
+            ..typing(field("Email"))
+        };
+        let mut look = inside_with(keyboard, vec![document()]);
+        let error = expecting(&in_document(), &mut look).unwrap_err();
+        assert_eq!(error.details["reason"], "unreadable");
+        assert_eq!(error.details["unread"], "withheld");
     }
 
     #[test]

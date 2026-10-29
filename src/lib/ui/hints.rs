@@ -144,6 +144,8 @@ pub enum Unsure {
     Alike,
     /// The focused window was not listed yet.
     Unlisted,
+    /// The app withheld its windows, as apps do while the Mac's screen is locked.
+    Withheld,
     /// A title or name was too long to read whole.
     Cut,
     /// The focused element sits deeper than Atlas reads.
@@ -164,6 +166,7 @@ impl InTheWay {
             Some("unreadable") => Self::Unknown(match unread {
                 Some("alike") => Unsure::Alike,
                 Some("unlisted") => Unsure::Unlisted,
+                Some("withheld") => Unsure::Withheld,
                 Some("cut") => Unsure::Cut,
                 Some("deep") => Unsure::Deep,
                 Some("slow") => Unsure::Slow,
@@ -192,6 +195,9 @@ impl InTheWay {
             Self::Unknown(Unsure::Unlisted) => {
                 "The window with keyboard focus was not listed yet, as when it is still opening"
             }
+            Self::Unknown(Unsure::Withheld) => {
+                "Your app withheld its windows, as apps do while the Mac's screen is locked"
+            }
             Self::Unknown(Unsure::Cut) => "A title or name Atlas checks was too long to read whole",
             Self::Unknown(Unsure::Deep) => {
                 "The focused element sits deeper in your app than Atlas reads"
@@ -217,6 +223,7 @@ impl InTheWay {
             }
             Self::Unknown(Unsure::Alike) => "move or close one of them",
             Self::Unknown(Unsure::Unlisted) => "take a screenshot",
+            Self::Unknown(Unsure::Withheld) => "ask the person to unlock the Mac",
             Self::Unknown(Unsure::Cut | Unsure::Deep) => {
                 "check this window or field with --app alone"
             }
@@ -443,7 +450,7 @@ mod tests {
     }
 
     /// Every kind of thing a focus refusal can find in the way.
-    const EVERY_WAY: [InTheWay; 11] = [
+    const EVERY_WAY: [InTheWay; 12] = [
         InTheWay::App,
         InTheWay::Window,
         InTheWay::Sheet,
@@ -452,6 +459,7 @@ mod tests {
         InTheWay::Unknown(Unsure::Front),
         InTheWay::Unknown(Unsure::Alike),
         InTheWay::Unknown(Unsure::Unlisted),
+        InTheWay::Unknown(Unsure::Withheld),
         InTheWay::Unknown(Unsure::Cut),
         InTheWay::Unknown(Unsure::Deep),
         InTheWay::Unknown(Unsure::Slow),
@@ -480,6 +488,7 @@ mod tests {
             ),
             (Some("unreadable"), Some("alike"), "look the same"),
             (Some("unreadable"), Some("unlisted"), "not listed yet"),
+            (Some("unreadable"), Some("withheld"), "screen is locked"),
             (Some("unreadable"), Some("cut"), "too long to read whole"),
             (Some("unreadable"), Some("deep"), "deeper in your app"),
             (Some("unreadable"), Some("slow"), "did not say in time"),
