@@ -8,17 +8,18 @@
 //! Beside the lock and the marker it keeps labels for people and agents:
 //! which host session holds control, which waits, and which claimed each
 //! pending change. Nothing here decides anything by them.
-mod causes;
+mod by_generation;
 mod commands;
 #[cfg(test)]
 mod commands_tests;
 mod notes;
 #[cfg(test)]
 mod notes_tests;
-mod running;
 mod turns;
 
 pub use notes::Note;
+
+use by_generation::ByGeneration;
 
 use crate::{
     config::home,
@@ -755,7 +756,7 @@ impl Controller {
     /// show who acts, never to decide who may.
     pub fn running_notes(&self) -> Vec<Note> {
         let marked = self.commands();
-        let mut notes: Vec<Note> = running::read(&self.running)
+        let mut notes: Vec<Note> = by_generation::read::<ByGeneration<Note>>(&self.running)
             .into_iter()
             .filter(|(generation, note)| marked.contains(generation) && note.live())
             .map(|(_, note)| note)
@@ -773,7 +774,7 @@ impl Controller {
         let Ok(pending) = self.pending() else {
             return Vec::new();
         };
-        running::read(&self.running)
+        by_generation::read::<ByGeneration<Note>>(&self.running)
             .into_iter()
             .filter(|(generation, _)| pending.contains(generation))
             .map(|(_, note)| note)
@@ -963,7 +964,7 @@ impl Controller {
         }
 
         let _lock = self.lock_marker()?;
-        let mut claimed = causes::read(&self.causes);
+        let mut claimed: ByGeneration<Key> = by_generation::read(&self.causes);
         let marked = self.commands();
         Ok(pending(&self.marker)?
             .into_iter()
@@ -1140,11 +1141,11 @@ impl Controller {
         replace_private(&self.marker, &serde_json::to_vec(&pending)?)?;
         if let Some(label) = &self.label {
             // Whose change it is, for display only; a lost note loses a label.
-            let _ = causes::note(&self.causes, generation, &label.key, &pending);
+            let _ = by_generation::note(&self.causes, generation, &label.key, &pending);
             if mark == Mark::Command
                 && let Some(note) = Note::now(Some(label))
             {
-                let _ = running::note(&self.running, generation, &note, &pending);
+                let _ = by_generation::note(&self.running, generation, &note, &pending);
             }
         }
         Ok(claim)
@@ -1178,9 +1179,9 @@ impl Controller {
 
         let mut pending = pending(&self.marker)?;
         pending.retain(|entry| entry != generation);
-        let _ = causes::keep(&self.causes, &pending);
+        let _ = by_generation::keep::<Key>(&self.causes, &pending);
         let _ = commands::keep(&self.commands, &pending);
-        let _ = running::keep(&self.running, &pending);
+        let _ = by_generation::keep::<Note>(&self.running, &pending);
 
         if pending.is_empty() {
             remove_marker(&self.marker)
@@ -1238,9 +1239,9 @@ impl Controller {
                 let _ = fs::remove_file(entry.path());
             }
         }
-        let _ = causes::keep(&self.causes, &running);
+        let _ = by_generation::keep::<Key>(&self.causes, &running);
         let _ = commands::keep(&self.commands, &running);
-        let _ = running::keep(&self.running, &running);
+        let _ = by_generation::keep::<Note>(&self.running, &running);
 
         if running.is_empty() {
             remove_marker(&self.marker)
@@ -1297,39 +1298,6 @@ fn replace_private(path: &Path, bytes: &[u8]) -> Result<()> {
         let _ = fs::remove_file(&temporary);
     }
     replaced.map_err(|error| Error::writing(path, error))
-}
-
-/// A record kept beside the marker, one entry per pending generation.
-trait Entries {
-    /// Keep only the entries whose generations are still `pending`.
-    fn retain_pending(&mut self, pending: &[String]);
-
-    fn is_empty(&self) -> bool;
-}
-
-/// Keep only the entries of the record at `path`, read with `read` and
-/// written with `write`, whose generations are still `pending`, removing it
-/// once none is left. A missing record stays missing.
-fn keep_entries<T: Entries>(
-    path: &Path,
-    pending: &[String],
-    read: impl FnOnce(&Path) -> T,
-    write: impl FnOnce(&Path, &T) -> Result<()>,
-) -> Result<()> {
-    if fs::symlink_metadata(path).is_err() {
-        return Ok(());
-    }
-
-    let mut entries = read(path);
-    entries.retain_pending(pending);
-    if entries.is_empty() {
-        return match fs::remove_file(path) {
-            Err(error) if error.kind() != std::io::ErrorKind::NotFound => Err(error.into()),
-            _ => Ok(()),
-        };
-    }
-
-    write(path, &entries)
 }
 
 /// The pending changes, as one locked read of the marker counts them.

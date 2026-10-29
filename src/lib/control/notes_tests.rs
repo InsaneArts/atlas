@@ -80,11 +80,11 @@ fn a_settled_change_forgets_its_cause_and_recovery_forgets_all_but_running_ones(
         generations,
         [abandoned.clone(), running.generation().to_owned()]
     );
-    let kept = causes::read(&controller.causes);
+    let kept: ByGeneration<Key> = by_generation::read(&controller.causes);
     assert_eq!(kept.len(), 2, "the settled one's cause is gone too");
 
     controller.clear().unwrap();
-    let kept = causes::read(&controller.causes);
+    let kept: ByGeneration<Key> = by_generation::read(&controller.causes);
     assert_eq!(
         kept.keys().cloned().collect::<Vec<_>>(),
         [running.generation().to_owned()]
