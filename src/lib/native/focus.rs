@@ -1973,8 +1973,13 @@ mod tests {
     #[test]
     fn the_check_never_activates_raises_or_focuses_anything() {
         // What the check reads with: this module and the Accessibility
-        // reads, which make copies and set only messaging timeouts.
-        for source in [include_str!("focus.rs"), include_str!("ax.rs")] {
+        // reads, keyboard focus among them, which make copies and set only
+        // messaging timeouts.
+        for source in [
+            include_str!("focus.rs"),
+            include_str!("ax.rs"),
+            include_str!("ax/keyboard.rs"),
+        ] {
             let code = source.split("#[cfg(test)]").next().unwrap_or_default();
             for setter in [
                 "set_attribute_value",
