@@ -131,11 +131,10 @@ button[disabled] { opacity: 0.35; cursor: default; }
 .chip .when { font-weight: 400; color: var(--ink-3); }
 .chip .what { overflow: hidden; text-overflow: ellipsis; }
 .chip.old { opacity: 0.6; }
-/* A host's icon before another session's words: its logo, its mark, or a
-   ">_" tile for any other host. */
+/* A host's icon before another session's words: its logo or its mark,
+   the terminal prompt's for any other host. */
 .ic { --ic: var(--icon-caption); flex: none; width: var(--ic); height: var(--ic); border-radius: 22%; }
 .topchip .ic { --ic: var(--icon-chip); }
-.ic.term { display: inline-flex; align-items: center; justify-content: center; background: var(--fill-on); color: var(--ink-2); font: 700 calc(var(--ic) * 0.5)/1 ui-monospace, SFMono-Regular, Menlo, monospace; letter-spacing: 0; }
 .captions { position: absolute; left: 14px; bottom: 14px; right: 14px; display: flex; flex-direction: column; align-items: flex-start; gap: 6px; pointer-events: none; }
 .topchip { position: absolute; left: 0; right: 0; top: 14px; display: flex; justify-content: center; pointer-events: none; padding: 0 var(--space-l); }
 .note { position: absolute; right: 14px; top: 14px; }
@@ -410,6 +409,7 @@ body.inline-expanded .content { min-height: 180px; overflow: auto; }
     <path d="M6.4 33A25.6 6.9 0 0 0 57.6 33" transform="rotate(-20 32 33)" fill="none" stroke="currentColor" stroke-width="2.4"/>
   </symbol>
   <linearGradient id="host-pi-card" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#2b2b2e"/><stop offset="1" stop-color="#111113"/></linearGradient>
+  <linearGradient id="host-terminal-card" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#3a3a3c"/><stop offset="1" stop-color="#1c1c1e"/></linearGradient>
   <linearGradient id="host-opencode-card" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#2e2a2a"/><stop offset="1" stop-color="#131010"/></linearGradient>
   <symbol id="host-pi" viewBox="-69.43 -69.43 938.86 938.86">
     <rect x="-69.43" y="-69.43" width="938.86" height="938.86" rx="216" fill="url(#host-pi-card)"/>
@@ -421,6 +421,11 @@ body.inline-expanded .content { min-height: 180px; overflow: auto; }
     <rect x="-64" y="-64" width="640" height="640" rx="147" fill="url(#host-opencode-card)"/>
     <path d="M 320 224V352H192V224H320Z" fill="#5a5858" fill-rule="evenodd"/>
     <path d="M 384 416H128V96H384V416ZM320 160H192V352H320V160Z" fill="#ffffff" fill-rule="evenodd"/>
+  </symbol>
+  <symbol id="host-terminal" viewBox="-52 -56 624 624">
+    <rect x="-52" y="-56" width="624" height="624" rx="144" fill="url(#host-terminal-card)"/>
+    <path d="M104 168L144 128L272 256L144 384L104 344L192 256Z" fill="#ffffff"/>
+    <path d="M288 328H416V384H288Z" fill="#ffffff"/>
   </symbol>
 </svg>
 <script>

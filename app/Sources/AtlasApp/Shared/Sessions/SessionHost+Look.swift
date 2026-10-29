@@ -17,8 +17,8 @@ extension SessionHost {
   }
 
   /// The host's icon: its bundled logo or mark, through ``AgentRowIcons`` with no installed icons, so the panel, the
-  /// main window and their renders never depend on what this Mac has installed; the `>_` tile for a host Atlas does not
-  /// know and for Terminal.
+  /// main window and their renders never depend on what this Mac has installed; the terminal prompt for a host Atlas does
+  /// not know and for Terminal.
   var icon: RowIcon {
     AgentRowIcons.icon(agent?.rawValue ?? "", [:])
   }

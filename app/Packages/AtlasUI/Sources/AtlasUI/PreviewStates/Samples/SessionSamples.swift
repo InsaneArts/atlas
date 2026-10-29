@@ -34,7 +34,7 @@
     /// Pi's mark.
     static let piIcon = RowIcon.mark(.pi)
     /// Terminal's tile.
-    static let terminalIcon = RowIcon.tile(.text(">_"))
+    static let terminalIcon = RowIcon.mark(.terminal)
     /// Every host's icon, for the icon's samples.
     static let icons = [claudeIcon, codexIcon, cursorIcon, piIcon, RowIcon.mark(.opencode), terminalIcon]
 

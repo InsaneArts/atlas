@@ -84,7 +84,7 @@ struct ViewerPresenterSessionsTests {
     #expect(quiet.state == nil && quiet.name == "Another session", "a session nothing names has no state")
   }
 
-  @Test("a session nothing names has no icon, and only Terminal has the >_ tile")
+  @Test("a session nothing names has no icon, and only Terminal has the prompt mark")
   func anUnknownSessionHasNoIcon() throws {
     var snapshot = try ViewerSnapshot.listing(Self.three)
     snapshot.panes.sessions.list = HostSessionList()

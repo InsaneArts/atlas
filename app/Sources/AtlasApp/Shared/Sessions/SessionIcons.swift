@@ -4,7 +4,7 @@ import AtlasUI
 
 /// The icon of the session an action came from, for the lines the panel and the main window list.
 enum SessionIcons {
-  /// The icon of the session an action came from: Terminal's `>_` tile for an action no host named, else its listed
+  /// The icon of the session an action came from: Terminal's prompt for an action no host named, else its listed
   /// session's host. A session the status does not list gets none, since nothing says which host runs it.
   ///
   /// - Parameters:

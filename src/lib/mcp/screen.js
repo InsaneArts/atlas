@@ -251,18 +251,18 @@ function whose(row, status, self) {
   return session;
 }
 
-/** A session's icon: its host's logo, its host's mark, or ">_" for any
- * other host and for Terminal. */
+/** A session's icon: its host's logo, its host's mark, or the terminal
+ * prompt's mark for any other host and for Terminal. */
 function iconOf(session) {
   const host = session && session.host;
   const name = nameOf(session);
   const logo = LOGO_HOSTS.includes(host) ? HOST_LOGOS[host] : null;
   if (typeof logo === 'string' && logo.startsWith('data:image/')) return { name, logo };
   if (MARK_HOSTS.includes(host)) return { name, mark: `host-${host}` };
-  return { name, text: '>_' };
+  return { name, mark: 'host-terminal' };
 }
 
-/** A host's icon for a row of another session: a logo, a mark or ">_";
+/** A host's icon for a row of another session: a logo or a mark;
  * null for this chat's own rows, the person's, and a session the status
  * does not list, whose host is unknown. */
 function iconFor(row, status, self) {
@@ -728,8 +728,8 @@ if (typeof document !== 'undefined') {
     }
   };
 
-  // A host's icon before a caption's words: its logo, its mark from the
-  // page, or a ">_" tile. Marks take the namespace of the page's own SVG.
+  // A host's icon before a caption's words: its logo or its mark from the
+  // page. Marks take the namespace of the page's own SVG.
   const svg = (name) => document.createElementNS(one('[data-orbit]').namespaceURI, name);
   const icon = (shown) => {
     if (shown.logo) {
@@ -738,18 +738,13 @@ if (typeof document !== 'undefined') {
       image.src = shown.logo;
       return image;
     }
-    if (shown.mark) {
-      const mark = svg('svg');
-      mark.setAttribute('class', 'ic');
-      mark.setAttribute('aria-hidden', 'true');
-      const use = svg('use');
-      use.setAttribute('href', `#${shown.mark}`);
-      mark.append(use);
-      return mark;
-    }
-    const tile = el('span', 'ic term', shown.text);
-    tile.setAttribute('aria-hidden', 'true');
-    return tile;
+    const mark = svg('svg');
+    mark.setAttribute('class', 'ic');
+    mark.setAttribute('aria-hidden', 'true');
+    const use = svg('use');
+    use.setAttribute('href', `#${shown.mark}`);
+    mark.append(use);
+    return mark;
   };
 
   const showScreen = () => {

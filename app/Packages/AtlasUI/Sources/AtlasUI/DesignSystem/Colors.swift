@@ -25,6 +25,10 @@ extension Color {
   static let brandPiBlue = Color(red: 0x4D / 255, green: 0x9A / 255, blue: 0xBF / 255)
   /// The gold part of Pi's original mark.
   static let brandPiGold = Color(red: 0xF1 / 255, green: 0xBE / 255, blue: 0x58 / 255)
+  /// The terminal prompt's graphite card, at its top edge.
+  static let brandTerminalTop = Color(red: 0x3A / 255, green: 0x3A / 255, blue: 0x3C / 255)
+  /// The terminal prompt's graphite card, at its bottom edge.
+  static let brandTerminalBottom = Color(red: 0x1C / 255, green: 0x1C / 255, blue: 0x1E / 255)
   /// The light across a dark brand card's top.
   static let brandCardHighlight = Color.white
     .opacity(0.16)

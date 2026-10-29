@@ -1377,7 +1377,7 @@ test('with this chat known, it is This chat while it acts and Waiting while anot
   assert.equal(view.hint({ status, self: codex.key }), 'Claude Code · understudy has the helper');
   assert.equal(view.chatWaits(status, codex.key), true);
   same(view.holderChip(status, codex.key), {
-    icon: { name: 'Claude Code · understudy', text: '>_' },
+    icon: { name: 'Claude Code · understudy', mark: 'host-terminal' },
     text: 'Claude Code · understudy has the helper',
   });
 
@@ -1448,13 +1448,13 @@ test("captions from another session carry its icon and this chat's own and the p
       text: 'Opened Notes',
       when: '8 s ago',
       newest: false,
-      icon: { name: 'Codex · atlas-landing', text: '>_' },
+      icon: { name: 'Codex · atlas-landing', mark: 'host-terminal' },
     },
     { text: 'Clicking Show Center in Opie', when: 'just now', newest: true },
   ]);
 });
 
-test('host icons are the bundled logos, the drawn marks, or a terminal tile', () => {
+test('host icons are the bundled logos, the drawn marks, or the terminal prompt mark', () => {
   const logos = {
     claude: 'data:image/png;base64,Q0xBVURF',
     codex: 'data:image/png;base64,Q09ERVg=',
@@ -1472,13 +1472,13 @@ test('host icons are the bundled logos, the drawn marks, or a terminal tile', ()
     [
       { name: 'claude one', logo: logos.claude },
       { name: 'codex one', logo: logos.codex },
-      { name: 'cursor one', text: '>_' },
+      { name: 'cursor one', mark: 'host-terminal' },
       { name: 'pi one', mark: 'host-pi' },
       { name: 'opencode one', mark: 'host-opencode' },
-      { name: 'other one', text: '>_' },
+      { name: 'other one', mark: 'host-terminal' },
     ],
   );
-  same(page.iconFor(row(undefined), status, null), { name: 'Terminal', text: '>_' });
+  same(page.iconFor(row(undefined), status, null), { name: 'Terminal', mark: 'host-terminal' });
   assert.equal(page.iconFor({ ...row(), actor: 'viewer' }, status, null), null, 'never the person');
   assert.equal(page.iconFor(row('claude one'), status, 'key0'), null, "never this chat's own");
   assert.equal(page.iconFor(row('claude one'), { ...status, sessionsShown: false }, null), null);
@@ -1489,8 +1489,8 @@ test('host icons are the bundled logos, the drawn marks, or a terminal tile', ()
   );
   same(
     view.iconFor(row('claude one'), status, null),
-    { name: 'claude one', text: '>_' },
-    'a page without logos still draws a tile',
+    { name: 'claude one', mark: 'host-terminal' },
+    "a page without logos still draws the prompt's mark",
   );
 });
 
@@ -1645,11 +1645,11 @@ test('the card shows who has the helper, a waiting dot and icon captions while a
   assert.equal(node('[data-hint]').textContent, 'Claude Code · understudy has the helper');
   const top = node('[data-topchip]');
   assert.equal(top.hidden, false);
-  assert.equal(top.children[0].children[0].className, 'ic term');
+  assert.equal(top.children[0].children[0].children[0].getAttribute('href'), '#host-terminal');
   assert.equal(top.children[0].children[1].textContent, 'Claude Code · understudy has the helper');
   const lines = node('[data-captions]').children;
   assert.equal(lines[0].children[0].className, 'what', "this chat's own caption stays plain");
-  assert.equal(lines[1].children[0].className, 'ic term', "another's carries its icon");
+  assert.equal(lines[1].children[0].getAttribute('class'), 'ic', "another's carries its icon");
 
   const pi = { ...claude, host: 'pi', hostLabel: 'Pi', name: 'Pi · notes-sync' };
   await status(twoSessions({ self: codex.key, sessions: [pi, codex], holder: pi.key }));
