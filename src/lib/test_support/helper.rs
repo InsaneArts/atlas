@@ -14,9 +14,6 @@ use tokio::{
     net::UnixListener,
 };
 
-/// The helper account test clients are configured for.
-pub(crate) const UID: u32 = 7001;
-
 /// The helper's home, as its hello reports it.
 const HOME: &str = "/Users/helper";
 
@@ -57,7 +54,7 @@ impl Helper {
     /// kept in `directory`. The client accepts the socket from the account
     /// running the test.
     pub(crate) fn client(directory: &Path, uid: u32) -> (Client, Self) {
-        let mut client = crate::transaction_test::client(directory);
+        let mut client = super::client(directory);
         client.config.helper_uid = uid;
         client.transport.peer_uid = nix::unistd::getuid().as_raw();
 

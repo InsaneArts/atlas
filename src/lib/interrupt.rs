@@ -743,8 +743,8 @@ mod tests {
     /// Start `scenario` as the test `test` run again, in `directory`,
     /// giving it `grace`.
     fn stand_in(test: &str, scenario: Scenario, directory: &Path, grace: Duration) -> Child {
-        std::process::Command::new(std::env::current_exe().unwrap())
-            .args(["--exact", test, "--nocapture"])
+        crate::test_support::rerun(test)
+            .arg("--nocapture")
             .env(SCENARIO, scenario.name())
             .env(DIRECTORY, directory)
             .env(GRACE_MS, grace.as_millis().to_string())
@@ -810,7 +810,7 @@ mod tests {
     fn a_terminated_command_with_nothing_under_way_exits_at_once_with_its_status() {
         const TEST: &str = "interrupt::tests::a_terminated_command_with_nothing_under_way_exits_at_once_with_its_status";
         command_if_stand_in();
-        if !crate::transaction_test::isolated(TEST) {
+        if !crate::test_support::isolated(TEST) {
             return;
         }
         let directory = tempfile::tempdir().unwrap();
@@ -834,7 +834,7 @@ mod tests {
         const TEST: &str =
             "interrupt::tests::a_terminated_command_lets_its_change_settle_then_exits";
         command_if_stand_in();
-        if !crate::transaction_test::isolated(TEST) {
+        if !crate::test_support::isolated(TEST) {
             return;
         }
         let directory = tempfile::tempdir().unwrap();
@@ -865,7 +865,7 @@ mod tests {
     fn a_change_a_signal_cuts_stays_pending_for_every_agent() {
         const TEST: &str = "interrupt::tests::a_change_a_signal_cuts_stays_pending_for_every_agent";
         command_if_stand_in();
-        if !crate::transaction_test::isolated(TEST) {
+        if !crate::test_support::isolated(TEST) {
             return;
         }
         let directory = tempfile::tempdir().unwrap();
@@ -902,7 +902,7 @@ mod tests {
         const TEST: &str =
             "interrupt::tests::a_signal_while_waiting_for_control_ends_the_wait_with_nothing_held";
         command_if_stand_in();
-        if !crate::transaction_test::isolated(TEST) {
+        if !crate::test_support::isolated(TEST) {
             return;
         }
         let directory = tempfile::tempdir().unwrap();
@@ -929,7 +929,7 @@ mod tests {
     fn a_hangup_and_an_interrupt_stop_it_the_same_way() {
         const TEST: &str = "interrupt::tests::a_hangup_and_an_interrupt_stop_it_the_same_way";
         command_if_stand_in();
-        if !crate::transaction_test::isolated(TEST) {
+        if !crate::test_support::isolated(TEST) {
             return;
         }
         let hold = Duration::from_millis(300);
@@ -960,7 +960,7 @@ mod tests {
         const TEST: &str =
             "interrupt::tests::a_command_that_never_reaches_a_check_is_ended_by_its_last_resort";
         command_if_stand_in();
-        if !crate::transaction_test::isolated(TEST) {
+        if !crate::test_support::isolated(TEST) {
             return;
         }
         let directory = tempfile::tempdir().unwrap();
@@ -990,7 +990,7 @@ mod tests {
         const TEST: &str =
             "interrupt::tests::a_blocked_command_with_nothing_under_way_ends_promptly";
         command_if_stand_in();
-        if !crate::transaction_test::isolated(TEST) {
+        if !crate::test_support::isolated(TEST) {
             return;
         }
         let directory = tempfile::tempdir().unwrap();

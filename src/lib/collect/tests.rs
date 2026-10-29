@@ -1,7 +1,5 @@
 use super::*;
 use crate::{
-    config::Config,
-    control::Controller,
     daemon::{
         protocol::{self, Request},
         read::{self, Places},
@@ -27,6 +25,8 @@ struct Place {
     client: Client,
     /// Whether the stand-in gives every digest wrong.
     lie: Arc<Mutex<bool>>,
+    /// How far the stand-in's clock runs ahead of the real one.
+    ahead: Arc<Mutex<Duration>>,
 }
 
 impl Place {
@@ -35,11 +35,7 @@ impl Place {
         let base = fs::canonicalize(dir.path()).unwrap();
         let home = base.join("helper");
         fs::create_dir(&home).unwrap();
-        let text = "helper_uid = 60001\nsocket_path = \"c.sock\"\noutput_dir = \"out\"\n\
-                    identity_probe = \"probe\"\ninput_socket = \"i.sock\"\n";
-        let config = Config::parse(text.as_bytes(), &base.join("u.toml")).unwrap();
-        let mut client = Client::new(config).unwrap().doing(Doing::new("collect"));
-        client.controller = Controller::at(60001, &base.join("state"));
+        let mut client = crate::test_support::client_in(&base).doing(Doing::new("collect"));
         client.transport.peer_uid = nix::unistd::getuid().as_raw();
         let host = HostSession::new(Host::Codex, "collect-test").unwrap();
         client.task = Some(Task::of(host.key(), None).unwrap());
@@ -49,6 +45,7 @@ impl Place {
             home,
             client,
             lie: Arc::default(),
+            ahead: Arc::default(),
         }
     }
 
@@ -58,12 +55,14 @@ impl Place {
         let listener = UnixListener::bind(&self.client.config.socket_path).unwrap();
         let home = self.home.clone();
         let lie = *self.lie.lock().unwrap();
+        let ahead = self.ahead.clone();
         let asked = Arc::new(Mutex::new(0));
         let counted = asked.clone();
         tokio::spawn(async move {
             while let Ok((stream, _)) = listener.accept().await {
                 *counted.lock().unwrap() += 1;
                 let home = home.clone();
+                let ahead = ahead.clone();
                 tokio::spawn(async move {
                     let (reader, mut writer) = stream.into_split();
                     let mut line = String::new();
@@ -77,7 +76,8 @@ impl Place {
                         home,
                         temporary: None,
                     };
-                    let reply = read::read(
+                    let now = SystemTime::now() + *ahead.lock().unwrap();
+                    let reply = read::read_at(
                         &request,
                         &places,
                         nix::unistd::getuid().as_raw(),
@@ -86,6 +86,7 @@ impl Place {
                             lines.push(event);
                             true
                         },
+                        now,
                     );
                     let mut reply = reply;
                     if lie && reply["sha256"].is_string() {
@@ -120,17 +121,31 @@ impl Place {
         path
     }
 
+    /// Write `bytes` at `name` in the helper's home, just now as the
+    /// stand-in's clock says.
+    fn fresh(&self, name: &str, bytes: &[u8]) {
+        let path = self.home.join(name);
+        fs::write(&path, bytes).unwrap();
+        File::options()
+            .write(true)
+            .open(&path)
+            .unwrap()
+            .set_modified(SystemTime::now() + *self.ahead.lock().unwrap())
+            .unwrap();
+    }
+
+    /// Let the stand-in's clock run on until files just written count as
+    /// still.
+    fn settle(&self) {
+        *self.ahead.lock().unwrap() += Duration::from_millis(2100);
+    }
+
     async fn collect(&self, files: &[&str], max_size: u64) -> Value {
         let files: Vec<String> = files.iter().map(|file| (*file).to_owned()).collect();
         collected(&self.client, None, &files, max_size, Instant::now())
             .await
             .unwrap()
     }
-}
-
-/// Wait until files just written count as still.
-fn settle() {
-    std::thread::sleep(Duration::from_millis(2100));
 }
 
 fn random(bytes: usize) -> Vec<u8> {
@@ -155,7 +170,7 @@ async fn a_binary_file_comes_back_byte_for_byte() {
     place.serve();
     let bytes = random(20 * 1024 * 1024 + 123);
     place.file("atlas-work/blob.bin", &bytes);
-    settle();
+    place.settle();
     let reply = place.collect(&["atlas-work/blob.bin"], 64 << 20).await;
     assert_eq!(reply["ok"], true, "{reply}");
     let kept = &reply["collected"][0];
@@ -175,7 +190,7 @@ async fn results_name_paths_sizes_and_digests_never_contents() {
     let place = Place::new();
     place.serve();
     place.file("a.txt", b"secret words");
-    settle();
+    place.settle();
     let reply = place.collect(&["a.txt"], 1024).await;
     assert!(!reply.to_string().contains("secret words"));
     let mut keys: Vec<_> = reply["collected"][0]
@@ -202,7 +217,7 @@ async fn a_copy_is_private_and_never_executable() {
         .unwrap()
         .set_modified(SystemTime::now() - Duration::from_secs(60))
         .unwrap();
-    settle();
+    place.settle();
     let reply = place.collect(&["tool.sh"], 1024).await;
     let copy = PathBuf::from(reply["collected"][0]["path"].as_str().unwrap());
     assert_eq!(fs::metadata(&copy).unwrap().mode() & 0o777, 0o600);
@@ -223,7 +238,7 @@ async fn two_files_of_one_name_in_one_call_never_overwrite() {
     place.file("a/report.bin", b"first");
     place.file("b/report.bin", b"second");
     place.file("c/Report.bin", b"third");
-    settle();
+    place.settle();
     let reply = place
         .collect(&["a/report.bin", "b/report.bin", "c/Report.bin"], 1024)
         .await;
@@ -241,8 +256,8 @@ async fn a_failed_file_leaves_the_others_collected() {
     let place = Place::new();
     place.serve();
     place.file("kept.bin", b"kept");
-    settle();
-    fs::write(place.home.join("fresh.log"), b"new").unwrap();
+    place.settle();
+    place.fresh("fresh.log", b"new");
     let reply = place
         .collect(&["kept.bin", "fresh.log", "gone.bin"], 1024)
         .await;
@@ -273,7 +288,7 @@ async fn a_file_over_its_limit_is_refused_and_keeps_nothing() {
     let place = Place::new();
     place.serve();
     place.file("big.bin", &[1_u8; 5000]);
-    settle();
+    place.settle();
     let reply = place.collect(&["big.bin"], 4096).await;
     assert_eq!(reply["failed"][0]["reason"], "too-large");
     assert_eq!(reply["receipt"], Value::Null);
@@ -302,7 +317,7 @@ async fn a_digest_that_does_not_match_keeps_nothing() {
     *place.lie.lock().unwrap() = true;
     place.serve();
     place.file("a.bin", b"abc");
-    settle();
+    place.settle();
     let reply = place.collect(&["a.bin"], 1024).await;
     assert_eq!(reply["failed"][0]["reason"], "changing", "{reply}");
     assert_eq!(reply["receipt"], Value::Null);
@@ -338,7 +353,7 @@ async fn a_linked_receipt_folder_is_refused() {
     let place = Place::new();
     place.serve();
     place.file("a.bin", b"a");
-    settle();
+    place.settle();
     let output = place.client.output_dir().unwrap();
     let elsewhere = output.parent().unwrap().join("elsewhere");
     fs::create_dir(&elsewhere).unwrap();
@@ -382,7 +397,7 @@ async fn nothing_is_scavenged_through_a_linked_collected_folder() {
     let place = Place::new();
     place.serve();
     place.file("a.bin", b"a");
-    settle();
+    place.settle();
     let output = place.client.output_dir().unwrap();
     let elsewhere = output.parent().unwrap().join("elsewhere");
     let partial = stale_partial(&elsewhere.join("unlabelled/1-a1b2c3"));
@@ -408,7 +423,7 @@ async fn abandoned_parts_are_removed_and_nothing_through_a_link_or_misnamed_is()
     let place = Place::new();
     place.serve();
     place.file("a.bin", b"a");
-    settle();
+    place.settle();
     let output = place.client.output_dir().unwrap().to_owned();
     let root = output.join(COLLECTED);
     fs::DirBuilder::new().mode(0o700).create(&root).unwrap();
@@ -517,7 +532,7 @@ async fn every_collection_has_its_own_folder() {
     let place = Place::new();
     place.serve();
     place.file("a.bin", b"a");
-    settle();
+    place.settle();
     let first = place.collect(&["a.bin"], 1024).await;
     let second = place.collect(&["a.bin"], 1024).await;
     assert_ne!(first["receipt"], second["receipt"]);
@@ -543,7 +558,7 @@ async fn a_kept_copy_that_changed_is_not_intact() {
     place.file("a.bin", b"aaaa");
     place.file("b.bin", b"bbbb");
     place.file("c.bin", b"cccc");
-    settle();
+    place.settle();
     let reply = place.collect(&["a.bin", "b.bin", "c.bin"], 1024).await;
     let receipt = ReceiptId::parse(reply["receipt"].as_str().unwrap()).unwrap();
     let output = place.client.output_dir().unwrap();
@@ -569,7 +584,7 @@ async fn collecting_writes_no_file_names_to_the_activity_log() {
     let place = Place::new();
     place.serve();
     place.file("private-name.bin", b"xyz");
-    settle();
+    place.settle();
     place.collect(&["private-name.bin"], 1024).await;
     let log =
         fs::read_to_string(place.client.output_dir().unwrap().join("metadata.jsonl")).unwrap();

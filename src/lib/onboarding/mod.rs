@@ -1628,13 +1628,13 @@ mod tests {
 
     #[test]
     fn setup_without_orphans_excludes_teardown_and_keeps_its_executor_after_caller_death() {
-        if !crate::transaction_test::isolated(
+        if !crate::test_support::isolated(
             "onboarding::tests::setup_without_orphans_excludes_teardown_and_keeps_its_executor_after_caller_death",
         ) {
             return;
         }
         for mode in ["selected", "allocated"] {
-            crate::transaction_test::interrupted_executor(
+            crate::test_support::interrupted_executor(
                 "onboarding::tests::an_account_setup_test_caller",
                 mode,
             );
@@ -1643,12 +1643,12 @@ mod tests {
 
     #[test]
     fn interactive_creation_keeps_its_worker_claim_after_the_caller_dies() {
-        if !crate::transaction_test::isolated(
+        if !crate::test_support::isolated(
             "onboarding::tests::interactive_creation_keeps_its_worker_claim_after_the_caller_dies",
         ) {
             return;
         }
-        crate::transaction_test::interrupted_executor(
+        crate::test_support::interrupted_executor(
             "onboarding::tests::an_account_setup_test_caller",
             "interactive",
         );
@@ -1657,7 +1657,7 @@ mod tests {
     /// A subprocess entry point using only temporary state and a harmless executor.
     #[test]
     fn an_account_setup_test_caller() {
-        let Some(directory) = crate::transaction_test::directory() else {
+        let Some(directory) = crate::test_support::directory() else {
             return;
         };
         if std::env::var("ATLAS_MUTATION_TEST_MODE").unwrap() == "interactive" {
@@ -1687,7 +1687,7 @@ mod tests {
             &[],
             |uid| Ok(Controller::at(uid, &directory.join("state"))),
             || {
-                crate::transaction_test::pause_executor(&directory);
+                crate::test_support::pause_executor(&directory);
                 Ok(())
             },
             || true,
@@ -1696,7 +1696,7 @@ mod tests {
 
     #[test]
     fn setup_requires_its_own_acknowledgement_even_when_every_orphan_is_gone() {
-        if !crate::transaction_test::isolated(
+        if !crate::test_support::isolated(
             "onboarding::tests::setup_requires_its_own_acknowledgement_even_when_every_orphan_is_gone",
         ) {
             return;
@@ -1745,7 +1745,7 @@ mod tests {
     }
     #[test]
     fn preparing_an_account_holds_every_orphan_and_records_interrupted_cleanup() {
-        if !crate::transaction_test::isolated(
+        if !crate::test_support::isolated(
             "onboarding::tests::preparing_an_account_holds_every_orphan_and_records_interrupted_cleanup",
         ) {
             return;
@@ -1919,7 +1919,7 @@ mod tests {
     /// socket file left behind, or none, is silent.
     #[test]
     fn a_helper_answers_only_while_its_socket_listens() {
-        if !crate::transaction_test::isolated(
+        if !crate::test_support::isolated(
             "onboarding::tests::a_helper_answers_only_while_its_socket_listens",
         ) {
             return;
@@ -2060,7 +2060,7 @@ mod tests {
 
     #[test]
     fn every_leftover_login_closes_under_one_approval() {
-        if !crate::transaction_test::isolated(
+        if !crate::test_support::isolated(
             "onboarding::tests::every_leftover_login_closes_under_one_approval",
         ) {
             return;
@@ -2114,7 +2114,7 @@ mod tests {
 
     #[test]
     fn closing_leftover_logins_holds_the_helper_and_keeps_an_unknown_outcome() {
-        if !crate::transaction_test::isolated(
+        if !crate::test_support::isolated(
             "onboarding::tests::closing_leftover_logins_holds_the_helper_and_keeps_an_unknown_outcome",
         ) {
             return;
@@ -2184,7 +2184,7 @@ mod tests {
 
     #[test]
     fn the_helper_is_logged_out_as_root_only_under_control_held_throughout() {
-        if !crate::transaction_test::isolated(
+        if !crate::test_support::isolated(
             "onboarding::tests::the_helper_is_logged_out_as_root_only_under_control_held_throughout",
         ) {
             return;
@@ -2235,7 +2235,7 @@ mod tests {
 
     #[test]
     fn a_log_out_as_root_stays_pending_until_the_login_is_seen_gone() {
-        if !crate::transaction_test::isolated(
+        if !crate::test_support::isolated(
             "onboarding::tests::a_log_out_as_root_stays_pending_until_the_login_is_seen_gone",
         ) {
             return;
@@ -2282,7 +2282,7 @@ mod tests {
 
     #[test]
     fn a_root_run_whose_reply_was_lost_stays_pending_though_the_login_looks_gone() {
-        if !crate::transaction_test::isolated(
+        if !crate::test_support::isolated(
             "onboarding::tests::a_root_run_whose_reply_was_lost_stays_pending_though_the_login_looks_gone",
         ) {
             return;
@@ -2310,7 +2310,7 @@ mod tests {
 
     #[test]
     fn a_log_out_root_never_started_leaves_nothing_pending() {
-        if !crate::transaction_test::isolated(
+        if !crate::test_support::isolated(
             "onboarding::tests::a_log_out_root_never_started_leaves_nothing_pending",
         ) {
             return;

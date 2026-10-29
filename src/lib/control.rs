@@ -1645,7 +1645,7 @@ mod tests {
 
     #[test]
     fn dropping_ownership_releases_control_while_a_duplicate_descriptor_stays_open() {
-        if !crate::transaction_test::isolated(
+        if !crate::test_support::isolated(
             "control::tests::dropping_ownership_releases_control_while_a_duplicate_descriptor_stays_open",
         ) {
             return;
@@ -1861,7 +1861,7 @@ mod tests {
 
     #[test]
     fn a_partial_executor_record_does_not_block_recovery_after_its_executor_and_boot_are_gone() {
-        if !crate::transaction_test::isolated(
+        if !crate::test_support::isolated(
             "control::tests::a_partial_executor_record_does_not_block_recovery_after_its_executor_and_boot_are_gone",
         ) {
             return;
@@ -1947,7 +1947,7 @@ mod tests {
 
     #[test]
     fn a_partial_executor_record_keeps_a_possibly_live_executor_pending() {
-        if !crate::transaction_test::isolated(
+        if !crate::test_support::isolated(
             "control::tests::a_partial_executor_record_keeps_a_possibly_live_executor_pending",
         ) {
             return;
@@ -2131,8 +2131,8 @@ mod tests {
     /// a process of its own: it takes control of the helper kept in
     /// `directory`, marks a change and says so in `held`.
     fn holder(test: &str, directory: &Path, hold: Duration) -> std::process::Child {
-        std::process::Command::new(std::env::current_exe().unwrap())
-            .args(["--exact", test, "--nocapture"])
+        crate::test_support::rerun(test)
+            .arg("--nocapture")
             .env("ATLAS_CONTROL_TEST_HOLDER", directory)
             .env("ATLAS_CONTROL_TEST_HOLD_MS", hold.as_millis().to_string())
             .stdout(std::process::Stdio::null())
@@ -2168,7 +2168,7 @@ mod tests {
 
     #[test]
     fn waiting_for_control_takes_the_lock_once_the_holder_lets_go() {
-        if !crate::transaction_test::isolated(
+        if !crate::test_support::isolated(
             "control::tests::waiting_for_control_takes_the_lock_once_the_holder_lets_go",
         ) {
             return;
@@ -2195,7 +2195,7 @@ mod tests {
         const TEST: &str =
             "control::tests::two_processes_that_change_the_helper_both_succeed_one_after_the_other";
         hold_if_holder();
-        if !crate::transaction_test::isolated(TEST) {
+        if !crate::test_support::isolated(TEST) {
             return;
         }
         let directory = tempfile::tempdir().unwrap();
@@ -2224,7 +2224,7 @@ mod tests {
 
     #[test]
     fn waiting_gives_up_with_busy_after_its_wait_and_says_how_long() {
-        if !crate::transaction_test::isolated(
+        if !crate::test_support::isolated(
             "control::tests::waiting_gives_up_with_busy_after_its_wait_and_says_how_long",
         ) {
             return;
@@ -2275,7 +2275,7 @@ mod tests {
 
     #[test]
     fn one_wait_is_shared_by_every_acquire_of_a_command() {
-        if !crate::transaction_test::isolated(
+        if !crate::test_support::isolated(
             "control::tests::one_wait_is_shared_by_every_acquire_of_a_command",
         ) {
             return;
@@ -2298,7 +2298,7 @@ mod tests {
 
     #[test]
     fn a_wait_of_zero_answers_busy_at_once_as_before() {
-        if !crate::transaction_test::isolated(
+        if !crate::test_support::isolated(
             "control::tests::a_wait_of_zero_answers_busy_at_once_as_before",
         ) {
             return;
@@ -2323,7 +2323,7 @@ mod tests {
 
     #[test]
     fn the_person_in_control_is_never_waited_for() {
-        if !crate::transaction_test::isolated(
+        if !crate::test_support::isolated(
             "control::tests::the_person_in_control_is_never_waited_for",
         ) {
             return;
@@ -2345,7 +2345,7 @@ mod tests {
 
     #[test]
     fn the_person_taking_control_during_a_wait_ends_it_at_once() {
-        if !crate::transaction_test::isolated(
+        if !crate::test_support::isolated(
             "control::tests::the_person_taking_control_during_a_wait_ends_it_at_once",
         ) {
             return;
@@ -2373,7 +2373,7 @@ mod tests {
 
     #[test]
     fn a_stop_noted_before_or_during_a_wait_ends_it_at_once() {
-        if !crate::transaction_test::isolated(
+        if !crate::test_support::isolated(
             "control::tests::a_stop_noted_before_or_during_a_wait_ends_it_at_once",
         ) {
             return;
@@ -2420,7 +2420,7 @@ mod tests {
 
     #[test]
     fn a_stop_noted_as_the_holder_lets_go_refuses_the_control_a_wait_takes() {
-        if !crate::transaction_test::isolated(
+        if !crate::test_support::isolated(
             "control::tests::a_stop_noted_as_the_holder_lets_go_refuses_the_control_a_wait_takes",
         ) {
             return;
@@ -2463,7 +2463,7 @@ mod tests {
         const TEST: &str =
             "control::tests::a_holder_killed_while_others_wait_hands_control_on_at_once";
         hold_if_holder();
-        if !crate::transaction_test::isolated(TEST) {
+        if !crate::test_support::isolated(TEST) {
             return;
         }
         let directory = tempfile::tempdir().unwrap();
@@ -2494,7 +2494,7 @@ mod tests {
 
     #[test]
     fn recovery_waits_for_the_lock_but_never_for_an_executor_still_running() {
-        if !crate::transaction_test::isolated(
+        if !crate::test_support::isolated(
             "control::tests::recovery_waits_for_the_lock_but_never_for_an_executor_still_running",
         ) {
             return;
@@ -2537,7 +2537,7 @@ mod tests {
 
     #[test]
     fn a_wait_tells_its_hook_when_it_begins_and_when_it_ends() {
-        if !crate::transaction_test::isolated(
+        if !crate::test_support::isolated(
             "control::tests::a_wait_tells_its_hook_when_it_begins_and_when_it_ends",
         ) {
             return;

@@ -47,16 +47,32 @@ fn request(path: &str, offset: u64, length: u64) -> ReadRequest {
 /// Read `request` with no stillness wait: its reply and its bytes.
 fn served(request: &ReadRequest, places: &Places) -> (Value, Vec<u8>) {
     let mut bytes = Vec::new();
-    let reply = read(request, places, uid(), &|| Ok(()), &mut |event| {
+    let reply = read_now(request, places, &|| Ok(()), &mut |event| {
         bytes.extend(STANDARD.decode(event["data"].as_str().unwrap()).unwrap());
         true
     });
     (reply, bytes)
 }
 
-/// Wait until a file just written counts as still.
+thread_local! {
+    /// How far this test's clock runs ahead of the real one.
+    static AHEAD: std::cell::Cell<Duration> = const { std::cell::Cell::new(Duration::ZERO) };
+}
+
+/// Read `request` as of this test's clock.
+fn read_now(
+    request: &ReadRequest,
+    places: &Places,
+    guard: &dyn Fn() -> Result<(), Value>,
+    events: &mut dyn FnMut(Value) -> bool,
+) -> Value {
+    let now = SystemTime::now() + AHEAD.with(std::cell::Cell::get);
+    read_at(request, places, uid(), guard, events, now)
+}
+
+/// Let this test's clock run on until a file just written counts as still.
 fn settle() {
-    std::thread::sleep(STILL + Duration::from_millis(100));
+    AHEAD.with(|ahead| ahead.set(ahead.get() + STILL + Duration::from_millis(100)));
 }
 
 /// The places of a helper named atlas, its own temporary folder `T`.
@@ -367,10 +383,9 @@ fn nothing_is_opened_or_sent_once_the_guard_refuses() {
         || json!({"ok": false, "code": "on-console", "error": "on screen", "uncertain": false});
 
     let mut sent = 0;
-    let reply = read(
+    let reply = read_now(
         &request("big.bin", 0, bytes.len() as u64),
         &places,
-        uid(),
         &|| Err(refusal()),
         &mut |_| {
             sent += 1;
@@ -391,10 +406,9 @@ fn nothing_is_opened_or_sent_once_the_guard_refuses() {
         }
     };
     let mut sent = 0;
-    let reply = read(
+    let reply = read_now(
         &request("big.bin", 0, bytes.len() as u64),
         &places,
-        uid(),
         &guard,
         &mut |_| {
             sent += 1;
@@ -415,7 +429,7 @@ fn nothing_is_opened_or_sent_once_the_guard_refuses() {
             Ok(())
         }
     };
-    let reply = read(&digest, &places, uid(), &guard, &mut |_| true);
+    let reply = read_now(&digest, &places, &guard, &mut |_| true);
     assert_eq!(reply, refusal(), "nor is it hashed");
 }
 
@@ -435,7 +449,7 @@ fn a_digest_stops_once_the_helper_may_no_longer_be_read() {
             Err(failure("on-console", "The helper is on the screen"))
         }
     };
-    let reply = read(&asked, &places, uid(), &guard, &mut |_| true);
+    let reply = read_now(&asked, &places, &guard, &mut |_| true);
     assert_eq!(reply["code"], "on-console", "{reply}");
     assert!(reply.get("sha256").is_none());
     assert!(

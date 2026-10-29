@@ -2,7 +2,7 @@ use super::{
     list::{Labels, SHOWN, frozen, list_as, listing},
     *,
 };
-use crate::helper_test::{Helper, UID};
+use crate::test_support::{Helper, UID};
 use base64::{Engine, engine::general_purpose::STANDARD};
 use std::{
     cell::Cell,
@@ -297,7 +297,7 @@ async fn a_worker_killed_after_replacing_a_file_stays_pending_until_recovery() {
         });
         panic!("the worker must be killed after replacement");
     }
-    if !crate::transaction_test::isolated(TEST) {
+    if !crate::test_support::isolated(TEST) {
         return;
     }
 
@@ -312,7 +312,7 @@ async fn a_worker_killed_after_replacing_a_file_stays_pending_until_recovery() {
     let first = sandbox.plan(vec![sandbox.payload("file", b"original")]);
     assert_eq!(sandbox.apply(&first)["ok"], true);
     let plan = sandbox.plan(vec![sandbox.payload("file", b"replacement")]);
-    let mut client = crate::transaction_test::client(&sandbox.root);
+    let mut client = crate::test_support::client(&sandbox.root);
     client.transport.peer_uid = nix::unistd::getuid().as_raw();
     let listener = UnixListener::bind(&client.transport.path).unwrap();
     let stage = stage_in(&sandbox.root, &plan.id);
@@ -332,8 +332,8 @@ async fn a_worker_killed_after_replacing_a_file_stays_pending_until_recovery() {
             } else if worker {
                 assert_eq!(client.controller.acquire(true).unwrap_err().code, "busy");
                 assert!(!client.controller.pending().unwrap().is_empty());
-                let output = Command::new(std::env::current_exe().unwrap())
-                    .args(["--exact", TEST, "--nocapture"])
+                let output = Command::from(crate::test_support::rerun(TEST))
+                    .arg("--nocapture")
                     .env(
                         "ATLAS_ENVIRONMENT_TEST_PACKET",
                         request["argv"][2].as_str().unwrap(),
@@ -1029,7 +1029,7 @@ fn a_discarded_stage_goes_at_once_and_its_leftovers_are_cleared() {
 #[tokio::test]
 async fn a_week_old_preview_cut_short_is_pruned() {
     let sandbox = Sandbox::new();
-    let client = crate::transaction_test::client(&sandbox.root);
+    let client = crate::test_support::client(&sandbox.root);
     let stage = |inside: &[&str]| {
         let id = crate::files::token();
         let stage = stage_in(&sandbox.root, &id);
@@ -1109,7 +1109,7 @@ async fn a_preview_cut_short_is_swept_once_no_preview_can_still_be_making_it() {
     // that does not exist.
     drop(held);
     aged(&locked);
-    let mut client = crate::transaction_test::client(&sandbox.root);
+    let mut client = crate::test_support::client(&sandbox.root);
     // An account that resolves to a name, as the helper's does.
     client.config.helper_uid = nix::unistd::getuid().as_raw();
     let missing = apply(&client, &crate::files::token()).await.unwrap_err();
@@ -1403,12 +1403,7 @@ fn old_command_folders_are_pruned() {
 #[tokio::test]
 async fn a_request_that_was_never_sent_leaves_nothing() {
     let sandbox = Sandbox::new();
-    let text = "helper_uid = 60001\nsocket_path = \"c.sock\"\noutput_dir = \"out\"\n\
-                identity_probe = \"probe\"\ninput_socket = \"i.sock\"\n";
-    let config =
-        crate::config::Config::parse(text.as_bytes(), &sandbox.root.join("u.toml")).unwrap();
-    let mut client = Client::new(config).unwrap();
-    client.controller = crate::control::Controller::at(60001, &sandbox.root.join("state"));
+    let client = crate::test_support::client_in(&sandbox.root);
 
     let stage = stage_in(&sandbox.root, &crate::files::token());
     let request = Request::Rollback {
@@ -1429,7 +1424,7 @@ async fn a_request_that_was_never_sent_leaves_nothing() {
 #[tokio::test]
 async fn an_environment_request_reads_the_helper_only_once_it_has_control() {
     let sandbox = Sandbox::new();
-    let client = crate::transaction_test::client(&sandbox.root);
+    let client = crate::test_support::client(&sandbox.root);
     let daemon = tokio::net::UnixListener::bind(&client.transport.path).unwrap();
     let _held = client.controller.acquire(false).unwrap();
 
@@ -1566,7 +1561,7 @@ async fn an_undo_preview_takes_no_control() {
 async fn an_apply_still_takes_control_and_stays_pending_when_its_reply_is_lost() {
     const TEST: &str =
         "environment::tests::an_apply_still_takes_control_and_stays_pending_when_its_reply_is_lost";
-    if !crate::transaction_test::isolated(TEST) {
+    if !crate::test_support::isolated(TEST) {
         return;
     }
 
@@ -2691,6 +2686,11 @@ fn a_plan_the_asker_holds_is_listed_whatever_its_phase_or_age() {
 
 #[test]
 fn a_plans_lock_looked_at_for_an_instant_is_waited_out() {
+    if !crate::test_support::isolated(
+        "environment::tests::a_plans_lock_looked_at_for_an_instant_is_waited_out",
+    ) {
+        return;
+    }
     let sandbox = Sandbox::new();
     let stage = stage_in(&sandbox.root, &crate::files::token());
     atomic_write(&stage.join("controller.lock"), b"", 0o600).unwrap();

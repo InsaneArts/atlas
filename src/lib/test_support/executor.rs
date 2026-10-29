@@ -1,56 +1,12 @@
 //! Unprivileged subprocess stand-ins for interrupted mutation transactions.
-use crate::{client::Client, config::Config, control::Controller};
+use super::{UID, rerun};
+use crate::control::Controller;
 use std::{
     fs,
-    path::{Path, PathBuf},
+    path::Path,
     process::{Command, Stdio},
     time::Duration,
 };
-
-/// Run lock-lifetime assertions in a process without parallel test threads.
-/// On macOS a concurrent spawn can briefly inherit another thread's flock
-/// until exec, keeping it held after the owning test drops its descriptor.
-/// Unique directories cannot isolate those inherited open file descriptions.
-pub(crate) fn isolated(test: &str) -> bool {
-    if std::env::var("ATLAS_ISOLATED_TEST").as_deref() == Ok(test) {
-        return true;
-    }
-    let output = Command::new(std::env::current_exe().unwrap())
-        .args(["--exact", test, "--nocapture"])
-        .env("ATLAS_ISOLATED_TEST", test)
-        .output()
-        .unwrap();
-    assert!(
-        output.status.success(),
-        "{test} failed: {}\n{}",
-        String::from_utf8_lossy(&output.stdout),
-        String::from_utf8_lossy(&output.stderr),
-    );
-    assert!(
-        String::from_utf8_lossy(&output.stdout).contains("running 1 test"),
-        "the exact test must run: {test}",
-    );
-    false
-}
-
-/// The explicit temporary directory makes subprocess entry tests inert normally.
-pub(crate) fn directory() -> Option<PathBuf> {
-    std::env::var_os("ATLAS_MUTATION_TEST_DIRECTORY").map(PathBuf::from)
-}
-
-/// A client whose endpoints and controller state are entirely temporary.
-pub(crate) fn client(directory: &Path) -> Client {
-    let mut client = Client::new(Config {
-        helper_uid: 7001,
-        socket_path: directory.join("absent.sock"),
-        identity_probe: directory.join("absent-probe"),
-        input_socket: directory.join("absent-input.sock"),
-        output_dir: directory.join("output"),
-    })
-    .unwrap();
-    client.controller = Controller::at(7001, &directory.join("state"));
-    client
-}
 
 /// Dispatch through the production executor handshake, then pause after a
 /// temporary filesystem mutation, until told to go on or the test's folder
@@ -85,8 +41,8 @@ while [[ ! -e $1 && -d ${1:h} ]]; do /bin/sleep 0.01; done
 pub(crate) fn interrupted_executor(test: &str, mode: &str) -> tempfile::TempDir {
     let directory = tempfile::tempdir().unwrap();
     fs::write(directory.path().join("opener"), b"temporary opener").unwrap();
-    let mut caller = Command::new(std::env::current_exe().unwrap())
-        .args(["--exact", test, "--nocapture"])
+    let mut caller = rerun(test)
+        .arg("--nocapture")
         .env("ATLAS_MUTATION_TEST_DIRECTORY", directory.path())
         .env("ATLAS_MUTATION_TEST_MODE", mode)
         .stdout(Stdio::null())
@@ -99,7 +55,7 @@ pub(crate) fn interrupted_executor(test: &str, mode: &str) -> tempfile::TempDir 
         }
         std::thread::sleep(Duration::from_millis(10));
     }
-    let controller = Controller::at(7001, &directory.path().join("state"));
+    let controller = Controller::at(UID, &directory.path().join("state"));
     let paused = directory.path().join("paused").exists();
     let held_during_dispatch = controller.acquire(true).is_err();
     let claimed_during_dispatch = controller.pending().unwrap().len() == 1;

@@ -976,7 +976,7 @@ mod tests {
         };
 
         let directory = tempfile::tempdir().unwrap();
-        let client = crate::transaction_test::client(directory.path());
+        let client = crate::test_support::client(directory.path());
         let session = |id: String| HostSession::new(Host::Codex, &id).unwrap();
         let worked = |session: &HostSession| {
             let doing = crate::doing::Doing::new("click");
@@ -1079,7 +1079,7 @@ mod tests {
         use crate::host_session::{Host, HostSession, store::note};
 
         let directory = tempfile::tempdir().unwrap();
-        let client = crate::transaction_test::client(directory.path());
+        let client = crate::test_support::client(directory.path());
         let output = client.output_dir().unwrap().to_path_buf();
         let session = HostSession::new(Host::Claude, "left").unwrap();
         note(
@@ -1127,7 +1127,7 @@ mod tests {
         use crate::host_session::{Host, HostSession};
 
         let directory = tempfile::tempdir().unwrap();
-        let client = crate::transaction_test::client(directory.path());
+        let client = crate::test_support::client(directory.path());
         let session = HostSession::new(Host::Codex, "first").unwrap();
         let holding = client
             .controller
@@ -1155,7 +1155,7 @@ mod tests {
         use crate::host_session::{Host, HostSession, store::note};
 
         let directory = tempfile::tempdir().unwrap();
-        let client = crate::transaction_test::client(directory.path());
+        let client = crate::test_support::client(directory.path());
         let first = HostSession::new(Host::Codex, "first")
             .unwrap()
             .in_folder(Some("left"));
@@ -1232,7 +1232,7 @@ mod tests {
         use crate::host_session::{Host, HostSession, Instance, store::note};
 
         let directory = tempfile::tempdir().unwrap();
-        let client = crate::transaction_test::client(directory.path());
+        let client = crate::test_support::client(directory.path());
         let worked = |session: &HostSession| {
             note(
                 &client,
@@ -1287,7 +1287,7 @@ mod tests {
         use crate::host_session::{Host, HostSession};
 
         let directory = tempfile::tempdir().unwrap();
-        let client = crate::transaction_test::client(directory.path());
+        let client = crate::test_support::client(directory.path());
         let agent = HostSession::new(Host::Named, "agent-a")
             .unwrap()
             .in_folder(Some("left"));
@@ -1333,7 +1333,7 @@ mod tests {
         };
 
         let directory = tempfile::tempdir().unwrap();
-        let client = crate::transaction_test::client(directory.path());
+        let client = crate::test_support::client(directory.path());
         let first = HostSession::new(Host::Claude, "resumed")
             .unwrap()
             .run_by(Some(Instance::new(i32::MAX, [1, 0])));
@@ -1386,7 +1386,7 @@ mod tests {
         use crate::host_session::{Host, HostSession, store::note};
 
         let directory = tempfile::tempdir().unwrap();
-        let client = crate::transaction_test::client(directory.path());
+        let client = crate::test_support::client(directory.path());
         let session = HostSession::new(Host::Codex, "done").unwrap();
         note(
             &client,
@@ -1422,7 +1422,7 @@ mod tests {
         use crate::host_session::{Host, HostSession, store::note};
 
         let directory = tempfile::tempdir().unwrap();
-        let client = crate::transaction_test::client(directory.path());
+        let client = crate::test_support::client(directory.path());
         let sessions: Vec<HostSession> = (0..12)
             .map(|n| HostSession::new(Host::Codex, &format!("worker-{n}")).unwrap())
             .collect();
@@ -1453,7 +1453,7 @@ mod tests {
     #[test]
     fn an_overview_with_no_records_has_no_sessions() {
         let directory = tempfile::tempdir().unwrap();
-        let client = crate::transaction_test::client(directory.path());
+        let client = crate::test_support::client(directory.path());
         let listed = host_sessions(&client, facts(false, crate::client::timestamp()));
         assert!(listed.sessions.is_empty() && !listed.shown);
         assert_eq!((listed.more, listed.holder), (0, None));

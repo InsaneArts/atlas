@@ -1,15 +1,9 @@
 use super::*;
-use crate::config::Config;
 
 pub(super) fn server(dir: &std::path::Path) -> Server {
-    let text = "helper_uid = 60001\nsocket_path = \"c.sock\"\noutput_dir = \"out\"\n\
-                identity_probe = \"probe\"\ninput_socket = \"i.sock\"\n";
-    let config = Config::parse(text.as_bytes(), &dir.join("u.toml")).unwrap();
-    let mut client = Client::new(config).unwrap();
     // The controller's notes (a Stop among them) stay in this test's folder.
-    client.controller = crate::control::Controller::at(60001, &dir.join("state"));
     Server {
-        client,
+        client: crate::test_support::client_in(dir),
         config: dir.join("u.toml"),
         port: 1,
         read_only: false,
@@ -391,7 +385,7 @@ async fn a_tool_that_fails_says_why_as_an_error_result() {
 
 #[tokio::test]
 async fn a_refused_app_list_is_an_error_in_the_view_not_zero_apps() {
-    use crate::helper_test::{Helper, UID};
+    use crate::test_support::{Helper, UID};
 
     let dir = tempfile::tempdir().unwrap();
     let mut server = server(dir.path());

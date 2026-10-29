@@ -267,7 +267,7 @@ pub async fn readiness(client: &Client, tools: &[String], apps: &[String]) -> Re
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::helper_test::{Helper, completed, exited};
+    use crate::test_support::{Helper, completed, exited};
 
     fn reply(exit: i64) -> Value {
         json!({"exitCode": exit, "timedOut": false, "signal": null})

@@ -94,7 +94,7 @@ fn an_update_waits_for_a_running_command() {
 
 #[test]
 fn a_command_whose_process_died_blocks_every_agent() {
-    if !crate::transaction_test::isolated(
+    if !crate::test_support::isolated(
         "control::commands_tests::a_command_whose_process_died_blocks_every_agent",
     ) {
         return;
@@ -126,7 +126,7 @@ fn an_unmarked_claim_still_blocks_agents_beside_it() {
 
 #[test]
 fn an_orphaned_privileged_executor_is_never_taken_for_a_command() {
-    if !crate::transaction_test::isolated(
+    if !crate::test_support::isolated(
         "control::commands_tests::an_orphaned_privileged_executor_is_never_taken_for_a_command",
     ) {
         return;
@@ -168,7 +168,7 @@ fn an_unknown_outcome_beside_a_running_command_still_blocks_agents() {
 
 #[test]
 fn recovery_keeps_a_running_command_and_its_mark() {
-    if !crate::transaction_test::isolated(
+    if !crate::test_support::isolated(
         "control::commands_tests::recovery_keeps_a_running_command_and_its_mark",
     ) {
         return;

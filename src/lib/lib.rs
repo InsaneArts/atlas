@@ -53,9 +53,7 @@ pub mod viewer;
 pub mod watch;
 
 #[cfg(test)]
-mod helper_test;
-#[cfg(test)]
-mod transaction_test;
+mod test_support;
 
 /// This build's version, as released.
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");

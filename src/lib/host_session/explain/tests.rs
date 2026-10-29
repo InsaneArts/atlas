@@ -7,13 +7,10 @@ use crate::{
         Host, Instance, ancestry,
         store::{Kind, note},
     },
+    test_support::client,
     ui::hints,
 };
-use std::{fs, path::Path};
-
-fn client(directory: &Path) -> Client {
-    crate::transaction_test::client(directory)
-}
+use std::fs;
 
 fn session(host: Host, id: &str) -> HostSession {
     HostSession::new(host, id).unwrap()

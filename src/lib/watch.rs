@@ -599,7 +599,7 @@ mod tests {
         use crate::host_session::{Host, HostSession, store};
 
         let directory = tempfile::tempdir().unwrap();
-        let client = crate::transaction_test::client(directory.path());
+        let client = crate::test_support::client(directory.path());
         let own = HostSession::new(Host::Claude, "own").unwrap();
         store::note(
             &client,
@@ -733,12 +733,7 @@ mod tests {
         use tokio::sync::Mutex;
 
         let dir = tempfile::tempdir().unwrap();
-        let config = crate::config::Config::parse(
-            b"helper_uid = 60001\nsocket_path = \"helper.sock\"\noutput_dir = \"out\"\nidentity_probe = \"probe\"\ninput_socket = \"input.sock\"\n",
-            &dir.path().join("atlas.toml"),
-        ).unwrap();
-        let mut client = Client::new(config).unwrap();
-        client.controller = crate::control::Controller::at(60001, &dir.path().join("state"));
+        let client = crate::test_support::client_in(dir.path());
         let output = client.output_dir().unwrap();
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let port = listener.local_addr().unwrap().port();

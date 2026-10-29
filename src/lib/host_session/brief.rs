@@ -157,7 +157,7 @@ mod tests {
     #[test]
     fn the_brief_mentions_leftovers_only_when_there_are_some() {
         let directory = tempfile::tempdir().unwrap();
-        let client = crate::transaction_test::client(directory.path());
+        let client = crate::test_support::client(directory.path());
         let own = session("own");
 
         assert_eq!(leftovers(&client, &own), None, "nothing recorded");
@@ -175,7 +175,7 @@ mod tests {
     #[test]
     fn the_brief_after_clear_points_to_the_session_before_it() {
         let directory = tempfile::tempdir().unwrap();
-        let client = crate::transaction_test::client(directory.path());
+        let client = crate::test_support::client(directory.path());
         let (before, after) = (session("before"), session("after"));
         applied(&client, &before);
         applied(&client, &before);
@@ -202,7 +202,7 @@ mod tests {
         use crate::task::{Task, record::CleanupState, store::Store as Tasks};
 
         let directory = tempfile::tempdir().unwrap();
-        let client = crate::transaction_test::client(directory.path());
+        let client = crate::test_support::client(directory.path());
         let own = session("cleaning");
         clicked(&client, &own);
         let task = Task::of(own.key(), None).unwrap();

@@ -126,8 +126,8 @@ fn a_cause_that_cannot_be_written_never_fails_the_claim() {
 /// process of its own: it claims a change for session `right` in the state
 /// kept in `directory`, says so in `claimed`, and waits to be killed.
 fn claimer(test: &str, directory: &Path) -> std::process::Child {
-    std::process::Command::new(std::env::current_exe().unwrap())
-        .args(["--exact", test, "--nocapture"])
+    crate::test_support::rerun(test)
+        .arg("--nocapture")
         .env("ATLAS_CONTROL_TEST_CLAIMER", directory)
         .stdout(std::process::Stdio::null())
         .stderr(std::process::Stdio::null())
@@ -163,7 +163,7 @@ fn appears(path: &Path) {
 fn a_killed_holders_cause_survives_it() {
     const TEST: &str = "control::notes_tests::a_killed_holders_cause_survives_it";
     claim_if_claimer();
-    if !crate::transaction_test::isolated(TEST) {
+    if !crate::test_support::isolated(TEST) {
         return;
     }
     let directory = tempfile::tempdir().unwrap();
@@ -311,7 +311,7 @@ fn waiting_notes(controller: &Controller) -> Vec<Note> {
 
 #[test]
 fn six_waiters_take_the_lock_in_the_order_they_began() {
-    if !crate::transaction_test::isolated(
+    if !crate::test_support::isolated(
         "control::notes_tests::six_waiters_take_the_lock_in_the_order_they_began",
     ) {
         return;
@@ -367,7 +367,7 @@ fn six_waiters_take_the_lock_in_the_order_they_began() {
 
 #[test]
 fn a_dead_or_stale_waiters_note_is_skipped() {
-    if !crate::transaction_test::isolated(
+    if !crate::test_support::isolated(
         "control::notes_tests::a_dead_or_stale_waiters_note_is_skipped",
     ) {
         return;
@@ -420,7 +420,7 @@ fn a_dead_or_stale_waiters_note_is_skipped() {
 
 #[test]
 fn a_waiter_with_no_note_still_gets_the_lock() {
-    if !crate::transaction_test::isolated(
+    if !crate::test_support::isolated(
         "control::notes_tests::a_waiter_with_no_note_still_gets_the_lock",
     ) {
         return;
@@ -442,7 +442,7 @@ fn a_waiter_with_no_note_still_gets_the_lock() {
 
 #[test]
 fn a_newcomer_waits_its_turn_but_the_person_and_a_stop_end_every_wait() {
-    if !crate::transaction_test::isolated(
+    if !crate::test_support::isolated(
         "control::notes_tests::a_newcomer_waits_its_turn_but_the_person_and_a_stop_end_every_wait",
     ) {
         return;

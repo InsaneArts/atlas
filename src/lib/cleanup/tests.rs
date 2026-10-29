@@ -890,7 +890,7 @@ async fn a_preview_changes_nothing_and_takes_no_lock() {
 #[test]
 fn adoption_is_refused_while_the_session_is_active_and_allowed_for_the_person() {
     let directory = tempfile::tempdir().unwrap();
-    let client = crate::transaction_test::client(directory.path());
+    let client = crate::test_support::client(directory.path());
     let host = HostSession::new(Host::Codex, "neighbour").unwrap();
     crate::host_session::store::note(
         &client,
@@ -988,7 +988,7 @@ async fn a_receipt_names_no_file_on_this_mac() {
 #[tokio::test]
 async fn a_cleanup_of_the_session_covers_every_task_and_what_its_record_lists() {
     let directory = tempfile::tempdir().unwrap();
-    let client = crate::transaction_test::client(directory.path());
+    let client = crate::test_support::client(directory.path());
     let output = client.output_dir().unwrap().to_owned();
     let root = fs::canonicalize(directory.path()).unwrap().join("copies");
     fs::DirBuilder::new().mode(0o700).create(&root).unwrap();
@@ -1086,7 +1086,7 @@ fn a_key_that_names_no_record_is_said_and_no_session_is_a_usage_error() {
     );
 
     let directory = tempfile::tempdir().unwrap();
-    let mut client = crate::transaction_test::client(directory.path());
+    let mut client = crate::test_support::client(directory.path());
     let error = Scope::of(&client, None, None).unwrap_err();
     assert_eq!(error.code, "usage");
     assert!(error.error.contains("ATLAS_SESSION"), "{error}");
@@ -1440,7 +1440,7 @@ fn fresh_task_records_keep_a_session_without_its_own_record_from_being_adopted()
 fn ended_neighbour(directory: &Path) -> (Client, HostSession) {
     use crate::host_session::store::{Kind, note};
 
-    let mut client = crate::transaction_test::client(directory);
+    let mut client = crate::test_support::client(directory);
     client.controller = client
         .controller
         .waiting(std::time::Duration::from_secs(10));

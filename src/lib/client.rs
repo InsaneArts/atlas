@@ -2653,7 +2653,7 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::interrupt::Interrupt;
+    use crate::{interrupt::Interrupt, test_support::client_in};
     use nix::sys::signal::Signal;
     use tokio::{
         io::{AsyncBufReadExt, AsyncWriteExt, BufReader},
@@ -3115,7 +3115,7 @@ mod tests {
     async fn standalone_input_with_an_uncertain_outcome_stays_pending_until_recovery() {
         // Recovery takes the controller lock, which a spawn on another test
         // thread can hold in its child until exec.
-        if !crate::transaction_test::isolated(
+        if !crate::test_support::isolated(
             "client::tests::standalone_input_with_an_uncertain_outcome_stays_pending_until_recovery",
         ) {
             return;
@@ -3236,7 +3236,7 @@ mod tests {
     async fn input_still_unanswered_after_the_grace_stays_pending_for_every_agent() {
         // Recovery takes the controller lock, which a spawn on another test
         // thread can hold in its child until exec.
-        if !crate::transaction_test::isolated(
+        if !crate::test_support::isolated(
             "client::tests::input_still_unanswered_after_the_grace_stays_pending_for_every_agent",
         ) {
             return;
@@ -3292,7 +3292,7 @@ mod tests {
 
     #[tokio::test]
     async fn a_release_still_unanswered_after_the_grace_stays_pending() {
-        if !crate::transaction_test::isolated(
+        if !crate::test_support::isolated(
             "client::tests::a_release_still_unanswered_after_the_grace_stays_pending",
         ) {
             return;
@@ -3320,7 +3320,7 @@ mod tests {
 
     #[tokio::test]
     async fn an_acquisition_still_unanswered_after_the_grace_stays_pending() {
-        if !crate::transaction_test::isolated(
+        if !crate::test_support::isolated(
             "client::tests::an_acquisition_still_unanswered_after_the_grace_stays_pending",
         ) {
             return;
@@ -3415,7 +3415,7 @@ mod tests {
 
     #[tokio::test]
     async fn a_run_still_going_after_the_grace_is_cut_and_stays_pending() {
-        if !crate::transaction_test::isolated(
+        if !crate::test_support::isolated(
             "client::tests::a_run_still_going_after_the_grace_is_cut_and_stays_pending",
         ) {
             return;
@@ -3753,6 +3753,11 @@ mod tests {
 
     #[test]
     fn an_interrupted_setup_can_repair_its_probe_without_settling_pending_work() {
+        if !crate::test_support::isolated(
+            "client::tests::an_interrupted_setup_can_repair_its_probe_without_settling_pending_work",
+        ) {
+            return;
+        }
         let dir = tempfile::tempdir().unwrap();
         let mut client = client_in(dir.path());
         client.controller = Controller::at(60001, &dir.path().join("state"));
@@ -3817,14 +3822,6 @@ mod tests {
         drop(claim);
         assert_eq!(client.controller.pending().unwrap(), [other.generation()]);
         assert!(client.controller.acquire(false).is_err());
-    }
-
-    /// A client for a configuration kept in `dir`.
-    fn client_in(dir: &Path) -> Client {
-        let text = "helper_uid = 60001\nsocket_path = \"c.sock\"\noutput_dir = \"out\"\n\
-                    identity_probe = \"probe\"\ninput_socket = \"i.sock\"\n";
-        let config = Config::parse(text.as_bytes(), &dir.join("u.toml")).unwrap();
-        Client::new(config).unwrap()
     }
 
     /// The rows `client` wrote to its activity log, oldest first.
@@ -4341,7 +4338,7 @@ mod tests {
 
     #[tokio::test]
     async fn a_run_lets_go_of_control_once_its_request_is_sent() {
-        if !crate::transaction_test::isolated(
+        if !crate::test_support::isolated(
             "client::tests::a_run_lets_go_of_control_once_its_request_is_sent",
         ) {
             return;
@@ -4375,7 +4372,7 @@ mod tests {
 
     #[tokio::test]
     async fn a_run_refused_before_it_is_sent_settles_under_control() {
-        if !crate::transaction_test::isolated(
+        if !crate::test_support::isolated(
             "client::tests::a_run_refused_before_it_is_sent_settles_under_control",
         ) {
             return;
@@ -4420,7 +4417,7 @@ mod tests {
 
     #[tokio::test]
     async fn a_stopped_run_stays_pending_beside_other_agents() {
-        if !crate::transaction_test::isolated(
+        if !crate::test_support::isolated(
             "client::tests::a_stopped_run_stays_pending_beside_other_agents",
         ) {
             return;
@@ -4461,8 +4458,7 @@ mod tests {
 
     #[tokio::test]
     async fn a_lost_run_reply_blocks_every_agent() {
-        if !crate::transaction_test::isolated("client::tests::a_lost_run_reply_blocks_every_agent")
-        {
+        if !crate::test_support::isolated("client::tests::a_lost_run_reply_blocks_every_agent") {
             return;
         }
         let (dir, client, input, _session) = native_client();
@@ -4489,7 +4485,7 @@ mod tests {
 
     #[tokio::test]
     async fn a_lost_or_uncertain_run_reply_is_unknown_before_its_row_is_written() {
-        if !crate::transaction_test::isolated(
+        if !crate::test_support::isolated(
             "client::tests::a_lost_or_uncertain_run_reply_is_unknown_before_its_row_is_written",
         ) {
             return;
@@ -4564,7 +4560,7 @@ mod tests {
 
     #[tokio::test]
     async fn a_run_that_let_go_and_is_cut_after_the_grace_stays_pending_for_everyone() {
-        if !crate::transaction_test::isolated(
+        if !crate::test_support::isolated(
             "client::tests::a_run_that_let_go_and_is_cut_after_the_grace_stays_pending_for_everyone",
         ) {
             return;
@@ -4602,7 +4598,7 @@ mod tests {
 
     #[tokio::test]
     async fn two_runs_go_on_beside_each_other() {
-        if !crate::transaction_test::isolated("client::tests::two_runs_go_on_beside_each_other") {
+        if !crate::test_support::isolated("client::tests::two_runs_go_on_beside_each_other") {
             return;
         }
         let (dir, client, input, _session) = native_client();
@@ -4638,9 +4634,7 @@ mod tests {
 
     #[tokio::test]
     async fn input_goes_on_beside_a_running_command() {
-        if !crate::transaction_test::isolated(
-            "client::tests::input_goes_on_beside_a_running_command",
-        ) {
+        if !crate::test_support::isolated("client::tests::input_goes_on_beside_a_running_command") {
             return;
         }
         let (dir, client, input, _session) = native_client();
@@ -5278,17 +5272,15 @@ mod tests {
 
                 // The synchronous open cannot be interrupted by a Tokio timeout.
                 // Confine it to a child we always reap, even on the old blocking path.
-                let mut child = std::process::Command::new(std::env::current_exe().unwrap())
-                    .args([
-                        "--exact",
-                        "client::tests::recording_refuses_non_files_without_waiting_for_a_reader",
-                    ])
-                    .env(WORKER, dir.path())
-                    .stdin(std::process::Stdio::null())
-                    .stdout(std::process::Stdio::null())
-                    .stderr(std::process::Stdio::null())
-                    .spawn()
-                    .unwrap();
+                let mut child = crate::test_support::rerun(
+                    "client::tests::recording_refuses_non_files_without_waiting_for_a_reader",
+                )
+                .env(WORKER, dir.path())
+                .stdin(std::process::Stdio::null())
+                .stdout(std::process::Stdio::null())
+                .stderr(std::process::Stdio::null())
+                .spawn()
+                .unwrap();
                 let deadline = Instant::now() + Duration::from_secs(2);
                 let success = loop {
                     if let Some(status) = child.try_wait().unwrap() {
@@ -5394,7 +5386,7 @@ mod tests {
 
     #[tokio::test]
     async fn an_app_list_read_is_never_uncertain() {
-        use crate::helper_test::{Helper, UID};
+        use crate::test_support::{Helper, UID};
 
         let directory = tempfile::tempdir().unwrap();
         let (client, helper) = Helper::client(directory.path(), UID);

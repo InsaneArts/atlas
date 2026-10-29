@@ -1825,7 +1825,7 @@ mod tests {
 
     #[test]
     fn uncertain_outcomes_stay_pending_and_definitive_ones_settle() {
-        if !crate::transaction_test::isolated(
+        if !crate::test_support::isolated(
             "setup::migrate::tests::uncertain_outcomes_stay_pending_and_definitive_ones_settle",
         ) {
             return;
@@ -1862,7 +1862,7 @@ mod tests {
 
     #[test]
     fn only_pending_actions_this_setup_owns_let_it_continue() {
-        if !crate::transaction_test::isolated(
+        if !crate::test_support::isolated(
             "setup::migrate::tests::only_pending_actions_this_setup_owns_let_it_continue",
         ) {
             return;

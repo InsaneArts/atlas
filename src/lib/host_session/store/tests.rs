@@ -3,6 +3,7 @@ use crate::error::Error;
 use crate::{
     doing::Doing,
     host_session::{Host, HostSession, Instance},
+    test_support::client,
 };
 use fs2::FileExt;
 use serde_json::json;
@@ -11,11 +12,6 @@ use std::{
     fs::OpenOptions,
     os::unix::fs::{DirBuilderExt, PermissionsExt},
 };
-
-/// A client whose output and controller state are in `directory`.
-fn client(directory: &Path) -> Client {
-    crate::transaction_test::client(directory)
-}
 
 fn session(id: &str) -> HostSession {
     HostSession::new(Host::Claude, id).unwrap()

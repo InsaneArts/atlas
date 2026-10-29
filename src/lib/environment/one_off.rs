@@ -110,7 +110,7 @@ pub(crate) async fn installs(client: &Client, ids: &[Token]) -> Result<Value> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::helper_test::{Helper, completed};
+    use crate::test_support::{Helper, completed};
 
     #[tokio::test]
     async fn sixty_five_installs_are_asked_about_once_each_within_the_workers_limit() {

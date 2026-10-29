@@ -287,7 +287,7 @@ mod tests {
     async fn a_stale_socket_is_replaced_and_a_non_socket_refused() {
         // A spawn on another test thread can keep the stale listener open
         // in its child until exec, so the socket would look served.
-        if !crate::transaction_test::isolated(
+        if !crate::test_support::isolated(
             "native::endpoint::tests::a_stale_socket_is_replaced_and_a_non_socket_refused",
         ) {
             return;

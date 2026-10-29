@@ -131,7 +131,7 @@ fn a_claim_is_written_whole_and_settled_in_place() {
 #[test]
 fn a_session_record_rewritten_by_an_older_build_loses_no_claim() {
     let directory = tempfile::tempdir().unwrap();
-    let client = crate::transaction_test::client(directory.path());
+    let client = crate::test_support::client(directory.path());
     let output = client.output_dir().unwrap().to_owned();
     let host = HostSession::new(Host::Codex, "one").unwrap();
     let task = Task::of(host.key(), None).unwrap();
@@ -292,7 +292,7 @@ fn a_record_this_build_cannot_rewrite_is_left_as_it_is() {
 #[test]
 fn a_rolled_back_plan_is_settled_in_every_task_that_claimed_it() {
     let directory = tempfile::tempdir().unwrap();
-    let client = crate::transaction_test::client(directory.path());
+    let client = crate::test_support::client(directory.path());
     let output = client.output_dir().unwrap().to_owned();
     let (left, right) = (task("left", None), task("right", Some("probe")));
     let (undone, kept) = (Token::new(), Token::new());
@@ -420,7 +420,7 @@ fn work_a_session_record_lists_without_a_task_record_belongs_to_the_default_task
     use crate::{environment::Phase, host_session::record::PlanNote};
 
     let directory = tempfile::tempdir().unwrap();
-    let client = crate::transaction_test::client(directory.path());
+    let client = crate::test_support::client(directory.path());
     let output = client.output_dir().unwrap().to_owned();
     let host = HostSession::new(Host::Codex, "older").unwrap();
     let (copied, planned, claimed) = (Token::new(), Token::new(), Token::new());
@@ -468,7 +468,7 @@ fn work_a_session_record_lists_without_a_task_record_belongs_to_the_default_task
 #[test]
 fn a_commands_claims_go_to_its_own_tasks_record_and_nowhere_without_one() {
     let directory = tempfile::tempdir().unwrap();
-    let mut client = crate::transaction_test::client(directory.path());
+    let mut client = crate::test_support::client(directory.path());
     let output = client.output_dir().unwrap().to_owned();
     let made = copy();
 

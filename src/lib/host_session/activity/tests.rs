@@ -5,12 +5,9 @@ use crate::{
         Instance,
         store::{Kind, note},
     },
+    test_support::client,
 };
 use std::fs;
-
-fn client(directory: &Path) -> Client {
-    crate::transaction_test::client(directory)
-}
 
 fn session(host: Host, id: &str) -> HostSession {
     HostSession::new(host, id).unwrap()

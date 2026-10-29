@@ -1,5 +1,5 @@
 use super::*;
-use crate::{config::Config, control::Controller, doing::Doing, task::Task};
+use crate::{doing::Doing, task::Task};
 use std::{
     path::Path,
     sync::{Arc, Mutex},
@@ -15,11 +15,7 @@ type Heard = Arc<Mutex<Vec<Value>>>;
 /// A client whose helper daemon is a stand-in at `dir/c.sock`, served by
 /// this test's own account, with control kept in `dir/state`.
 fn client_in(dir: &Path) -> Client {
-    let text = "helper_uid = 60001\nsocket_path = \"c.sock\"\noutput_dir = \"out\"\n\
-                identity_probe = \"probe\"\ninput_socket = \"i.sock\"\n";
-    let config = Config::parse(text.as_bytes(), &dir.join("u.toml")).unwrap();
-    let mut client = Client::new(config).unwrap();
-    client.controller = Controller::at(60001, &dir.join("state"));
+    let mut client = crate::test_support::client_in(dir);
     client.transport.peer_uid = nix::unistd::getuid().as_raw();
     client
 }

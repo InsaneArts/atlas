@@ -424,7 +424,7 @@ pub async fn discover(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::helper_test::{Helper, UID, completed};
+    use crate::test_support::{Helper, UID, completed};
     use std::os::unix::fs::PermissionsExt;
 
     /// The arguments a probe was given, after its fixed script.

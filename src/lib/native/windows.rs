@@ -724,7 +724,7 @@ mod tests {
     fn a_probe_says_where_the_dock_takes_clicks_or_leaves_it_unread() {
         use serde_json::json;
 
-        let reply = |output: serde_json::Value| crate::helper_test::completed(&output.to_string());
+        let reply = |output: serde_json::Value| crate::test_support::completed(&output.to_string());
         let icons = json!({"icons": [{"x": 200.0, "y": 740.0, "width": 600.0, "height": 60.0}]});
         for (said, dock) in [
             (icons, Dock::Icons(vec![dock_icons()])),

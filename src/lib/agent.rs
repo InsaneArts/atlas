@@ -2017,7 +2017,7 @@ mod tests {
     /// The stand-in helper's answer to a read: TextEdit (812) with one
     /// window and no elements.
     fn textedit_reads(request: &Value) -> Option<Value> {
-        use crate::helper_test::completed;
+        use crate::test_support::completed;
 
         if request["op"] == "apps" {
             return Some(json!({"ok": true, "apps": [{"pid": 812, "name": "TextEdit"}]}));
@@ -2037,7 +2037,7 @@ mod tests {
     /// verify the helper once between them, not once for each list read.
     #[tokio::test]
     async fn finding_an_app_verifies_the_helper_once() {
-        use crate::helper_test::{Helper, UID};
+        use crate::test_support::{Helper, UID};
 
         let directory = tempfile::tempdir().unwrap();
         let (client, helper) = Helper::client(directory.path(), UID);
@@ -2059,7 +2059,7 @@ mod tests {
     /// trusted to be the one verified: each read verifies it again.
     #[tokio::test]
     async fn an_older_daemon_is_verified_again_for_each_read() {
-        use crate::helper_test::{Helper, UID};
+        use crate::test_support::{Helper, UID};
 
         let directory = tempfile::tempdir().unwrap();
         let (client, helper) = Helper::client(directory.path(), UID);
@@ -2085,7 +2085,7 @@ mod tests {
     /// cannot refuse the lookup itself, gets no capture asked of it.
     #[tokio::test]
     async fn an_app_is_captured_only_in_the_session_it_was_found_in() {
-        use crate::helper_test::{Helper, UID};
+        use crate::test_support::{Helper, UID};
 
         let directory = tempfile::tempdir().unwrap();
         let (client, helper) = Helper::client(directory.path(), UID);
@@ -2116,7 +2116,7 @@ mod tests {
     /// nothing is listed, clicked or sent.
     #[tokio::test]
     async fn a_helper_that_changes_after_it_is_verified_is_refused() {
-        use crate::helper_test::{Helper, UID};
+        use crate::test_support::{Helper, UID};
 
         let filter = ElementFilter {
             role: Some("AXButton".into()),
@@ -2174,7 +2174,7 @@ mod tests {
     #[test]
     fn only_a_point_check_asks_the_window_probe_for_the_dock() {
         let directory = tempfile::tempdir().unwrap();
-        let client = crate::transaction_test::client(directory.path());
+        let client = crate::test_support::client(directory.path());
         let skip = windows_probe(&client, DockRead::Skip);
         let read = windows_probe(&client, DockRead::Read);
         assert_eq!(skip[1..], ["windows-info"]);
@@ -2312,7 +2312,7 @@ mod tests {
     /// window lists it gives.
     fn two_apps(lists: &std::cell::Cell<usize>) -> impl FnMut(&Value) -> Option<Value> + '_ {
         move |request| {
-            use crate::helper_test::completed;
+            use crate::test_support::completed;
 
             if request["op"] == "apps" {
                 return Some(json!({"ok": true, "apps": [
@@ -2334,7 +2334,7 @@ mod tests {
     /// What `expected` asks the helper to check, found in a helper showing
     /// [`two_apps`], with how many window lists it read.
     async fn resolved(expected: Option<Expected>) -> (Result<Expect>, usize) {
-        use crate::helper_test::{Helper, UID};
+        use crate::test_support::{Helper, UID};
 
         let directory = tempfile::tempdir().unwrap();
         let (client, helper) = Helper::client(directory.path(), UID);
@@ -4148,7 +4148,7 @@ mod tests {
 
     #[tokio::test]
     async fn a_close_whose_first_list_is_refused_quits_nothing_and_keeps_every_copy() {
-        use crate::helper_test::{Helper, UID};
+        use crate::test_support::{Helper, UID};
 
         let directory = tempfile::tempdir().unwrap();
         let (client, helper) = Helper::client(directory.path(), UID);
@@ -4174,7 +4174,7 @@ mod tests {
     #[tokio::test]
     async fn a_close_whose_list_fails_after_the_signal_keeps_the_copies_and_says_what_was_signalled()
      {
-        use crate::helper_test::{Helper, UID, completed};
+        use crate::test_support::{Helper, UID, completed};
 
         let directory = tempfile::tempdir().unwrap();
         let (client, helper) = Helper::client(directory.path(), UID);
@@ -4234,7 +4234,7 @@ mod tests {
 
     #[tokio::test]
     async fn a_malformed_list_never_reads_as_not_running() {
-        use crate::helper_test::{Helper, UID};
+        use crate::test_support::{Helper, UID};
 
         let directory = tempfile::tempdir().unwrap();
         let (client, helper) = Helper::client(directory.path(), UID);
@@ -4253,7 +4253,7 @@ mod tests {
 
     #[tokio::test]
     async fn an_empty_list_still_means_not_running() {
-        use crate::helper_test::{Helper, UID};
+        use crate::test_support::{Helper, UID};
 
         let directory = tempfile::tempdir().unwrap();
         let (client, helper) = Helper::client(directory.path(), UID);
@@ -4276,9 +4276,9 @@ mod tests {
     async fn removed_copies_are_settled_in_the_task_that_claimed_them() {
         use crate::{
             files::Token,
-            helper_test::{Helper, UID},
             host_session::{Host, HostSession},
             task::{Claims, Owned, State, Task, store::Store},
+            test_support::{Helper, UID},
         };
         use std::os::unix::fs::DirBuilderExt;
 
@@ -4319,9 +4319,9 @@ mod tests {
     #[tokio::test]
     async fn an_app_opened_by_name_is_listed_for_the_task_and_nothing_else_is() {
         use crate::{
-            helper_test::{Helper, UID, completed},
             host_session::{Host, Key},
             task::{Owned, State, Task, store::Store},
+            test_support::{Helper, UID, completed},
         };
 
         let directory = tempfile::tempdir().unwrap();
@@ -4368,7 +4368,7 @@ mod tests {
 
     #[tokio::test]
     async fn an_open_whose_list_is_refused_copies_prunes_and_launches_nothing() {
-        use crate::helper_test::{Helper, UID};
+        use crate::test_support::{Helper, UID};
 
         let directory = tempfile::tempdir().unwrap();
         let (client, helper) = Helper::client(directory.path(), UID);
@@ -4400,9 +4400,9 @@ mod tests {
     async fn an_app_launch_services_cannot_find_opens_from_the_tasks_own_install() {
         use crate::{
             files::Token,
-            helper_test::{Helper, completed, exited},
             host_session::{Host, HostSession},
             task::{Claims, Owned, State, Task, store::Store},
+            test_support::{Helper, completed, exited},
         };
 
         let directory = tempfile::tempdir().unwrap();
@@ -4477,7 +4477,7 @@ mod tests {
 
     #[tokio::test]
     async fn an_app_no_task_installed_is_not_found_by_name_and_nothing_else_is_tried() {
-        use crate::helper_test::{Helper, UID, completed, exited};
+        use crate::test_support::{Helper, UID, completed, exited};
 
         let directory = tempfile::tempdir().unwrap();
         let (client, helper) = Helper::client(directory.path(), UID);

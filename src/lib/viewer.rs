@@ -1800,16 +1800,12 @@ mod tests {
     use super::local::{answering, exchange, parse_response};
     use super::*;
 
-    const SETTINGS: &str = "helper_uid = 60001\nsocket_path = \"c.sock\"\noutput_dir = \"out\"\n\
-                            identity_probe = \"probe\"\ninput_socket = \"i.sock\"\n";
+    use crate::test_support::SETTINGS;
 
     /// A client for a helper that is not there, with controller state
     /// private to the test.
     fn client(dir: &Path) -> Client {
-        let config = Config::parse(SETTINGS.as_bytes(), &dir.join("u.toml")).unwrap();
-        let mut client = Client::new(config).unwrap();
-        client.controller = crate::control::Controller::at(60001, &dir.join("state"));
-        client
+        crate::test_support::client_in(dir)
     }
 
     /// A viewer bound to a free port, for a helper that is not there.
@@ -2083,7 +2079,7 @@ mod tests {
 
     #[tokio::test]
     async fn the_person_takes_control_beside_a_running_command() {
-        if !crate::transaction_test::isolated(
+        if !crate::test_support::isolated(
             "viewer::tests::the_person_takes_control_beside_a_running_command",
         ) {
             return;

@@ -128,7 +128,19 @@ pub fn read(
     guard: &dyn Fn() -> Result<(), Value>,
     events: &mut dyn FnMut(Value) -> bool,
 ) -> Value {
-    match served(request, places, uid, guard, events) {
+    read_at(request, places, uid, guard, events, SystemTime::now())
+}
+
+/// [`read`] as of `now`, which decides whether a file is still.
+pub(crate) fn read_at(
+    request: &ReadRequest,
+    places: &Places,
+    uid: u32,
+    guard: &dyn Fn() -> Result<(), Value>,
+    events: &mut dyn FnMut(Value) -> bool,
+    now: SystemTime,
+) -> Value {
+    match served(request, places, uid, guard, events, now) {
         Ok(reply) => reply,
         Err(Stop::Refused(reason)) => refusal(reason),
         Err(Stop::Guard(refusal)) => refusal,
@@ -153,6 +165,7 @@ fn served(
     uid: u32,
     guard: &dyn Fn() -> Result<(), Value>,
     events: &mut dyn FnMut(Value) -> bool,
+    now: SystemTime,
 ) -> Result<Value, Stop> {
     let path = locate(&request.path, places)?;
     guard().map_err(Stop::Guard)?;
@@ -175,7 +188,7 @@ fn served(
         uid,
         request.expect.as_ref(),
         request.max_size,
-        SystemTime::now(),
+        now,
     )?;
 
     let mut reply = json!({

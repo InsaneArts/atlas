@@ -1509,12 +1509,12 @@ fn handed_over(shared_command: &Path) -> Vec<PathBuf> {
 mod tests {
     #[test]
     fn removing_a_secondary_opener_keeps_control_and_pending_work_after_interruption() {
-        if !crate::transaction_test::isolated(
+        if !crate::test_support::isolated(
             "uninstall::tests::removing_a_secondary_opener_keeps_control_and_pending_work_after_interruption",
         ) {
             return;
         }
-        let directory = crate::transaction_test::interrupted_executor(
+        let directory = crate::test_support::interrupted_executor(
             "uninstall::tests::an_opener_removal_test_caller",
             "opener",
         );
@@ -1548,34 +1548,28 @@ mod tests {
     /// A separate caller with an executor that removes only a temporary opener.
     #[test]
     fn an_opener_removal_test_caller() {
-        let Some(directory) = crate::transaction_test::directory() else {
+        let Some(directory) = crate::test_support::directory() else {
             return;
         };
         let controller = Controller::at(7001, &directory.join("state"));
         let _ = forget_opener(&controller, || {
-            crate::transaction_test::pause_executor(&directory);
+            crate::test_support::pause_executor(&directory);
             Ok(json!({"ok": true, "removed": true}))
         });
     }
 
     #[test]
     fn input_shutdown_stays_pending_when_its_caller_dies_after_dispatch() {
-        use std::{
-            process::{Command, Stdio},
-            time::Duration,
-        };
+        use std::{process::Stdio, time::Duration};
         let directory = tempfile::tempdir().unwrap();
-        let mut caller = Command::new(std::env::current_exe().unwrap())
-            .args([
-                "--exact",
-                "uninstall::tests::an_input_shutdown_test_caller",
-                "--nocapture",
-            ])
-            .env("ATLAS_MUTATION_TEST_DIRECTORY", directory.path())
-            .stdout(Stdio::null())
-            .stderr(Stdio::null())
-            .spawn()
-            .unwrap();
+        let mut caller =
+            crate::test_support::rerun("uninstall::tests::an_input_shutdown_test_caller")
+                .arg("--nocapture")
+                .env("ATLAS_MUTATION_TEST_DIRECTORY", directory.path())
+                .stdout(Stdio::null())
+                .stderr(Stdio::null())
+                .spawn()
+                .unwrap();
         for _ in 0..500 {
             if directory.path().join("dispatched").exists() || caller.try_wait().unwrap().is_some()
             {
@@ -1599,7 +1593,7 @@ mod tests {
     /// A shutdown dispatch stand-in that deliberately never acknowledges completion.
     #[tokio::test]
     async fn an_input_shutdown_test_caller() {
-        let Some(directory) = crate::transaction_test::directory() else {
+        let Some(directory) = crate::test_support::directory() else {
             return;
         };
         let controller = Controller::at(7001, &directory.join("state"));
@@ -1644,7 +1638,7 @@ mod tests {
     }
     #[test]
     fn interrupted_retirement_keeps_every_unacknowledged_mutation_pending() {
-        if !crate::transaction_test::isolated(
+        if !crate::test_support::isolated(
             "uninstall::tests::interrupted_retirement_keeps_every_unacknowledged_mutation_pending",
         ) {
             return;
@@ -1890,7 +1884,7 @@ mod tests {
 
     #[test]
     fn a_helper_held_while_its_caches_go_stays_held() {
-        if !crate::transaction_test::isolated(
+        if !crate::test_support::isolated(
             "uninstall::tests::a_helper_held_while_its_caches_go_stays_held",
         ) {
             return;
@@ -2283,7 +2277,7 @@ mod tests {
 
     #[tokio::test]
     async fn unsupported_or_vanished_input_still_reaches_verified_logout_and_teardown() {
-        if !crate::transaction_test::isolated(
+        if !crate::test_support::isolated(
             "uninstall::tests::unsupported_or_vanished_input_still_reaches_verified_logout_and_teardown",
         ) {
             return;
@@ -2402,7 +2396,7 @@ mod tests {
 
     #[tokio::test]
     async fn no_other_controller_takes_the_helper_until_the_caches_are_gone() {
-        if !crate::transaction_test::isolated(
+        if !crate::test_support::isolated(
             "uninstall::tests::no_other_controller_takes_the_helper_until_the_caches_are_gone",
         ) {
             return;

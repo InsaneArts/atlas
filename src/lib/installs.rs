@@ -173,9 +173,9 @@ pub(crate) async fn installed_path(client: &Client, app: &str) -> Option<String>
 mod tests {
     use super::*;
     use crate::{
-        helper_test::{Helper, UID},
         host_session::{Host, HostSession},
         task::Task,
+        test_support::{Helper, UID},
     };
     use serde_json::json;
     use std::os::unix::fs::DirBuilderExt;
@@ -191,7 +191,7 @@ mod tests {
     #[tokio::test]
     async fn an_install_without_a_task_is_refused() {
         let directory = tempfile::tempdir().unwrap();
-        let client = crate::transaction_test::client(directory.path());
+        let client = crate::test_support::client(directory.path());
         let bundle = bundle_in(directory.path(), "Probe.app");
 
         let error = install(&client, &bundle).await.unwrap_err();
@@ -227,7 +227,7 @@ mod tests {
     #[tokio::test]
     async fn the_same_app_installed_twice_by_one_task_names_the_earlier_install() {
         let directory = tempfile::tempdir().unwrap();
-        let mut client = crate::transaction_test::client(directory.path());
+        let mut client = crate::test_support::client(directory.path());
         let host = HostSession::new(Host::Codex, "twice").unwrap();
         let task = Task::of(host.key(), Some("probe")).unwrap();
         client.host_session = Some(host);
@@ -272,9 +272,9 @@ mod tests {
         if request["argv"][1] == "environment-worker" {
             return worker
                 .as_ref()
-                .map(|reply| crate::helper_test::completed(&reply.to_string()));
+                .map(|reply| crate::test_support::completed(&reply.to_string()));
         }
-        Some(crate::helper_test::completed("1\n"))
+        Some(crate::test_support::completed("1\n"))
     }
 
     fn claimed(client: &Client, task: &Task) -> Vec<(Owned, State)> {
@@ -338,7 +338,7 @@ mod tests {
                             .and_then(|packet| Path::new(packet).parent()?.file_name()?.to_str())
                             .unwrap_or_default()
                     );
-                    return Some(crate::helper_test::exited(
+                    return Some(crate::test_support::exited(
                         environment::WORKER_REFUSED,
                         &refused.to_string(),
                     ));
