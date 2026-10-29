@@ -352,6 +352,108 @@ async fn a_linked_receipt_folder_is_refused() {
     assert!(fs::read_dir(&elsewhere).unwrap().next().is_none());
 }
 
+/// Make `path` look an hour and a half old, not following a link.
+fn aged(path: &Path) {
+    let then = nix::sys::time::TimeVal::new(
+        (SystemTime::now() - Duration::from_secs(90 * 60))
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_secs() as i64,
+        0,
+    );
+    nix::sys::stat::lutimes(path, &then, &then).unwrap();
+}
+
+/// A stale partial file at `folder`/`.0.partial`, and the folder, aged.
+fn stale_partial(folder: &Path) -> PathBuf {
+    fs::DirBuilder::new()
+        .recursive(true)
+        .mode(0o700)
+        .create(folder)
+        .unwrap();
+    let partial = folder.join(".0.partial");
+    fs::write(&partial, b"half").unwrap();
+    aged(&partial);
+    aged(folder);
+    partial
+}
+
+#[tokio::test]
+async fn nothing_is_scavenged_through_a_linked_collected_folder() {
+    let place = Place::new();
+    place.serve();
+    place.file("a.bin", b"a");
+    settle();
+    let output = place.client.output_dir().unwrap();
+    let elsewhere = output.parent().unwrap().join("elsewhere");
+    let partial = stale_partial(&elsewhere.join("unlabelled/1-a1b2c3"));
+    let other = elsewhere.join("unlabelled/1-a1b2c3/keep.txt");
+    fs::write(&other, b"keep").unwrap();
+    aged(&other);
+    fs::set_permissions(&elsewhere, fs::Permissions::from_mode(0o700)).unwrap();
+    std::os::unix::fs::symlink(&elsewhere, output.join(COLLECTED)).unwrap();
+
+    let files = ["a.bin".to_owned()];
+    let error = collected(&place.client, None, &files, 1024, Instant::now())
+        .await
+        .unwrap_err();
+    assert_eq!(error.code, "state");
+    assert!(
+        partial.exists() && other.exists(),
+        "nothing outside was touched"
+    );
+}
+
+#[tokio::test]
+async fn abandoned_parts_are_removed_and_nothing_through_a_link_or_misnamed_is() {
+    let place = Place::new();
+    place.serve();
+    place.file("a.bin", b"a");
+    settle();
+    let output = place.client.output_dir().unwrap().to_owned();
+    let root = output.join(COLLECTED);
+    fs::DirBuilder::new().mode(0o700).create(&root).unwrap();
+    let key = place.client.task.as_ref().unwrap().key().to_string();
+
+    // A receipt's folder with its receipt: only its stale partial goes.
+    let kept = root.join(&key).join("1-aaaaaa");
+    let stale = stale_partial(&kept);
+    fs::write(kept.join("receipt.json"), b"{}").unwrap();
+    let fresh = kept.join(".1.partial");
+    fs::write(&fresh, b"fresh").unwrap();
+    aged(&kept);
+
+    // A folder a killed collection left without its receipt goes whole.
+    let left = root.join(&key).join("2-bbbbbb");
+    stale_partial(&left);
+    fs::DirBuilder::new()
+        .mode(0o700)
+        .create(left.join("files"))
+        .unwrap();
+    let copy = left.join("files/report.pdf");
+    fs::write(&copy, b"pdf").unwrap();
+    aged(&copy);
+    aged(&left.join("files"));
+    aged(&left);
+
+    // Neither a folder Atlas does not name so, nor one reached by a link.
+    let misnamed = stale_partial(&root.join(&key).join("not-a-receipt"));
+    let elsewhere = output.parent().unwrap().join("elsewhere");
+    let outside = stale_partial(&elsewhere.join("3-cccccc"));
+    fs::set_permissions(&elsewhere, fs::Permissions::from_mode(0o700)).unwrap();
+    std::os::unix::fs::symlink(&elsewhere, root.join("000000000000")).unwrap();
+    aged(&root.join(&key));
+
+    let reply = place.collect(&["a.bin"], 1024).await;
+    assert_eq!(reply["ok"], true, "{reply}");
+    assert!(!stale.exists(), "a stale part goes");
+    assert!(fresh.exists(), "a fresh one stays");
+    assert!(kept.join("receipt.json").exists());
+    assert!(!left.exists(), "an unreported collection goes");
+    assert!(misnamed.exists(), "a folder Atlas does not name is left");
+    assert!(outside.exists(), "a link is never followed");
+}
+
 #[tokio::test]
 async fn an_older_daemon_is_refused_before_anything_is_read() {
     use base64::{Engine, engine::general_purpose::STANDARD};
