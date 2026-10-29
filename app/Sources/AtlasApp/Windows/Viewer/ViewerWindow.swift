@@ -105,8 +105,8 @@ final class ViewerWindow: NSWindow, NSWindowDelegate, WindowPresenting {
   private func openWantedSessionsMenu() {
     guard controller.session.sessionsMenuWanted, sessionsFrame != nil else { return }
     Task { @MainActor [weak self] in
-      guard let self, isPresented, controller.session.sessionsMenuWanted, let frame = sessionsFrame else { return }
-      handle(.showSessions(below: frame))
+      guard let self, isPresented, controller.session.sessionsMenuWanted, sessionsFrame != nil else { return }
+      handle(.showSessions)
     }
   }
 
@@ -164,8 +164,9 @@ final class ViewerWindow: NSWindow, NSWindowDelegate, WindowPresenting {
       open(KeysMenu.menu(for: controller), below: frame, as: .keys)
     case .showMore(let frame):
       open(MoreMenu.menu(controller.moreMenu, target: self), below: frame, as: .more)
-    case .showSessions(let frame):
-      guard controller.session.openMenu == nil else { return }
+    case .showSessions:
+      // The button places itself as it is drawn (``ViewerEvent/placeSessions(_:)``), before it can be pressed.
+      guard controller.session.openMenu == nil, let frame = sessionsFrame else { return }
       let menu = SessionsMenu.menu(controller.sessionsMenu, target: self, scale: backingScaleFactor)
       open(menu, at: Self.menuOrigin(leadingBelow: frame), as: .sessions)
     case .placeSessions(let frame):

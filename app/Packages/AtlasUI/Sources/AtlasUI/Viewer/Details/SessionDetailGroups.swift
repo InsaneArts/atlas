@@ -10,7 +10,6 @@ struct SessionDetailGroups: View {
   let detail: ViewerSessionDetail
   /// Receives what the person does.
   let send: @MainActor (ViewerEvent) -> Void
-  @Environment(\.paneShows) private var paneShows
 
   /// The header, then each group that has rows, then the cleanup.
   var body: some View {
@@ -71,10 +70,8 @@ struct SessionDetailGroups: View {
           }
           .buttonStyle(.plain)
           .help("Show this screenshot large")
-          .accessibilityLabel(Text(verbatim: shot.label.isEmpty ? "Screenshot" : shot.label))
-          .onAppear { send(.thumbnailNeeded(shot.name)) }
-          // A kept pane's thumbnails do not appear anew as it shows again; one let go meanwhile is asked for again.
-          .onChange(of: paneShows) { _, shows in if shows { send(.thumbnailNeeded(shot.name)) } }
+          .accessibilityLabel(shot.label)
+          .asksForThumbnail(shot.name, send: send)
         }
       }
     }

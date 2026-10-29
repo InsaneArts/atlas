@@ -13,13 +13,8 @@ public struct ViewerActivitySessionGroup: Equatable, Sendable, Identifiable {
   public var tone: StatusTone
   /// Its newest lines, newest first.
   public var lines: [ViewerActivityLine]
-  /// "Show all 14" while it holds more lines than it lists; nil otherwise.
-  public var more: String?
-  /// What VoiceOver reads for Show all, naming the session, such as "Show all 14 from Codex · atlas-landing"; empty
-  /// while there is none.
-  public var moreLabel: String
-  /// What Show all sends: the session chosen, or the person's own filter for "You".
-  public var showAll: ViewerEvent?
+  /// Show all, while it holds more lines than it lists; nil otherwise.
+  public var showAll: ViewerShowAll?
 
   /// Creates a group.
   ///
@@ -30,9 +25,7 @@ public struct ViewerActivitySessionGroup: Equatable, Sendable, Identifiable {
   ///   - state: Its state in a word; empty for none.
   ///   - tone: The state's tone; quiet by default.
   ///   - lines: Its newest lines.
-  ///   - more: "Show all 14"; nil for none.
-  ///   - moreLabel: What VoiceOver reads for Show all; empty by default, which reads `more` alone.
-  ///   - showAll: What Show all sends.
+  ///   - showAll: Show all, while it holds more lines than it lists; none by default.
   public init(
     id: String,
     icon: RowIcon?,
@@ -40,9 +33,7 @@ public struct ViewerActivitySessionGroup: Equatable, Sendable, Identifiable {
     state: String = "",
     tone: StatusTone = .quiet,
     lines: [ViewerActivityLine],
-    more: String? = nil,
-    moreLabel: String = "",
-    showAll: ViewerEvent? = nil
+    showAll: ViewerShowAll? = nil
   ) {
     self.id = id
     self.icon = icon
@@ -50,8 +41,6 @@ public struct ViewerActivitySessionGroup: Equatable, Sendable, Identifiable {
     self.state = state
     self.tone = tone
     self.lines = lines
-    self.more = more
-    self.moreLabel = moreLabel
     self.showAll = showAll
   }
 }

@@ -82,13 +82,7 @@ struct PanelPicture: View {
     ZStack(alignment: .bottomLeading) {
       if let caption = state.caption {
         GlassChip(lead: Self.lead(caption), time: caption.time.isEmpty ? nil : caption.time, size: .small) {
-          HStack(spacing: Spacing.xsPlus) {
-            if let icon = caption.icon {
-              SessionIcon(icon: icon, side: PanelLayout.captionIcon)
-            }
-            Text(caption.text)
-              .truncationMode(.tail)
-          }
+          CaptionLine(icon: caption.icon, text: caption.text)
         }
         .frame(maxWidth: PanelLayout.captionWidth, alignment: .leading)
         .padding(PanelLayout.captionInset)

@@ -4,14 +4,13 @@ import SwiftUI
 enum ViewerLayout {
   /// 52: the top row's height, the title bar's with its empty toolbar.
   static let topRowHeight: CGFloat = 52
-  /// 16: a host session's icon in the sessions menu's button, the screen's chip and Details.
+  /// 16: a host session's icon in the sessions menu's button and the screen's chip, as large as in the menu itself.
   static let sessionIcon = IconSize.s
   /// -2: between the icons the sessions button stacks, each just over the one before, with room to tell them apart.
   static let sessionStackSpacing = -Spacing.half
   /// 20: a host session's icon heading its group in Activity, and before the Activity title of one session.
   static let groupIcon: CGFloat = 20
-  /// 14: a host session's icon in a caption over the screen.
-  static let captionIcon = IconSize.xsPlus
+
   /// 4: the most lines a session's group lists in Activity before Show all.
   static let groupLines = 4
   /// 84 by 52: a screenshot's thumbnail in a session's Details.

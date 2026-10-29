@@ -15,7 +15,7 @@ struct PanelSessionRow: View {
     Button {
       send(.openSession(entry.id))
     } label: {
-      HStack(spacing: Spacing.sPlus) {
+      HStack(spacing: PanelLayout.sessionGap) {
         SessionIcon(icon: entry.icon, side: PanelLayout.sessionIcon)
         words
         state
@@ -27,8 +27,7 @@ struct PanelSessionRow: View {
     .help("Show its activity in Atlas")
     .accessibilityElement(children: .ignore)
     .accessibilityLabel(entry.label)
-    .accessibilityHint("Shows its activity")
-    .accessibilityAddTraits(.isButton)
+    .accessibilityHint("Shows its activity in Atlas")
   }
 
   /// The name over the line, each on one line cut short at its end.

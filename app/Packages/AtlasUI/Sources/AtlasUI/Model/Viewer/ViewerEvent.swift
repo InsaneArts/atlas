@@ -22,10 +22,9 @@ public enum ViewerEvent: Equatable, Sendable {
   ///
   /// - Parameter below: The button's frame in the window's content, top left first, which the menu opens under.
   case showMore(below: CGRect)
-  /// The sessions button: offer the host sessions to choose from, in a menu under the button.
-  ///
-  /// - Parameter below: The button's frame in the window's content, top left first, which the menu opens under.
-  case showSessions(below: CGRect)
+  /// The sessions button: offer the host sessions to choose from, in a menu under the button, where the button last
+  /// placed itself (``placeSessions(_:)``).
+  case showSessions
   /// The sessions button took its place in the window, moved, or went: where the window opens the sessions menu when
   /// it is asked to open it by itself, as from the panel.
   ///

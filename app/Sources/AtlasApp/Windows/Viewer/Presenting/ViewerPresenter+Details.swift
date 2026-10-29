@@ -186,10 +186,10 @@ extension ViewerPresenter {
   /// - Parameters:
   ///   - name: The screenshot's file name.
   ///   - snapshot: What the controller holds.
-  /// - Returns: "Screenshot taken at 10:31:44", or empty when its time is unknown.
+  /// - Returns: "Screenshot taken at 10:31:44", or "Screenshot" when its time is unknown.
   static func shotLabel(_ name: String, _ snapshot: ViewerSnapshot) -> String {
     let listed = snapshot.panes.shots.shots?.first { $0.name == name }?.takenAt
-    guard let taken = listed ?? Screenshot.takenAt(named: name) else { return "" }
+    guard let taken = listed ?? Screenshot.takenAt(named: name) else { return ViewerWords.screenshot }
     return ViewerWords.shotLabel(clock(taken, snapshot))
   }
 

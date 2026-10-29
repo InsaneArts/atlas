@@ -11,6 +11,8 @@ struct PaneHeader<Trailing: View>: View {
   let meta: String
   /// The icon before the title, such as a host session's; nil for none.
   var icon: RowIcon?
+  /// The icon's side, from the window's layout.
+  var iconSide = IconSize.s
   /// The controls at the end, such as a search field and filters.
   @ViewBuilder let trailing: Trailing
 
@@ -44,7 +46,7 @@ extension PaneHeader {
   /// The icon, the title and the note beside it; the note gives way first.
   @ViewBuilder private var heading: some View {
     if let icon {
-      SessionIcon(icon: icon, side: ViewerLayout.groupIcon)
+      SessionIcon(icon: icon, side: iconSide)
     }
     Text(title)
       .font(Typography.font(.heading, weight: .semibold))
@@ -80,7 +82,12 @@ extension PaneHeader where Trailing == EmptyView {
   }
 
   #Preview("One session") {
-    PaneHeader(title: SessionSamples.claudeName, meta: String("6 actions today"), icon: SessionSamples.claudeIcon) {
+    PaneHeader(
+      title: SessionSamples.claudeName,
+      meta: String("6 actions today"),
+      icon: SessionSamples.claudeIcon,
+      iconSide: ViewerLayout.groupIcon
+    ) {
       EmptyView()
     }
     .frame(width: SampleWidth.column * 2)

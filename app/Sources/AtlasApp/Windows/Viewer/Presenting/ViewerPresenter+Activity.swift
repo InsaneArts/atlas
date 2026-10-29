@@ -118,9 +118,7 @@ extension ViewerPresenter {
         icon: nil,
         name: ViewerWords.youGroup,
         lines: lines,
-        more: hasMore ? ViewerWords.showAll(group.total) : nil,
-        moreLabel: hasMore ? ViewerWords.showAll(group.total, from: ViewerWords.youGroup) : "",
-        showAll: .filterActivity(.you)
+        showAll: hasMore ? showAll(group, name: ViewerWords.youGroup, event: .filterActivity(.you)) : nil
       )
     }
     let session = resolvedSession(key, snapshot)
@@ -132,9 +130,22 @@ extension ViewerPresenter {
       state: session.state.map(Words.sessionState) ?? "",
       tone: session.state?.tone ?? .quiet,
       lines: lines,
-      more: hasMore ? ViewerWords.showAll(group.total) : nil,
-      moreLabel: hasMore ? ViewerWords.showAll(group.total, from: name) : "",
-      showAll: .chooseSession(.one(key))
+      showAll: hasMore ? showAll(group, name: name, event: .chooseSession(.one(key))) : nil
+    )
+  }
+
+  /// Show all under a group that holds more lines than it lists, naming the group to VoiceOver.
+  ///
+  /// - Parameters:
+  ///   - group: The group.
+  ///   - name: The group's name.
+  ///   - event: What it sends.
+  /// - Returns: Show all.
+  static func showAll(_ group: ActivitySessionGroup, name: String, event: ViewerEvent) -> ViewerShowAll {
+    ViewerShowAll(
+      title: ViewerWords.showAll(group.total),
+      label: ViewerWords.showAll(group.total, from: name),
+      event: event
     )
   }
 

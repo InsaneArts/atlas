@@ -3,8 +3,8 @@ import SwiftUI
 /// The top row's sessions button, beside the status: the live sessions' icons, stacked just over each other, and
 /// "All sessions", or the chosen session's icon and name, then a chevron, on a small glass capsule, pressed while its
 /// menu is open. In the bar's narrower layouts it keeps its icons and chevron alone. It is no taller than the bar's
-/// other buttons, so the bar keeps its height. It tells the window where it is as that changes, so the window can open
-/// its menu under it by itself, as the panel's row for more sessions asks.
+/// other buttons, so the bar keeps its height. It tells the window where it is as that changes, so the window opens
+/// its menu under it, on a press or by itself, as the panel's row for more sessions asks.
 struct ViewerSessionsPicker: View {
   /// What the button shows.
   let button: ViewerSessionsButton
@@ -12,13 +12,11 @@ struct ViewerSessionsPicker: View {
   let showsWords: Bool
   /// Receives what the person does.
   let send: @MainActor (ViewerEvent) -> Void
-  /// Where the button is, in the window, so its menu opens under it.
-  @State private var frame = CGRect.zero
 
   /// The icons, the words and the chevron.
   var body: some View {
     Button {
-      send(.showSessions(below: frame))
+      send(.showSessions)
     } label: {
       HStack(spacing: Spacing.xsPlus) {
         HStack(spacing: ViewerLayout.sessionStackSpacing) {
@@ -41,13 +39,13 @@ struct ViewerSessionsPicker: View {
     .onGeometryChange(for: CGRect.self) {
       $0.frame(in: .global)
     } action: {
-      frame = $0
       send(.placeSessions($0))
     }
     .onDisappear { send(.placeSessions(nil)) }
     .help(button.help)
     .accessibilityLabel(button.title)
-    .accessibilityHint(Text(verbatim: "Opens a menu"))
+    .accessibilityValue(button.isOpen ? "Open" : "")
+    .accessibilityHint("Opens a menu")
   }
 }
 

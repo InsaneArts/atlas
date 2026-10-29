@@ -27,7 +27,7 @@ struct PanelSessions: View {
       .padding(.bottom, Spacing.half)
       VStack(spacing: Spacing.half) {
         // An entry's id is the session's key, which holds as its state changes.
-        ForEach(entries.prefix(PanelLayout.mostSessions)) { entry in
+        ForEach(entries) { entry in
           PanelSessionRow(entry: entry, send: send)
             .transition(arriving)
         }

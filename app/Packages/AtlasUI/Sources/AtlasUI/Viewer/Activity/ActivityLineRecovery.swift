@@ -10,11 +10,11 @@ struct ActivityLineRecovery: View {
   /// Show Screen, then Recover….
   var body: some View {
     HStack(spacing: Spacing.s) {
-      Button(String("Show Screen")) { send(.selectTab(.screen)) }
+      Button("Show Screen") { send(.selectTab(.screen)) }
         .buttonStyle(.capsule(.glass, size: .mini))
         .help("Show what the action left on the helper's screen")
         .accessibilityHint("Shows what the action left on the helper's screen")
-      Button(String("Recover…")) { send(.askRecover) }
+      Button("Recover…") { send(.askRecover) }
         .buttonStyle(.capsule(size: .mini))
         .help("Recover the helper so every session can go on")
         .accessibilityHint("Asks before recovering the helper, so every session can go on")

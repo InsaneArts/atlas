@@ -10,7 +10,6 @@ struct ActivityLineRow: View {
   let line: ViewerActivityLine
   /// Receives what the person does.
   let send: @MainActor (ViewerEvent) -> Void
-  @Environment(\.paneShows) private var paneShows
 
   /// The line as a timeline row, read as one.
   var body: some View {
@@ -55,9 +54,7 @@ struct ActivityLineRow: View {
       }
       .buttonStyle(.textLink)
       .help("Show this screenshot large")
-      .onAppear { send(.thumbnailNeeded(shot.name)) }
-      // A kept pane's lines do not appear anew as it shows again; a thumbnail let go meanwhile is asked for again.
-      .onChange(of: paneShows) { _, shows in if shows { send(.thumbnailNeeded(shot.name)) } }
+      .asksForThumbnail(shot.name, send: send)
     } else if line.lead == .live {
       Text(verbatim: "now")
     }

@@ -85,10 +85,10 @@ struct ViewerPresenterActivityTests {
     #expect(activity.sessions.map(\.name) == ["Claude Code · understudy", "Codex · atlas-landing", "You", "Terminal"])
     let claude = try #require(activity.sessions.first)
     #expect(claude.lines.map(\.id) == ["claude-0", "claude-1", "claude-2", "claude-3"])
-    #expect(claude.more == "Show all 6")
-    #expect(claude.showAll == .chooseSession(.one("3f9a1c07b2e4")))
+    #expect(claude.showAll?.title == "Show all 6")
+    #expect(claude.showAll?.event == .chooseSession(.one("3f9a1c07b2e4")))
     #expect(claude.state == "Acting")
-    #expect(activity.sessions[1].more == nil, "a session with four lines or fewer lists them all")
+    #expect(activity.sessions[1].showAll == nil, "a session with four lines or fewer lists them all")
     // With one session live, the same log is grouped by time, as today.
     let alone = ViewerPresenter.activity(try Self.onActivity(Self.mixedLog, sessions: [SessionReplies.claudeActing]))
     #expect(alone.sessions.isEmpty)

@@ -21,7 +21,7 @@ struct ViewerActivityPane: View {
   /// The header with the search and filters, over the lines or why there are none.
   var body: some View {
     VStack(spacing: .zero) {
-      PaneHeader(title: state.title, meta: state.meta, icon: state.titleIcon) {
+      PaneHeader(title: state.title, meta: state.meta, icon: state.titleIcon, iconSide: ViewerLayout.groupIcon) {
         if state.isSearchable {
           SearchField(text: state.query, prompt: "Search activity", focusRequests: state.findRequests) {
             send(.searchActivity($0))

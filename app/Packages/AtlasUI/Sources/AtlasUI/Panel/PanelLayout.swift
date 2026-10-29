@@ -26,11 +26,11 @@ enum PanelLayout {
   static let mostSessions = 3
   /// 4: a session row's inset round its content, inside its hover fill.
   static let sessionInset = Spacing.xs
+  /// 10: between a session row's icon and its words.
+  static let sessionGap = Spacing.sPlus
   /// Where a session row's words start: past its inset, its icon and the gap after it, so the row under the sessions
   /// lines up with their names.
-  static let sessionText = sessionInset + sessionIcon + Spacing.sPlus
-  /// 14: a session's icon before the caption's words.
-  static let captionIcon = IconSize.xsPlus
+  static let sessionText = sessionInset + sessionIcon + sessionGap
   /// 8: the inset of whatever sits on the picture's corners: the caption, the pause button, the badge and the expand
   /// symbol.
   static let captionInset = Spacing.s

@@ -138,8 +138,7 @@
               text: "Opened Opie",
               label: "10:27:42, Opened Opie"
             )
-          ],
-          showAll: .chooseSession(.one(SessionSamples.cursorKey))
+          ]
         ),
         ViewerActivitySessionGroup(
           id: "you",
@@ -162,8 +161,7 @@
               text: "You clicked in Opie ×3",
               label: "10:29:05, You clicked in Opie ×3"
             ),
-          ],
-          showAll: .filterActivity(.you)
+          ]
         ),
         ViewerActivitySessionGroup(
           id: "session-\(SessionSamples.terminalKey)",
@@ -179,8 +177,7 @@
               text: "Ran a command",
               label: "10:26:42, Ran a command"
             )
-          ],
-          showAll: .chooseSession(.one(SessionSamples.terminalKey))
+          ]
         ),
       ]
       return terminalListed ? [groups[0], groups[2], groups[1]] : groups
@@ -192,8 +189,7 @@
       icon: SessionSamples.codexIcon,
       name: SessionSamples.codexName,
       state: "Waiting",
-      lines: codexGroupLines,
-      showAll: .chooseSession(.one(SessionSamples.codexKey))
+      lines: codexGroupLines
     )
 
     /// Activity with every session's work, grouped by session in the status's order: Claude Code acting, Codex
@@ -211,9 +207,11 @@
         state: "Acting",
         tone: .active,
         lines: claudeGroupLines,
-        more: "Show all 6",
-        moreLabel: "Show all 6 from \(SessionSamples.claudeName)",
-        showAll: .chooseSession(.one(SessionSamples.claudeKey))
+        showAll: ViewerShowAll(
+          title: "Show all 6",
+          label: "Show all 6 from \(SessionSamples.claudeName)",
+          event: .chooseSession(.one(SessionSamples.claudeKey))
+        )
       )
       state.pane = .activity(
         ViewerActivityState(
@@ -266,9 +264,11 @@
         state: "Needs you",
         tone: .attention,
         lines: [unfinished] + claudeGroupLines.dropFirst(),
-        more: "Show all 6",
-        moreLabel: "Show all 6 from \(SessionSamples.claudeName)",
-        showAll: .chooseSession(.one(SessionSamples.claudeKey))
+        showAll: ViewerShowAll(
+          title: "Show all 6",
+          label: "Show all 6 from \(SessionSamples.claudeName)",
+          event: .chooseSession(.one(SessionSamples.claudeKey))
+        )
       )
       state.pane = .activity(
         ViewerActivityState(

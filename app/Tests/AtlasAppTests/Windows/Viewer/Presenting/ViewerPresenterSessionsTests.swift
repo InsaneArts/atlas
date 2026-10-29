@@ -148,7 +148,7 @@ struct ViewerPresenterSessionsTests {
     #expect(names == ["Claude Code · understudy", "Terminal", "Cursor · opie", "You"])
     let group = try #require(activity.sessions.first { $0.name == "Terminal" })
     #expect(group.state == "Idle")
-    #expect(group.moreLabel == "Show all 6 from Terminal")
+    #expect(group.showAll?.label == "Show all 6 from Terminal")
   }
 
   @Test("a copy and a plan say what is known, with no empty value where a time would be")

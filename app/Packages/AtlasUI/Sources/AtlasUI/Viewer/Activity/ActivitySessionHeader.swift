@@ -9,27 +9,30 @@ struct ActivitySessionHeader: View {
   /// Receives what the person does.
   let send: @MainActor (ViewerEvent) -> Void
 
-  /// The icon, the name and the state, and Show all, on the pinned ground.
+  /// The icon, the name and the state, read as one header, and Show all apart from it, on the pinned ground.
   var body: some View {
     HStack(spacing: Spacing.s) {
-      lead
-      Text(group.name)
-        .font(Typography.font(.callout, weight: .semibold))
-        .foregroundStyle(Color.textPrimary)
-        .truncationMode(.tail)
-        .accessibilityAddTraits(.isHeader)
-      if !group.state.isEmpty {
-        Text(group.state)
-          .font(Typography.font(.callout, weight: .medium))
-          .foregroundStyle(group.tone.stateColor)
-          .fixedSize()
+      HStack(spacing: Spacing.s) {
+        lead
+        Text(group.name)
+          .font(Typography.font(.callout, weight: .semibold))
+          .foregroundStyle(Color.textPrimary)
+          .truncationMode(.tail)
+        if !group.state.isEmpty {
+          Text(group.state)
+            .font(Typography.font(.callout, weight: .medium))
+            .foregroundStyle(group.tone.stateColor)
+            .fixedSize()
+        }
       }
+      .accessibilityElement(children: .combine)
+      .accessibilityAddTraits(.isHeader)
       Spacer(minLength: .zero)
-      if let more = group.more, let showAll = group.showAll {
-        Button(more) { send(showAll) }
+      if let showAll = group.showAll {
+        Button(showAll.title) { send(showAll.event) }
           .buttonStyle(.textLink)
           .fixedSize()
-          .accessibilityLabel(group.moreLabel.isEmpty ? more : group.moreLabel)
+          .accessibilityLabel(showAll.label)
       }
     }
     .lineLimit(1)

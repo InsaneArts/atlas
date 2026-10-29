@@ -55,12 +55,7 @@ struct CaptionStack: View {
   private func chip(_ entry: ActivityEntry, showsWords: Bool) -> some View {
     GlassChip(lead: Self.lead(entry)) {
       Group {
-        HStack(spacing: Spacing.xsPlus) {
-          if let icon = entry.icon {
-            SessionIcon(icon: icon, side: ViewerLayout.captionIcon)
-          }
-          Text(entry.line)
-        }
+        CaptionLine(icon: entry.icon, text: entry.line)
         // A time changes every second, so it takes no transition.
         Text(entry.when)
           .font(Typography.digits(.callout))
