@@ -31,6 +31,7 @@ pub mod menubar;
 pub mod native;
 pub mod onboarding;
 pub mod overview;
+pub mod process;
 pub mod readiness;
 mod record_folder;
 mod select;

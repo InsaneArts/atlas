@@ -532,87 +532,19 @@ struct Executor {
 
 /// The immutable identity of this boot, unaffected by wall-clock changes.
 fn executor_boot() -> Result<String> {
-    executor_boot_with(executor_sysctl)
+    crate::process::boot()
 }
 
+#[cfg(test)]
 fn executor_boot_with(read: impl FnOnce(&std::ffi::CStr) -> Result<String>) -> Result<String> {
     read(c"kern.bootsessionuuid")
 }
 
-#[allow(unsafe_code, reason = "FFI: kern.bootsessionuuid has no safe binding")]
-fn executor_sysctl(name: &std::ffi::CStr) -> Result<String> {
-    let mut boot = [0_u8; 37];
-    let mut size = std::mem::size_of_val(&boot);
-    // SAFETY: NUL-terminated name and writable buffer of the declared size; no input buffer.
-    let status = unsafe {
-        libc::sysctlbyname(
-            name.as_ptr(),
-            boot.as_mut_ptr().cast(),
-            &mut size,
-            std::ptr::null_mut(),
-            0,
-        )
-    };
-    if status != 0 || size != std::mem::size_of_val(&boot) {
-        return Err(std::io::Error::last_os_error().into());
-    }
-    std::ffi::CStr::from_bytes_with_nul(&boot)
-        .ok()
-        .and_then(|boot| boot.to_str().ok())
-        .map(str::to_owned)
-        .ok_or_else(|| Error::new("state", "Invalid boot session UUID"))
-}
-
-#[allow(unsafe_code, reason = "FFI: KERN_PROC_PID has no safe binding")]
+/// The exact start time of the executor, whichever account it runs as:
+/// `proc_pidinfo` refuses another user's process, the root executor
+/// included, and the kernel's process sysctl does not.
 fn executor_start(pid: i32) -> Result<[u64; 2]> {
-    // PROC_PIDTBSDINFO refuses another user's process, including the root
-    // executor. KERN_PROC_PID exposes the same exact start time across users.
-    let mut name = [libc::CTL_KERN, libc::KERN_PROC, libc::KERN_PROC_PID, pid];
-    let mut size = 0;
-    // SAFETY: the four-element MIB is valid; a null output asks only its size.
-    let status = unsafe {
-        libc::sysctl(
-            name.as_mut_ptr(),
-            name.len() as u32,
-            std::ptr::null_mut(),
-            &mut size,
-            std::ptr::null_mut(),
-            0,
-        )
-    };
-    if status != 0 {
-        return Err(std::io::Error::last_os_error().into());
-    }
-    let invalid = || Error::new("state", "The executor's start time is unavailable");
-    if size < std::mem::size_of::<libc::timeval>() {
-        return Err(invalid());
-    }
-    let mut info = vec![0_u8; size];
-    // SAFETY: the MIB is valid and info has the declared writable capacity.
-    let status = unsafe {
-        libc::sysctl(
-            name.as_mut_ptr(),
-            name.len() as u32,
-            info.as_mut_ptr().cast(),
-            &mut size,
-            std::ptr::null_mut(),
-            0,
-        )
-    };
-    if status != 0 {
-        return Err(std::io::Error::last_os_error().into());
-    }
-    if size < std::mem::size_of::<libc::timeval>() || size > info.len() {
-        return Err(invalid());
-    }
-    // SAFETY: sys/sysctl.h's kinfo_proc starts with kp_proc; sys/proc.h's
-    // extern_proc starts with p_starttime, a timeval. The returned prefix is
-    // long enough, and read_unaligned does not assume the byte buffer's alignment.
-    let start = unsafe { info.as_ptr().cast::<libc::timeval>().read_unaligned() };
-    if start.tv_sec <= 0 || !(0..1_000_000).contains(&start.tv_usec) {
-        return Err(invalid());
-    }
-    Ok([start.tv_sec as u64, start.tv_usec as u64])
+    crate::process::start(pid)
 }
 
 /// A different boot or process instance cannot be the dispatched executor.
