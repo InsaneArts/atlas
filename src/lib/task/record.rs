@@ -122,12 +122,16 @@ impl Record {
     }
 
     /// Note that the task is about to make `owned`, or made it, `now`. A
-    /// thing already listed takes the new state where it is. When the list
-    /// is full, room is made by forgetting the oldest thing that is gone,
+    /// thing already listed takes the new state where it is. Each open by
+    /// name keeps its own claim, so activating an app does not erase the
+    /// claim of its launch. When the list is full, room is made by
+    /// forgetting the oldest thing that is gone,
     /// then the oldest app opened by name; with neither, the claim is
     /// refused.
     pub(crate) fn claim(&mut self, owned: &Owned, state: State, now: u64) -> Result<()> {
-        if self.settle(owned, state, now) {
+        if !(matches!(owned, Owned::Launch { .. }) && state == State::Made)
+            && self.settle(owned, state, now)
+        {
             return Ok(());
         }
         if self.owned.len() >= OWNED {
@@ -149,38 +153,41 @@ impl Record {
 
     /// Note what became of `owned` `now`; whether this record lists it.
     pub(crate) fn settle(&mut self, owned: &Owned, state: State, now: u64) -> bool {
-        let claim = self.owned.iter_mut().find_map(|entry| match entry {
-            Entry::Known(claim) if claim.owned().is_some_and(|known| known.same(owned)) => {
-                Some(claim)
+        let mut settled = false;
+        for entry in &mut self.owned {
+            if let Entry::Known(claim) = entry
+                && claim.owned().is_some_and(|known| known.same(owned))
+            {
+                claim.state = state;
+                claim.at = now;
+                settled = true;
             }
-            _ => None,
-        });
-        let Some(claim) = claim else {
-            return false;
-        };
-        claim.state = state;
-        claim.at = now;
-        true
+        }
+        settled
     }
 
     /// Everything this record claims that this build understands, with its
     /// state.
     pub(crate) fn claims(&self) -> impl Iterator<Item = (Owned, State)> + '_ {
+        self.timed_claims().map(|(owned, state, _)| (owned, state))
+    }
+
+    /// Every understood claim with its own state and time, including each
+    /// open of the same app.
+    pub(crate) fn timed_claims(&self) -> impl Iterator<Item = (Owned, State, u64)> + '_ {
         self.owned.iter().filter_map(|entry| match entry {
-            Entry::Known(claim) => claim.owned().map(|owned| (owned, claim.state)),
+            Entry::Known(claim) => claim.owned().map(|owned| (owned, claim.state, claim.at)),
             Entry::Later(_) => None,
         })
     }
 
-    /// When the claim of `owned` was made or last settled, when this record
-    /// lists it.
+    /// When the newest claim of `owned` was made or last settled, when
+    /// this record lists it.
     pub(crate) fn claimed_at(&self, owned: &Owned) -> Option<u64> {
-        self.owned.iter().find_map(|entry| match entry {
-            Entry::Known(claim) if claim.owned().is_some_and(|known| known.same(owned)) => {
-                Some(claim.at)
-            }
-            _ => None,
-        })
+        self.timed_claims()
+            .filter(|(known, _, _)| known.same(owned))
+            .map(|(_, _, at)| at)
+            .max()
     }
 
     /// Whether anything this record lists may still be in the helper or

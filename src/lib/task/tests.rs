@@ -219,6 +219,38 @@ fn a_full_record_drops_finished_entries_first_and_refuses_a_claim_when_none_are_
 }
 
 #[test]
+fn settling_an_app_settles_every_open_that_the_task_recorded() {
+    let mut record = Record::new(&task("one", None), 1);
+    let launch = Owned::Launch {
+        app: "Notes".into(),
+    };
+    let other = Owned::Launch {
+        app: "TextEdit".into(),
+    };
+    record.claim(&launch, State::Made, 2).unwrap();
+    record.claim(&other, State::Made, 3).unwrap();
+    record.claim(&launch, State::Made, 4).unwrap();
+    assert_eq!(
+        record.timed_claims().collect::<Vec<_>>(),
+        [
+            (launch.clone(), State::Made, 2),
+            (other.clone(), State::Made, 3),
+            (launch.clone(), State::Made, 4),
+        ]
+    );
+    assert_eq!(record.claimed_at(&launch), Some(4));
+    assert!(record.settle(&launch, State::Gone, 5));
+    assert_eq!(
+        record.timed_claims().collect::<Vec<_>>(),
+        [
+            (launch.clone(), State::Gone, 5),
+            (other, State::Made, 3),
+            (launch, State::Gone, 5),
+        ]
+    );
+}
+
+#[test]
 fn a_record_a_later_build_wrote_keeps_what_this_one_does_not_know() {
     let directory = tempfile::tempdir().unwrap();
     let store = Store::at(directory.path());

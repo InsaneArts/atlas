@@ -112,7 +112,7 @@ impl Running<'_> {
             return None;
         }
 
-        newest(tasks, |owned, state| {
+        newest(tasks, |owned, state, _| {
             matches!(owned, Owned::Install { app, .. } if state.live() && same_text(app, &self.name))
         })
         .map(|(task, at)| self.origin(task, How::Install, Some(at)))
@@ -121,10 +121,10 @@ impl Running<'_> {
     /// Opened by name by a task that claimed it near this launch.
     fn claimed(&self, tasks: &[Record]) -> Option<Origin> {
         let launched = self.launched_at?;
-        newest(tasks, |owned, state| {
+        newest(tasks, |owned, state, at| {
             matches!(owned, Owned::Launch { app } if state == State::Made && same_text(app, &self.name))
+                && launched.abs_diff(at) <= CLAIM_AROUND_LAUNCH
         })
-        .filter(|(_, at)| launched.abs_diff(*at) <= CLAIM_AROUND_LAUNCH)
         .map(|(task, _)| self.origin(task, How::Launch, Some(launched)))
     }
 
@@ -166,13 +166,13 @@ impl Running<'_> {
 
 /// The task among `tasks` with the newest claim `wanted` takes, with that
 /// claim's time.
-fn newest(tasks: &[Record], wanted: impl Fn(&Owned, State) -> bool) -> Option<(&Record, u64)> {
+fn newest(tasks: &[Record], wanted: impl Fn(&Owned, State, u64) -> bool) -> Option<(&Record, u64)> {
     tasks
         .iter()
         .flat_map(|task| {
-            task.claims()
-                .filter(|(owned, state)| wanted(owned, *state))
-                .filter_map(move |(owned, _)| Some((task, task.claimed_at(&owned)?)))
+            task.timed_claims()
+                .filter(|(owned, state, at)| wanted(owned, *state, *at))
+                .map(move |(_, _, at)| (task, at))
         })
         .max_by_key(|(_, at)| *at)
 }
@@ -376,6 +376,76 @@ mod tests {
                 !origins(&apps, &[claim], &[], Path::new(handoff::ROOT)).is_empty(),
                 matches,
                 "claim offset {offset}"
+            );
+        }
+    }
+
+    #[test]
+    fn the_newest_claim_within_the_launch_interval_wins_over_later_activations() {
+        let apps = running(
+            "Notes",
+            "/System/Applications/Notes.app/Contents/MacOS/Notes",
+            Some(LAUNCHED),
+        );
+        let launch = Owned::Launch {
+            app: "Notes".into(),
+        };
+        let first = task(
+            "claude:a1",
+            &[(launch.clone(), State::Made, LAUNCHED - 500)],
+        );
+        let newest_valid = task("codex:b2", &[(launch.clone(), State::Made, LAUNCHED + 500)]);
+        let later = task("codex:c3", &[(launch, State::Made, LAUNCHED + 60_000)]);
+        for (tasks, expected) in [
+            (vec![first.clone(), later.clone()], &first),
+            (vec![later.clone(), first.clone()], &first),
+            (
+                vec![first.clone(), newest_valid.clone(), later],
+                &newest_valid,
+            ),
+        ] {
+            let found = origins(&apps, &tasks, &[], Path::new(handoff::ROOT));
+            assert_eq!(
+                found.get(&812),
+                Some(&Origin {
+                    session: expected.session.as_str().to_owned(),
+                    how: How::Launch,
+                    at: Some(LAUNCHED),
+                })
+            );
+        }
+    }
+
+    #[test]
+    fn repeated_opens_in_one_task_preserve_the_evidence_of_each_launch() {
+        let launch = Owned::Launch {
+            app: "Notes".into(),
+        };
+        let reopened = LAUNCHED + 120_000;
+        let record = task(
+            "claude:a1",
+            &[
+                (launch.clone(), State::Made, LAUNCHED + 500),
+                (launch.clone(), State::Made, LAUNCHED + 60_000),
+                (launch, State::Made, reopened + 500),
+            ],
+        );
+        let saved = serde_json::to_value(&record).unwrap();
+        let records = [serde_json::from_value(saved).unwrap()];
+        for launched in [LAUNCHED, reopened] {
+            let apps = running(
+                "Notes",
+                "/System/Applications/Notes.app/Contents/MacOS/Notes",
+                Some(launched),
+            );
+            let found = origins(&apps, &records, &[], Path::new(handoff::ROOT));
+            assert_eq!(
+                found.get(&812),
+                Some(&Origin {
+                    session: record.session.as_str().to_owned(),
+                    how: How::Launch,
+                    at: Some(launched),
+                })
             );
         }
     }
