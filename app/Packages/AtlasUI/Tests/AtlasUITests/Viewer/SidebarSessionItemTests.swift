@@ -1,3 +1,4 @@
+import SwiftUI
 import Testing
 
 @testable import AtlasUI
@@ -29,6 +30,12 @@ struct SidebarSessionItemTests {
     let idle = SidebarSessionItem.items(Self.sessions(.idle), reduceMotion: true)
     #expect(working.last?.id == "working.c")
     #expect(idle.last?.id == "idle.c")
+  }
+
+  @Test("Reduce Motion removes sidebar layout interpolation while ordinary updates retain it")
+  func reducedMotionHasNoLayoutAnimation() {
+    #expect(SidebarSessionList.layoutMotion(reduceMotion: true) == nil)
+    #expect(SidebarSessionList.layoutMotion(reduceMotion: false) == Motion.state)
   }
 
   @Test("a line's changing words leave the list's order alone, so only a move animates it")

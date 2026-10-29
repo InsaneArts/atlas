@@ -90,13 +90,13 @@ struct SidebarSessionList: View {
     if choice != state.chosen { send(.chooseSession(choice)) }
   }
 
-  /// How the lines move as the list's order changes: on ``Motion/state``; under Reduce Motion, where a moved row fades
-  /// rather than travels, over ``Motion/Duration/crossfadeReduced``.
+  /// How the lines move as the service changes their order: on ``Motion/state``; no layout animation under
+  /// Reduce Motion. Inserted and removed rows keep their own opacity transitions.
   ///
   /// - Parameter reduceMotion: Whether the Reduce Motion setting is on.
   /// - Returns: The animation.
-  nonisolated static func layoutMotion(reduceMotion: Bool) -> Animation {
-    Motion.animation(Motion.state, reduceMotion: reduceMotion, reduced: Motion.crossfadeReduced)
+  nonisolated static func layoutMotion(reduceMotion: Bool) -> Animation? {
+    Motion.animation(Motion.state, reduceMotion: reduceMotion)
   }
 
   /// How a line comes and goes: fading in on ``Motion/arrive`` and out on ``Motion/leave``, an Ended row coming down
