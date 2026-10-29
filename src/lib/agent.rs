@@ -19,7 +19,9 @@ use crate::{
     interrupt::Interrupt,
     native::{
         ax::{self, Element, Frame, Stop},
-        windows::{Bounds, Dock, MENU_LAYER, Screen, Shown, Window, top_at, unobstructed},
+        windows::{
+            Bounds, Dock, MENU_LAYER, Screen, Shown, Window, owning_window, top_at, unobstructed,
+        },
     },
     task,
     transport::{accepted, run_output},
@@ -298,7 +300,7 @@ impl Expected {
                 let listed = verified_window_list(client, verified).await?;
                 let owner = window_owner(&listed, *number)?;
                 if let Some(app) = app
-                    && target_pid(client, verified, app).await? != owner.pid
+                    && target_pid_among(client, verified, app, &listed).await? != owner.pid
                 {
                     return Err(other_app(owner, app));
                 }
@@ -323,7 +325,7 @@ impl Expected {
 fn window_owner(listed: &[Window], number: i64) -> Result<&Window> {
     listed
         .iter()
-        .find(|window| window.number == number && app_layer(window))
+        .find(|window| window.number == number && window.is_apps())
         .ok_or_else(|| {
             Error::new(
                 "windows",
@@ -413,7 +415,7 @@ impl Unconfirmed {
         if let Some(holder) = reply["holder"].as_str().and_then(Holder::parse) {
             error = error.held_by(holder);
         }
-        for kept in ["reason", "found"] {
+        for kept in ["reason", "unread", "found"] {
             if !reply[kept].is_null() {
                 error = error.with(kept, &reply[kept]);
             }
@@ -503,7 +505,7 @@ impl WindowFilter {
     pub fn matches(&self, window: &Window) -> bool {
         // An app's floating panels and alerts count as its windows, so a
         // system alert in front of everything is listed too.
-        (self.all || app_layer(window))
+        (self.all || window.is_apps())
             && self.app.as_ref().is_none_or(|app| {
                 window
                     .owner
@@ -1145,23 +1147,6 @@ async fn no_window(client: &Client, filter: &WindowFilter) -> String {
     }
 }
 
-/// Layers from the Dock's up hold the Dock, the menu bar and system overlays,
-/// never an app's own windows.
-const DOCK_LAYER: i64 = 20;
-
-/// Whether `window` is one of an app's own visible windows: an ordinary one,
-/// or a floating panel or alert below the Dock's layer. An open menu is not
-/// one: `windows` and `wait` never mistake it for the window it opens.
-fn app_layer(window: &Window) -> bool {
-    window.layer == 0 || ((1..DOCK_LAYER).contains(&window.layer) && window.alpha > 0.0)
-}
-
-/// [`app_layer`], or a menu the app has open: what an element command may
-/// act on.
-fn app_or_menu_layer(window: &Window) -> bool {
-    app_layer(window) || (window.layer == MENU_LAYER && window.alpha > 0.0)
-}
-
 /// The app an element command is about: a PID, or a name that must resolve
 /// to exactly one process with a window of its own on screen.
 #[derive(Debug, Clone)]
@@ -1177,7 +1162,7 @@ fn app_pids(windows: &[Window], name: &str) -> Vec<i64> {
     let candidates: Vec<&Window> = windows
         .iter()
         .filter(|window| {
-            app_or_menu_layer(window)
+            window.is_apps_or_menu()
                 && window
                     .owner
                     .as_deref()
@@ -1230,6 +1215,21 @@ fn one_pid(name: &str, pids: &[i64]) -> Result<i64> {
 /// the caller verified just before, so it is not verified again for each
 /// list it reads.
 async fn target_pid(client: &Client, verified: &Verified, target: &Target) -> Result<i64> {
+    let listed = match target {
+        Target::Pid(_) => Vec::new(),
+        Target::Name(_) => verified_window_list(client, verified).await?,
+    };
+    target_pid_among(client, verified, target, &listed).await
+}
+
+/// [`target_pid`] with the helper's windows `listed` already read; a
+/// process ID needs none of them.
+async fn target_pid_among(
+    client: &Client,
+    verified: &Verified,
+    target: &Target,
+    listed: &[Window],
+) -> Result<i64> {
     let name = match target {
         Target::Pid(pid) => {
             let apps = client.apps_in(verified).await?;
@@ -1252,7 +1252,7 @@ async fn target_pid(client: &Client, verified: &Verified, target: &Target) -> Re
         Target::Name(name) => name,
     };
 
-    let pids = app_pids(&verified_window_list(client, verified).await?, name);
+    let pids = app_pids(listed, name);
     if !pids.is_empty() {
         return one_pid(name, &pids);
     }
@@ -1598,38 +1598,6 @@ fn compact<'a>(element: &'a Element, windows: &mut Vec<&'a Frame>) -> Value {
     }
 
     listed
-}
-
-/// The CoreGraphics window whose bounds are an element's AX window frame,
-/// or None when no window or more than one window of the process matches.
-fn owning_window(windows: &[Window], pid: i64, frame: &Frame) -> Option<i64> {
-    let near = |a: f64, b: f64| (a - b).abs() <= 1.0;
-    let matching: Vec<&Window> = windows
-        .iter()
-        .filter(|window| {
-            window.pid == pid
-                && app_or_menu_layer(window)
-                && near(window.bounds.x, frame.x)
-                && near(window.bounds.y, frame.y)
-                && near(window.bounds.width, frame.width)
-                && near(window.bounds.height, frame.height)
-        })
-        .collect();
-
-    // An ordinary window wins over a same-sized overlay of the same app.
-    let unique = |windows: Vec<&Window>| match windows.as_slice() {
-        [window] => Some(window.number),
-        _ => None,
-    };
-
-    unique(
-        matching
-            .iter()
-            .copied()
-            .filter(|window| window.layer == 0)
-            .collect(),
-    )
-    .or_else(|| unique(matching))
 }
 
 /// The menu bar where it shows the point, which is the Window Server's
@@ -2296,6 +2264,85 @@ mod tests {
                 "{missing}: an open menu is not a window to type into"
             );
         }
+    }
+
+    /// A helper showing a TextEdit document and Calculator, counting the
+    /// window lists it gives.
+    fn two_apps(lists: &std::cell::Cell<usize>) -> impl FnMut(&Value) -> Option<Value> + '_ {
+        move |request| {
+            use crate::helper_test::completed;
+
+            if request["op"] == "apps" {
+                return Some(json!({"ok": true, "apps": [
+                    {"pid": 812, "name": "TextEdit"}, {"pid": 900, "name": "Calculator"}]}));
+            }
+            assert_eq!(request["argv"][1], "windows-info", "nothing else is read");
+            lists.set(lists.get() + 1);
+            let window = |number, pid, owner| {
+                json!({"number": number, "pid": pid,
+                "owner": owner, "title": null, "layer": 0, "alpha": 1.0,
+                "bounds": {"x": 0, "y": 0, "width": 100, "height": 100}})
+            };
+            let listed = json!({"ok": true, "windows": [
+                window(4120, 812, "TextEdit"), window(339, 900, "Calculator")]});
+            Some(completed(&listed.to_string()))
+        }
+    }
+
+    /// What `expected` asks the helper to check, found in a helper showing
+    /// [`two_apps`], with how many window lists it read.
+    async fn resolved(expected: Option<Expected>) -> (Result<Expect>, usize) {
+        use crate::helper_test::{Helper, UID};
+
+        let directory = tempfile::tempdir().unwrap();
+        let (client, helper) = Helper::client(directory.path(), UID);
+        let lists = std::cell::Cell::new(0);
+        let expected = expected.unwrap();
+        let outcome = helper
+            .serve(
+                async {
+                    let verified = client.verify().await?;
+                    expected.resolve(&client, &verified).await
+                },
+                two_apps(&lists),
+            )
+            .await;
+        (outcome, lists.get())
+    }
+
+    #[tokio::test]
+    async fn an_expectation_is_resolved_in_the_helper_with_one_window_list() {
+        let textedit = || Some(Target::Name("TextEdit".into()));
+        let field = || Some("Email".to_owned());
+
+        let (alone, lists) = resolved(Expected::new(None, Some(4120), field()).unwrap()).await;
+        assert_eq!(
+            serde_json::to_value(alone.unwrap()).unwrap(),
+            json!({"pid": 812, "window": 4120, "field": "Email"}),
+            "the window names its app"
+        );
+        assert_eq!(lists, 1);
+
+        let (both, lists) = resolved(Expected::new(textedit(), Some(4120), None).unwrap()).await;
+        assert_eq!(both.unwrap().pid(), 812);
+        assert_eq!(lists, 1, "the app is found in the same list");
+
+        let calculator = Some(Target::Name("Calculator".into()));
+        let (other, _) = resolved(Expected::new(calculator, Some(4120), None).unwrap()).await;
+        assert_eq!(other.unwrap_err().code, "usage");
+
+        let (by_pid, _) =
+            resolved(Expected::new(Some(Target::Pid(900)), Some(4120), None).unwrap()).await;
+        assert_eq!(by_pid.unwrap_err().code, "usage");
+
+        let (missing, _) = resolved(Expected::new(textedit(), Some(77), None).unwrap()).await;
+        assert_eq!(missing.unwrap_err().code, "windows");
+
+        let (app, _) = resolved(Expected::new(textedit(), None, field()).unwrap()).await;
+        assert_eq!(
+            serde_json::to_value(app.unwrap()).unwrap(),
+            json!({"pid": 812, "field": "Email"})
+        );
     }
 
     #[test]
@@ -3006,10 +3053,7 @@ mod tests {
         );
 
         let menubar = window(1, 2, "Window Server", 24);
-        assert!(
-            !app_or_menu_layer(&menubar),
-            "the menu bar is not the app's"
-        );
+        assert!(!menubar.is_apps_or_menu(), "the menu bar is not the app's");
 
         let open = window(9, 6, "Opie", MENU_LAYER);
         let filter = WindowFilter {

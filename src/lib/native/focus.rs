@@ -5,8 +5,8 @@
 //! one, to be the top one at the point. Nothing here activates, raises or
 //! focuses anything: what is not in place is refused, never moved.
 use super::{
-    ax::{self, Element, Frame, Keyboard, Within},
-    windows::{self, Bounds, Dock, Screen, Window},
+    ax::{self, Element, Focused, Judged, Keyboard, Unread, Within},
+    windows::{self, Bounds, Dock, Kind, Listed, Screen, Window},
 };
 use crate::{
     actions::{Action, Expect},
@@ -14,6 +14,7 @@ use crate::{
     select::{ElementFilter, shown_name},
 };
 use serde::Serialize;
+use serde_json::json;
 use std::time::{Duration, Instant};
 
 /// The most time one request spends checking; past it, the rest is refused
@@ -27,15 +28,20 @@ const FOCUS_TIMEOUT: Duration = Duration::from_millis(250);
 /// all: its focused window, its focused element and the way between them.
 const KEYBOARD_TIMEOUT: Duration = Duration::from_millis(300);
 
-/// Layers from the Dock's up never hold a window an app has keyboard focus
-/// in.
-const DOCK_LAYER: i64 = 20;
+/// The roles of controls that take typed text themselves. Anything else
+/// reported as focused (a window or a web page while focus moves between
+/// fields or sits in a custom view, a button, a tab group, an unknown
+/// element) is no field, whatever its name.
+const FIELDS: [&str; 5] = [
+    "AXTextField",
+    "AXTextArea",
+    "AXComboBox",
+    "AXSearchField",
+    "AXSecureTextField",
+];
 
-/// Roles that hold fields rather than take text themselves. An app that
-/// reports one of these as focused, its window or a web page, says no field
-/// has keyboard focus: focus is on its way between fields, or in a custom
-/// view without accessibility. Its name proves nothing about where keys
-/// land.
+/// Roles that hold other elements, whose names are titles (a document's,
+/// a page's) rather than a field's: a refusal never shows them.
 const CONTAINERS: [&str; 9] = [
     "AXApplication",
     "AXWindow",
@@ -126,13 +132,15 @@ enum Reason {
     Field,
     /// The field has keyboard focus but is disabled.
     Disabled,
-    /// What is in front could not be read in time.
+    /// What is in front could not be told; `unread` says why when the app
+    /// was.
     Unreadable,
 }
 
 /// The focused element found where the expected field should have been:
-/// its role and the name `atlas elements` shows for it. Never its value,
-/// which may be what someone typed.
+/// its role and the name `atlas elements` shows for it, unless it is a
+/// container whose name is a title. Never its value, which may be what
+/// someone typed.
 #[derive(Debug, Serialize)]
 struct Field {
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -143,9 +151,15 @@ struct Field {
 
 impl Field {
     fn of(element: &Element) -> Self {
+        let container = element
+            .role
+            .as_deref()
+            .is_some_and(|role| CONTAINERS.contains(&role));
         Self {
             role: element.role.clone(),
-            name: shown_name(element).map(str::to_owned),
+            name: (!container)
+                .then(|| shown_name(element).map(str::to_owned))
+                .flatten(),
         }
     }
 }
@@ -194,8 +208,9 @@ impl Found {
 trait Look {
     /// The process with keyboard focus; None when no app has it.
     fn focused(&mut self) -> Result<Option<i64>>;
-    /// Where keyboard focus is inside process `pid`.
-    fn keyboard(&mut self, pid: i64) -> Result<Keyboard>;
+    /// Where keyboard focus is inside process `pid`, as far as what is
+    /// `judged` needs.
+    fn keyboard(&mut self, pid: i64, judged: Judged) -> Result<Keyboard>;
     /// On-screen windows, front to back.
     fn windows(&mut self) -> Result<&[Window]>;
     /// Where the Dock takes clicks; [`Dock::Unread`] when that cannot be
@@ -245,9 +260,9 @@ impl Look for Live {
 
     /// Read from the app element of the process judged to have focus, so
     /// the app, window and field checks look at the same app.
-    fn keyboard(&mut self, pid: i64) -> Result<Keyboard> {
-        let left = self.left()?;
-        ax::keyboard(pid, left.min(KEYBOARD_TIMEOUT))
+    fn keyboard(&mut self, pid: i64, judged: Judged) -> Result<Keyboard> {
+        let left = self.left().map_err(|_| Unread::Slow.error())?;
+        ax::keyboard(pid, left.min(KEYBOARD_TIMEOUT), judged)
     }
 
     fn windows(&mut self) -> Result<&[Window]> {
@@ -340,12 +355,14 @@ fn inside(expect: &Expect, look: &mut impl Look) -> Result<()> {
         return Ok(());
     }
 
-    let keyboard = look
-        .keyboard(expect.pid())
-        .map_err(|_| unreadable_inside())?;
+    let judged = Judged {
+        window: expect.window().is_some(),
+        field: expect.field().is_some(),
+    };
+    let keyboard = look.keyboard(expect.pid(), judged).map_err(unread_by)?;
     let verdict = match expect.window() {
         Some(wanted) => {
-            let listed = look.windows().map_err(|_| unreadable_inside())?;
+            let listed = look.windows().map_err(|_| unreadable())?;
             in_window(wanted, expect.pid(), &keyboard, listed)
         }
         None => Verdict::Pass,
@@ -357,15 +374,19 @@ fn inside(expect: &Expect, look: &mut impl Look) -> Result<()> {
 
     let (reason, message) = match verdict {
         Verdict::Pass => return Ok(()),
-        Verdict::Unknown => return Err(unreadable_inside()),
+        Verdict::Unknown(why) => return Err(unread_by(why.error())),
         Verdict::Refused(reason, message) => (reason, message),
     };
     let listed = look.windows().unwrap_or_default();
     let mut found = Found::named(expect.pid(), listed);
-    found.window = keyboard
-        .window
-        .as_ref()
-        .and_then(|window| number(listed, expect.pid(), window));
+    found.window =
+        keyboard
+            .window
+            .as_ref()
+            .and_then(|window| match number(listed, expect.pid(), window) {
+                Listed::One(number) => Some(number),
+                Listed::Missing | Listed::Several => None,
+            });
     found.field = keyboard
         .focused
         .as_ref()
@@ -384,8 +405,8 @@ enum Verdict {
     Pass,
     /// It is not, for this reason, said in these words.
     Refused(Reason, String),
-    /// Whether it is could not be told.
-    Unknown,
+    /// Whether it is could not be told, for this reason.
+    Unknown(Unread),
 }
 
 impl Verdict {
@@ -399,10 +420,11 @@ impl Verdict {
 }
 
 /// Whether window `wanted` of app `pid` has keyboard focus with no sheet
-/// over it: the app's focused window is that window by its number, holds
-/// the focused element with no sheet between them, and no window of the
-/// app's is in front of it at its layer, where a sheet shows. A sheet
-/// named by its own number is a window like any other.
+/// over it: the app's focused window is that window, the one listed window
+/// it can be ([`number`]); it holds the focused element with no sheet
+/// between them; and no shown window of the app's is in front of it at its
+/// layer or above. A sheet named by its own number is a window like any
+/// other.
 fn in_window(wanted: i64, pid: i64, keyboard: &Keyboard, listed: &[Window]) -> Verdict {
     let Some(window) = &keyboard.window else {
         return Verdict::Refused(
@@ -410,60 +432,73 @@ fn in_window(wanted: i64, pid: i64, keyboard: &Keyboard, listed: &[Window]) -> V
             "No window of the app has keyboard focus".to_owned(),
         );
     };
-    let sheet = Verdict::Refused(
-        Reason::Sheet,
-        format!("A sheet is open over window {wanted} and has keyboard focus"),
-    );
+    let sheet = window.role.as_deref() == Some("AXSheet") || keyboard.within == Within::Sheet;
 
     match number(listed, pid, window) {
-        Some(number) if number == wanted => {
-            if keyboard.within == Within::Sheet || covered(listed, pid, number) {
-                return sheet;
+        Listed::One(number) if number == wanted => {
+            if keyboard.within == Within::Sheet {
+                return over(wanted);
+            }
+            if covered(listed, pid, number) {
+                return Verdict::Refused(
+                    Reason::Window,
+                    format!("Another window of the app is in front of window {wanted}"),
+                );
             }
             if keyboard.within == Within::Elsewhere {
-                return Verdict::Unknown;
+                return Verdict::Unknown(Unread::Failed);
             }
             Verdict::Pass
         }
-        _ if window.role.as_deref() == Some("AXSheet") || keyboard.within == Within::Sheet => sheet,
-        Some(number) => Verdict::Refused(
+        _ if sheet => over(wanted),
+        Listed::One(number) => Verdict::Refused(
             Reason::Window,
             format!("Window {number} has keyboard focus, not window {wanted}"),
         ),
-        None => Verdict::Unknown,
+        Listed::Missing => Verdict::Unknown(Unread::Unlisted),
+        Listed::Several => Verdict::Unknown(Unread::Alike),
     }
 }
 
+/// The refusal for a sheet over window `wanted` that has keyboard focus.
+fn over(wanted: i64) -> Verdict {
+    Verdict::Refused(
+        Reason::Sheet,
+        format!("A sheet is open over window {wanted} and has keyboard focus"),
+    )
+}
+
 /// Whether the field named `name` has keyboard focus in app `pid`: the
-/// focused element is the app's own, is no container (see
-/// [`CONTAINERS`]), matches the name as `atlas elements --name` would,
-/// every name of it was read whole, and it is enabled.
+/// focused element is the app's own, is a control that takes text itself
+/// (see [`FIELDS`]), says it is focused, matches the name as `atlas
+/// elements --name` would, and is enabled.
 fn in_field(name: &str, pid: i64, keyboard: &Keyboard) -> Verdict {
-    let Some(focused) = &keyboard.focused else {
-        return Verdict::Refused(
+    let no_field = || {
+        Verdict::Refused(
             Reason::Field,
-            "Nothing in the app has keyboard focus".to_owned(),
-        );
+            "No field of the app has keyboard focus".to_owned(),
+        )
     };
-    if focused.pid != pid {
+    let Some(Focused {
+        element,
+        pid: owner,
+    }) = &keyboard.focused
+    else {
+        return no_field();
+    };
+    if *owner != pid {
         return Verdict::Refused(
             Reason::Field,
             "Keyboard focus is in a panel another process shows".to_owned(),
         );
     }
 
-    let element = &focused.element;
-    let Some(role) = element.role.as_deref() else {
-        return Verdict::Unknown;
-    };
-    if CONTAINERS.contains(&role) {
-        return Verdict::Refused(
-            Reason::Field,
-            "No field of the app has keyboard focus".to_owned(),
-        );
-    }
-    if !element.unreadable.is_empty() || !element.truncated.is_empty() {
-        return Verdict::Unknown;
+    let field = element
+        .role
+        .as_deref()
+        .is_some_and(|role| FIELDS.contains(&role));
+    if !field || element.focused == Some(false) {
+        return no_field();
     }
 
     let filter = ElementFilter {
@@ -477,63 +512,30 @@ fn in_field(name: &str, pid: i64, keyboard: &Keyboard) -> Verdict {
         );
     }
     if element.enabled == Some(false) {
-        return Verdict::Refused(
-            Reason::Disabled,
-            format!("The field named {name} has keyboard focus but is disabled"),
-        );
+        return Verdict::Refused(Reason::Disabled, "That field is disabled".to_owned());
     }
 
     Verdict::Pass
 }
 
-/// The number of the listed window that is app `pid`'s focused `window`:
-/// the one window of the app below the Dock's layer whose bounds are the
-/// window's frame within a point and whose title, when both are known,
-/// holds the window's or is held in it (Chrome adds its own name to what
-/// Accessibility reports). An ordinary window wins over a same-sized
-/// panel. None when no window, or more than one, is it.
-fn number(listed: &[Window], pid: i64, window: &Element) -> Option<i64> {
-    let frame = window.frame.as_ref()?;
-    let matching: Vec<&Window> = listed
-        .iter()
-        .filter(|listed| {
-            listed.pid == pid
-                && (0..DOCK_LAYER).contains(&listed.layer)
-                && listed.alpha > 0.0
-                && frame.matches(&frame_of(&listed.bounds))
-                && match (&listed.title, &window.title) {
-                    (Some(listed), Some(title)) => title.contains(listed) || listed.contains(title),
-                    _ => true,
-                }
-        })
-        .collect();
-    let unique = |windows: Vec<&Window>| match windows.as_slice() {
-        [window] => Some(window.number),
-        _ => None,
+/// Which listed window app `pid`'s focused `window` is: the one its frame,
+/// title and kind (by its subrole) leave, of every window of the app.
+fn number(listed: &[Window], pid: i64, window: &Element) -> Listed {
+    let Some(frame) = &window.frame else {
+        return Listed::Missing;
     };
-
-    unique(
-        matching
-            .iter()
-            .copied()
-            .filter(|window| window.layer == 0)
-            .collect(),
+    windows::described(
+        listed,
+        pid,
+        frame,
+        window.title.as_deref(),
+        Kind::of(window.subrole.as_deref()),
     )
-    .or_else(|| unique(matching))
 }
 
-/// Bounds as a frame, to compare with what Accessibility reports.
-fn frame_of(bounds: &Bounds) -> Frame {
-    Frame {
-        x: bounds.x,
-        y: bounds.y,
-        width: bounds.width,
-        height: bounds.height,
-    }
-}
-
-/// Whether a shown window of app `pid` at window `number`'s layer is in
-/// front of it and overlaps it, as a sheet does.
+/// Whether a shown window of app `pid` is in front of window `number` and
+/// overlaps it, at its layer or above: a sheet's own window, a popup, a
+/// floating panel or an open menu, any of which may take the keys.
 fn covered(listed: &[Window], pid: i64, number: i64) -> bool {
     let Some(index) = listed.iter().position(|window| window.number == number) else {
         return false;
@@ -541,7 +543,7 @@ fn covered(listed: &[Window], pid: i64, number: i64) -> bool {
     let window = &listed[index];
     listed[..index].iter().any(|other| {
         other.pid == pid
-            && other.layer == window.layer
+            && other.layer >= window.layer
             && other.alpha > 0.0
             && other.bounds.intersects(&window.bounds)
     })
@@ -680,16 +682,20 @@ pub fn unreadable() -> Error {
     )
 }
 
-/// The refusal when the app is in front but where its focus is inside it
-/// could not be read whole in time.
-fn unreadable_inside() -> Error {
+/// The refusal for an app in front whose window or field could not be
+/// told, in the words of the read's `error` and naming why when it says.
+fn unread_by(error: Error) -> Error {
+    let why = error
+        .details
+        .get("unread")
+        .cloned()
+        .unwrap_or_else(|| json!(Unread::Failed));
     refused(
         Reason::Unreadable,
-        format!(
-            "Atlas could not tell which window or field of the app has keyboard focus, {NOT_SENT}"
-        ),
+        format!("{}, {NOT_SENT}", error.error),
         None,
     )
+    .with("unread", why)
 }
 
 /// A `focus-changed` refusal for `reason`, naming what was `found`.
@@ -704,7 +710,7 @@ fn refused(reason: Reason, message: String, found: Option<Found>) -> Error {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use serde_json::json;
+    use crate::native::ax::Frame;
 
     const APP: i64 = 812;
     const OTHER: i64 = 900;
@@ -755,6 +761,9 @@ mod tests {
         dock: Option<Dock>,
         /// Where focus is inside the app; unreadable unless a test sets it.
         keyboard: Option<Keyboard>,
+        /// Why the keyboard read fails when it does, and how long it takes.
+        unread: Option<Unread>,
+        slow: Duration,
         focus_reads: usize,
         window_reads: usize,
         keyboard_reads: usize,
@@ -793,8 +802,12 @@ mod tests {
             }
         }
 
-        fn keyboard(&mut self, _: i64) -> Result<Keyboard> {
+        fn keyboard(&mut self, _: i64, _: Judged) -> Result<Keyboard> {
             self.keyboard_reads += 1;
+            std::thread::sleep(self.slow);
+            if let Some(why) = self.unread {
+                return Err(why.error());
+            }
             self.keyboard
                 .clone()
                 .ok_or_else(|| Error::new("native", "unreadable"))
@@ -1255,6 +1268,7 @@ mod tests {
     fn document_window() -> Element {
         Element {
             title: Some("Letter.txt".to_owned()),
+            subrole: Some("AXStandardWindow".to_owned()),
             ..element("AXWindow", (100.0, 100.0, 400.0, 300.0))
         }
     }
@@ -1386,12 +1400,13 @@ mod tests {
         assert_eq!(refused["reason"], "sheet");
         assert_eq!(refused["found"]["window"], 4122);
 
-        // A window of the app's in front of the document at its layer, as
-        // a sheet's own window shows, even when the reads miss the sheet.
+        // A window of the app's in front of the document, as a sheet's own
+        // window shows, even when the reads miss the sheet: named for what
+        // the window list says it is, another window.
         let mut covered = inside_with(typing(field("Email")), vec![sheet, document()]);
         assert_eq!(
             refusal(expecting(&in_document(), &mut covered))["reason"],
-            "sheet"
+            "window"
         );
     }
 
@@ -1418,13 +1433,109 @@ mod tests {
     }
 
     #[test]
-    fn a_floating_panel_of_the_app_in_front_does_not_cover_the_window() {
+    fn a_window_of_the_app_in_front_at_a_higher_layer_is_refused_as_another_window() {
+        let panel = |bounds| Window {
+            layer: 3,
+            ..numbered(4130, APP, Some("Fonts"), bounds)
+        };
+        let menu = Window {
+            layer: windows::MENU_LAYER,
+            ..numbered(4131, APP, None, (120.0, 120.0, 150.0, 200.0))
+        };
+        for (listed, what) in [
+            (
+                vec![panel((150.0, 150.0, 200.0, 200.0)), document()],
+                "a panel",
+            ),
+            (vec![menu, document()], "an open menu"),
+        ] {
+            let mut look = inside_with(typing(field("Email")), listed);
+            let error = expecting(&in_document(), &mut look).unwrap_err();
+            assert_eq!(error.details["reason"], "window", "{what}");
+            assert!(
+                error
+                    .error
+                    .starts_with("Another window of the app is in front"),
+                "{what}: {}",
+                error.error
+            );
+        }
+
+        let aside = panel((600.0, 100.0, 200.0, 200.0));
+        let mut look = inside_with(typing(field("Email")), vec![aside, document()]);
+        assert!(
+            expecting(&in_document(), &mut look).is_ok(),
+            "a panel beside it"
+        );
+    }
+
+    /// A floating panel and a document at the same place, with titles
+    /// that do not tell them apart: the panel's subrole says which one has
+    /// focus, and the document is never taken for the panel.
+    #[test]
+    fn a_panel_with_the_same_frame_is_told_apart_by_its_kind_or_refused() {
         let panel = Window {
             layer: 3,
-            ..numbered(4130, APP, Some("Fonts"), (150.0, 150.0, 200.0, 200.0))
+            ..numbered(4130, APP, None, (100.0, 100.0, 400.0, 300.0))
         };
-        let mut look = inside_with(typing(field("Email")), vec![panel, document()]);
-        assert!(expecting(&in_document(), &mut look).is_ok());
+        let panel_window = |subrole: Option<&str>| Element {
+            title: None,
+            subrole: subrole.map(str::to_owned),
+            ..document_window()
+        };
+        let listed = vec![panel.clone(), document()];
+
+        assert_eq!(
+            number(&listed, APP, &panel_window(Some("AXFloatingWindow"))),
+            Listed::One(4130)
+        );
+        assert_eq!(
+            number(&listed, APP, &document_window()),
+            Listed::Several,
+            "a standard window may be raised to the panel's layer: never the document by default"
+        );
+        assert_eq!(
+            number(&listed, APP, &panel_window(None)),
+            Listed::Several,
+            "a window that says nothing of its kind"
+        );
+
+        let mut panel_in_front = inside_with(
+            Keyboard {
+                window: Some(panel_window(Some("AXFloatingWindow"))),
+                ..typing(field("Email"))
+            },
+            listed.clone(),
+        );
+        let refused = refusal(expecting(&in_document(), &mut panel_in_front));
+        assert_eq!(refused["reason"], "window");
+        assert_eq!(refused["found"]["window"], 4130);
+
+        let mut unsaid = inside_with(
+            Keyboard {
+                window: Some(panel_window(None)),
+                ..typing(field("Email"))
+            },
+            listed,
+        );
+        let error = expecting(&in_document(), &mut unsaid).unwrap_err();
+        assert_eq!(error.details["reason"], "unreadable");
+        assert_eq!(error.details["unread"], "alike");
+    }
+
+    #[test]
+    fn a_focused_window_missing_from_the_list_is_unreadable() {
+        let keyboard = Keyboard {
+            window: Some(Element {
+                title: Some("Untitled".to_owned()),
+                ..element("AXWindow", (140.0, 140.0, 400.0, 300.0))
+            }),
+            ..typing(field("Email"))
+        };
+        let mut look = inside_with(keyboard, vec![document()]);
+        let error = expecting(&in_document(), &mut look).unwrap_err();
+        assert_eq!(error.details["reason"], "unreadable");
+        assert_eq!(error.details["unread"], "unlisted");
     }
 
     #[test]
@@ -1439,9 +1550,13 @@ mod tests {
         let window = document_window();
         assert_eq!(
             number(&[twin_elsewhere, offset.clone(), document()], APP, &window),
-            Some(DOCUMENT)
+            Listed::One(DOCUMENT)
         );
-        assert_eq!(number(&[offset], APP, &window), None, "off by three points");
+        assert_eq!(
+            number(&[offset], APP, &window),
+            Listed::Missing,
+            "off by three points"
+        );
 
         let renamed = numbered(
             DOCUMENT,
@@ -1449,14 +1564,18 @@ mod tests {
             Some("Other.txt"),
             (100.0, 100.0, 400.0, 300.0),
         );
-        assert_eq!(number(&[renamed], APP, &window), None, "titles differ");
+        assert_eq!(
+            number(&[renamed], APP, &window),
+            Listed::Missing,
+            "titles differ"
+        );
         let browser = Element {
             title: Some("Letter.txt - Google Chrome".to_owned()),
             ..document_window()
         };
         assert_eq!(
             number(&[document()], APP, &browser),
-            Some(DOCUMENT),
+            Listed::One(DOCUMENT),
             "the app's name added to the title"
         );
         let numbered_twin = numbered(
@@ -1467,13 +1586,13 @@ mod tests {
         );
         assert_eq!(
             number(&[numbered_twin, document()], APP, &window),
-            None,
+            Listed::Several,
             "titles that both hold the window's leave it unproven"
         );
         let untitled = numbered(DOCUMENT, APP, None, (100.0, 100.0, 400.0, 300.0));
         assert_eq!(
             number(&[untitled], APP, &window),
-            Some(DOCUMENT),
+            Listed::One(DOCUMENT),
             "a title the list does not show proves nothing either way"
         );
     }
@@ -1483,14 +1602,14 @@ mod tests {
         let twin = numbered(4121, APP, Some("Letter.txt"), (100.0, 100.0, 400.0, 300.0));
         assert_eq!(
             number(&[twin.clone(), document()], APP, &document_window()),
-            None
+            Listed::Several
         );
 
         let mut look = inside_with(typing(field("Email")), vec![twin, document()]);
-        assert_eq!(
-            refusal(expecting(&in_document(), &mut look)),
-            json!({"reason": "unreadable", "found": null})
-        );
+        let error = expecting(&in_document(), &mut look).unwrap_err();
+        assert_eq!(error.details["reason"], "unreadable");
+        assert_eq!(error.details["unread"], "alike");
+        assert!(error.details.get("found").is_none());
     }
 
     #[test]
@@ -1575,34 +1694,80 @@ mod tests {
 
     /// A custom view without accessibility leaves its window reported as
     /// focused, and so does an app while focus moves between fields; a
-    /// browser may report its page. None is a field, whatever its title.
+    /// browser may report its page; a custom control may say it is unknown.
+    /// Only a control that takes text itself is a field, whatever the name.
     #[test]
-    fn a_window_or_page_reported_as_focused_is_never_the_field() {
-        for role in ["AXWindow", "AXSheet", "AXWebArea", "AXGroup"] {
-            let container = Element {
+    fn only_a_control_that_takes_text_is_the_field() {
+        for role in [
+            Some("AXWindow"),
+            Some("AXSheet"),
+            Some("AXWebArea"),
+            Some("AXGroup"),
+            Some("AXUnknown"),
+            Some("AXTabGroup"),
+            Some("AXPopover"),
+            Some("AXToolbar"),
+            Some("AXButton"),
+            None,
+        ] {
+            let named = Element {
                 title: Some("Email".to_owned()),
-                ..element(role, (100.0, 100.0, 400.0, 300.0))
+                role: role.map(str::to_owned),
+                ..field("Email")
             };
-            let mut look = inside_with(typing(container), vec![document()]);
+            let mut look = inside_with(typing(named), vec![document()]);
             assert_eq!(
                 refusal(expecting(&in_field("Email"), &mut look))["reason"],
                 "field",
-                "{role}"
+                "{role:?}"
             );
         }
 
-        let mut unknown = inside_with(
-            typing(Element {
-                role: None,
+        for role in FIELDS {
+            let named = Element {
+                role: Some(role.to_owned()),
                 ..field("Email")
-            }),
-            vec![document()],
-        );
+            };
+            let mut look = inside_with(typing(named), vec![document()]);
+            assert!(expecting(&in_field("Email"), &mut look).is_ok(), "{role}");
+        }
+    }
+
+    #[test]
+    fn an_element_that_says_it_is_not_focused_is_not_the_field() {
+        let unfocused = Element {
+            focused: Some(false),
+            ..field("Email")
+        };
+        let mut look = inside_with(typing(unfocused), vec![document()]);
         assert_eq!(
-            refusal(expecting(&in_field("Email"), &mut unknown))["reason"],
-            "unreadable",
-            "a role that could not be read"
+            refusal(expecting(&in_field("Email"), &mut look))["reason"],
+            "field"
         );
+
+        let unsaid = Element {
+            focused: None,
+            enabled: None,
+            ..field("Email")
+        };
+        let mut look = inside_with(typing(unsaid), vec![document()]);
+        assert!(
+            expecting(&in_field("Email"), &mut look).is_ok(),
+            "an app that does not say either"
+        );
+    }
+
+    /// A container's name is a title, a document's or a page's: a refusal
+    /// names its role alone.
+    #[test]
+    fn a_refusal_names_a_container_by_its_role_alone() {
+        let page = Element {
+            title: Some("Bank statement".to_owned()),
+            ..element("AXWebArea", (100.0, 100.0, 400.0, 300.0))
+        };
+        let mut look = inside_with(typing(page), vec![document()]);
+        let refused = refusal(expecting(&in_field("Email"), &mut look));
+        assert_eq!(refused["found"]["field"], json!({"role": "AXWebArea"}));
     }
 
     #[test]
@@ -1612,27 +1777,29 @@ mod tests {
             ..field("Email")
         };
         let mut look = inside_with(typing(disabled), vec![document()]);
-        assert_eq!(
-            refusal(expecting(&in_field("Email"), &mut look))["reason"],
-            "disabled"
+        let error = expecting(&in_field("Email"), &mut look).unwrap_err();
+        assert_eq!(error.details["reason"], "disabled");
+        assert!(
+            error.error.starts_with("That field is disabled"),
+            "{}",
+            error.error
         );
     }
 
+    /// A read that could not tell where focus is, for whatever reason,
+    /// refuses and says why.
     #[test]
-    fn a_field_whose_name_could_not_be_read_whole_is_refused_not_passed() {
-        for (unreadable, truncated) in [(vec!["AXDescription"], vec![]), (vec![], vec!["AXTitle"])]
-        {
-            let unread = Element {
-                unreadable: unreadable.iter().map(|a| (*a).to_owned()).collect(),
-                truncated: truncated.iter().map(|a| (*a).to_owned()).collect(),
-                ..field("Email")
-            };
-            let mut look = inside_with(typing(unread), vec![document()]);
-            assert_eq!(
-                refusal(expecting(&in_field("Email"), &mut look))["reason"],
-                "unreadable",
-                "{unreadable:?} {truncated:?}"
-            );
+    fn a_read_that_could_not_tell_refuses_and_says_why() {
+        for why in [Unread::Cut, Unread::Deep, Unread::Failed, Unread::Malformed] {
+            let mut look = inside_with(typing(field("Email")), vec![document()]);
+            look.unread = Some(why);
+            for expect in [in_document(), in_field("Email")] {
+                let error = expecting(&expect, &mut look).unwrap_err();
+                assert_eq!(error.details["reason"], "unreadable", "{why:?}");
+                assert_eq!(error.details["unread"], json!(why));
+                assert!(error.error.ends_with(NOT_SENT), "{}", error.error);
+                assert!(!error.uncertain);
+            }
         }
     }
 
@@ -1649,15 +1816,35 @@ mod tests {
         );
     }
 
+    /// A read of where focus is that answered after the check's deadline
+    /// proves nothing, however good its answer.
     #[test]
     fn a_check_that_ran_out_of_time_is_refused_and_says_so() {
-        let mut look = Seen::focused(Some(APP)).showing(vec![document()]);
+        let mut look = inside_with(typing(field("Email")), vec![document()]);
+        look.slow = Duration::from_millis(20);
         for expect in [in_document(), in_field("Email")] {
-            let error = expecting(&expect, &mut look).unwrap_err();
+            let deadline = Instant::now() + Duration::from_millis(5);
+            let error = require(&expect, Need::Keys, &display(), &mut look, deadline).unwrap_err();
             assert_eq!(error.details["reason"], "unreadable");
             assert!(error.error.contains("could not tell"), "{}", error.error);
             assert!(!error.uncertain);
         }
+
+        let mut spent = Live::until(Instant::now());
+        assert_eq!(
+            spent
+                .keyboard(
+                    APP,
+                    Judged {
+                        window: true,
+                        field: true
+                    }
+                )
+                .unwrap_err()
+                .details["unread"],
+            "slow",
+            "nothing is asked once the time is spent"
+        );
     }
 
     #[test]

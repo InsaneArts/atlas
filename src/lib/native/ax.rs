@@ -32,6 +32,9 @@ unsafe extern "C-unwind" {
     fn AXUIElementCreateSystemWide() -> Option<NonNull<AXUIElement>>;
 }
 
+mod keyboard;
+pub(crate) use keyboard::{Focused, Judged, Keyboard, Unread, Within, keyboard};
+
 /// Longest text reported for any one attribute, in UTF-16 units.
 const TEXT_LIMIT: CFIndex = 200;
 
@@ -634,58 +637,6 @@ impl Scan {
         })
     }
 
-    /// Everything an element reports beyond its `role` and `frame`, read
-    /// already: its names, flags and, as `text` allows, its value. What
-    /// failed to read or was cut since the caller cleared the scan's lists
-    /// goes with it. Where it sits (index, depth, window, menu) is the
-    /// caller's to fill in.
-    fn described(
-        &mut self,
-        element: &AXUIElement,
-        batch: Option<&Batch>,
-        role: Option<String>,
-        frame: Option<Frame>,
-        text: Text,
-    ) -> Element {
-        let from = Source::of(element, batch);
-        let selectable = matches!(role.as_deref(), Some("AXRow" | "AXCell"));
-        let subrole = self.text(from, "AXSubrole");
-        let title = self.text(from, "AXTitle");
-        let description = self.text(from, "AXDescription");
-        let value = match text {
-            Text::Label if role.as_deref() != Some("AXStaticText") => None,
-            _ => self.value(element, batch, role.as_deref(), subrole.as_deref()),
-        };
-        let identifier = self.text(from, "AXIdentifier");
-        let enabled = self.flag(from, "AXEnabled");
-        let focused = self.flag(from, "AXFocused");
-        let selected = selectable.then(|| self.flag(from, "AXSelected")).flatten();
-        let mark = (role.as_deref() == Some("AXMenuItem"))
-            .then(|| self.text(from, "AXMenuItemMarkChar"))
-            .flatten()
-            .filter(|mark| !mark.is_empty());
-
-        Element {
-            index: 0,
-            depth: 0,
-            window: None,
-            role,
-            title,
-            description,
-            value,
-            subrole,
-            identifier,
-            enabled,
-            focused,
-            selected,
-            frame,
-            unreadable: std::mem::take(&mut self.unreadable),
-            truncated: std::mem::take(&mut self.truncated),
-            menu: false,
-            mark,
-        }
-    }
-
     /// At most `maximum` elements from an array attribute. The value count
     /// is read first: zero is a leaf, and a count beyond what was fetched (or
     /// any failure to enumerate a non-empty array) leaves the scan incomplete
@@ -913,6 +864,18 @@ impl Frame {
     }
 }
 
+impl From<&windows::Bounds> for Frame {
+    /// A window's bounds, as Accessibility gives an element's frame.
+    fn from(bounds: &windows::Bounds) -> Self {
+        Self {
+            x: bounds.x,
+            y: bounds.y,
+            width: bounds.width,
+            height: bounds.height,
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Element {
@@ -1085,200 +1048,6 @@ pub fn focused_pid(timeout: Duration) -> Result<Option<i64>> {
     Ok(Some(pid.into()))
 }
 
-/// Most steps from the focused element up to its window: deeper than any
-/// app nests a field, short enough to stay within a check's deadline.
-const PARENTS: usize = 32;
-
-/// The element with keyboard focus in an app and the process that owns
-/// it, which for a panel another process draws is not the app's.
-#[derive(Debug, Clone)]
-pub struct Focused {
-    pub element: Element,
-    pub pid: i64,
-}
-
-/// Where the focused element sits, from its parents up to a window.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
-pub enum Within {
-    /// In the app's focused window, with no sheet between them.
-    #[default]
-    Window,
-    /// In a sheet, which takes the keys meant for its window.
-    Sheet,
-    /// Not in the focused window, or in nothing Atlas could reach.
-    Elsewhere,
-}
-
-/// Where keyboard focus is inside one app, as Accessibility reports it.
-/// Never a field's value: only a label's text is read.
-#[derive(Debug, Clone, Default)]
-pub struct Keyboard {
-    /// The app's focused window: its role, title and frame. None when the
-    /// app has none.
-    pub window: Option<Element>,
-    /// The focused element. None when nothing in the app has focus.
-    pub focused: Option<Focused>,
-    /// Where the focused element sits; [`Within::Window`] when there is
-    /// none.
-    pub within: Within,
-}
-
-/// Which value [`Scan::described`] reads of an element.
-#[derive(Debug, Clone, Copy)]
-enum Text {
-    /// Its value, whatever its role.
-    Any,
-    /// Only a label's, a static text's, never what a field holds.
-    Label,
-}
-
-/// Where keyboard focus is inside app `pid`, waiting at most `timeout` in
-/// all. Only copies are made: nothing is set but each element's own
-/// messaging timeout. Any read that fails, other than an attribute the app
-/// does not have, or that ends past the deadline, makes the whole answer
-/// an error: half an answer could pass a check it should not.
-pub fn keyboard(pid: i64, timeout: Duration) -> Result<Keyboard> {
-    let pid = libc::pid_t::try_from(pid).map_err(|_| unreadable_focus())?;
-    let mut scan = Scan::new(Instant::now() + timeout);
-
-    // SAFETY: a plain constructor returning an owned element or null.
-    let app = unsafe { AXUIElementCreateApplication(pid) }
-        // SAFETY: the constructor handed over one owned reference.
-        .map(|app| unsafe { CFRetained::from_raw(app) })
-        .ok_or_else(unreadable_focus)?;
-    let window = scan.reference(&app, "AXFocusedWindow")?;
-    let focused = scan.reference(&app, "AXFocusedUIElement")?;
-
-    let mut keyboard = Keyboard {
-        window: window
-            .as_deref()
-            .map(|window| scan.whole(window, Text::Label)),
-        ..Keyboard::default()
-    };
-    if let Some(element) = focused.as_deref() {
-        let mut owner: libc::pid_t = 0;
-        // SAFETY: a valid `pid_t` slot for the element's process.
-        if unsafe { element.pid(NonNull::from(&mut owner)) } != AXError::Success || owner <= 0 {
-            return Err(unreadable_focus());
-        }
-
-        keyboard.focused = Some(Focused {
-            element: scan.whole(element, Text::Label),
-            pid: owner.into(),
-        });
-        keyboard.within = scan.within(element, window.as_deref())?;
-    }
-
-    // A request that started before the deadline may have ended after it.
-    if scan.incomplete || !scan.open() {
-        return Err(unreadable_focus());
-    }
-
-    Ok(keyboard)
-}
-
-/// The error for a read of where an app's focus is that did not finish.
-fn unreadable_focus() -> Error {
-    Error::new("native", "Where the app's focus is could not be read")
-}
-
-impl Scan {
-    /// The element `attribute` of `element` names, with every read of
-    /// `element` bounded by what is left of the scan; None when it has
-    /// none, an error when the read failed otherwise.
-    fn reference(
-        &mut self,
-        element: &AXUIElement,
-        attribute: &'static str,
-    ) -> Result<Option<CFRetained<AXUIElement>>> {
-        if !self.limit(element) {
-            return Err(unreadable_focus());
-        }
-
-        self.last_error = None;
-        let value = self.attribute(Source::Element(element), attribute);
-        if let Some(code) = self.last_error
-            && !ABSENT.contains(&code)
-        {
-            return Err(unreadable_focus());
-        }
-
-        match value {
-            None => Ok(None),
-            Some(value) => value
-                .downcast::<AXUIElement>()
-                .map(Some)
-                .map_err(|_| unreadable_focus()),
-        }
-    }
-
-    /// Bound every read of `element` by what is left of the scan; false
-    /// once nothing is left, or when the timeout could not be set.
-    fn limit(&mut self, element: &AXUIElement) -> bool {
-        let left = self.deadline.saturating_duration_since(Instant::now());
-        if left.is_zero() {
-            self.stop(Stop::Time);
-            return false;
-        }
-
-        // SAFETY: sets this one element's messaging timeout, which bounds
-        // each read of it; nothing else in the process is affected.
-        let status = unsafe { element.set_messaging_timeout(left.as_secs_f32()) };
-        status == AXError::Success
-    }
-
-    /// All `element` reports, as a scan lists it, its value read as `text`
-    /// allows.
-    fn whole(&mut self, element: &AXUIElement, text: Text) -> Element {
-        self.unreadable.clear();
-        self.truncated.clear();
-        if !self.limit(element) {
-            self.stop(Stop::Unread);
-        }
-
-        let batch = self.batch(element);
-        let from = Source::of(element, batch.as_ref());
-        let role = self.text(from, "AXRole");
-        let frame = self.frame(from);
-        self.described(element, batch.as_ref(), role, frame, text)
-    }
-
-    /// Where `element` sits, from its parents: in `window` when it is that
-    /// window or the walk reaches it, in a sheet when one comes first,
-    /// elsewhere when the walk ends at another window or at the top. An
-    /// error when a parent fails to read or the walk is longer than any
-    /// app nests.
-    fn within(&mut self, element: &AXUIElement, window: Option<&AXUIElement>) -> Result<Within> {
-        let mut current = objc2_core_foundation::Type::retain(element);
-        for _ in 0..PARENTS {
-            if window.is_some_and(|window| *window == *current) {
-                return Ok(Within::Window);
-            }
-
-            if !self.limit(&current) {
-                return Err(unreadable_focus());
-            }
-            self.last_error = None;
-            match self.text(Source::Element(&current), "AXRole").as_deref() {
-                Some("AXSheet") => return Ok(Within::Sheet),
-                Some("AXWindow" | "AXApplication") => return Ok(Within::Elsewhere),
-                Some(_) => {}
-                None if self.last_error.is_some_and(|code| !ABSENT.contains(&code)) => {
-                    return Err(unreadable_focus());
-                }
-                None => {}
-            }
-
-            match self.reference(&current, "AXParent")? {
-                Some(parent) => current = parent,
-                None => return Ok(Within::Elsewhere),
-            }
-        }
-
-        Err(unreadable_focus())
-    }
-}
-
 /// The longest a read of where the Dock takes clicks may take.
 pub const DOCK_TIMEOUT: Duration = Duration::from_millis(250);
 
@@ -1432,12 +1201,7 @@ pub fn elements(pid: i32, limits: Limits) -> Result<Snapshot> {
                 window.pid == i64::from(pid) && window.layer == MENU_LAYER && window.alpha > 0.0
             });
             for menu in menus {
-                let bounds = Frame {
-                    x: menu.bounds.x,
-                    y: menu.bounds.y,
-                    width: menu.bounds.width,
-                    height: menu.bounds.height,
-                };
+                let bounds = Frame::from(&menu.bounds);
 
                 // A window the app lists among its windows is read already.
                 if roots
@@ -1517,11 +1281,38 @@ pub fn elements(pid: i32, limits: Limits) -> Result<Snapshot> {
         }
 
         let window = sheet_window(role.as_deref(), frame.as_ref(), window);
-        let mut element = scan.described(item, values.as_ref(), role, frame, Text::Any);
-        element.index = found.len();
-        element.depth = depth;
-        element.window = window.clone();
-        element.menu = menu;
+        let selectable = matches!(role.as_deref(), Some("AXRow" | "AXCell"));
+        let subrole = scan.text(from, "AXSubrole");
+        let title = scan.text(from, "AXTitle");
+        let description = scan.text(from, "AXDescription");
+        let value = scan.value(item, values.as_ref(), role.as_deref(), subrole.as_deref());
+        let mut element = Element {
+            index: found.len(),
+            depth,
+            window: window.clone(),
+            role,
+            title,
+            description,
+            value,
+            subrole,
+            identifier: scan.text(from, "AXIdentifier"),
+            enabled: scan.flag(from, "AXEnabled"),
+            focused: scan.flag(from, "AXFocused"),
+            selected: selectable.then(|| scan.flag(from, "AXSelected")).flatten(),
+            frame,
+            unreadable: Vec::new(),
+            truncated: Vec::new(),
+            menu,
+            mark: None,
+        };
+        if element.role.as_deref() == Some("AXMenuItem") {
+            element.mark = scan
+                .text(from, "AXMenuItemMarkChar")
+                .filter(|mark| !mark.is_empty());
+        }
+
+        element.unreadable = std::mem::take(&mut scan.unreadable);
+        element.truncated = std::mem::take(&mut scan.truncated);
         let bar_title = element.role.as_deref() == Some("AXMenuBarItem");
         found.push(element);
 

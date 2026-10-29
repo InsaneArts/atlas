@@ -3,7 +3,7 @@
 //! where the session's capture permission allows them.
 use crate::{
     error::{Error, Result},
-    native::cf,
+    native::{ax::Frame, cf},
 };
 use objc2_core_graphics::CGWindowListOption;
 use serde::{Deserialize, Serialize};
@@ -15,6 +15,10 @@ pub const MENU_LAYER: i64 = 101;
 /// The layer of the menu bar itself, a window of the Window Server's that
 /// shows the frontmost app's titles.
 pub const MENU_BAR_LAYER: i64 = 24;
+
+/// Layers from the Dock's up hold the Dock, the menu bar and system overlays,
+/// never an app's own windows.
+pub const DOCK_LAYER: i64 = 20;
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -103,6 +107,121 @@ impl Window {
     pub fn is_dock(&self) -> bool {
         self.owner.as_deref() == Some("Dock")
     }
+
+    /// Whether this is one of an app's own visible windows: an ordinary
+    /// one, or a floating panel or alert below the Dock's layer. An open
+    /// menu is not one: `windows` and `wait` never mistake it for the window
+    /// it opens.
+    pub fn is_apps(&self) -> bool {
+        self.layer == 0 || ((1..DOCK_LAYER).contains(&self.layer) && self.alpha > 0.0)
+    }
+
+    /// [`Window::is_apps`], or a menu the app has open: what an element
+    /// command may act on.
+    pub fn is_apps_or_menu(&self) -> bool {
+        self.is_apps() || (self.layer == MENU_LAYER && self.alpha > 0.0)
+    }
+}
+
+/// What kind of window Accessibility says a window is, by its subrole,
+/// which tells at which layers the window list can show it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Kind {
+    /// A floating panel, never at the ordinary layer.
+    Floating,
+    /// A document window, a dialog, a sheet or anything else: at the
+    /// ordinary layer, or above it where its app raised it, so no layer is
+    /// ruled out.
+    Other,
+}
+
+impl Kind {
+    /// The kind a window's subrole names.
+    pub fn of(subrole: Option<&str>) -> Self {
+        match subrole {
+            Some("AXFloatingWindow" | "AXSystemFloatingWindow") => Self::Floating,
+            _ => Self::Other,
+        }
+    }
+
+    /// Whether a window of this kind can be listed at `layer`.
+    fn admits(self, layer: i64) -> bool {
+        match self {
+            Self::Floating => layer != 0,
+            Self::Other => true,
+        }
+    }
+}
+
+/// Which listed window a window Accessibility describes is.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Listed {
+    /// This one, and only this one.
+    One(i64),
+    /// None of them.
+    Missing,
+    /// More than one, which cannot be told apart.
+    Several,
+}
+
+/// Every listed window of process `pid` whose bounds are `frame` within a
+/// point, at any layer, however faint.
+fn framed<'a>(
+    windows: &'a [Window],
+    pid: i64,
+    frame: &'a Frame,
+) -> impl Iterator<Item = &'a Window> {
+    windows
+        .iter()
+        .filter(move |window| window.pid == pid && frame.matches(&Frame::from(&window.bounds)))
+}
+
+/// The one listed window a window Accessibility describes is: of every
+/// window of process `pid` at its `frame` (see [`framed`]), those whose
+/// layer its `kind` admits and whose title, when both are known, holds the
+/// other's (Chrome adds its own name to what Accessibility reports).
+pub fn described(
+    windows: &[Window],
+    pid: i64,
+    frame: &Frame,
+    title: Option<&str>,
+    kind: Kind,
+) -> Listed {
+    let mut matching = framed(windows, pid, frame).filter(|window| {
+        kind.admits(window.layer)
+            && match (window.title.as_deref(), title) {
+                (Some(listed), Some(title)) => title.contains(listed) || listed.contains(title),
+                _ => true,
+            }
+    });
+    match (matching.next(), matching.next()) {
+        (Some(window), None) => Listed::One(window.number),
+        (None, _) => Listed::Missing,
+        (Some(_), Some(_)) => Listed::Several,
+    }
+}
+
+/// The window whose bounds are an element's AX window frame, for listing
+/// and clicking the element: of the app's own windows and open menus at
+/// that frame (see [`framed`]), an ordinary window wins over a same-sized
+/// overlay. None when no window, or more than one, is left.
+pub fn owning_window(windows: &[Window], pid: i64, frame: &Frame) -> Option<i64> {
+    let matching: Vec<&Window> = framed(windows, pid, frame)
+        .filter(|window| window.is_apps_or_menu())
+        .collect();
+    let unique = |windows: Vec<&Window>| match windows.as_slice() {
+        [window] => Some(window.number),
+        _ => None,
+    };
+
+    unique(
+        matching
+            .iter()
+            .copied()
+            .filter(|window| window.layer == 0)
+            .collect(),
+    )
+    .or_else(|| unique(matching))
 }
 
 /// How far around its list of icons the Dock's shelf takes clicks too.
@@ -302,6 +421,70 @@ pub fn frontmost_pid(windows: &[Window]) -> Option<i64> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A window of process 8 at `layer` with `title`, at one place.
+    fn placed(number: i64, layer: i64, title: Option<&str>, alpha: f64) -> Window {
+        Window {
+            number,
+            pid: 8,
+            owner: Some("TextEdit".into()),
+            title: title.map(str::to_owned),
+            layer,
+            alpha,
+            bounds: Bounds {
+                x: 10.0,
+                y: 20.0,
+                width: 300.0,
+                height: 200.0,
+            },
+        }
+    }
+
+    /// Where every window here is placed, as Accessibility reports it.
+    fn frame() -> Frame {
+        Frame::from(&placed(0, 0, None, 1.0).bounds)
+    }
+
+    #[test]
+    fn a_described_window_is_the_one_its_frame_kind_and_title_leave() {
+        let document = placed(5, 0, Some("Letter.txt"), 1.0);
+        let panel = placed(6, 3, Some("Fonts"), 1.0);
+        let faint = placed(7, 3, None, 0.0);
+        let listed = [panel.clone(), document.clone()];
+        let at = |listed: &[Window], title, kind| described(listed, 8, &frame(), title, kind);
+
+        assert_eq!(at(&listed, None, Kind::Floating), Listed::One(6));
+        assert_eq!(
+            at(&listed, None, Kind::Other),
+            Listed::Several,
+            "a document window may be raised above the ordinary layer"
+        );
+        assert_eq!(at(&listed, Some("Fonts"), Kind::Other), Listed::One(6));
+        assert_eq!(
+            at(&[faint, document.clone()], None, Kind::Other),
+            Listed::Several,
+            "a faint window at the same place still counts"
+        );
+        assert_eq!(
+            at(std::slice::from_ref(&document), None, Kind::Floating),
+            Listed::Missing
+        );
+        assert_eq!(at(&[document], None, Kind::Other), Listed::One(5));
+        assert_eq!(
+            described(&listed, 9, &frame(), None, Kind::Other),
+            Listed::Missing
+        );
+    }
+
+    #[test]
+    fn kinds_follow_the_subrole_and_rule_out_layers() {
+        assert_eq!(Kind::of(Some("AXStandardWindow")), Kind::Other);
+        assert_eq!(Kind::of(Some("AXDialog")), Kind::Other);
+        assert_eq!(Kind::of(Some("AXFloatingWindow")), Kind::Floating);
+        assert_eq!(Kind::of(None), Kind::Other);
+        assert!(!Kind::Floating.admits(0) && Kind::Floating.admits(3));
+        assert!(Kind::Other.admits(0) && Kind::Other.admits(101));
+    }
 
     /// The literal keys read here are the framework's exported constants.
     #[test]
