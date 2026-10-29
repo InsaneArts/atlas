@@ -18,9 +18,9 @@ use std::{
     path::{Component, Path},
 };
 
-/// How long before a task claimed opening an app by name the app may have
-/// launched, in milliseconds: the claim is written once `open` returns.
-const LAUNCH_BEFORE_CLAIM: u64 = 2_000;
+/// How far from an app's launch a task may claim opening it, in
+/// milliseconds: `open` can return just before or after the app launches.
+const CLAIM_AROUND_LAUNCH: u64 = 2_000;
 /// How long before and after an app launched an agent's row opening it may
 /// have been written, in milliseconds.
 const OPEN_BEFORE_LAUNCH: u64 = 2_000;
@@ -118,14 +118,13 @@ impl Running<'_> {
         .map(|(task, at)| self.origin(task, How::Install, Some(at)))
     }
 
-    /// Opened by name by a task, launching no earlier than shortly before
-    /// the task claimed it: an app launched long before was already open.
+    /// Opened by name by a task that claimed it near this launch.
     fn claimed(&self, tasks: &[Record]) -> Option<Origin> {
         let launched = self.launched_at?;
         newest(tasks, |owned, state| {
             matches!(owned, Owned::Launch { app } if state == State::Made && same_text(app, &self.name))
         })
-        .filter(|(_, at)| launched.saturating_add(LAUNCH_BEFORE_CLAIM) >= *at)
+        .filter(|(_, at)| launched.abs_diff(*at) <= CLAIM_AROUND_LAUNCH)
         .map(|(task, _)| self.origin(task, How::Launch, Some(launched)))
     }
 
@@ -344,6 +343,39 @@ mod tests {
             assert!(
                 origins(&notes(Some(LAUNCHED)), &[], &[row], copies).is_empty(),
                 "{why}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_launch_claim_only_names_an_app_launched_near_its_time() {
+        let apps = running(
+            "Notes",
+            "/System/Applications/Notes.app/Contents/MacOS/Notes",
+            Some(LAUNCHED),
+        );
+        for (offset, matches) in [
+            (-60_000_i64, false),
+            (-2_001, false),
+            (-2_000, true),
+            (0, true),
+            (2_000, true),
+            (2_001, false),
+        ] {
+            let claim = task(
+                "claude:a1",
+                &[(
+                    Owned::Launch {
+                        app: "Notes".into(),
+                    },
+                    State::Made,
+                    LAUNCHED.checked_add_signed(offset).unwrap(),
+                )],
+            );
+            assert_eq!(
+                !origins(&apps, &[claim], &[], Path::new(handoff::ROOT)).is_empty(),
+                matches,
+                "claim offset {offset}"
             );
         }
     }
