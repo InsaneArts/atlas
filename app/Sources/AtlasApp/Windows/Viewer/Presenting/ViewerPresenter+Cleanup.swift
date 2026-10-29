@@ -12,20 +12,27 @@ extension ViewerPresenter {
   ///   - snapshot: What the controller holds.
   /// - Returns: The cleanup, or nil when there is nothing to clean up.
   static func cleanup(_ record: HostSessionRecord, _ snapshot: ViewerSnapshot) -> SessionCleanup? {
-    let session = snapshot.session
-    let receipt = session.cleanupReceipts[record.key]
-    let running = session.cleaningUp == record.key || session.cleanupUnanswered?.session == record.key
+    let state = snapshot.session.cleanup
+    let receipt = state.receipts[record.key]
+    let running = state.isBusy(for: record.key)
     // Terminal's session has no key a cleanup can name.
     guard !record.key.isEmpty, record.leftWork || receipt != nil || running else { return nil }
     let stage: SessionCleanup.Stage =
-      if session.cleaningUp != nil || session.cleanupUnanswered != nil {
+      if running {
         .working
       } else if let receipt {
         .finished(cleanupReceipt(receipt))
       } else {
         .ready
       }
-    return SessionCleanup(session: record.key, title: ViewerWords.cleanUpSession, stage: stage)
+    return SessionCleanup(
+      session: record.key,
+      title: ViewerWords.cleanUpSession,
+      workingTitle: ViewerWords.cleaningUp,
+      stage: stage,
+      // One cleanup runs at a time: another session's holds this button, with no spinner of its own.
+      waitsForAnother: state.isBusy && !running
+    )
   }
 
   /// The alert's lines, from what a preview says it takes: the apps it quits as one line, the environment changes it

@@ -18,18 +18,18 @@ extension ViewerController {
   ///
   /// - Parameter key: The session's key.
   func askCleanup(_ key: String) async {
-    guard session.cleaningUp == nil, session.cleanupUnanswered == nil, session.alert == nil else { return }
+    guard !session.cleanup.isBusy, session.alert == nil else { return }
     guard !session.alertRunning, !session.recovering else { return say(HelperWords.waitForAction) }
-    session.cleaningUp = key
+    session.cleanup.running = key
     let preview: CleanupReply
     do {
       preview = try await service.cleanup(session: key, apply: false)
     } catch {
-      session.cleaningUp = nil
+      session.cleanup.running = nil
       if !error.isCancelled { say(error.message) }
       return
     }
-    session.cleaningUp = nil
+    session.cleanup.running = nil
     guard !preview.isEmpty else {
       say(ViewerWords.nothingToCleanUp)
       return panesModel.followSessions(readNow: true)
@@ -54,36 +54,47 @@ extension ViewerController {
   ///
   /// - Parameter key: The session's key.
   func cleanUp(_ key: String) async {
-    session.cleaningUp = key
+    session.cleanup.running = key
     let sentAt = dependencies.wallClock()
     do {
       let reply = try await service.cleanup(session: key, apply: true)
-      session.cleanupReceipts[key] = reply.isEmpty ? nil : reply
+      session.cleanup.receipts[key] = reply.isEmpty ? nil : reply
       say(ViewerPresenter.cleanupNotice(reply))
     } catch {
       if error.isCleanupUnanswered {
-        session.cleanupUnanswered = ViewerUnansweredCleanup(session: key, sentAt: sentAt)
+        session.cleanup.unanswered = ViewerUnansweredCleanup(session: key, sentAt: sentAt)
       }
       say(error.isCleanupUnanswered ? ViewerWords.cleanupUnanswered : error.message)
     }
     session.alert = nil
-    session.cleaningUp = nil
+    session.cleanup.running = nil
     panesModel.followSessions(readNow: true)
+  }
+
+  /// What a fresh read of the sessions' list asks of this window's cleanups: what the last ones did is forgotten for
+  /// sessions the list no longer names, and a cleanup whose reply never came is read again
+  /// (``checkUnansweredCleanup()``), so its button waits until it ended.
+  ///
+  /// - Parameter list: The list just read.
+  func sessionsRead(_ list: HostSessionList) async {
+    let named = Set(list.sessions.map(\.key) + list.live.map(\.key))
+    session.cleanup.keepReceipts(for: named)
+    await checkUnansweredCleanup()
   }
 
   /// Reads `cleanup.json` again for a cleanup whose reply never came, each time the sessions' list is read. Once it
   /// shows no step under way, or ``cleanupWaitLimit`` has passed, Clean Up takes a press again, what each step did
   /// stays for Details, and the notice says how it ended; until then the button waits.
   func checkUnansweredCleanup() async {
-    guard let unanswered = session.cleanupUnanswered else { return }
+    guard let unanswered = session.cleanup.unanswered else { return }
     let preview = try? await service.cleanup(session: unanswered.session, apply: false)
     let now = dependencies.wallClock()
     let ended = preview?.isUnderWay == false
     let waitedOut = now.timeIntervalSince(unanswered.sentAt) >= Self.cleanupWaitLimit
-    guard session.cleanupUnanswered == unanswered, ended || waitedOut else { return }
-    session.cleanupUnanswered = nil
+    guard session.cleanup.unanswered == unanswered, ended || waitedOut else { return }
+    session.cleanup.unanswered = nil
     guard let preview else { return }
-    session.cleanupReceipts[unanswered.session] = preview.hasRun ? preview : nil
+    session.cleanup.receipts[unanswered.session] = preview.hasRun ? preview : nil
     if let notice = ViewerPresenter.unansweredCleanupNotice(preview) { say(notice) }
   }
 }

@@ -116,8 +116,8 @@ extension ViewerPresenter {
     )
   }
 
-  /// A session's facts: its host, or None named for Terminal; its folder when known; when it started; and when it
-  /// ended, or was last seen.
+  /// A session's facts: its host, or None named for Terminal; its folder when known; when it started; when it ended,
+  /// or was last seen; and, while the sessions' list cannot be read, that what Details says may be out of date.
   ///
   /// - Parameters:
   ///   - record: The session, as the list has it.
@@ -136,6 +136,10 @@ extension ViewerPresenter {
       facts.append(Fact(name: ViewerWords.endedFact, value: Words.ago(snapshot.date.timeIntervalSince(ended))))
     } else if let seen = snapshot.reading.statusReading.session(record.key)?.lastSeenAt ?? record.lastSeenAt {
       facts.append(Fact(name: ViewerWords.lastSeenFact, value: Words.ago(snapshot.date.timeIntervalSince(seen))))
+    }
+    // The list kept from before may be out of date while it cannot be read.
+    if snapshot.panes.sessions.failure != nil {
+      facts.append(Fact(name: ViewerWords.sessionsFact, value: ViewerWords.sessionsUnread))
     }
     return facts
   }

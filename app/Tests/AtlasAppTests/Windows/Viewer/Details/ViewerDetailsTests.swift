@@ -48,6 +48,20 @@ struct ViewerDetailsTests {
     #expect(ViewerPresenter.details(snapshot).hostSession?.apps.map(\.value) == ["Open · a copy", "Closed"])
   }
 
+  @Test("a sessions' list that cannot be read says so under the chosen session")
+  func anUnreadListSaysSo() throws {
+    var snapshot = try ViewerSnapshot.listing([SessionReplies.claudeActing, SessionReplies.terminalIdle])
+    snapshot.detailsShown = true
+    snapshot.session.chosenSession = .one("")
+    snapshot.panes.sessions.list = HostSessionList(sessions: [
+      HostSessionRecord(key: "", name: "Terminal", host: .terminal)
+    ])
+    #expect(ViewerPresenter.details(snapshot).hostSession?.facts.last?.name != "Sessions")
+    snapshot.panes.sessions.failure = "The service did not answer"
+    let unread = Fact(name: "Sessions", value: "Couldn't read sessions; this may be out of date")
+    #expect(ViewerPresenter.details(snapshot).hostSession?.facts.last == unread)
+  }
+
   @Test("Terminal's host is none named")
   func terminalsHostIsNoneNamed() throws {
     var snapshot = try ViewerSnapshot.listing([SessionReplies.claudeActing, SessionReplies.terminalIdle])

@@ -39,6 +39,10 @@ extension ViewerWords {
   static let lastSeenFact = "Last seen"
   /// The ended fact's name.
   static let endedFact = "Ended"
+  /// The fact's name while the sessions' list cannot be read.
+  static let sessionsFact = "Sessions"
+  /// The fact's value while the sessions' list cannot be read, so what Details shows may be out of date.
+  static let sessionsUnread = "Couldn't read sessions; this may be out of date"
   /// The Terminal session's host, which no host named.
   static let noHost = "None named"
   /// An app the session opened, open in the helper now.

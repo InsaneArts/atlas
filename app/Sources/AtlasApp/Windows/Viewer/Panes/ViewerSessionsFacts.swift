@@ -7,9 +7,7 @@ import Foundation
 struct ViewerSessionsFacts {
   /// The list, newest last seen first; nil before the first reading.
   var list: HostSessionList?
-  /// When the list was read.
-  var readAt: Date?
-  /// Why the last reading failed, while it has; nil once one worked.
+  /// Why the last reading failed, while it has, which Details says under the chosen session; nil once one worked.
   var failure: String?
   /// When the service last answered that it offers no list, as an older one does; nil while it offers one.
   var notOfferedAt: Date?

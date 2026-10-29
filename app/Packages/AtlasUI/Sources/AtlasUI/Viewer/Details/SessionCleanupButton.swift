@@ -1,7 +1,8 @@
 import SwiftUI
 
 /// Clean Up This Session's Work…, the whole width of Details, last in the chosen session's part: it asks before
-/// anything runs. While what it takes is read, or the cleanup runs, it holds a spinner and takes no press.
+/// anything runs. While what it takes is read, or the cleanup runs, it holds a spinner, VoiceOver hears its working
+/// title, and it takes no press; while another session's cleanup runs, it takes no press either.
 struct SessionCleanupButton: View {
   /// The cleanup.
   let cleanup: SessionCleanup
@@ -13,9 +14,10 @@ struct SessionCleanupButton: View {
     Button(cleanup.title) {
       send(.askCleanup(session: cleanup.session))
     }
-    .buttonStyle(.capsule(.glass, size: .small, fill: true, isWorking: !cleanup.isEnabled))
+    .buttonStyle(.capsule(.glass, size: .small, fill: true, isWorking: cleanup.isWorking))
     .disabled(!cleanup.isEnabled)
-    .help(Text(verbatim: "Quit, roll back and clean up what this session left, once you confirm"))
+    .accessibilityLabel(cleanup.isWorking ? cleanup.workingTitle : cleanup.title)
+    .help("Quit, roll back and clean up what this session left, once you confirm")
   }
 }
 
@@ -29,6 +31,13 @@ struct SessionCleanupButton: View {
             var working = cleanup
             working.stage = .working
             return working
+          }()
+        ) { _ in }
+        SessionCleanupButton(
+          cleanup: {
+            var waiting = cleanup
+            waiting.waitsForAnother = true
+            return waiting
           }()
         ) { _ in }
       }

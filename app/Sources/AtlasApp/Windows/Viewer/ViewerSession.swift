@@ -2,9 +2,8 @@ import AtlasService
 import AtlasUI
 
 /// What the main window is doing: the tab shown, whose work it shows, watching or paused, recovering, the alert and
-/// menu open. Each is
-/// observed, so the window follows every change at once. Control, and what the input method is composing, are
-/// ``ViewerControl``'s.
+/// menu open, and its cleanups. Each is observed, so the window follows every change at once. Control, and what the
+/// input method is composing, are ``ViewerControl``'s.
 struct ViewerSession {
   /// The tab shown.
   var tab = ViewerTab.screen
@@ -31,14 +30,8 @@ struct ViewerSession {
   var alert: ViewerAlert?
   /// Whether the asked alert's command runs now, which holds its buttons.
   var alertRunning = false
-  /// The session whose cleanup is being read or runs now, which holds Clean Up This Session's Work…; nil while none
-  /// is.
-  var cleaningUp: String?
-  /// The cleanup whose apply got no reply and may still run, which holds Clean Up This Session's Work… until
-  /// `cleanup.json` shows it ended; nil while none is.
-  var cleanupUnanswered: ViewerUnansweredCleanup?
-  /// What each session's last cleanup from this window did, by its key, which Details lists above its button.
-  var cleanupReceipts: [String: CleanupReply] = [:]
+  /// Where this window's cleanups of sessions' work stand, which hold Clean Up This Session's Work… while one runs.
+  var cleanup = ViewerCleanupState()
   /// The top row's menu open now.
   var openMenu: ViewerMenu?
   /// The screen takes the keyboard (while in control).

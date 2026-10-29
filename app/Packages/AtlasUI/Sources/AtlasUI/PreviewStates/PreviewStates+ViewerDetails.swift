@@ -72,6 +72,7 @@
       state.details?.hostSession?.cleanup = SessionCleanup(
         session: SessionSamples.claudeKey,
         title: "Clean Up This Session's Work…",
+        workingTitle: "Cleaning Up…",
         stage: .finished([
           Fact(name: "Quit Opie", value: "Done"),
           Fact(name: "Undo an environment change", value: "Done"),

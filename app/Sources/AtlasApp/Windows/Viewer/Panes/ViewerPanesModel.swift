@@ -52,18 +52,26 @@ final class ViewerPanesModel {
   @ObservationIgnored private let shotOutlet: ShotOutlet
   /// The tabs' reading and thumbnails under way.
   @ObservationIgnored private(set) var work = ViewerPaneWork()
+  /// What the window does once the sessions' list is read, before the next reading is waited for.
+  @ObservationIgnored private let onSessionsRead: @MainActor (HostSessionList) async -> Void
 
   /// Creates tabs that have read nothing yet.
   ///
   /// - Parameters:
   ///   - viewer: The window they belong to.
   ///   - dependencies: What they reach outside the window.
-  init(viewer: ViewerController, dependencies: ViewerDependencies) {
+  ///   - onSessionsRead: What the window does once the sessions' list is read.
+  init(
+    viewer: ViewerController,
+    dependencies: ViewerDependencies,
+    onSessionsRead: @escaping @MainActor (HostSessionList) async -> Void
+  ) {
     self.viewer = viewer
     service = dependencies.service
     clock = dependencies.clock
     wallClock = dependencies.wallClock
     shotOutlet = dependencies.shotOutlet
+    self.onSessionsRead = onSessionsRead
   }
 
   /// Reads the shown tab while the window is on screen, every its own pause, and stops reading any other. The
@@ -184,21 +192,17 @@ final class ViewerPanesModel {
 
   /// Reads the host sessions' list. A reply overtaken by a newer start or stop has no effect; a service that does not
   /// offer it is left until ``ViewerSessionsFacts/askAgainAfter`` has passed; another failure is kept, and a cancelled
-  /// request says nothing. Once read, a cleanup whose reply never came is read again
-  /// (``ViewerController/checkUnansweredCleanup()``).
+  /// request says nothing. Once read, the window is told, so a cleanup whose reply never came is read again with it.
   ///
   /// - Parameter number: The reading's generation.
   func readSessions(_ number: Int) async {
     do {
       let list = try await service.sessions()
-      let readAt = wallClock()
       guard number == work.sessionsGeneration else { return }
       panes.sessions.list = list
-      panes.sessions.readAt = readAt
       panes.sessions.failure = nil
       panes.sessions.notOfferedAt = nil
-      // A cleanup whose reply never came is read again with the list, so its button waits until it ended.
-      await viewer?.checkUnansweredCleanup()
+      await onSessionsRead(list)
     } catch {
       guard number == work.sessionsGeneration, !error.isCancelled else { return }
       guard !error.isNotOffered else {

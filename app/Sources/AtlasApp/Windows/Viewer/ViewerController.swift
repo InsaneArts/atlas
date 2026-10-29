@@ -32,7 +32,10 @@ final class ViewerController {
   /// The status and the picture, read one at a time while the window shows, and the picture's rate.
   @ObservationIgnored private(set) lazy var readingLoop = ViewerReadingLoop(viewer: self, dependencies: dependencies)
   /// The Activity, Apps and Screenshots tabs, and the thumbnails they share.
-  @ObservationIgnored private(set) lazy var panesModel = ViewerPanesModel(viewer: self, dependencies: dependencies)
+  @ObservationIgnored private(set) lazy var panesModel = ViewerPanesModel(viewer: self, dependencies: dependencies) {
+    [weak self] list in
+    await self?.sessionsRead(list)
+  }
   /// Waits for a state that asks something of the person to hold before VoiceOver says it.
   @ObservationIgnored private var announcing: Task<Void, Never>?
 

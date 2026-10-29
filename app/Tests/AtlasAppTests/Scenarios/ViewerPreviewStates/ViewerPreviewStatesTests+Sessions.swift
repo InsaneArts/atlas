@@ -75,7 +75,7 @@
           record.installs = ["Probe"]
           record.cleanup = .incomplete
           snapshot.panes.sessions.list = HostSessionList(sessions: [record])
-          snapshot.session.cleanupReceipts[Self.claudeKey] = Self.cleanupApplied
+          snapshot.session.cleanup.receipts[Self.claudeKey] = Self.cleanupApplied
         },
         "Focus changed": shown(idle) { snapshot in
           Self.onTab(.activity, at: Self.activityReadAt, &snapshot)

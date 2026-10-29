@@ -191,7 +191,7 @@ struct ViewerPresenterCleanupTests {
     let unknown = CleanupStep(number: 1, kind: .removeCopy, state: .kept, reason: .unknown)
     #expect(ViewerPresenter.cleanupOutcome(unknown) == "Kept", "a reason this app does not know is never shown")
     var snapshot = try Self.chosen(Self.record(copies: [HostSessionCopy(app: "Probe")]))
-    snapshot.session.cleanupReceipts[Self.key] = applied
+    snapshot.session.cleanup.receipts[Self.key] = applied
     let cleanup = try #require(ViewerPresenter.details(snapshot).hostSession?.cleanup)
     #expect(cleanup.receipt.count == 9, "the receipt shows above the button, which can be pressed again")
     #expect(cleanup.isEnabled)
@@ -274,6 +274,30 @@ struct ViewerPresenterCleanupTests {
     viewer.close()
   }
 
+  @Test("another session's cleanup holds the button without a spinner of its own")
+  func anotherSessionsCleanupHoldsTheButtonWithoutASpinner() throws {
+    var snapshot = try Self.chosen(Self.record(copies: [HostSessionCopy(app: "Probe")]))
+    snapshot.session.cleanup.running = "8be20c4d1a77"
+    let held = try #require(ViewerPresenter.details(snapshot).hostSession?.cleanup)
+    #expect(!held.isEnabled && !held.isWorking && held.waitsForAnother)
+    snapshot.session.cleanup.running = nil
+    snapshot.session.cleanup.unanswered = ViewerUnansweredCleanup(session: "8be20c4d1a77", sentAt: .distantPast)
+    let waiting = try #require(ViewerPresenter.details(snapshot).hostSession?.cleanup)
+    #expect(!waiting.isEnabled && !waiting.isWorking)
+    snapshot.session.cleanup.unanswered = ViewerUnansweredCleanup(session: Self.key, sentAt: .distantPast)
+    let own = try #require(ViewerPresenter.details(snapshot).hostSession?.cleanup)
+    #expect(!own.isEnabled && own.isWorking && !own.waitsForAnother)
+    #expect(own.workingTitle == "Cleaning Up…", "VoiceOver hears it working")
+  }
+
+  @Test("what the last cleanups did is forgotten for sessions the list no longer names")
+  func receiptsAreForgottenForSessionsTheListNoLongerNames() {
+    var state = ViewerCleanupState()
+    state.receipts = [Self.key: CleanupReply(ok: true), "c0ffee5e5510": CleanupReply(ok: true)]
+    state.keepReceipts(for: [Self.key])
+    #expect(Array(state.receipts.keys) == [Self.key])
+  }
+
   @Test("a preview read after the person moved on asks nothing")
   func aPreviewReadAfterThePersonMovedOnAsksNothing() async throws {
     let service = ScriptedService()
@@ -288,7 +312,7 @@ struct ViewerPresenterCleanupTests {
     try await settle("the preview was never asked for") { service.held["cleanup.json"] != nil }
     viewer.send(.chooseSession(.all))
     service.resume("cleanup.json")
-    try await settle("the preview never came back") { viewer.session.cleaningUp == nil }
+    try await settle("the preview never came back") { viewer.session.cleanup.running == nil }
     #expect(viewer.session.alert == nil, "another session is shown, so nothing asks about this one")
 
     viewer.send(.chooseSession(.one(Self.key)))
@@ -297,7 +321,7 @@ struct ViewerPresenterCleanupTests {
     try await settle("the second preview was never asked for") { service.held["cleanup.json"] != nil }
     viewer.ask(.restart)
     service.resume("cleanup.json")
-    try await settle("the second preview never came back") { viewer.session.cleaningUp == nil }
+    try await settle("the second preview never came back") { viewer.session.cleanup.running == nil }
     #expect(viewer.session.alert == .restart, "the alert that went up meanwhile stays")
     viewer.close()
   }
@@ -346,7 +370,7 @@ struct ViewerPresenterCleanupTests {
     viewer.panesModel.followSessions(readNow: true)
     try await settle("the cleanup was never read again") { cleanup()?.isEnabled == true }
     #expect(service.cleanups.count > checks)
-    #expect(viewer.session.cleanupUnanswered == nil)
+    #expect(viewer.session.cleanup.unanswered == nil)
     let failed = Fact(name: "Remove the copy of Probe", value: "Couldn't: still in use. Try again.")
     #expect(cleanup()?.receipt.last == failed, "what each step did stays for Details")
     #expect(viewer.session.notice == "The cleanup didn't finish. Details lists each step.")
