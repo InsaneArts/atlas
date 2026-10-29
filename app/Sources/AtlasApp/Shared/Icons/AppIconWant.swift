@@ -16,12 +16,36 @@ nonisolated struct AppIconWant: Equatable, Sendable {
   /// The icon the service sent for the open app, as PNG, for when the bundle does not read.
   var served: Data?
 
+  /// Whether this request carries evidence from an open app.
+  var isLive: Bool { bundle != nil || served != nil }
+
+  /// Whether this request already includes another request's live evidence for the same identity.
+  ///
+  /// - Parameter other: The incoming evidence.
+  /// - Returns: Whether processing it would add no bundle or service icon.
+  func covers(_ other: AppIconWant) -> Bool {
+    key == other.key && (other.bundle == nil || bundle == other.bundle)
+      && (other.served == nil || served == other.served)
+  }
+
+  /// Fills absent evidence from an earlier request without replacing newer evidence.
+  ///
+  /// - Parameter earlier: Work already queued or being processed for this identity.
+  /// - Returns: The combined request.
+  func keepingEvidence(from earlier: AppIconWant) -> AppIconWant {
+    guard key == earlier.key else { return self }
+    var combined = self
+    combined.bundle = bundle ?? earlier.bundle
+    combined.served = served ?? earlier.served
+    return combined
+  }
+
   /// What is wanted for an app open now, by its key; nil for an app with neither a bundle identifier nor a name.
   ///
   /// - Parameters:
   ///   - app: The app.
   ///   - home: The person's home folder.
-  ///   - live: Whether to read it from the app itself, which is done once a launch.
+  ///   - live: Whether to read it from the app itself, when its bundle or service evidence has changed.
   /// - Returns: The want, or nil.
   static func open(_ app: HelperApp, home: String, live: Bool) -> AppIconWant? {
     guard let key = app.iconKey else { return nil }

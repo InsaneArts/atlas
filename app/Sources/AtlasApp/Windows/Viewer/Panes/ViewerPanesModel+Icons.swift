@@ -7,8 +7,8 @@ extension ViewerPanesModel {
   static let iconsAtOnce = 2
 
   /// After an Apps reading: each open app's icon is wanted, read from the app itself once, and the bundle identifier
-  /// each app's name goes with is kept. An app whose icon was found, missed or is being found asks for nothing, so a
-  /// reading every few seconds costs a look in memory each.
+  /// each app's name goes with is kept. New live evidence retries a miss or waits behind a weaker lookup;
+  /// evidence already processed or queued asks for nothing.
   ///
   /// - Parameter apps: The apps read.
   func wantIcons(for apps: [HelperApp]) {
@@ -16,10 +16,9 @@ extension ViewerPanesModel {
     for app in apps {
       learn(app)
       guard let key = app.iconKey else { continue }
-      let live = !iconWork.readLive.contains(key.text)
-      let shown = panes.icons.images[key.text] != nil
-      guard live || !shown, let want = AppIconWant.open(app, home: icons.home, live: live) else { continue }
-      if live { iconWork.readLive.insert(key.text) }
+      guard let want = AppIconWant.open(app, home: icons.home, live: true),
+        iconWork.readLive[key.text]?.covers(want) != true
+      else { continue }
       wants.append(want)
     }
     want(wants)
@@ -40,16 +39,27 @@ extension ViewerPanesModel {
     want(wants)
   }
 
-  /// Queues what is not found, being found, waiting or missed already, and starts the queue.
+  /// Coalesces requests by identity, retaining live evidence behind an in-flight lookup and retrying earlier misses.
   ///
   /// - Parameter wants: The icons wanted.
   private func want(_ wants: [AppIconWant]) {
-    for want in wants {
+    for incoming in wants {
+      var want = incoming
       let key = want.key.text
-      guard iconWork.loading[key] == nil, !iconWork.missed.contains(key) else { continue }
+      if want.isLive {
+        iconWork.missed.remove(key)
+        if let active = iconWork.active[key] {
+          guard !active.covers(want) else { continue }
+          want = want.keepingEvidence(from: active)
+        }
+      } else {
+        guard iconWork.loading[key] == nil, !iconWork.missed.contains(key), panes.icons.images[key] == nil else {
+          continue
+        }
+      }
       if let waiting = iconWork.wanted.firstIndex(where: { $0.key == want.key }) {
-        // A live read asked for later still goes first.
-        if want.bundle != nil || want.served != nil { iconWork.wanted[waiting] = want }
+        // Keep every source already queued while accepting newer live evidence.
+        if want.isLive { iconWork.wanted[waiting] = want.keepingEvidence(from: iconWork.wanted[waiting]) }
         continue
       }
       iconWork.wanted.append(want)
@@ -60,8 +70,11 @@ extension ViewerPanesModel {
   /// Starts the waiting icons, oldest first, while fewer than ``iconsAtOnce`` are being found. Each is found off the
   /// main actor.
   private func findIcons() {
-    while iconWork.loading.count < Self.iconsAtOnce, !iconWork.wanted.isEmpty {
-      let want = iconWork.wanted.removeFirst()
+    while iconWork.loading.count < Self.iconsAtOnce,
+      let next = iconWork.wanted.firstIndex(where: { iconWork.loading[$0.key.text] == nil })
+    {
+      let want = iconWork.wanted.remove(at: next)
+      iconWork.active[want.key.text] = want
       iconWork.loading[want.key.text] = Task { [weak self, icons] in
         let found = await icons.find(want)
         self?.land(found, for: want)
@@ -69,7 +82,7 @@ extension ViewerPanesModel {
     }
   }
 
-  /// An icon found, or not: drawn from now on, or its app keeps its tile until the next launch; the next one starts.
+  /// An icon found, or not: drawn from now on, or its app keeps its tile until new live evidence; the next one starts.
   /// An icon found under a bundle identifier for an app wanted by name is drawn for both.
   ///
   /// - Parameters:
@@ -78,11 +91,14 @@ extension ViewerPanesModel {
   func land(_ found: AppIconFound?, for want: AppIconWant) {
     let key = want.key.text
     iconWork.loading[key] = nil
+    iconWork.active[key] = nil
+    if want.isLive { iconWork.readLive[key] = want }
     defer { findIcons() }
     guard let found else {
       if panes.icons.images[key] == nil { iconWork.missed.insert(key) }
       return
     }
+    iconWork.missed.remove(key)
     let image = found.drawn(as: key)
     panes.icons.images[key] = image
     guard case .name = want.key, let id = found.bundleId, let bundleKey = AppIconKey(bundleId: id) else { return }

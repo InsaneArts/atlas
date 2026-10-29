@@ -5,10 +5,12 @@ struct ViewerIconWork {
   var wanted: [AppIconWant] = []
   /// Icons being found, by their key's text.
   var loading: [String: Task<Void, Never>] = [:]
-  /// Keys whose icon was looked for and not found, which stay their tile until the next launch.
+  /// The requests being processed, so stronger requests can wait behind them.
+  var active: [String: AppIconWant] = [:]
+  /// Keys whose icon was not found, retried when live evidence arrives.
   var missed: Set<String> = []
-  /// Keys whose open app's icon was read from the app itself, which is done once.
-  var readLive: Set<String> = []
+  /// Live requests already processed; new bundle or service evidence may ask again.
+  var readLive: [String: AppIconWant] = [:]
   /// The name and bundle identifier pairs already passed on to be kept, by the name's key's text.
   var learned: [String: String] = [:]
 }

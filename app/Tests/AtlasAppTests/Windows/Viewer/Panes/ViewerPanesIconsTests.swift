@@ -69,6 +69,43 @@ struct ViewerPanesIconsTests {
     viewer.close()
   }
 
+  @Test("new live evidence retries an earlier Activity icon miss")
+  func liveEvidenceRetriesAMiss() async throws {
+    let viewer = try await ViewerController.watching(ScriptedService(), icons: .none)
+    let weak = try #require(AppIconWant.named(bundleId: "test.atlas.probe", name: "Probe"))
+    viewer.panesModel.land(nil, for: weak)
+    #expect(viewer.panesModel.iconWork.missed.contains(weak.key.text))
+    let app = HelperApp(pid: 9, name: "Probe", bundleId: "test.atlas.probe", icon: png(width: 128, height: 128))
+    viewer.panesModel.wantIcons(for: [app])
+    #expect(!viewer.panesModel.iconWork.missed.contains(weak.key.text))
+    try await settle("the live icon never replaced the miss") { viewer.panes.icons.images[weak.key.text] != nil }
+    #expect(viewer.panesModel.iconWork.readLive[weak.key.text]?.served == app.icon)
+    viewer.close()
+  }
+
+  @Test("live icon work waits behind a weaker in-flight lookup and finishes only after processing")
+  func liveEvidenceWaitsBehindAWeakerLookup() async throws {
+    let viewer = try await ViewerController.watching(ScriptedService(), icons: .none)
+    let weak = try #require(AppIconWant.named(bundleId: "test.atlas.probe", name: "Probe"))
+    // Hold the weaker work deterministically until its completion is delivered below.
+    viewer.panesModel.iconWork.loading[weak.key.text] = Task {}
+    viewer.panesModel.iconWork.active[weak.key.text] = weak
+    let app = HelperApp(pid: 9, name: "Probe", bundleId: "test.atlas.probe", icon: png(width: 128, height: 128))
+    let bundled = HelperApp(pid: 9, name: "Probe", bundle: "/Applications/Probe.app", bundleId: "test.atlas.probe")
+    viewer.panesModel.wantIcons(for: [bundled])
+    viewer.panesModel.wantIcons(for: [app])
+    viewer.panesModel.wantIcons(for: [app])
+    #expect(viewer.panesModel.iconWork.wanted.count == 1)
+    #expect(viewer.panesModel.iconWork.wanted.first?.bundle == "/Applications/Probe.app")
+    #expect(viewer.panesModel.iconWork.wanted.first?.served == app.icon)
+    #expect(viewer.panesModel.iconWork.readLive[weak.key.text] == nil)
+    viewer.panesModel.land(nil, for: weak)
+    try await settle("the stronger icon request was lost") { viewer.panes.icons.images[weak.key.text] != nil }
+    #expect(viewer.panesModel.iconWork.wanted.isEmpty)
+    #expect(viewer.panesModel.iconWork.readLive[weak.key.text]?.served == app.icon)
+    viewer.close()
+  }
+
   @Test("an Activity row's app is looked for once by its bundle id")
   func activityRows() async throws {
     let service = ScriptedService()
