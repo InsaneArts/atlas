@@ -202,6 +202,45 @@ fn settling_a_command_removes_its_mark() {
 }
 
 #[test]
+fn a_labelled_command_is_noted_while_it_runs_and_forgotten_once_it_stops() {
+    use crate::host_session::{Host, HostSession};
+
+    let directory = tempfile::tempdir().unwrap();
+    let agent = HostSession::new(Host::Named, "agent-a")
+        .unwrap()
+        .in_folder(Some("left"));
+    let (running, other) = pair(directory.path());
+    let running = running.labelled(Some(&agent));
+
+    let change = running.quarantine().unwrap();
+    assert!(other.running_notes().is_empty(), "only a command is noted");
+    running.clear_if(&change).unwrap();
+    drop(change);
+
+    let settled = running.quarantine_command().unwrap();
+    let notes = other.running_notes();
+    assert_eq!(notes.len(), 1);
+    assert_eq!(notes[0].session.as_ref(), Some(agent.key()));
+    assert_eq!(notes[0].folder.as_deref(), Some("left"));
+    assert_eq!(
+        notes[0].named.as_ref().map(|named| named.as_str()),
+        Some("agent-a")
+    );
+    running.clear_if(&settled).unwrap();
+    drop(settled);
+    assert!(other.running_notes().is_empty());
+    assert!(!other.running.exists(), "settled, its note goes");
+
+    let lost = running.quarantine_command().unwrap();
+    running.abandon_command(lost);
+    assert!(
+        other.running_notes().is_empty(),
+        "an unknown outcome is no command running"
+    );
+    assert!(!other.running.exists());
+}
+
+#[test]
 fn a_malformed_command_list_fails_closed() {
     let directory = tempfile::tempdir().unwrap();
     let (running, other) = pair(directory.path());

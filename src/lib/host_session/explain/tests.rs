@@ -354,6 +354,59 @@ fn busy_from_a_running_command_names_the_session_that_started_it() {
     client.controller.clear_if(&command).unwrap();
 }
 
+/// A session named by ATLAS_SESSION in folder `left`, as its first
+/// command resolves it.
+fn first_command(id: &str) -> HostSession {
+    session(Host::Named, id).in_folder(Some("left"))
+}
+
+#[test]
+fn busy_from_a_first_commands_run_names_its_session_as_its_record_will() {
+    let directory = tempfile::tempdir().unwrap();
+    let client = client(directory.path());
+    let agent = first_command("agent-a");
+    let command = client
+        .controller
+        .clone()
+        .labelled(Some(&agent))
+        .quarantine_command()
+        .unwrap();
+
+    let refused = client.controller.acquire(false).map(|_| json!({}));
+    let error = reply(refused, || Some(client.clone()), None).unwrap_err();
+    assert_eq!(error.details["running"], "command");
+    assert_eq!(
+        error.details["heldBy"],
+        json!({"session": agent.key.as_str(), "name": "agent-a · left"}),
+        "never its key: it has no record yet and holds no control"
+    );
+
+    client.controller.clear_if(&command).unwrap();
+    drop(command);
+    assert!(
+        client.controller.running_notes().is_empty(),
+        "gone once it ends"
+    );
+}
+
+#[test]
+fn an_unknown_outcome_of_a_session_running_its_first_command_names_it() {
+    let directory = tempfile::tempdir().unwrap();
+    let client = client(directory.path());
+    let (agent, codex) = (first_command("agent-a"), session(Host::Codex, "right"));
+    abandoned(&client, Some(&agent));
+    let command = client
+        .controller
+        .clone()
+        .labelled(Some(&agent))
+        .quarantine_command()
+        .unwrap();
+
+    let error = reply(uncertain(), || Some(client.clone()), Some(&codex)).unwrap_err();
+    assert_eq!(error.details["causedBy"], json!(["agent-a · left"]));
+    drop(command);
+}
+
 #[test]
 fn an_unknown_outcome_of_its_own_beside_another_sessions_command_is_still_yours() {
     let directory = tempfile::tempdir().unwrap();

@@ -15,6 +15,7 @@ mod commands_tests;
 mod notes;
 #[cfg(test)]
 mod notes_tests;
+mod running;
 mod turns;
 
 pub use notes::Note;
@@ -770,6 +771,8 @@ pub struct Controller {
     /// Which pending generations are commands agents started with `run`,
     /// beside the marker.
     commands: PathBuf,
+    /// Who started each of those commands, beside the marker.
+    running: PathBuf,
     /// Which host session holds control right now, beside the lock.
     holder: PathBuf,
     /// The commands waiting for control, one note each, in the order they
@@ -802,6 +805,7 @@ impl Controller {
             label: None,
             causes: directory.join(format!("{name}.causes.json")),
             commands: directory.join(format!("{name}.commands.json")),
+            running: directory.join(format!("{name}.running.json")),
             holder: directory.join(format!("{name}.holder.json")),
             waiting: directory.join(format!("{name}.waiting")),
         }
@@ -960,6 +964,21 @@ impl Controller {
     /// for apps to show who waits, never to decide who goes next.
     pub fn waiting_notes(&self) -> Vec<Note> {
         let mut notes = turns::waiting(&self.waiting);
+        notes.sort_by_key(|note| note.since);
+        notes
+    }
+
+    /// The notes of the commands agents started with `run` that still run,
+    /// oldest first: such a command holds no control while it runs, so
+    /// only its note names a session on its first command. For apps to
+    /// show who acts, never to decide who may.
+    pub fn running_notes(&self) -> Vec<Note> {
+        let marked = self.commands();
+        let mut notes: Vec<Note> = running::read(&self.running)
+            .into_iter()
+            .filter(|(generation, note)| marked.contains(generation) && note.live())
+            .map(|(_, note)| note)
+            .collect();
         notes.sort_by_key(|note| note.since);
         notes
     }
@@ -1325,6 +1344,11 @@ impl Controller {
         if let Some(label) = &self.label {
             // Whose change it is, for display only; a lost note loses a label.
             let _ = causes::note(&self.causes, generation, &label.key, &pending);
+            if mark == Mark::Command
+                && let Some(note) = Note::now(Some(label))
+            {
+                let _ = running::note(&self.running, generation, &note, &pending);
+            }
         }
         Ok(claim)
     }
@@ -1340,6 +1364,7 @@ impl Controller {
                 .filter(|entry| entry != claim.generation())
                 .collect();
             let _ = commands::keep(&self.commands, &kept);
+            let _ = running::keep(&self.running, &kept);
         }
         drop(claim);
     }
@@ -1358,6 +1383,7 @@ impl Controller {
         pending.retain(|entry| entry != generation);
         let _ = causes::keep(&self.causes, &pending);
         let _ = commands::keep(&self.commands, &pending);
+        let _ = running::keep(&self.running, &pending);
 
         if pending.is_empty() {
             remove_marker(&self.marker)
@@ -1402,6 +1428,7 @@ impl Controller {
         }
         let _ = causes::keep(&self.causes, &running);
         let _ = commands::keep(&self.commands, &running);
+        let _ = running::keep(&self.running, &running);
 
         if running.is_empty() {
             remove_marker(&self.marker)

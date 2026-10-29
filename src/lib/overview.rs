@@ -385,6 +385,7 @@ fn live(client: &Client, facts: SessionFacts) -> Vec<Listed> {
     let causes = client.controller.pending_causes().unwrap_or_default();
     let holder = client.controller.holder_note();
     let waiting = client.controller.waiting_notes();
+    let running = client.controller.running_notes();
     let scene = Scene {
         rows: &rows,
         holder: holder.as_ref(),
@@ -405,7 +406,7 @@ fn live(client: &Client, facts: SessionFacts) -> Vec<Listed> {
     }
     // A session on its first command has no record until that command
     // ends: its note names it meanwhile, by the same rule as a record.
-    let first = unrecorded(holder.as_ref(), &waiting, &seen);
+    let first = unrecorded(holder.as_ref(), &waiting, &running, &seen);
     let named = names_with(seen.iter().map(|seen| &seen.record), first.iter().copied());
 
     let mut listed: Vec<Listed> = seen
@@ -444,14 +445,20 @@ fn live(client: &Client, facts: SessionFacts) -> Vec<Listed> {
     listed
 }
 
-/// The live notes, the holder's first, naming a session that has no
-/// record among `seen`: each such session once.
+/// The live notes, the holder's first, then the waiting commands' and the
+/// running commands', naming a session that has no record among `seen`:
+/// each such session once.
 fn unrecorded<'a>(
     holder: Option<&'a crate::control::Note>,
     waiting: &'a [crate::control::Note],
+    running: &'a [crate::control::Note],
     seen: &[Seen],
 ) -> Vec<&'a crate::control::Note> {
-    let notes = holder.filter(|note| note.live()).into_iter().chain(waiting);
+    let notes = holder
+        .filter(|note| note.live())
+        .into_iter()
+        .chain(waiting)
+        .chain(running);
     let mut found: Vec<&crate::control::Note> = Vec::new();
     for note in notes {
         let Some(key) = &note.session else { continue };
@@ -464,12 +471,13 @@ fn unrecorded<'a>(
     found
 }
 
-/// Whether a live holder or waiting note names a session with no record
-/// yet among `seen`: a session on its first command.
+/// Whether a live holder, waiting or running note names a session with no
+/// record yet among `seen`: a session on its first command.
 pub(crate) fn first_command_running(client: &Client, seen: &[Seen]) -> bool {
     let holder = client.controller.holder_note();
     let waiting = client.controller.waiting_notes();
-    !unrecorded(holder.as_ref(), &waiting, seen).is_empty()
+    let running = client.controller.running_notes();
+    !unrecorded(holder.as_ref(), &waiting, &running, seen).is_empty()
 }
 
 /// One host session as [`add_host_sessions`] lists it, before the rest of
@@ -500,8 +508,9 @@ fn host_session(
     })
 }
 
-/// A host session whose first command holds or waits for the helper and
-/// so has no record yet, from its note: named by its host and folder, and
+/// A host session whose first command holds or waits for the helper, or
+/// runs as a command started with `run`, and so has no record yet, from
+/// its note: named by its host and folder, and
 /// started when its command did, as its record will say.
 fn first_command(key: &Key, note: &crate::control::Note, names: &BTreeMap<Key, String>) -> Value {
     json!({
@@ -1265,6 +1274,49 @@ mod tests {
         ));
         assert_eq!(after, before);
         drop(holding);
+    }
+
+    #[test]
+    fn a_session_running_its_first_command_is_listed_acting_by_its_name() {
+        use crate::host_session::{Host, HostSession};
+
+        let directory = tempfile::tempdir().unwrap();
+        let client = crate::transaction_test::client(directory.path());
+        let agent = HostSession::new(Host::Named, "agent-a")
+            .unwrap()
+            .in_folder(Some("left"));
+        // A command started with `run` lets go of control once sent: no
+        // holder note names it, and its session has no record yet.
+        let command = client
+            .controller
+            .clone()
+            .labelled(Some(&agent))
+            .quarantine_command()
+            .unwrap();
+        assert!(client.controller.holder_note().is_none());
+
+        let listed = host_sessions(&client, facts(false, crate::client::timestamp()));
+        let entry = listed
+            .sessions
+            .iter()
+            .find(|entry| entry["key"] == agent.key().as_str())
+            .expect("listed from its running command's note");
+        assert_eq!(entry["name"], "agent-a · left");
+        assert_eq!(entry["state"], "acting");
+        assert_eq!(entry["ended"], Value::Null);
+        assert_eq!(pending(&client.controller).0.commands, 1);
+        assert!(first_command_running(&client, &[]));
+
+        client.controller.clear_if(&command).unwrap();
+        drop(command);
+        let listed = host_sessions(&client, facts(false, crate::client::timestamp()));
+        assert!(
+            listed
+                .sessions
+                .iter()
+                .all(|entry| entry["key"] != agent.key().as_str()),
+            "nothing lists it once its command ends with no record"
+        );
     }
 
     #[test]

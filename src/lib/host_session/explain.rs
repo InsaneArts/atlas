@@ -122,8 +122,8 @@ fn additions(refusal: &Refusal, client: &Client, own: Option<&Key>) -> Vec<(&'st
     let Ok(output) = client.output_dir() else {
         return Vec::new();
     };
-    // A session on its first command, as a holder, is named as the
-    // status names it: from its note.
+    // A session on its first command, holding, waiting or running a
+    // command, is named as the status names it: from its note.
     let named = || {
         let recent = Store::at(output).recent();
         let notes: Vec<_> = client
@@ -131,6 +131,7 @@ fn additions(refusal: &Refusal, client: &Client, own: Option<&Key>) -> Vec<(&'st
             .holder_note()
             .into_iter()
             .chain(client.controller.waiting_notes())
+            .chain(client.controller.running_notes())
             .collect();
         names_with(recent.iter().map(|seen| &seen.record), &notes)
     };
