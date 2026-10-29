@@ -1332,11 +1332,13 @@ mod tests {
         let said = |args: &[&str]| {
             let command = parse(args).unwrap().command.unwrap();
             doing(&command).map(|doing| {
-                let mut row = serde_json::Map::new();
-                row.insert("ok".into(), json!(true));
-                row.insert("actionCount".into(), json!(1));
-                doing.fields(&mut row, true);
-                atlas::doing::says(&Value::Object(row))
+                let mut row = atlas::activity_log::Row {
+                    ok: Some(true),
+                    action_count: Some(1),
+                    ..Default::default()
+                };
+                doing.fill(&mut row, true);
+                atlas::doing::says(&row)
             })
         };
         let says = |args: &[&str], words: &str| assert_eq!(said(args).as_deref(), Some(words));
@@ -1377,9 +1379,9 @@ mod tests {
     fn an_actions_app_is_named_in_its_activity() {
         let app = |args: &[&str]| {
             let command = parse(args).unwrap().command.unwrap();
-            let mut row = serde_json::Map::new();
-            doing(&command).unwrap().fields(&mut row, true);
-            row.get("app").cloned()
+            let mut row = atlas::activity_log::Row::default();
+            doing(&command).unwrap().fill(&mut row, true);
+            row.app.map(|app| json!(app))
         };
 
         for args in [
@@ -1794,9 +1796,9 @@ mod tests {
     fn job_and_collect_rows_name_no_arguments_or_files() {
         let fields = |args: &[&str]| {
             let command = parse(args).unwrap().command.unwrap();
-            let mut fields = serde_json::Map::new();
-            doing(&command).unwrap().fields(&mut fields, true);
-            fields
+            let mut row = atlas::activity_log::Row::default();
+            doing(&command).unwrap().fill(&mut row, true);
+            serde_json::to_value(row).unwrap()
         };
         for (args, verb) in [
             (
@@ -1817,7 +1819,7 @@ mod tests {
         ] {
             let fields = fields(args);
             assert_eq!(fields["verb"], verb);
-            let text = Value::Object(fields).to_string();
+            let text = fields.to_string();
             for word in ["web", "nc", "8765", "secret-report", "7c2e91a04b3f"] {
                 assert!(!text.contains(word), "{args:?}: {text}");
             }

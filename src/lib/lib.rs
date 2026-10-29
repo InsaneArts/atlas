@@ -1,5 +1,6 @@
 pub mod acl;
 pub mod actions;
+pub mod activity_log;
 pub mod agent;
 pub mod agents;
 mod app_selection;

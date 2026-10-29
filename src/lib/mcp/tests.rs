@@ -647,8 +647,14 @@ fn mcp_actions_are_recorded_without_a_session() {
         &json!({"op": "input", "actions": [{}]}),
         &json!({"ok": true}),
     );
-    let log = std::fs::read_to_string(server.client.output_dir().unwrap().join("metadata.jsonl"))
-        .unwrap();
+    let log = std::fs::read_to_string(
+        server
+            .client
+            .output_dir()
+            .unwrap()
+            .join(crate::activity_log::FILE),
+    )
+    .unwrap();
     assert!(!log.contains("session"), "{log}");
 }
 

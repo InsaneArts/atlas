@@ -2,6 +2,7 @@
 //! menu bar: a mode, a one-sentence reason, recent agent activity and the
 //! capability facts a person needs at a glance.
 use crate::{
+    activity_log::{self, Op, Row},
     client::Client,
     control::Controller,
     error::Error,
@@ -13,12 +14,10 @@ use crate::{
     },
     session_view::{self, Scene, Who},
 };
+use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
-use sha2::{Digest, Sha256};
 use std::{
     collections::BTreeMap,
-    io::{Read, Seek, SeekFrom},
-    path::Path,
     sync::{Mutex, MutexGuard, PoisonError},
     time::Duration,
 };
@@ -26,10 +25,6 @@ use tokio::time::Instant;
 
 /// Activity this recent counts as an agent acting now.
 const ACTIVE_NANOS: u128 = 5_000_000_000;
-/// How much of the end of the activity log is read at least, and as much
-/// more as a row takes at most for each row asked for past that.
-const TAIL: u64 = 64 * 1024;
-const ROW_BYTES: u64 = 512;
 
 /// How long reading the status or a frame may take: less than the app
 /// waits (8 seconds), so it hears why rather than giving up.
@@ -232,7 +227,7 @@ pub async fn read(client: &Client) -> Value {
     let (pending, _) = pending(&client.controller);
     let activity = client
         .output_dir()
-        .map(|directory| activity(directory, ROWS))
+        .map(|directory| activity_log::recent(directory, ROWS))
         .unwrap_or_default();
 
     status["controlActive"] = json!(false);
@@ -381,7 +376,7 @@ fn live(client: &Client, facts: SessionFacts) -> Vec<Listed> {
         return Vec::new();
     };
     let seen = Store::at(output).recent();
-    let rows = activity(output, SESSION_ROWS);
+    let rows = activity_log::recent(output, SESSION_ROWS);
     let causes = client.controller.pending_causes().unwrap_or_default();
     let holder = client.controller.holder_note();
     let waiting = client.controller.waiting_notes();
@@ -548,77 +543,6 @@ fn terminal(started: u64, last_seen: u64, now: u64) -> Value {
     })
 }
 
-/// One recorded operation per command, newest first; no payloads are ever
-/// recorded. A command that acted in several steps (typing in batches,
-/// opening then waiting) shows as its newest step.
-pub fn activity(directory: &Path, limit: usize) -> Vec<Value> {
-    if limit == 0 {
-        return Vec::new();
-    }
-
-    // Never through a link, and never waiting on a pipe put in its place.
-    let Some(mut file) = crate::files::open_plain(&directory.join("metadata.jsonl")) else {
-        return Vec::new();
-    };
-
-    let tail = TAIL.max(ROW_BYTES.saturating_mul(limit as u64));
-    let length = file.metadata().map(|m| m.len()).unwrap_or(0);
-    let mut bytes = Vec::new();
-    if file
-        .seek(SeekFrom::Start(length.saturating_sub(tail)))
-        .is_err()
-        || file.take(tail).read_to_end(&mut bytes).is_err()
-    {
-        return Vec::new();
-    }
-
-    // The tail may start inside a character; only that first, partial line
-    // is lost.
-    let mut rows: Vec<Value> = Vec::new();
-    for row in String::from_utf8_lossy(&bytes)
-        .lines()
-        .rev()
-        .filter_map(|line| serde_json::from_str::<Value>(line).ok())
-        .filter(|row| row["operation"].is_string())
-    {
-        let step = row["command"].is_string()
-            && rows
-                .last()
-                .is_some_and(|newer| newer["command"] == row["command"]);
-        if !step {
-            rows.push(row);
-        }
-        if rows.len() == limit {
-            break;
-        }
-    }
-
-    rows
-}
-
-/// A logged row's id: the same on every read, and never another row's.
-///
-/// The log keeps no sequence number, and a row's place in it moves: it is
-/// read from its tail, and it starts over once it grows past a megabyte.
-/// What a row holds never changes once written, though, and no two rows
-/// hold the same: each carries the nanosecond it was written at (taken
-/// under the log's exclusive lock, so writers take turns) and, for an
-/// agent's command, that command's random token. So the id is a digest of
-/// the row itself. A command's newest step stands for it, so the row shown
-/// for a command under way is another one, with another id, once it ends.
-pub fn row_id(row: &Value) -> String {
-    crate::name::hex(&Sha256::digest(row.to_string().as_bytes())[..8])
-}
-
-/// Nanoseconds since an activity row was recorded, if it parses.
-fn age(row: &Value, now: u128) -> Option<u128> {
-    row["at"]
-        .as_str()?
-        .parse::<u128>()
-        .ok()
-        .map(|at| now.saturating_sub(at))
-}
-
 /// Unknown-outcome mutations: those nothing will settle, and those a live
 /// process is still carrying out, commands agents started among them.
 #[derive(Debug, Clone, Copy, Default)]
@@ -650,7 +574,7 @@ pub fn overview(
     report: &Value,
     lease_active: bool,
     pending: Pending,
-    activity: &[Value],
+    activity: &[Row],
     now: u128,
 ) -> Value {
     let session = &report["session"];
@@ -666,8 +590,8 @@ pub fn overview(
     // The person's own viewer input and explicit recovery are not an agent.
     let recent = activity
         .iter()
-        .find(|row| row["actor"] != "viewer" && row["operation"] != "restart")
-        .and_then(|row| age(row, now))
+        .find(|row| row.actor() != "viewer" && !row.is(&Op::Restart))
+        .and_then(|row| row.age(now))
         .is_some_and(|age| age < ACTIVE_NANOS);
 
     // A silent helper in the app's words: the panel and viewer offer buttons,
@@ -748,7 +672,7 @@ pub fn overview(
     // so it ends without a full stop.
     let newest = activity
         .iter()
-        .find(|row| row["actor"] != "viewer")
+        .find(|row| row.actor() != "viewer")
         .map(crate::doing::says);
     let headline = match (state, newest) {
         ("working", Some(newest)) => crate::doing::capitalized(&newest),
@@ -791,11 +715,12 @@ pub fn overview(
 
 /// Why a failed action failed, in plain words, from the fixed code its row
 /// keeps; nil for an action that worked or a code with no plain reason.
-fn reason(row: &Value) -> Option<&'static str> {
-    if row["ok"] != false {
+fn reason(row: &Row) -> Option<&'static str> {
+    if !row.failed() {
         return None;
     }
-    Some(match row["code"].as_str()? {
+    let focus = row.reason.as_deref();
+    Some(match row.code.as_deref()? {
         "busy" => "Something else had the mouse and keyboard",
         "stopped" => "Agents were stopped",
         "elements" => "Nothing on screen matched",
@@ -803,19 +728,19 @@ fn reason(row: &Value) -> Option<&'static str> {
         "no-window" => "The app had no window on screen",
         "input" => "The mouse and keyboard weren't ready",
         "capture" => "The screen couldn't be read",
-        "permission" => match row["operation"].as_str() {
-            Some("screenshot") => "The helper can't record the screen",
-            Some("input") => "The helper can't use the mouse and keyboard",
+        "permission" => match row.operation {
+            Some(Op::Screenshot) => "The helper can't record the screen",
+            Some(Op::Input) => "The helper can't use the mouse and keyboard",
             _ => "The helper doesn't have permission",
         },
         "session-changed" => "The helper's screen changed meanwhile",
-        "focus-changed" if row["reason"] == "unreadable" => {
+        "focus-changed" if focus == Some("unreadable") => {
             "Atlas couldn't tell which app was in front"
         }
-        "focus-changed" if row["reason"] == "window" => "Another window was in front",
-        "focus-changed" if row["reason"] == "sheet" => "A sheet was open over the window",
-        "focus-changed" if row["reason"] == "field" => "Another field had focus",
-        "focus-changed" if row["reason"] == "disabled" => "That field is disabled",
+        "focus-changed" if focus == Some("window") => "Another window was in front",
+        "focus-changed" if focus == Some("sheet") => "A sheet was open over the window",
+        "focus-changed" if focus == Some("field") => "Another field had focus",
+        "focus-changed" if focus == Some("disabled") => "That field is disabled",
         "focus-changed" => "Another app was in front",
         "lease-lost" => "Control ended before it finished",
         "cancelled" => "It was cancelled",
@@ -832,38 +757,62 @@ fn reason(row: &Value) -> Option<&'static str> {
 }
 
 /// A logged row as every app shows it: what it did in words, who did it
-/// and how long ago, at `now`.
-pub fn shown(row: &Value, now: u128) -> Value {
-    json!({
-        // The row's own id, the same on every read, so an app can keep a
-        // line's identity as newer ones arrive.
-        "id": row_id(row),
-        "operation": row["operation"],
-        // A command under way is not a failure: apps that read only `ok`
-        // show it as going well.
-        "ok": row["ok"] == true || row["started"] == true,
-        "actionCount": row["actionCount"],
-        "started": row["started"] == true,
-        "verb": row["verb"],
-        "app": row["app"],
-        "label": row["label"],
-        // The host session's key and the screenshot's file name, as the row
-        // keeps them; apps name the session from their own list.
-        "session": row["session"],
-        "capture": row["capture"],
-        // Refused before anything was sent, as when another app was in
-        // front: not a problem, and nothing to recover.
-        "nothingSent": row["code"] == "focus-changed",
-        // Such a refusal after part of its text was typed.
-        "partial": row["partial"] == true,
-        // Its outcome is unknown until the person recovers.
-        "uncertain": row["code"] == "uncertain",
-        "says": crate::doing::says(row),
-        "reason": reason(row),
-        "actor": row["actor"].as_str().unwrap_or("agent"),
-        "ageSeconds": age(row, now)
+/// and how long ago.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Shown {
+    /// The row's own id, the same on every read, so an app can keep a
+    /// line's identity as newer ones arrive.
+    pub id: String,
+    pub operation: Option<Op>,
+    /// A command under way is not a failure: apps that read only `ok` show
+    /// it as going well.
+    pub ok: bool,
+    pub action_count: Option<u64>,
+    pub started: bool,
+    pub verb: Option<String>,
+    pub app: Option<String>,
+    pub label: Option<String>,
+    /// The host session's key and the screenshot's file name, as the row
+    /// keeps them; apps name the session from their own list.
+    pub session: Option<String>,
+    pub capture: Option<String>,
+    /// Refused before anything was sent, as when another app was in front:
+    /// not a problem, and nothing to recover.
+    pub nothing_sent: bool,
+    /// Such a refusal after part of its text was typed.
+    pub partial: bool,
+    /// Its outcome is unknown until the person recovers.
+    pub uncertain: bool,
+    pub says: String,
+    pub reason: Option<String>,
+    pub actor: String,
+    pub age_seconds: Option<u64>,
+}
+
+/// `row` as every app shows it, at `now`.
+pub fn shown(row: &Row, now: u128) -> Shown {
+    Shown {
+        id: row.id.clone(),
+        operation: row.operation.clone(),
+        ok: row.worked() || row.started == Some(true),
+        action_count: row.action_count,
+        started: row.started == Some(true),
+        verb: row.verb.clone(),
+        app: row.app.clone(),
+        label: row.label.clone(),
+        session: row.session.clone(),
+        capture: row.capture.clone(),
+        nothing_sent: row.coded("focus-changed"),
+        partial: row.partial == Some(true),
+        uncertain: row.coded("uncertain"),
+        says: crate::doing::says(row),
+        reason: reason(row).map(str::to_owned),
+        actor: row.actor().to_owned(),
+        age_seconds: row
+            .age(now)
             .map(|nanos| u64::try_from(nanos / 1_000_000_000).unwrap_or(u64::MAX)),
-    })
+    }
 }
 
 #[cfg(test)]
@@ -882,6 +831,16 @@ mod tests {
     use std::fs;
 
     const NOW: u128 = 100_000_000_000;
+
+    /// `value` as a logged row.
+    fn logged(value: Value) -> Row {
+        Row::parse(&value).unwrap()
+    }
+
+    /// The logged row `row` as every app shows it, at `now`.
+    fn shown(row: &Value, now: u128) -> Value {
+        json!(super::shown(&logged(row.clone()), now))
+    }
 
     /// How long a look is reused in these tests.
     const TEST_REUSE: Duration = Duration::from_secs(1);
@@ -945,11 +904,11 @@ mod tests {
         let row = json!({"at": "99000000000", "operation": "screenshot", "ok": true,
             "actor": "agent", "verb": "screenshot", "command": "0123456789ab",
             "session": "3f9a1c07b2e4", "capture": "1761660429000123456-capture.png"});
-        let shown = shown(&row, NOW);
-        assert_eq!(shown["session"], "3f9a1c07b2e4");
-        assert_eq!(shown["capture"], "1761660429000123456-capture.png");
+        let seen = shown(&row, NOW);
+        assert_eq!(seen["session"], "3f9a1c07b2e4");
+        assert_eq!(seen["capture"], "1761660429000123456-capture.png");
 
-        let plain = super::shown(
+        let plain = shown(
             &json!({"at": "99000000000", "operation": "input", "ok": true}),
             NOW,
         );
@@ -1099,7 +1058,7 @@ mod tests {
                 "session": session.key()}),
         ];
         let log: String = rows.iter().rev().map(|row| format!("{row}\n")).collect();
-        fs::write(output.join("metadata.jsonl"), log).unwrap();
+        fs::write(output.join(activity_log::FILE), log).unwrap();
 
         let listed = host_sessions(&client, facts(false, now));
         assert!(listed.shown, "a host's session and Terminal make two");
@@ -1400,7 +1359,7 @@ mod tests {
         let now = crate::client::timestamp();
         let row = json!({"at": (now - 1_000_000_000).to_string(), "operation": "input",
             "ok": true, "actor": "agent", "verb": "click", "session": session.key()});
-        fs::write(output.join("metadata.jsonl"), format!("{row}\n")).unwrap();
+        fs::write(output.join(activity_log::FILE), format!("{row}\n")).unwrap();
 
         let listed = host_sessions(&client, facts(true, now));
         assert_eq!(listed.sessions[0]["waitingFor"], "recovery");
@@ -1509,24 +1468,6 @@ mod tests {
         assert_eq!(unknown["uncertain"], true);
     }
 
-    #[test]
-    fn the_activity_log_is_read_only_as_a_plain_file_never_a_link_or_a_pipe() {
-        let dir = tempfile::tempdir().unwrap();
-        let elsewhere = dir.path().join("elsewhere.jsonl");
-        fs::write(&elsewhere, row(1).to_string() + "\n").unwrap();
-        std::os::unix::fs::symlink(&elsewhere, dir.path().join("metadata.jsonl")).unwrap();
-        assert!(activity(dir.path(), 5).is_empty(), "a link");
-
-        fs::remove_file(dir.path().join("metadata.jsonl")).unwrap();
-        nix::unistd::mkfifo(
-            &dir.path().join("metadata.jsonl"),
-            nix::sys::stat::Mode::S_IRUSR | nix::sys::stat::Mode::S_IWUSR,
-        )
-        .unwrap();
-        // A pipe would hold a blocking open forever; this returns at once.
-        assert!(activity(dir.path(), 5).is_empty(), "a pipe");
-    }
-
     fn report(reachable: bool, ready: bool) -> Value {
         json!({
             "ready": ready,
@@ -1537,9 +1478,11 @@ mod tests {
         })
     }
 
-    fn row(seconds_ago: u128) -> Value {
-        json!({"at": (NOW - seconds_ago * 1_000_000_000).to_string(),
-            "operation": "input", "ok": true, "actionCount": 1})
+    fn row(seconds_ago: u128) -> Row {
+        logged(
+            json!({"at": (NOW - seconds_ago * 1_000_000_000).to_string(),
+            "operation": "input", "ok": true, "actionCount": 1}),
+        )
     }
 
     fn unresolved(count: usize) -> Pending {
@@ -1549,7 +1492,7 @@ mod tests {
         }
     }
 
-    fn mode(report: &Value, lease: bool, pending: usize, activity: &[Value]) -> Value {
+    fn mode(report: &Value, lease: bool, pending: usize, activity: &[Row]) -> Value {
         overview(report, lease, unresolved(pending), activity, NOW)["mode"].clone()
     }
 
@@ -1579,7 +1522,7 @@ mod tests {
     #[test]
     fn every_mode_has_one_of_the_states_agent_apps_show() {
         let ready = report(true, true);
-        let state = |report: &Value, lease: bool, pending: usize, activity: &[Value]| {
+        let state = |report: &Value, lease: bool, pending: usize, activity: &[Row]| {
             let summary = overview(report, lease, unresolved(pending), activity, NOW);
             (summary["state"].clone(), summary["label"].clone())
         };
@@ -1613,11 +1556,11 @@ mod tests {
     fn the_headline_is_the_newest_thing_an_agent_did() {
         let ready = report(true, true);
         let mut save = row(2);
-        save["verb"] = json!("click");
-        save["app"] = json!("TextEdit");
-        save["label"] = json!("Save");
+        save.verb = Some("click".into());
+        save.app = Some("TextEdit".into());
+        save.label = Some("Save".into());
         let mut own = row(1);
-        own["actor"] = json!("viewer");
+        own.actor = Some("viewer".into());
 
         let summary = overview(&ready, false, unresolved(0), &[own, save], NOW);
         assert_eq!(summary["headline"], "Clicked Save in TextEdit");
@@ -1754,43 +1697,12 @@ mod tests {
     #[test]
     fn an_idle_headline_says_what_was_done_last() {
         let mut save = row(60);
-        save["verb"] = json!("click");
-        save["label"] = json!("Save");
+        save.verb = Some("click".into());
+        save.label = Some("Save".into());
 
         let summary = overview(&report(true, true), false, unresolved(0), &[save], NOW);
         assert_eq!(summary["state"], "idle");
         assert_eq!(summary["headline"], "Last: clicked Save");
-    }
-
-    #[test]
-    fn a_command_of_several_steps_is_one_row() {
-        let dir = tempfile::tempdir().unwrap();
-        let rows = [
-            json!({"operation": "run", "ok": true, "verb": "open", "command": "a"}),
-            json!({"operation": "input", "ok": true, "verb": "type", "command": "b"}),
-            json!({"operation": "input", "ok": false, "verb": "type", "command": "b"}),
-            json!({"operation": "input", "ok": true}),
-            json!({"operation": "input", "ok": true}),
-        ];
-        let log = rows
-            .iter()
-            .map(|row| format!("{row}\n"))
-            .collect::<String>();
-        fs::write(dir.path().join("metadata.jsonl"), log).unwrap();
-
-        let shown = activity(dir.path(), 12);
-        let says = shown.iter().map(crate::doing::says).collect::<Vec<_>>();
-        assert_eq!(
-            says,
-            [
-                "used the mouse and keyboard",
-                "used the mouse and keyboard",
-                "couldn't type",
-                "opened a file"
-            ],
-            "the newest step stands for its command; rows of no command stay apart"
-        );
-        assert_eq!(activity(dir.path(), 2).len(), 2);
     }
 
     #[test]
@@ -1824,9 +1736,9 @@ mod tests {
         assert_eq!(mode(&ready, false, 0, &[row(30)]), "observing");
 
         let mut own = row(1);
-        own["actor"] = json!("viewer");
+        own.actor = Some("viewer".into());
         let mut restart = row(1);
-        restart["operation"] = json!("restart");
+        restart.operation = Some(Op::Restart);
 
         assert_eq!(
             mode(&ready, false, 0, &[own.clone(), restart, row(30)]),
@@ -1945,38 +1857,38 @@ mod tests {
     }
 
     #[test]
-    fn activity_reads_the_newest_rows_from_the_log_tail() {
+    fn older_and_partial_rows_still_read_and_show_as_they_always_did() {
         let dir = tempfile::tempdir().unwrap();
-        assert!(activity(dir.path(), 5).is_empty());
-
-        let rows: String = (0..30)
-            .map(|i| format!("{{\"at\":\"{i}\",\"operation\":\"input\",\"ok\":true}}\n"))
-            .chain(["not json\n".to_owned()])
+        let log = [
+            // A row with no outcome, actor or step: from before any of them.
+            r#"{"at":"40000000000","operation":"run"}"#,
+            // Whole-number milliseconds and a field no build reads.
+            r#"{"at":"50000000000","operation":"input","ok":true,"elapsedMs":12,"actionCount":3,"verb":"key","label":"⌘S","app":"TextEdit","extra":{"x":1}}"#,
+            r#"{"operation":7}"#,
+            "not json",
+            r#"{"at":"soon","operation":"screenshot","ok":false,"code":"permission","actor":"viewer","capture":"1-capture.png"}"#,
+            r#"{"at":"90000000000","operation":"input","ok":false,"code":"focus-changed","reason":"sheet","partial":true,"verb":"type","session":"0123456789ab","command":"c1"}"#,
+            r#"{"at":"95000000000","operation":"input","ok":null,"started":true,"verb":"type","command":"c2","task":"ba9876543210"}"#,
+            r#"{"at":"99000000000","operation":"run","ok":false,"code":"uncertain","verb":"open","app":"Calculator","command":"c3"}"#,
+        ]
+        .join("\n");
+        fs::write(dir.path().join(activity_log::FILE), format!("{log}\n")).unwrap();
+        let rows = activity_log::recent(dir.path(), 10);
+        let shown: Vec<String> = rows
+            .iter()
+            .map(|row| json!(super::shown(row, NOW)).to_string())
             .collect();
-        fs::write(dir.path().join("metadata.jsonl"), rows).unwrap();
-        let newest = activity(dir.path(), 3);
-        assert_eq!(newest.len(), 3);
-        assert_eq!(newest[0]["at"], "29");
-        assert_eq!(newest[2]["at"], "27");
-    }
-
-    #[test]
-    fn a_tail_that_starts_inside_a_character_still_reads() {
-        let dir = tempfile::tempdir().unwrap();
-        let mut text = format!(
-            "{{\"operation\":\"old\",\"pad\":\"{}\"}}\n{{\"at\":\"1\",\"operation\":\"input\"}}\n",
-            "é".repeat(40_000)
+        assert_eq!(
+            shown,
+            [
+                r#"{"actionCount":null,"actor":"agent","ageSeconds":1,"app":"Calculator","capture":null,"id":"436d0e30331dd417","label":null,"nothingSent":false,"ok":false,"operation":"run","partial":false,"reason":"It may not have finished","says":"couldn't open Calculator","session":null,"started":false,"uncertain":true,"verb":"open"}"#,
+                r#"{"actionCount":null,"actor":"agent","ageSeconds":5,"app":null,"capture":null,"id":"78ca8deb5a96fe76","label":null,"nothingSent":false,"ok":true,"operation":"input","partial":false,"reason":null,"says":"running a command…","session":null,"started":true,"uncertain":false,"verb":"type"}"#,
+                r#"{"actionCount":null,"actor":"agent","ageSeconds":10,"app":null,"capture":null,"id":"182c45e5106ca226","label":null,"nothingSent":true,"ok":false,"operation":"input","partial":true,"reason":"A sheet was open over the window","says":"stopped typing","session":"0123456789ab","started":false,"uncertain":false,"verb":"type"}"#,
+                r#"{"actionCount":null,"actor":"viewer","ageSeconds":null,"app":null,"capture":"1-capture.png","id":"07e383625bdf0af1","label":null,"nothingSent":false,"ok":false,"operation":"screenshot","partial":false,"reason":"The helper can't record the screen","says":"couldn't take a screenshot","session":null,"started":false,"uncertain":false,"verb":null}"#,
+                r#"{"actionCount":3,"actor":"agent","ageSeconds":50,"app":"TextEdit","capture":null,"id":"355e7aff1bb0ef3c","label":"⌘S","nothingSent":false,"ok":true,"operation":"input","partial":false,"reason":null,"says":"pressed ⌘S in TextEdit","session":null,"started":false,"uncertain":false,"verb":"key"}"#,
+                r#"{"actionCount":null,"actor":"agent","ageSeconds":60,"app":null,"capture":null,"id":"6f5d59054d040875","label":null,"nothingSent":false,"ok":false,"operation":"run","partial":false,"reason":null,"says":"couldn't run a command","session":null,"started":false,"uncertain":false,"verb":null}"#,
+            ]
         );
-        let cut = |text: &str| text.as_bytes()[text.len() - TAIL as usize];
-        if cut(&text) & 0xC0 != 0x80 {
-            text.push('\n');
-        }
-
-        assert_eq!(cut(&text) & 0xC0, 0x80, "the tail starts inside é");
-        fs::write(dir.path().join("metadata.jsonl"), text).unwrap();
-        let rows = activity(dir.path(), 5);
-        assert_eq!(rows.len(), 1);
-        assert_eq!(rows[0]["at"], "1");
     }
 
     #[tokio::test]
@@ -2129,9 +2041,9 @@ mod tests {
             overview(&ready, false, unresolved(0), &[], NOW)["jobs"],
             json!({"running": 3, "launching": 1, "unresolved": 2})
         );
-        let refused = json!({"ok": false, "code": "job", "operation": "job"});
+        let refused = logged(json!({"ok": false, "code": "job", "operation": "job"}));
         assert_eq!(reason(&refused), Some("A background job was refused"));
-        let refused = json!({"ok": false, "code": "collect", "operation": "collect"});
+        let refused = logged(json!({"ok": false, "code": "collect", "operation": "collect"}));
         assert_eq!(reason(&refused), Some("A file could not be collected"));
     }
 }

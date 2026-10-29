@@ -545,7 +545,7 @@ impl Viewer {
 
         let activity = client
             .output_dir()
-            .map(|directory| crate::overview::activity(directory, crate::overview::ROWS))
+            .map(|directory| crate::activity_log::recent(directory, crate::overview::ROWS))
             .unwrap_or_default();
         let now = crate::client::timestamp();
         status["overview"] = crate::overview::overview(&status, active, pending, &activity, now);
@@ -573,7 +573,7 @@ impl Viewer {
             client
                 .output_dir()
                 .map(|directory| {
-                    let rows = crate::overview::activity(directory, ACTIVITY_ROWS);
+                    let rows = crate::activity_log::recent(directory, ACTIVITY_ROWS);
                     (rows, Store::at(directory).recent())
                 })
                 .unwrap_or_else(|_| (Vec::new(), Arc::from([])))
@@ -614,7 +614,7 @@ impl Viewer {
             // are looked at again, for which app each copy is.
             let seen = store.recent();
             let records: Vec<_> = seen.iter().map(|seen| seen.record.clone()).collect();
-            let rows = crate::overview::activity(output, ACTIVITY_ROWS);
+            let rows = crate::activity_log::recent(output, ACTIVITY_ROWS);
             let captures = helper_info::captures(output, SHOTS)
                 .into_iter()
                 .map(|(_, name)| name)
@@ -1675,30 +1675,27 @@ async fn respond(viewer: Arc<Viewer>, request: Request) -> Response {
 /// whom, how long ago, whether it worked and how many actions it sent.
 /// Only these fields go, through [`crate::overview::shown`]: never typed
 /// text, argv, coordinates or titles, which the log never keeps either.
-fn activity_row(row: &Value, now: u128) -> Value {
+fn activity_row(row: &crate::activity_log::Row, now: u128) -> Value {
     let shown = crate::overview::shown(row, now);
     json!({
-        "id": shown["id"],
+        "id": shown.id,
         // When it started, in milliseconds since 1970, so its time never
         // moves between readings.
-        "startedAt": row["at"]
-            .as_str()
-            .and_then(|at| at.parse::<u128>().ok())
-            .and_then(|at| u64::try_from(at / 1_000_000).ok()),
-        "says": shown["says"],
-        "ok": shown["ok"],
-        "started": shown["started"],
-        "actor": shown["actor"],
-        "ageSeconds": shown["ageSeconds"],
-        "reason": shown["reason"],
-        "operation": shown["operation"],
-        "count": shown["actionCount"],
-        "session": shown["session"],
-        "capture": shown["capture"],
-        "verb": shown["verb"],
-        "nothingSent": shown["nothingSent"],
-        "partial": shown["partial"],
-        "uncertain": shown["uncertain"],
+        "startedAt": row.at_ms(),
+        "says": shown.says,
+        "ok": shown.ok,
+        "started": shown.started,
+        "actor": shown.actor,
+        "ageSeconds": shown.age_seconds,
+        "reason": shown.reason,
+        "operation": shown.operation,
+        "count": shown.action_count,
+        "session": shown.session,
+        "capture": shown.capture,
+        "verb": shown.verb,
+        "nothingSent": shown.nothing_sent,
+        "partial": shown.partial,
+        "uncertain": shown.uncertain,
     })
 }
 
@@ -2878,7 +2875,7 @@ mod tests {
             "text": "hunter2", "argv": ["rm", "secret-argument"], "x": 123.5, "y": 456.25,
             "title": "Secret plans", "elapsedMs": 4.0,
         });
-        std::fs::write(output.join("metadata.jsonl"), format!("{row}\n")).unwrap();
+        std::fs::write(output.join(crate::activity_log::FILE), format!("{row}\n")).unwrap();
 
         let (status, reply) = read_json(&viewer, "activity.json").await;
         assert_eq!((status, reply["ok"].clone()), (200, json!(true)));
@@ -2934,7 +2931,7 @@ mod tests {
                 .unwrap();
         let mut row = row;
         row["session"] = json!(session.key());
-        std::fs::write(output.join("metadata.jsonl"), format!("{row}\n")).unwrap();
+        std::fs::write(output.join(crate::activity_log::FILE), format!("{row}\n")).unwrap();
         crate::host_session::store::note(
             &viewer.client(),
             &session,
@@ -2988,7 +2985,7 @@ mod tests {
                 )
             })
             .collect();
-        std::fs::write(output.join("metadata.jsonl"), rows).unwrap();
+        std::fs::write(output.join(crate::activity_log::FILE), rows).unwrap();
 
         let (_, reply) = read_json(&viewer, "activity.json").await;
         let sessions = reply["sessions"].as_object().unwrap();
@@ -3013,7 +3010,7 @@ mod tests {
                 format!("{row}\n")
             })
             .collect::<String>();
-        std::fs::write(output.join("metadata.jsonl"), log).unwrap();
+        std::fs::write(output.join(crate::activity_log::FILE), log).unwrap();
 
         let first = read_json(&viewer, "activity.json").await.1;
         let rows = first["activity"].as_array().unwrap();
@@ -3027,7 +3024,7 @@ mod tests {
         let newer = json!({"at": "2000000", "operation": "input", "ok": false, "actor": "agent"});
         let mut file = std::fs::OpenOptions::new()
             .append(true)
-            .open(output.join("metadata.jsonl"))
+            .open(output.join(crate::activity_log::FILE))
             .unwrap();
         std::io::Write::write_all(&mut file, format!("{newer}\n").as_bytes()).unwrap();
 
@@ -3100,7 +3097,7 @@ mod tests {
         assert!(agent.apps().await.is_err());
         assert!(crate::agent::list(&agent, &filter).await.is_err());
         let output = agent.output_dir().unwrap().to_path_buf();
-        assert!(crate::overview::activity(&output, 5).is_empty());
+        assert!(crate::activity_log::recent(&output, 5).is_empty());
 
         // The same client records what acts, even when no helper answers.
         assert!(
@@ -3109,12 +3106,35 @@ mod tests {
                 .await
                 .is_err()
         );
-        let rows = crate::overview::activity(&output, 5);
+        let rows = crate::activity_log::recent(&output, 5);
         assert_eq!(rows.len(), 1);
         assert!(
-            crate::overview::shown(&rows[0], 0)["reason"].is_string(),
-            "a failed capture says why: {}",
+            crate::overview::shown(&rows[0], 0).reason.is_some(),
+            "a failed capture says why: {:?}",
             rows[0]
+        );
+    }
+
+    #[test]
+    fn the_apps_activity_row_keeps_its_fields_and_values() {
+        let dir = tempfile::tempdir().unwrap();
+        let line = r#"{"at":"90000000000","operation":"input","ok":false,"code":"focus-changed","reason":"window","partial":true,"verb":"click","app":"Opie","label":"Save","session":"0123456789ab","capture":"1-capture.png","actionCount":1,"actor":"agent","command":"c1"}"#;
+        std::fs::write(
+            dir.path().join(crate::activity_log::FILE),
+            format!("{line}\n{{\"at\":\"1\",\"operation\":\"run\"}}\n"),
+        )
+        .unwrap();
+        let rows = crate::activity_log::recent(dir.path(), 5);
+        let shown: Vec<String> = rows
+            .iter()
+            .map(|row| activity_row(row, 100_000_000_000).to_string())
+            .collect();
+        assert_eq!(
+            shown,
+            [
+                r#"{"actor":"agent","ageSeconds":99,"capture":null,"count":null,"id":"18919a007a04e825","nothingSent":false,"ok":false,"operation":"run","partial":false,"reason":null,"says":"couldn't run a command","session":null,"started":false,"startedAt":0,"uncertain":false,"verb":null}"#,
+                r#"{"actor":"agent","ageSeconds":10,"capture":"1-capture.png","count":1,"id":"405a9bc9382e3946","nothingSent":true,"ok":false,"operation":"input","partial":true,"reason":"Another window was in front","says":"didn't click Save in Opie","session":"0123456789ab","started":false,"startedAt":90000,"uncertain":false,"verb":"click"}"#,
+            ]
         );
     }
 
@@ -3152,7 +3172,7 @@ mod tests {
         let at = crate::client::timestamp();
         let row = json!({"at": at.to_string(), "operation": "open", "ok": true, "actor": "agent",
             "verb": "open", "app": "Notes", "command": "000000000001", "session": session.key()});
-        std::fs::write(output.join("metadata.jsonl"), format!("{row}\n")).unwrap();
+        std::fs::write(output.join(crate::activity_log::FILE), format!("{row}\n")).unwrap();
 
         let (status, reply) = read_json(&viewer, "sessions.json").await;
         assert_eq!(status, 200);

@@ -140,7 +140,11 @@ fn row(seconds_ago: u64, session: &HostSession, app: &str) -> Value {
 /// The activity log holding `rows`, oldest first as it is written.
 fn logged(client: &Client, rows: &[Value]) {
     let text: String = rows.iter().map(|row| format!("{row}\n")).collect();
-    fs::write(client.output_dir().unwrap().join("metadata.jsonl"), text).unwrap();
+    fs::write(
+        client.output_dir().unwrap().join(crate::activity_log::FILE),
+        text,
+    )
+    .unwrap();
 }
 
 fn focus_changed(app: &str) -> Result<Value> {

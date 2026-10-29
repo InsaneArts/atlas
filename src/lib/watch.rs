@@ -478,7 +478,7 @@ fn without_ticking_ages(session: &mut Value) {
 }
 
 fn log_mark(output: &Path) -> Mark {
-    let metadata = fs::metadata(output.join("metadata.jsonl")).ok()?;
+    let metadata = fs::metadata(output.join(crate::activity_log::FILE)).ok()?;
     Some((metadata.len(), metadata.modified().ok()?))
 }
 
@@ -859,9 +859,9 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         assert_eq!(log_mark(dir.path()), None);
 
-        fs::write(dir.path().join("metadata.jsonl"), "{}\n").unwrap();
+        fs::write(dir.path().join(crate::activity_log::FILE), "{}\n").unwrap();
         let first = log_mark(dir.path());
-        fs::write(dir.path().join("metadata.jsonl"), "{}\n{}\n").unwrap();
+        fs::write(dir.path().join(crate::activity_log::FILE), "{}\n{}\n").unwrap();
         assert_ne!(log_mark(dir.path()), first);
     }
 

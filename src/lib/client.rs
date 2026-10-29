@@ -5,6 +5,7 @@
 //! screenshots and activity log in the private output folder.
 use crate::{
     actions::{self, Expect},
+    activity_log::{self, Op, Row, Step},
     config::Config,
     control::{Beside, Controller, Ownership, SharedLease},
     daemon::protocol::{
@@ -24,13 +25,11 @@ use crate::{
     transport::{Transport, accepted, refusal, run_output},
 };
 use base64::{Engine, engine::general_purpose::STANDARD};
-use fs2::FileExt;
 use serde::Deserialize;
 use serde_json::{Value, json};
 use std::{
-    fs::{self, OpenOptions},
-    io::Write,
-    os::unix::fs::{DirBuilderExt, MetadataExt, OpenOptionsExt, PermissionsExt},
+    fs,
+    os::unix::fs::{DirBuilderExt, MetadataExt, PermissionsExt},
     path::Path,
     sync::Arc,
     time::{Duration, Instant, SystemTime, UNIX_EPOCH},
@@ -1951,8 +1950,9 @@ impl Client {
         // claim is then marked as a running command.
         release: Option<Ownership>,
     ) -> Result<Value> {
+        let op = Op::of(&request);
         debug_assert!(
-            release.is_none() || request["op"] == "run",
+            release.is_none() || op == Some(Op::Run),
             "only a command started with run lets go of control while it runs"
         );
         let started = Instant::now();
@@ -1963,8 +1963,8 @@ impl Client {
         // An agent's command that changes the helper is refused, before it
         // starts, once the person has stopped agents; reads and Atlas's own
         // steps (no `doing`) go on.
-        let cuttable = request["op"] == "run" && self.actor == Actor::Agent && self.doing.is_some();
-        let job_change = request["op"] == "job"
+        let cuttable = op == Some(Op::Run) && self.actor == Actor::Agent && self.doing.is_some();
+        let job_change = op == Some(Op::Job)
             && matches!(request["action"].as_str(), Some("start" | "stop"))
             && self.actor == Actor::Agent
             && self.doing.is_some();
@@ -1976,7 +1976,7 @@ impl Client {
         }
 
         // Connect without holding the lease. Release can cancel slow preflight.
-        let mut transport = if request["op"] == "input" {
+        let mut transport = if op == Some(Op::Input) {
             self.input_transport()
         } else {
             self.transport.clone()
@@ -1986,7 +1986,7 @@ impl Client {
         // has stopped whatever it left running.
         if let Some(run) = request["timeoutMs"]
             .as_u64()
-            .filter(|_| request["op"] == "run")
+            .filter(|_| op == Some(Op::Run))
         {
             transport.timeout = transport
                 .timeout
@@ -2014,9 +2014,9 @@ impl Client {
 
         // Restart, log-out and standalone input run under the claim their
         // caller holds through verification or cleanup.
-        let mut generation = (request["op"] != "restart"
-            && request["op"] != "logout"
-            && !(request["op"] == "input" && lease.is_none()))
+        let mut generation = (op != Some(Op::Restart)
+            && op != Some(Op::Logout)
+            && !(op == Some(Op::Input) && lease.is_none()))
         .then(|| {
             if command {
                 self.controller.quarantine_command()
@@ -2158,7 +2158,7 @@ impl Client {
     /// Record that a command began, so what it does shows while it runs;
     /// the row it ends with stands for it after.
     async fn record_start(&self, request: &Value) -> Result<()> {
-        self.recorded(request, &json!({"ok": null}), Duration::ZERO, true)
+        self.recorded(request, &json!({"ok": null}), Duration::ZERO, Step::Start)
             .await
     }
 
@@ -2169,7 +2169,7 @@ impl Client {
         reply: &Value,
         elapsed: Duration,
     ) -> Result<()> {
-        self.recorded(request, reply, elapsed, false).await
+        self.recorded(request, reply, elapsed, Step::End).await
     }
 
     /// [`Client::write_row`] on a blocking thread: a row waits its turn
@@ -2179,10 +2179,10 @@ impl Client {
         request: &Value,
         reply: &Value,
         elapsed: Duration,
-        start: bool,
+        step: Step,
     ) -> Result<()> {
         let (client, request, reply) = (self.clone(), request.clone(), reply.clone());
-        tokio::task::spawn_blocking(move || client.write_row(&request, &reply, elapsed, start))
+        tokio::task::spawn_blocking(move || client.write_row(&request, &reply, elapsed, step))
             .await
             .map_err(|_| Error::new("state", "The activity row could not be written"))?
     }
@@ -2190,13 +2190,13 @@ impl Client {
     /// [`Client::record_start`] on this thread, for tests.
     #[cfg(test)]
     fn record_start_blocking(&self, request: &Value) -> Result<()> {
-        self.write_row(request, &json!({"ok": null}), Duration::ZERO, true)
+        self.write_row(request, &json!({"ok": null}), Duration::ZERO, Step::Start)
     }
 
     /// [`Client::record`] on this thread, for tests.
     #[cfg(test)]
     fn record_blocking(&self, request: &Value, reply: &Value, elapsed: Duration) -> Result<()> {
-        self.write_row(request, reply, elapsed, false)
+        self.write_row(request, reply, elapsed, Step::End)
     }
 
     /// [`Client::record`] a finished command's row, for tests elsewhere in
@@ -2207,52 +2207,33 @@ impl Client {
             .unwrap();
     }
 
+    /// Append the activity row for `step` of `request`, which `reply`
+    /// answered, after `elapsed`.
     fn write_row(
         &self,
         request: &Value,
         reply: &Value,
         elapsed: Duration,
-        start: bool,
+        step: Step,
     ) -> Result<()> {
         let directory = self.output_dir()?;
-        let lock = OpenOptions::new()
-            .create(true)
-            .truncate(false)
-            .write(true)
-            .mode(0o600)
-            .custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK)
-            .open(directory.join("metadata.lock"))?;
-        if !lock.metadata()?.is_file() {
-            return Err(Error::new("state", "The activity lock is not a plain file"));
-        }
-        FileExt::lock_exclusive(&lock)?;
-
-        let path = directory.join("metadata.jsonl");
-        if fs::symlink_metadata(&path).is_ok_and(|m| m.is_file() && m.len() > 1024 * 1024) {
-            fs::rename(&path, directory.join("metadata.previous.jsonl"))?;
-        }
-
-        let mut file = OpenOptions::new()
-            .create(true)
-            .append(true)
-            .mode(0o600)
-            .custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK)
-            .open(path)?;
-        if !file.metadata()?.is_file() {
-            return Err(Error::new("state", "The activity log is not a plain file"));
-        }
+        let start = step == Step::Start;
+        let operation = Op::of(request);
 
         // No input text, argv, coordinates, window titles, output or image
         // payloads in metadata: only what `Doing` names.
         let ok = worked(reply);
-        let mut row = json!({
-            "at": timestamp().to_string(),
-            "operation": request["op"],
-            "ok": if start { Value::Null } else { json!(ok) },
-            "elapsedMs": elapsed.as_secs_f64() * 1000.0,
-            "actionCount": request["actions"].as_array().map(Vec::len),
-            "actor": self.actor.as_str(),
-        });
+        let mut row = Row {
+            at: Some(timestamp().to_string()),
+            operation: operation.clone(),
+            ok: (!start).then_some(ok),
+            elapsed_ms: Some(elapsed.as_secs_f64() * 1000.0),
+            action_count: request["actions"]
+                .as_array()
+                .map(|actions| actions.len() as u64),
+            actor: Some(self.actor.as_str().to_owned()),
+            ..Row::default()
+        };
 
         // A failure keeps its fixed code (never its message), so the app can
         // say why in plain words. A refusal for another app in front says
@@ -2260,72 +2241,64 @@ impl Client {
         // refused.
         if !start
             && !ok
-            && let (Some(code), Some(fields)) = (failure_code(reply), row.as_object_mut())
+            && let Some(code) = failure_code(reply)
         {
             if code == "focus-changed" {
                 let sent = reply["performed"]
                     .as_u64()
                     .is_some_and(|performed| performed > 0);
-                fields.insert("partial".into(), json!(sent || reply["partial"] == true));
-                if let Some(reason) = focus_reason(reply) {
-                    fields.insert("reason".into(), json!(reason));
-                }
+                row.partial = Some(sent || reply["partial"] == true);
+                row.reason = focus_reason(reply).map(str::to_owned);
             }
-            fields.insert("code".into(), json!(code));
+            row.code = Some(code);
         }
 
         // Only an agent's own command names its host session; the person's,
         // through a viewer, never does.
         if self.actor == Actor::Agent
-            && let (Some(session), Some(fields)) = (&self.host_session, row.as_object_mut())
+            && let Some(session) = &self.host_session
         {
-            fields.insert("session".into(), json!(session.key()));
+            row.session = Some(session.key().as_str().to_owned());
         }
 
         // A task ATLAS_TASK split from its session names its key, never its
         // name; a session's default task adds nothing.
         if self.actor == Actor::Agent
-            && let (Some(task), Some(fields)) = (&self.task, row.as_object_mut())
+            && let Some(task) = &self.task
             && task.name().is_some()
         {
-            fields.insert("task".into(), json!(task.key()));
+            row.task = Some(task.key().as_str().to_owned());
         }
 
         // A collection says how many files and bytes it kept, never which.
-        if request["op"] == "collect"
-            && let Some(fields) = row.as_object_mut()
-        {
-            for field in ["count", "bytes"] {
-                if let Some(number) = reply[field].as_u64() {
-                    fields.insert(field.into(), json!(number));
-                }
-            }
+        if operation == Some(Op::Collect) {
+            row.count = reply["count"].as_u64();
+            row.bytes = reply["bytes"].as_u64();
         }
 
         // A screenshot names the file it gave: Atlas's own timestamp name,
         // never a path or a person's file.
-        if request["op"] == "screenshot"
-            && let (Some(capture), Some(fields)) = (reply["capture"].as_str(), row.as_object_mut())
+        if operation == Some(Op::Screenshot)
+            && let Some(capture) = reply["capture"].as_str()
             && crate::helper_info::capture_time(capture).is_some()
         {
-            fields.insert("capture".into(), json!(capture));
+            row.capture = Some(capture.to_owned());
         }
 
-        if let (Some(doing), Some(fields)) = (&self.doing, row.as_object_mut()) {
-            doing.fields(fields, ok);
+        if let Some(doing) = &self.doing {
+            doing.fill(&mut row, ok);
             if start {
-                fields.insert("started".into(), json!(true));
+                row.started = Some(true);
             }
             // Input names the app it landed in, as the helper saw it.
-            if !fields.contains_key("app")
+            if row.app.is_none()
                 && let Some(app) = reply["app"].as_str()
             {
-                fields.insert("app".into(), json!(crate::doing::bounded(app)));
+                row.app = Some(crate::doing::bounded(app));
             }
         }
 
-        writeln!(file, "{row}")?;
-        Ok(())
+        activity_log::append(directory, &row)
     }
 }
 
@@ -2650,7 +2623,9 @@ where
 mod tests {
     use super::*;
     use crate::{interrupt::Interrupt, test_support::client_in};
+    use fs2::FileExt;
     use nix::sys::signal::Signal;
+    use std::{fs::OpenOptions, os::unix::fs::OpenOptionsExt};
     use tokio::{
         io::{AsyncBufReadExt, AsyncWriteExt, BufReader},
         net::{UnixListener, UnixStream},
@@ -3437,7 +3412,8 @@ mod tests {
             0,
             "the helper sees the connection close, which ends the command"
         );
-        let log = fs::read_to_string(acting.output_dir().unwrap().join("metadata.jsonl")).unwrap();
+        let log =
+            fs::read_to_string(acting.output_dir().unwrap().join(activity_log::FILE)).unwrap();
         let ended: Value = serde_json::from_str(log.lines().last().unwrap()).unwrap();
         assert_eq!(ended["ok"], false);
         assert_eq!(ended["code"], "uncertain", "never recorded as not done");
@@ -3822,7 +3798,7 @@ mod tests {
 
     /// The rows `client` wrote to its activity log, oldest first.
     fn rows(client: &Client) -> Vec<Value> {
-        fs::read_to_string(client.output_dir().unwrap().join("metadata.jsonl"))
+        fs::read_to_string(client.output_dir().unwrap().join(activity_log::FILE))
             .unwrap()
             .lines()
             .map(|line| serde_json::from_str(line).unwrap())
@@ -3882,7 +3858,7 @@ mod tests {
         assert_eq!(by_name["task"], task.as_str());
         assert_ne!(task, &key);
         let line =
-            fs::read_to_string(session.output_dir().unwrap().join("metadata.jsonl")).unwrap();
+            fs::read_to_string(session.output_dir().unwrap().join(activity_log::FILE)).unwrap();
         assert!(!line.contains("settings-sheet"), "never the name");
     }
 
@@ -3911,6 +3887,92 @@ mod tests {
                 "ok",
                 "operation",
                 "verb"
+            ]
+        );
+    }
+
+    #[test]
+    fn every_kind_of_row_is_written_byte_for_byte_as_the_log_keeps_it() {
+        let dir = tempfile::tempdir().unwrap();
+        let agent = labelled(&client_in(dir.path()));
+        let key = agent.host_session.as_ref().unwrap().key().clone();
+        let mut tasked = agent
+            .clone()
+            .doing(Doing::new("type").app(Some("TextEdit")));
+        tasked.task = Some(Task::of(&key, Some("settings-sheet")).unwrap());
+        let typed = json!({"op": "input", "actions": [{}, {}]});
+        tasked.record_start_blocking(&typed).unwrap();
+        tasked
+            .record_blocking(&typed, &json!({"ok": true}), Duration::from_millis(5))
+            .unwrap();
+        let ran = agent
+            .clone()
+            .doing(Doing::new("open").app(Some("Calculator")));
+        let run = json!({"op": "run", "argv": ["open"]});
+        ran.record_blocking(&run, &json!({"ok": true, "exitCode": 2}), Duration::ZERO)
+            .unwrap();
+        ran.record_blocking(&run, &json!({"ok": true, "timedOut": true}), Duration::ZERO)
+            .unwrap();
+        let refused = agent.clone().doing(Doing::new("click"));
+        refused
+            .record_blocking(
+                &typed,
+                &json!({"ok": false, "code": "focus-changed", "performed": 1, "reason": "window"}),
+                Duration::ZERO,
+            )
+            .unwrap();
+        agent
+            .clone()
+            .doing(Doing::new("collect"))
+            .record_blocking(
+                &json!({"op": "collect"}),
+                &json!({"ok": true, "count": 2, "bytes": 30}),
+                Duration::ZERO,
+            )
+            .unwrap();
+        agent
+            .clone()
+            .doing(Doing::new("screenshot"))
+            .record_blocking(
+                &json!({"op": "screenshot"}),
+                &json!({"ok": true, "capture": "1761660429000123456-capture.png"}),
+                Duration::ZERO,
+            )
+            .unwrap();
+        let mut viewer = client_in(dir.path());
+        viewer.actor = Actor::Viewer;
+        viewer
+            .record_blocking(
+                &json!({"op": "restart"}),
+                &json!({"ok": true}),
+                Duration::ZERO,
+            )
+            .unwrap();
+
+        let log = fs::read_to_string(agent.output_dir().unwrap().join(activity_log::FILE)).unwrap();
+        let lines: Vec<String> = log
+            .lines()
+            .map(|line| {
+                let row: Value = serde_json::from_str(line).unwrap();
+                let mut line = line.replace(row["at"].as_str().unwrap(), "AT");
+                if let Some(command) = row["command"].as_str() {
+                    line = line.replace(command, "COMMAND");
+                }
+                line.replace(key.as_str(), "SESSION")
+                    .replace(tasked.task.as_ref().unwrap().key().as_str(), "TASK")
+            })
+            .collect();
+        assert_eq!(
+            lines,
+            [
+                r#"{"actionCount":2,"actor":"agent","app":"TextEdit","at":"AT","command":"COMMAND","elapsedMs":0.0,"ok":null,"operation":"input","session":"SESSION","started":true,"task":"TASK","verb":"type"}"#,
+                r#"{"actionCount":2,"actor":"agent","app":"TextEdit","at":"AT","command":"COMMAND","elapsedMs":5.0,"ok":true,"operation":"input","session":"SESSION","task":"TASK","verb":"type"}"#,
+                r#"{"actionCount":null,"actor":"agent","app":"Calculator","at":"AT","code":"exit","command":"COMMAND","elapsedMs":0.0,"ok":false,"operation":"run","session":"SESSION","verb":"open"}"#,
+                r#"{"actionCount":null,"actor":"agent","app":"Calculator","at":"AT","code":"timeout","command":"COMMAND","elapsedMs":0.0,"ok":false,"operation":"run","session":"SESSION","verb":"open"}"#,
+                r#"{"actionCount":2,"actor":"agent","at":"AT","code":"focus-changed","command":"COMMAND","elapsedMs":0.0,"ok":false,"operation":"input","partial":true,"reason":"window","session":"SESSION","verb":"click"}"#,
+                r#"{"actionCount":null,"actor":"agent","at":"AT","bytes":30,"command":"COMMAND","count":2,"elapsedMs":0.0,"ok":true,"operation":"collect","session":"SESSION","verb":"collect"}"#,
+                r#"{"actionCount":null,"actor":"agent","at":"AT","capture":"1761660429000123456-capture.png","command":"COMMAND","elapsedMs":0.0,"ok":true,"operation":"screenshot","session":"SESSION","verb":"screenshot"}"#,
+                r#"{"actionCount":null,"actor":"viewer","at":"AT","elapsedMs":0.0,"ok":true,"operation":"restart"}"#,
             ]
         );
     }
@@ -4517,12 +4579,13 @@ mod tests {
         let mut line = String::new();
         peer.read_line(&mut line).await.unwrap();
         let started = Instant::now();
-        while !fs::read_to_string(output.join("metadata.jsonl")).is_ok_and(|log| !log.is_empty()) {
+        while !fs::read_to_string(output.join(activity_log::FILE)).is_ok_and(|log| !log.is_empty())
+        {
             assert!(started.elapsed() < Duration::from_secs(2), "it began");
             tokio::time::sleep(Duration::from_millis(10)).await;
         }
 
-        let activity = fs::File::create(output.join("metadata.lock")).unwrap();
+        let activity = fs::File::create(output.join(activity_log::LOCK)).unwrap();
         FileExt::lock_exclusive(&activity).unwrap();
         if lost {
             drop(peer);
@@ -4884,18 +4947,18 @@ mod tests {
                 Duration::ZERO,
             )
             .unwrap();
-        let rows = crate::overview::activity(client.output_dir().unwrap(), 5);
+        let rows = crate::activity_log::recent(client.output_dir().unwrap(), 5);
         assert_eq!(crate::doing::says(&rows[0]), "typed in TextEdit");
 
         let client = client.doing(Doing::new("open").app(Some("Calculator")));
         let run = json!({"op": "run", "argv": ["open", "-a", "Calculator"]});
         client.record_start_blocking(&run).unwrap();
-        let rows = crate::overview::activity(client.output_dir().unwrap(), 5);
+        let rows = crate::activity_log::recent(client.output_dir().unwrap(), 5);
         assert_eq!(crate::doing::says(&rows[0]), "opening Calculator…");
         client
             .record_blocking(&run, &json!({"ok": true, "exitCode": 0}), Duration::ZERO)
             .unwrap();
-        let rows = crate::overview::activity(client.output_dir().unwrap(), 5);
+        let rows = crate::activity_log::recent(client.output_dir().unwrap(), 5);
         assert_eq!(
             crate::doing::says(&rows[0]),
             "opened Calculator",
@@ -4929,10 +4992,10 @@ mod tests {
             .record_blocking(&request, &reply, Duration::ZERO)
             .unwrap();
 
-        let rows = crate::overview::activity(client.output_dir().unwrap(), 5);
+        let rows = crate::activity_log::recent(client.output_dir().unwrap(), 5);
         assert_eq!(rows.len(), 1);
-        assert_eq!(rows[0]["ok"], false);
-        assert_eq!(rows[0]["code"], "exit");
+        assert_eq!(rows[0].ok, Some(false));
+        assert_eq!(rows[0].code.as_deref(), Some("exit"));
     }
 
     fn display() -> Display {
@@ -5104,13 +5167,14 @@ mod tests {
                 .is_err()
         );
 
-        let rows = crate::overview::activity(client.output_dir().unwrap(), 5);
+        let rows = crate::activity_log::recent(client.output_dir().unwrap(), 5);
         assert_eq!(
-            (&rows[0]["operation"], &rows[0]["ok"], &rows[0]["actor"]),
-            (&json!("screenshot"), &json!(false), &json!("agent"))
+            (&rows[0].operation, rows[0].ok, rows[0].actor()),
+            (&Some(Op::Screenshot), Some(false), "agent")
         );
         assert_eq!(crate::doing::says(&rows[0]), "couldn't take a screenshot");
-        let log = fs::read_to_string(client.output_dir().unwrap().join("metadata.jsonl")).unwrap();
+        let log =
+            fs::read_to_string(client.output_dir().unwrap().join(activity_log::FILE)).unwrap();
         let logged: Vec<Value> = log
             .lines()
             .map(|line| serde_json::from_str(line).unwrap())
@@ -5163,12 +5227,12 @@ mod tests {
 
         let client = client_in(dir.path());
         let directory = client.output_dir().unwrap();
-        let log = std::fs::read_to_string(directory.join("metadata.jsonl")).unwrap();
+        let log = std::fs::read_to_string(directory.join(activity_log::FILE)).unwrap();
         assert!(!log.contains("secret"), "{log}");
-        let rows = crate::overview::activity(directory, 5);
+        let rows = crate::activity_log::recent(directory, 5);
         let reasons = rows
             .iter()
-            .map(|row| crate::overview::shown(row, 0)["reason"].clone())
+            .map(|row| json!(crate::overview::shown(row, 0).reason))
             .collect::<Vec<_>>();
         assert_eq!(
             reasons,
@@ -5197,25 +5261,19 @@ mod tests {
             .unwrap();
 
         let directory = client.output_dir().unwrap();
-        let rows = crate::overview::activity(directory, 5);
+        let rows = crate::activity_log::recent(directory, 5);
         assert_eq!(
-            (&rows[0]["actor"], &rows[0]["operation"]),
-            (&json!("viewer"), &json!("restart"))
+            (rows[0].actor(), &rows[0].operation),
+            ("viewer", &Some(Op::Restart))
         );
+        assert_eq!((rows[1].actor(), rows[1].action_count), ("agent", Some(1)));
         assert_eq!(
-            (&rows[1]["actor"], &rows[1]["actionCount"]),
-            (&json!("agent"), &json!(1))
+            (rows[1].verb.as_deref(), rows[1].app.as_deref()),
+            (Some("type"), Some("TextEdit"))
         );
-        assert_eq!(
-            (&rows[1]["verb"], &rows[1]["app"]),
-            (&json!("type"), &json!("TextEdit"))
-        );
-        assert!(
-            rows[0].get("verb").is_none(),
-            "a row says only what it knows"
-        );
+        assert!(rows[0].verb.is_none(), "a row says only what it knows");
 
-        let log = fs::read_to_string(directory.join("metadata.jsonl")).unwrap();
+        let log = fs::read_to_string(directory.join(activity_log::FILE)).unwrap();
         assert!(!log.contains("secret"), "no typed text is recorded");
     }
 
@@ -5229,7 +5287,7 @@ mod tests {
         }
 
         let mut refused = Vec::new();
-        for name in ["metadata.lock", "metadata.jsonl"] {
+        for name in [activity_log::LOCK, activity_log::FILE] {
             for kind in [
                 "fifo",
                 "fifo with reader",
@@ -5309,9 +5367,9 @@ mod tests {
             .record_blocking(&request, &json!({"ok": true}), Duration::ZERO)
             .unwrap();
         let output = client.output_dir().unwrap();
-        let path = output.join("metadata.jsonl");
+        let path = output.join(activity_log::FILE);
         assert_eq!(fs::read_to_string(&path).unwrap().lines().count(), 2);
-        for name in ["metadata.lock", "metadata.jsonl"] {
+        for name in [activity_log::LOCK, activity_log::FILE] {
             assert_eq!(
                 fs::metadata(output.join(name)).unwrap().mode() & 0o777,
                 0o600
@@ -5321,10 +5379,7 @@ mod tests {
         let full = vec![b'x'; 1024 * 1024 + 1];
         fs::write(&path, &full).unwrap();
         client.record_start_blocking(&request).unwrap();
-        assert_eq!(
-            fs::read(output.join("metadata.previous.jsonl")).unwrap(),
-            full
-        );
+        assert_eq!(fs::read(output.join(activity_log::PREVIOUS)).unwrap(), full);
         let row: Value = serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
         assert_eq!(row["operation"], "run");
         assert_eq!(row["started"], true);

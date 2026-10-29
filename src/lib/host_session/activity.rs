@@ -10,6 +10,7 @@ use super::{
     store::Store,
 };
 use crate::{
+    activity_log::{self, Row},
     client::Client,
     control::Cause,
     error::{Error, Result},
@@ -48,7 +49,7 @@ pub fn list(
             .holder_note()
             .filter(|note| note.live())
             .and_then(|note| note.session),
-        rows: crate::overview::activity(output, ROWS),
+        rows: activity_log::recent(output, ROWS),
         now: crate::client::timestamp(),
         store: &store,
         records: &records,
@@ -101,7 +102,7 @@ struct Reading<'a> {
     causes: Vec<Cause>,
     /// The session holding the helper, when its command still runs.
     holder: Option<Key>,
-    rows: Vec<Value>,
+    rows: Vec<Row>,
     /// Every task record, for what each session's tasks left.
     tasks: Vec<crate::task::record::Record>,
     now: u128,
@@ -217,7 +218,7 @@ impl Reading<'_> {
         let recent: Vec<Value> = self
             .rows
             .iter()
-            .filter(|row| row["session"].as_str() == Some(subject.key.as_str()))
+            .filter(|row| row.session.as_deref() == Some(subject.key.as_str()))
             .take(limit)
             .map(|row| self.row(row))
             .collect();
@@ -306,8 +307,9 @@ impl Reading<'_> {
             .take(limit)
             .map(|row| {
                 let mut shown = self.row(row);
-                shown["session"] = row["session"]
-                    .as_str()
+                shown["session"] = row
+                    .session
+                    .as_deref()
                     .and_then(Key::parse)
                     .map_or(Value::Null, |key| json!(name_of(&self.names, &key, None)));
                 shown
@@ -324,18 +326,20 @@ impl Reading<'_> {
 
     /// One recent action, in words: what it did, whether it worked and how
     /// long ago, why not when it failed and the screenshot it took.
-    fn row(&self, row: &Value) -> Value {
+    fn row(&self, row: &Row) -> Value {
         let shown = crate::overview::shown(row, self.now);
         let mut said = json!({
-            "says": shown["says"],
-            "ok": shown["ok"],
-            "ageSeconds": shown["ageSeconds"],
+            "says": shown.says,
+            "ok": shown.ok,
+            "ageSeconds": shown.age_seconds,
         });
-        if shown["ok"] == false && !shown["reason"].is_null() {
-            said["reason"] = shown["reason"].clone();
+        if !shown.ok
+            && let Some(reason) = shown.reason
+        {
+            said["reason"] = json!(reason);
         }
-        if row["capture"].is_string() {
-            said["capture"] = row["capture"].clone();
+        if let Some(capture) = &row.capture {
+            said["capture"] = json!(capture);
         }
         said
     }

@@ -203,18 +203,13 @@ fn last_used_by(
 ) -> Vec<(&'static str, Value)> {
     let now = crate::client::timestamp();
     let within = LAST_USED_WITHIN.as_nanos();
-    let found = crate::overview::activity(output, ROWS)
+    let found = crate::activity_log::recent(output, ROWS)
         .into_iter()
-        .filter(|row| row["actor"] == "agent")
-        .filter(|row| {
-            row["at"]
-                .as_str()
-                .and_then(|at| at.parse::<u128>().ok())
-                .is_some_and(|at| now.saturating_sub(at) <= within)
-        })
+        .filter(|row| row.actor.as_deref() == Some("agent"))
+        .filter(|row| row.age(now).is_some_and(|age| age <= within))
         .find_map(|row| {
-            let session = row["session"].as_str().and_then(Key::parse)?;
-            let used = row["app"].as_str().is_some_and(|used| same_text(used, app));
+            let session = Key::parse(row.session.as_deref()?)?;
+            let used = row.app.as_deref().is_some_and(|used| same_text(used, app));
             (used && Some(&session) != own).then_some(session)
         });
 

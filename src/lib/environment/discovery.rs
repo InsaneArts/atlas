@@ -569,7 +569,13 @@ mod tests {
         let (client, helper) = Helper::client(directory.path(), UID);
 
         helper.serve(discovered(&client), found).await.unwrap();
-        assert!(!client.config.output_dir.join("metadata.jsonl").exists());
+        assert!(
+            !client
+                .config
+                .output_dir
+                .join(crate::activity_log::FILE)
+                .exists()
+        );
     }
 
     #[tokio::test]

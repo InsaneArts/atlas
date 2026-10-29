@@ -586,13 +586,20 @@ async fn collecting_writes_no_file_names_to_the_activity_log() {
     place.file("private-name.bin", b"xyz");
     place.settle();
     place.collect(&["private-name.bin"], 1024).await;
-    let log =
-        fs::read_to_string(place.client.output_dir().unwrap().join("metadata.jsonl")).unwrap();
+    let log = fs::read_to_string(
+        place
+            .client
+            .output_dir()
+            .unwrap()
+            .join(crate::activity_log::FILE),
+    )
+    .unwrap();
     assert!(!log.contains("private-name"), "{log}");
     let row: Value = serde_json::from_str(log.lines().last().unwrap()).unwrap();
     assert_eq!(row["operation"], "collect");
     assert_eq!(row["count"], 1);
     assert_eq!(row["bytes"], 3);
+    let row = crate::activity_log::Row::parse(&row).unwrap();
     assert_eq!(crate::doing::says(&row), "collected 1 file");
 }
 

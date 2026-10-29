@@ -1507,7 +1507,13 @@ async fn a_preview_works_while_another_controller_holds_the_lock_and_leaves_no_m
     assert!(!sandbox.home.join("file").exists());
     assert!(client.controller.pending().unwrap().is_empty());
     assert!(!requests(&stage));
-    assert!(!client.config.output_dir.join("metadata.jsonl").exists());
+    assert!(
+        !client
+            .config
+            .output_dir
+            .join(crate::activity_log::FILE)
+            .exists()
+    );
 }
 
 #[tokio::test]

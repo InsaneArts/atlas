@@ -2,7 +2,7 @@
 //! surface says it: a verb, the app it acted in and the control it named.
 //! Typed text, argv, coordinates, output, file names and window titles are
 //! never kept.
-use serde_json::{Map, Value, json};
+use crate::activity_log::Row;
 
 /// The most characters an app name or element label keeps.
 const NAME_LIMIT: usize = 40;
@@ -127,17 +127,17 @@ impl Doing {
         self.verb
     }
 
-    /// The row's fields for these facts. A control is named only when the
-    /// action worked: a name that matched nothing may be anything. A
-    /// shortcut is named either way.
-    pub fn fields(&self, row: &mut Map<String, Value>, ok: bool) {
-        row.insert("verb".into(), json!(self.verb));
-        row.insert("command".into(), json!(self.command));
+    /// Fill in `row`'s fields for these facts. A control is named only
+    /// when the action worked: a name that matched nothing may be
+    /// anything. A shortcut is named either way.
+    pub fn fill(&self, row: &mut Row, ok: bool) {
+        row.verb = Some(self.verb.to_owned());
+        row.command = Some(self.command.clone());
         if let Some(app) = &self.app {
-            row.insert("app".into(), json!(app));
+            row.app = Some(app.clone());
         }
         if let Some(label) = self.label.as_ref().filter(|_| ok || self.asked) {
-            row.insert("label".into(), json!(label));
+            row.label = Some(label.clone());
         }
     }
 }
@@ -256,14 +256,14 @@ fn key_name(key: &str) -> String {
 
 /// What a recorded row did, after who did it ("clicked Save in TextEdit"),
 /// or what could not be done.
-pub fn says(row: &Value) -> String {
-    if row["started"] == true && row["ok"].is_null() {
+pub fn says(row: &Row) -> String {
+    if row.under_way() {
         return doing(row);
     }
 
-    let ok = row["ok"] == true;
-    let app = row["app"].as_str();
-    let label = row["label"].as_str();
+    let ok = row.worked();
+    let app = row.app.as_deref();
+    let label = row.label.as_deref();
     let within = |text: &str| match app {
         Some(app) => format!("{text} in {app}"),
         None => text.to_owned(),
@@ -273,7 +273,7 @@ pub fn says(row: &Value) -> String {
         None => within(verb),
     };
 
-    let (done, failed) = match row["verb"].as_str() {
+    let (done, failed) = match row.verb.as_deref() {
         Some(verb @ ("click" | "double-click" | "right-click")) => {
             let past = match verb {
                 "click" => "clicked",
@@ -286,7 +286,7 @@ pub fn says(row: &Value) -> String {
             app.map_or("typed text".into(), |app| format!("typed in {app}")),
             within("couldn't type"),
         ),
-        Some("key") => match (label, row["actionCount"].as_u64()) {
+        Some("key") => match (label, row.action_count) {
             (Some(label), _) => (
                 within(&format!("pressed {label}")),
                 within(&format!("couldn't press {label}")),
@@ -328,7 +328,7 @@ pub fn says(row: &Value) -> String {
             "stopped a background job".into(),
             "couldn't stop a background job".into(),
         ),
-        Some("collect") => match row["count"].as_u64() {
+        Some("collect") => match row.count {
             Some(count) if count > 0 => (
                 format!(
                     "collected {}",
@@ -346,15 +346,15 @@ pub fn says(row: &Value) -> String {
         verb => {
             let plain = verb.filter(|verb| PLAIN_VERBS.contains(verb));
             operation(
-                plain.or(row["operation"].as_str()),
-                row["actionCount"].as_u64(),
+                plain.or(row.operation.as_ref().map(|op| op.as_str())),
+                row.action_count,
             )
         }
     };
 
     if ok {
         done
-    } else if row["code"] == "focus-changed" {
+    } else if row.coded("focus-changed") {
         not_sent(row, &failed)
     } else {
         failed
@@ -364,9 +364,9 @@ pub fn says(row: &Value) -> String {
 /// What a command refused because another app came to the front did not
 /// do, as a skip rather than a failure: "didn't type in Notes", or
 /// "stopped typing in Notes" when part of its text was sent first.
-fn not_sent(row: &Value, failed: &str) -> String {
-    if row["partial"] == true && row["verb"] == "type" {
-        return match row["app"].as_str() {
+fn not_sent(row: &Row, failed: &str) -> String {
+    if row.partial == Some(true) && row.verb.as_deref() == Some("type") {
+        return match row.app.as_deref() {
             Some(app) => format!("stopped typing in {app}"),
             None => "stopped typing".into(),
         };
@@ -379,9 +379,9 @@ fn not_sent(row: &Value, failed: &str) -> String {
 }
 
 /// What a command is doing while it runs: "opening TextEdit…".
-fn doing(row: &Value) -> String {
-    let app = row["app"].as_str();
-    match (row["verb"].as_str(), app) {
+fn doing(row: &Row) -> String {
+    let app = row.app.as_deref();
+    match (row.verb.as_deref(), app) {
         (Some("open"), Some(app)) => format!("opening {app}…"),
         (Some("open"), None) => "opening a file…".into(),
         (Some("open-link"), _) => "opening a link…".into(),
@@ -449,13 +449,22 @@ pub fn capitalized(text: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::activity_log::Op;
+    use serde_json::{Value, json};
 
-    fn row(doing: &Doing, ok: bool) -> Value {
-        let mut row = Map::new();
-        row.insert("operation".into(), json!("input"));
-        row.insert("ok".into(), json!(ok));
-        doing.fields(&mut row, ok);
-        Value::Object(row)
+    fn row(doing: &Doing, ok: bool) -> Row {
+        let mut row = Row {
+            operation: Some(Op::Input),
+            ok: Some(ok),
+            ..Row::default()
+        };
+        doing.fill(&mut row, ok);
+        row
+    }
+
+    /// `value` as a logged row.
+    fn read(value: Value) -> Row {
+        Row::parse(&value).unwrap()
     }
 
     fn said(doing: &Doing) -> (String, String) {
@@ -512,8 +521,8 @@ mod tests {
     fn a_command_under_way_says_what_it_is_doing() {
         let started = |doing: &Doing| {
             let mut row = row(doing, true);
-            row["ok"] = Value::Null;
-            row["started"] = json!(true);
+            row.ok = None;
+            row.started = Some(true);
             says(&row)
         };
 
@@ -580,7 +589,7 @@ mod tests {
         let keys = |keys: &[&str]| {
             let keys = keys.iter().map(|k| (*k).to_owned()).collect::<Vec<_>>();
             let mut row = row(&Doing::keys(&keys), true);
-            row["actionCount"] = json!(keys.len());
+            row.action_count = Some(keys.len() as u64);
             says(&row)
         };
 
@@ -612,7 +621,7 @@ mod tests {
         );
 
         let mut failed = row(&Doing::keys(&["cmd+s".into()]), false);
-        failed["actionCount"] = json!(1);
+        failed.action_count = Some(1);
         assert_eq!(says(&failed), "couldn't press ⌘S");
     }
 
@@ -647,16 +656,32 @@ mod tests {
         assert_eq!(doing.label, None, "a blank label is no label");
 
         let fields = row(&doing, true);
-        let keys = fields.as_object().unwrap().keys().collect::<Vec<_>>();
-        assert_eq!(keys, ["app", "command", "ok", "operation", "verb"]);
-        assert_eq!(fields["command"].as_str().unwrap().len(), COMMAND_ID);
+        let written = serde_json::to_value(&fields).unwrap();
+        let keys = written.as_object().unwrap().keys().collect::<Vec<_>>();
+        assert_eq!(
+            keys,
+            [
+                "actionCount",
+                "actor",
+                "app",
+                "at",
+                "command",
+                "elapsedMs",
+                "ok",
+                "operation",
+                "verb"
+            ]
+        );
+        assert_eq!(fields.command.unwrap().len(), COMMAND_ID);
         assert_ne!(Doing::new("type").command, Doing::new("type").command);
     }
 
     #[test]
     fn rows_without_a_verb_read_by_their_operation_as_atlas_app_words_them() {
         let old = |operation: &str, count: Option<u64>, ok: bool| {
-            says(&json!({"operation": operation, "ok": ok, "actionCount": count}))
+            says(&read(
+                json!({"operation": operation, "ok": ok, "actionCount": count}),
+            ))
         };
 
         assert_eq!(old("input", Some(3), true), "sent 3 actions");
@@ -670,7 +695,9 @@ mod tests {
         assert_eq!(old("newop", None, true), "did something in the helper");
         assert_eq!(old("newop", None, false), "couldn't finish an action");
         assert_eq!(
-            says(&json!({"operation": "run", "ok": true, "verb": "someday"})),
+            says(&read(
+                json!({"operation": "run", "ok": true, "verb": "someday"})
+            )),
             "ran a command",
             "a verb this build lacks reads by its operation"
         );
@@ -680,10 +707,10 @@ mod tests {
     #[test]
     fn a_focus_refusal_says_what_it_did_not_do() {
         let refused = |verb: &str, label: Option<&str>, partial: bool| {
-            says(
-                &json!({"operation": "input", "ok": false, "code": "focus-changed",
+            says(&read(
+                json!({"operation": "input", "ok": false, "code": "focus-changed",
                 "verb": verb, "app": "Notes", "label": label, "partial": partial}),
-            )
+            ))
         };
 
         assert_eq!(refused("type", None, false), "didn't type in Notes");
@@ -699,8 +726,10 @@ mod tests {
             "only typing can stop part way"
         );
         assert_eq!(
-            says(&json!({"operation": "input", "ok": false, "code": "busy",
-                "verb": "type", "app": "Notes"})),
+            says(&read(
+                json!({"operation": "input", "ok": false, "code": "busy",
+                "verb": "type", "app": "Notes"})
+            )),
             "couldn't type in Notes",
             "other refusals still say what could not be done"
         );
@@ -708,7 +737,7 @@ mod tests {
 
     #[test]
     fn background_jobs_and_collections_are_said_plainly() {
-        let row = |verb: &str, ok: bool| json!({"verb": verb, "ok": ok, "operation": "job"});
+        let row = |verb: &str, ok: bool| read(json!({"verb": verb, "ok": ok, "operation": "job"}));
         assert_eq!(says(&row("job-start", true)), "started a background job");
         assert_eq!(
             says(&row("job-start", false)),
@@ -720,15 +749,21 @@ mod tests {
             "couldn't stop a background job"
         );
         assert_eq!(
-            says(&json!({"verb": "collect", "ok": true, "count": 2})),
+            says(&read(
+                json!({"verb": "collect", "ok": true, "count": 2, "operation": "collect"})
+            )),
             "collected 2 files"
         );
         assert_eq!(
-            says(&json!({"verb": "collect", "ok": false, "count": 0})),
+            says(&read(
+                json!({"verb": "collect", "ok": false, "count": 0, "operation": "collect"})
+            )),
             "couldn't collect files"
         );
         assert_eq!(
-            says(&json!({"verb": "collect", "started": true, "ok": null})),
+            says(&read(
+                json!({"verb": "collect", "started": true, "ok": null, "operation": "collect"})
+            )),
             "collecting files…"
         );
     }

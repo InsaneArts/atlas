@@ -421,7 +421,7 @@ mod tests {
             "../1-capture.png",
             "1-capture.png.partial",
             "a1-capture.png",
-            "metadata.jsonl",
+            crate::activity_log::FILE,
         ] {
             assert_eq!(capture_time(name), None, "{name}");
         }
@@ -431,7 +431,7 @@ mod tests {
         let named = |at: u128| format!("{}-capture.png", at * second);
         std::fs::write(dir.path().join(named(10)), b"x").unwrap();
         std::fs::write(dir.path().join(named(40)), b"x").unwrap();
-        std::fs::write(dir.path().join("metadata.jsonl"), b"x").unwrap();
+        std::fs::write(dir.path().join(crate::activity_log::FILE), b"x").unwrap();
         std::os::unix::fs::symlink("/etc/hosts", dir.path().join(named(50))).unwrap();
 
         let shots = captures(dir.path(), 30);

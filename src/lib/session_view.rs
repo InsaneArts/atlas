@@ -4,6 +4,7 @@
 //! agents' panes, so they never disagree. A session is a label for the
 //! person: nothing here is read by any check of who may act.
 use crate::{
+    activity_log::{Op, Row},
     control::{Cause, Note},
     environment::Phase,
     helper_info::Capture,
@@ -84,10 +85,10 @@ impl Who {
     /// Whether `row` is this one's: a host's by its key, Terminal's when
     /// it names no session at all. A row naming something that is not a
     /// key is nobody's.
-    fn wrote(&self, row: &Value) -> bool {
-        match (self, &row["session"]) {
-            (Self::Terminal, Value::Null) => true,
-            (Self::Host(key), session) => session.as_str() == Some(key.as_str()),
+    fn wrote(&self, row: &Row) -> bool {
+        match (self, row.session.as_deref()) {
+            (Self::Terminal, None) => true,
+            (Self::Host(key), session) => session == Some(key.as_str()),
             _ => false,
         }
     }
@@ -97,7 +98,7 @@ impl Who {
 /// found them.
 pub(crate) struct Scene<'a> {
     /// The newest activity rows, newest first, as the log keeps them.
-    pub rows: &'a [Value],
+    pub rows: &'a [Row],
     /// The holder note, whether or not its command still runs.
     pub holder: Option<&'a Note>,
     /// The notes of the commands waiting for control now.
@@ -169,7 +170,7 @@ impl Scene<'_> {
             .iter()
             .find(|note| who.names(note.session.as_ref()));
         let recently = newest
-            .and_then(|row| self.age(row))
+            .and_then(|row| row.age(self.now))
             .is_some_and(|age| age < RECOVERY_WAIT.as_nanos());
 
         let (state, waiting_for) = if needs_you {
@@ -201,10 +202,8 @@ impl Scene<'_> {
             waiting_for,
             waiting_seconds,
             latest: newest.map(|row| self.latest(row)),
-            uncertain_row: uncertain.map(crate::overview::row_id),
-            uncertain_verb: uncertain
-                .and_then(|row| row["verb"].as_str())
-                .map(str::to_owned),
+            uncertain_row: uncertain.map(|row| row.id.clone()),
+            uncertain_verb: uncertain.and_then(|row| row.verb.clone()),
         }
     }
 
@@ -218,17 +217,17 @@ impl Scene<'_> {
             .rows
             .iter()
             .rev()
-            .find(|row| row["session"].is_string())
-            .and_then(|row| self.age(row));
+            .find(|row| row.session.is_some())
+            .and_then(|row| row.age(self.now));
         let mut rows = self.rows_of(&Who::Terminal).filter(|row| {
-            self.age(row).is_some_and(|age| {
+            row.age(self.now).is_some_and(|age| {
                 age <= LIVE_FOR.as_nanos() && named_since.is_none_or(|since| age < since)
             })
         });
         match rows.next() {
             Some(newest) => {
                 let oldest = rows.last().unwrap_or(newest);
-                Some((millis(oldest)?, millis(newest)?))
+                Some((oldest.at_ms()?, newest.at_ms()?))
             }
             None => {
                 let now = u64::try_from(self.now / 1_000_000).ok()?;
@@ -258,24 +257,24 @@ impl Scene<'_> {
             return None;
         }
 
-        let newest = self.rows.iter().find(|row| row["actor"] != "viewer")?;
-        let begun = under_way(newest)
-            && self
-                .age(newest)
+        let newest = self.rows.iter().find(|row| row.actor() != "viewer")?;
+        let begun = newest.under_way()
+            && newest
+                .age(self.now)
                 .is_some_and(|age| age < UNDER_WAY.as_nanos());
         if !begun {
             return None;
         }
-        match &newest["session"] {
-            Value::Null => Some(Who::Terminal),
-            session => session.as_str().and_then(Key::parse).map(Who::Host),
+        match newest.session.as_deref() {
+            None => Some(Who::Terminal),
+            Some(session) => Key::parse(session).map(Who::Host),
         }
     }
 
     /// The row of `who` whose outcome is unknown: the oldest of its newest
     /// unknown rows, passing over the looks that need no control, so a
     /// later command refused because of it is not taken for it.
-    fn cause_row<'s>(&'s self, who: &'s Who) -> Option<&'s Value> {
+    fn cause_row<'s>(&'s self, who: &'s Who) -> Option<&'s Row> {
         let mut cause = None;
         for row in self.rows_of(who) {
             if unknown(row) {
@@ -288,28 +287,23 @@ impl Scene<'_> {
     }
 
     /// The agents' rows of `who`, newest first; never the person's own.
-    fn rows_of<'s>(&'s self, who: &'s Who) -> impl Iterator<Item = &'s Value> + 's {
+    fn rows_of<'s>(&'s self, who: &'s Who) -> impl Iterator<Item = &'s Row> + 's {
         self.rows
             .iter()
-            .filter(move |row| row["actor"] != "viewer" && who.wrote(row))
-    }
-
-    /// Nanoseconds since `row` was recorded.
-    fn age(&self, row: &Value) -> Option<u128> {
-        Some(self.now.saturating_sub(row["at"].as_str()?.parse().ok()?))
+            .filter(move |row| row.actor() != "viewer" && who.wrote(row))
     }
 
     /// A row as a session's latest action: what it did in words and how
     /// long ago.
-    fn latest(&self, row: &Value) -> Value {
+    fn latest(&self, row: &Row) -> Value {
         let shown = crate::overview::shown(row, self.now);
         json!({
-            "says": shown["says"],
-            "verb": shown["verb"],
-            "ok": shown["ok"],
-            "started": shown["started"],
-            "nothingSent": shown["nothingSent"],
-            "ageSeconds": shown["ageSeconds"],
+            "says": shown.says,
+            "verb": shown.verb,
+            "ok": shown.ok,
+            "started": shown.started,
+            "nothingSent": shown.nothing_sent,
+            "ageSeconds": shown.age_seconds,
         })
     }
 }
@@ -375,7 +369,7 @@ pub(crate) struct Records<'a> {
     /// Every record kept, newest last seen first.
     pub records: &'a [Record],
     /// The newest activity rows, newest first.
-    pub rows: &'a [Value],
+    pub rows: &'a [Row],
     /// The screenshots still kept, by file name.
     pub captures: &'a BTreeSet<String>,
     /// Each session's copies still there, by the app each is for when
@@ -482,9 +476,9 @@ impl Records<'_> {
         let opened = self
             .rows
             .iter()
-            .filter(|row| row["session"].as_str() == Some(record.key.as_str()))
-            .filter(|row| row["verb"] == "open" && row["ok"] == true)
-            .filter_map(|row| row["app"].as_str());
+            .filter(|row| row.session.as_deref() == Some(record.key.as_str()))
+            .filter(|row| row.verb.as_deref() == Some("open") && row.worked())
+            .filter_map(|row| row.app.as_deref());
         for name in opened {
             if apps.iter().all(|app| app.name != name) {
                 apps.push(PastApp {
@@ -505,25 +499,14 @@ pub(crate) fn sessions_shown<'a>(shown: impl IntoIterator<Item = &'a Shown>) -> 
 /// Whether `row`'s outcome may be unknown: refused as uncertain, or a
 /// step whose command never said how it ended. Rows flag only the first
 /// as `uncertain`; a session needing the person names either.
-fn unknown(row: &Value) -> bool {
-    row["code"] == "uncertain" || under_way(row)
+fn unknown(row: &Row) -> bool {
+    row.coded("uncertain") || row.under_way()
 }
 
 /// Whether `row` only looked at the helper, which takes no control: a
 /// screenshot or a list of its apps.
-fn looks(row: &Value) -> bool {
-    matches!(row["operation"].as_str(), Some("screenshot" | "apps"))
-}
-
-/// Whether `row` is a step still under way.
-fn under_way(row: &Value) -> bool {
-    row["started"] == true && row["ok"].is_null()
-}
-
-/// When `row` was recorded, in milliseconds since 1970.
-fn millis(row: &Value) -> Option<u64> {
-    let at: u128 = row["at"].as_str()?.parse().ok()?;
-    u64::try_from(at / 1_000_000).ok()
+fn looks(row: &Row) -> bool {
+    matches!(row.operation, Some(Op::Screenshot | Op::Apps))
 }
 
 #[cfg(test)]

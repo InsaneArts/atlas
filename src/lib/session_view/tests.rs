@@ -10,7 +10,7 @@ fn key(id: &str) -> Key {
 }
 
 /// An agent's row of `session`, `ago` seconds before [`NOW`].
-fn row(session: Option<&Key>, ago: u128, fields: Value) -> Value {
+fn row(session: Option<&Key>, ago: u128, fields: Value) -> Row {
     let mut row = json!({"at": (NOW - ago * SECOND).to_string(), "operation": "input",
         "actor": "agent", "verb": "click", "app": "Opie", "ok": true});
     if let Some(session) = session {
@@ -19,7 +19,7 @@ fn row(session: Option<&Key>, ago: u128, fields: Value) -> Value {
     for (name, value) in fields.as_object().unwrap() {
         row[name] = value.clone();
     }
-    row
+    Row::parse(&row).unwrap()
 }
 
 /// A note of this process for `session`, begun `ago` seconds before [`NOW`].
@@ -44,7 +44,7 @@ fn cause(session: Option<&Key>) -> Cause {
 }
 
 /// The scene of `rows`, with no note, cause or unknown outcome.
-fn scene(rows: &[Value]) -> Scene<'_> {
+fn scene(rows: &[Row]) -> Scene<'_> {
     Scene {
         rows,
         holder: None,
@@ -187,10 +187,7 @@ fn the_session_whose_action_is_unknown_needs_the_person_and_the_rest_wait_for_re
 
     let causer = scene.shown(&Who::Host(left), false);
     assert_eq!(causer.state, State::NeedsYou);
-    assert_eq!(
-        causer.uncertain_row.as_deref(),
-        Some(crate::overview::row_id(&rows[1]).as_str())
-    );
+    assert_eq!(causer.uncertain_row.as_deref(), Some(rows[1].id.as_str()));
     assert_eq!(causer.uncertain_verb.as_deref(), Some("type"));
 
     let other = scene.shown(&Who::Host(right), false);
@@ -371,7 +368,7 @@ fn the_row_named_for_an_unknown_outcome_is_the_one_that_left_it() {
     assert_eq!(shown.state, State::NeedsYou);
     assert_eq!(
         shown.uncertain_row.as_deref(),
-        Some(crate::overview::row_id(&rows[2]).as_str()),
+        Some(rows[2].id.as_str()),
         "not the refusal after it, nor a cut short drag it went on from"
     );
     assert_eq!(shown.uncertain_verb.as_deref(), Some("type"));

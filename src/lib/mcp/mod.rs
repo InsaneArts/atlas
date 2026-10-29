@@ -836,7 +836,7 @@ impl Server {
         let output = self.client.output_dir()?.to_path_buf();
         let (rows, named) = tokio::task::spawn_blocking(move || {
             (
-                crate::overview::activity(&output, ACTIVITY),
+                crate::activity_log::recent(&output, ACTIVITY),
                 session_names(&output),
             )
         })
@@ -848,15 +848,15 @@ impl Server {
             .map(|row| crate::overview::shown(row, now))
             .map(|row| {
                 let mut shown = json!({
-                    "says": row["says"],
-                    "ok": row["ok"],
-                    "started": row["started"],
-                    "actor": row["actor"],
-                    "ageSeconds": row["ageSeconds"],
-                    "reason": row["reason"],
-                    "nothingSent": row["nothingSent"],
+                    "says": row.says,
+                    "ok": row.ok,
+                    "started": row.started,
+                    "actor": row.actor,
+                    "ageSeconds": row.age_seconds,
+                    "reason": row.reason,
+                    "nothingSent": row.nothing_sent,
                 });
-                if let Some(name) = session_name(&row, &named) {
+                if let Some(name) = session_name(row.session.as_deref(), &named) {
                     shown["session"] = json!(name);
                 }
                 shown
@@ -1240,10 +1240,10 @@ fn session_names(output: &Path) -> BTreeMap<Key, String> {
     names(recent.iter().map(|seen| &seen.record))
 }
 
-/// The name of the host session a shown row names, when its record is
-/// there: never its key or the host's own id.
-fn session_name<'a>(row: &Value, named: &'a BTreeMap<Key, String>) -> Option<&'a String> {
-    named.get(&row["session"].as_str().and_then(Key::parse)?)
+/// The name of the host session a shown row names by its key `session`,
+/// when its record is there: never its key or the host's own id.
+fn session_name<'a>(session: Option<&str>, named: &'a BTreeMap<Key, String>) -> Option<&'a String> {
+    named.get(&Key::parse(session?)?)
 }
 
 /// What a row names a session it came from that no list names: another
@@ -1291,7 +1291,7 @@ fn summary(status: &Value, named: &BTreeMap<Key, String>, own: Option<&Key>) -> 
                 let name = row["session"]
                     .as_str()
                     .and_then(|key| listed_names.get(key).copied())
-                    .or_else(|| session_name(row, named).map(String::as_str))
+                    .or_else(|| session_name(row["session"].as_str(), named).map(String::as_str))
                     .unwrap_or(ANOTHER_SESSION);
                 kept["session"] = json!(name);
             }
