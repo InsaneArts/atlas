@@ -244,7 +244,7 @@ final class ViewerPanesModel {
   /// - Parameter number: The reading's generation.
   func readApps(_ number: Int) async {
     do {
-      let apps = try await service.apps()
+      let apps = try await service.apps().apps
       let icons = await Self.newIcons(apps, known: Set(panes.apps.icons.keys))
       guard number == work.generation else { return }
       panes.apps.apps = apps

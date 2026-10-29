@@ -55,6 +55,8 @@ public final class ScriptedService: ViewerService {
   public var activityLog = ActivityLog()
   /// The apps open in the helper, front to back.
   public var openApps: [HelperApp] = []
+  /// The host sessions the apps' origins name, by key.
+  public var appSessions: [String: HostSessionSummary] = [:]
   /// The screenshots agents took, newest first.
   public var shots: [Screenshot] = []
   /// The folder the screenshots are kept in; nil names none.
@@ -86,7 +88,7 @@ public final class ScriptedService: ViewerService {
   /// The cleanup requests made, in order: "preview KEY" or "apply KEY".
   public var cleanups: [String] = []
   /// Apps requests made.
-  var appsCalls = 0
+  public var appsCalls = 0
 
   /// A service that answers every request at once, ready and observing.
   public init() {}
@@ -290,13 +292,13 @@ public final class ScriptedService: ViewerService {
 
   /// Answers `openApps`, unless held or failed.
   ///
-  /// - Returns: The apps open in the helper.
+  /// - Returns: The apps open in the helper, and the sessions that opened them.
   /// - Throws: A ``ServiceError`` when the route fails.
   @MainActor
-  public func apps() async throws(ServiceError) -> [HelperApp] {
+  public func apps() async throws(ServiceError) -> HelperAppList {
     appsCalls += 1
     try await pause("apps")
-    return openApps
+    return HelperAppList(apps: openApps, sessions: appSessions)
   }
 
   /// Answers `shots` and `shotsFolder`, unless held or failed.
