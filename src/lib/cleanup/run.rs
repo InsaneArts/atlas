@@ -294,12 +294,10 @@ async fn act(hands: &impl Hands, step: &Step, session: &Key) -> Outcome {
 /// all are; otherwise failed, saying which files' copies are missing or
 /// changed, so no later step removes those files.
 fn check_outputs(hands: &impl Hands, outputs: &[Collection]) -> Outcome {
-    let mut found: Vec<(&Collection, Intact)> = outputs
+    let found: Vec<(&Collection, Intact)> = outputs
         .iter()
         .map(|collection| (collection, hands.intact(collection)))
         .collect();
-    // Oldest first, so the last collection of a file is its newest.
-    found.sort_by_key(|(collection, _)| collected_at(collection));
 
     let mut not_kept = Vec::new();
     let mut said = Vec::new();
@@ -318,44 +316,39 @@ fn check_outputs(hands: &impl Hands, outputs: &[Collection]) -> Outcome {
         }
     }
 
-    // The newest collection of each file is the one that counts: an older
-    // copy stands in for it only when it is the very same bytes.
+    // Each version of a file that was collected, from every collection.
+    let mut versions: Vec<Version> = Vec::new();
+    for (collection, intact) in &found {
+        let at = collected_at(collection);
+        for (files, how) in [
+            (&intact.kept, None),
+            (&intact.missing, Some("is gone")),
+            (&intact.changed, Some("changed")),
+        ] {
+            versions.extend(files.iter().map(|file| Version {
+                file,
+                how,
+                span: file.read.filter(|span| span.trusted(at)),
+            }));
+        }
+    }
     let mut sources: Vec<&str> = Vec::new();
-    for (_, intact) in &found {
-        for file in intact
-            .kept
-            .iter()
-            .chain(&intact.missing)
-            .chain(&intact.changed)
-        {
-            if !sources.contains(&file.source.as_str()) {
-                sources.push(&file.source);
-            }
+    for version in &versions {
+        if !sources.contains(&version.file.source.as_str()) {
+            sources.push(&version.file.source);
         }
     }
     for source in sources {
-        let newest = found.iter().rev().find_map(|(_, intact)| {
-            let of = |files: &'_ [Kept]| files.iter().find(|file| file.source == source).cloned();
-            of(&intact.kept)
-                .map(|file| (file, None))
-                .or_else(|| of(&intact.missing).map(|file| (file, Some("is gone"))))
-                .or_else(|| of(&intact.changed).map(|file| (file, Some("changed"))))
-        });
-        let Some((file, Some(how))) = newest else {
-            continue;
-        };
-        let same_kept = found.iter().any(|(_, intact)| {
-            intact
-                .kept
-                .iter()
-                .any(|kept| kept.source == source && kept.sha256 == file.sha256)
-        });
-        if !same_kept {
+        let of: Vec<&Version> = versions
+            .iter()
+            .filter(|version| version.file.source == source)
+            .collect();
+        for (file, how) in unkept(&of) {
             not_kept.push(NotKept {
                 source: file.source.clone(),
                 in_home: file.in_home.clone(),
             });
-            said.push(format!("the newest copy of {} {how}", file.source));
+            said.push(format!("the copy of {} {how}", file.source));
         }
     }
     if said.is_empty() {
@@ -368,6 +361,64 @@ fn check_outputs(hands: &impl Hands, outputs: &[Collection]) -> Outcome {
             said.join("; ")
         ))
     })
+}
+
+/// One version of a file a collection kept: the copy, how it stands now
+/// (none when it is as collected), and when it was read, when that can be
+/// trusted to order it.
+struct Version<'a> {
+    file: &'a Kept,
+    how: Option<&'static str>,
+    span: Option<crate::collect::ReadSpan>,
+}
+
+/// The versions of one file (`of`, every one collected) whose copies must
+/// still be kept and are not, with how each stands. The newest version
+/// counts: one read wholly after every other version with other bytes.
+/// Its bytes are kept when any copy of them is intact. When no version is
+/// the newest, because reads overlapped, a time is missing, or the clock
+/// moved backwards, any one of them may be the file's latest state, so a
+/// copy of each different version must be intact.
+fn unkept<'a>(of: &[&'a Version<'a>]) -> Vec<(&'a Kept, &'static str)> {
+    let intact = |sha256: &str| {
+        of.iter()
+            .any(|version| version.how.is_none() && version.file.sha256 == sha256)
+    };
+    let newest = of.iter().find(|candidate| {
+        let Some(span) = candidate.span else {
+            return false;
+        };
+        of.iter()
+            .filter(|other| other.file.sha256 != candidate.file.sha256)
+            .all(|other| other.span.is_some_and(|other| other.before(&span)))
+    });
+    let must: Vec<&Version> = match newest {
+        Some(newest) => vec![*newest],
+        None => {
+            let mut distinct: Vec<&Version> = Vec::new();
+            for version in of {
+                if !distinct
+                    .iter()
+                    .any(|known| known.file.sha256 == version.file.sha256)
+                {
+                    distinct.push(version);
+                }
+            }
+            distinct
+        }
+    };
+    must.into_iter()
+        .filter(|version| !intact(&version.file.sha256))
+        .map(|version| {
+            // Say how the copy of these bytes stands: gone or changed.
+            let how = of
+                .iter()
+                .filter(|other| other.file.sha256 == version.file.sha256)
+                .find_map(|other| other.how)
+                .unwrap_or("is gone");
+            (version.file, how)
+        })
+        .collect()
 }
 
 /// When `collection` was made, in milliseconds since 1970, as its receipt

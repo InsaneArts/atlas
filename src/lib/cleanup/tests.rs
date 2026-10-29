@@ -1566,6 +1566,7 @@ fn copy_of(source: &str, in_home: &str) -> crate::collect::Kept {
         path: PathBuf::from("/nowhere/copy"),
         size: 3,
         sha256: "00".into(),
+        read: None,
     }
 }
 
@@ -1839,52 +1840,131 @@ fn collected_at(place: &Place, task: &Task, at: u64) -> crate::collect::ReceiptI
     receipt
 }
 
-#[tokio::test]
-async fn the_newest_collection_of_a_file_is_the_one_that_counts() {
-    const SOURCE: &str = "/Users/atlas/.config/probe/settings.toml";
-    const IN_HOME: &str = ".config/probe/settings.toml";
-    let version = |sha256: &str| crate::collect::Kept {
+/// One version of the probe's settings file, read from `started` to
+/// `finished` and kept with `sha256`.
+fn version(sha256: &str, read: Option<(u64, u64)>) -> crate::collect::Kept {
+    crate::collect::Kept {
         sha256: sha256.into(),
-        ..copy_of(SOURCE, IN_HOME)
-    };
-    for (newer, kept) in [("bb", false), ("aa", true)] {
-        let place = Place::new();
-        let key = session("versions");
-        let task = default_task(&key);
-        let plan = plan_claimed(&place, &task);
-        let older = collected_at(&place, &task, 1_000);
-        let newest = collected_at(&place, &task, 2_000);
-        let fake = Fake::at(&place.root);
-        fake.intact.borrow_mut().insert(
-            older.to_string(),
+        read: read.map(|(started, finished)| crate::collect::ReadSpan { started, finished }),
+        ..copy_of(
+            "/Users/atlas/.config/probe/settings.toml",
+            ".config/probe/settings.toml",
+        )
+    }
+}
+
+/// Clean up a task that applied a plan writing the probe's settings and
+/// made two collections of them: `first` at 1000 and `second` at 2000,
+/// each copy `kept` or lost. Whether the plan was undone, and the reply.
+async fn two_versions(
+    first: crate::collect::Kept,
+    first_kept: bool,
+    second: crate::collect::Kept,
+    second_kept: bool,
+) -> (bool, Value) {
+    let place = Place::new();
+    let key = session("versions");
+    let task = default_task(&key);
+    let plan = plan_claimed(&place, &task);
+    let fake = Fake::at(&place.root);
+    for (at, file, kept) in [(1_000, first, first_kept), (2_000, second, second_kept)] {
+        let receipt = collected_at(&place, &task, at);
+        let intact = if kept {
             crate::collect::Intact {
-                kept: vec![version("aa")],
+                kept: vec![file],
                 ..Default::default()
-            },
-        );
-        fake.intact.borrow_mut().insert(
-            newest.to_string(),
-            crate::collect::Intact {
-                missing: vec![version(newer)],
-                ..Default::default()
-            },
-        );
-        let reply = place.apply(&fake, &own(&key)).await;
-        let undone = fake.logged().contains(&format!("undo {plan}"));
-        if kept {
-            assert_eq!(reply["ok"], true, "the same bytes are still kept: {reply}");
-            assert!(undone);
+            }
         } else {
-            assert_eq!(states(&reply), ["failed", "blocked"], "{reply}");
-            assert!(
-                reply["steps"][0]["error"]
-                    .as_str()
-                    .unwrap()
-                    .contains("newest copy"),
-                "{reply}"
-            );
-            assert!(!undone, "an older version never stands in for the newest");
-        }
+            crate::collect::Intact {
+                missing: vec![file],
+                ..Default::default()
+            }
+        };
+        fake.intact.borrow_mut().insert(receipt.to_string(), intact);
+    }
+    let reply = place.apply(&fake, &own(&key)).await;
+    (fake.logged().contains(&format!("undo {plan}")), reply)
+}
+
+#[tokio::test]
+async fn the_version_read_after_every_other_is_the_one_that_counts() {
+    // Read one after the other: the later bytes count.
+    let (undone, reply) = two_versions(
+        version("aa", Some((1_000, 1_100))),
+        true,
+        version("bb", Some((2_000, 2_100))),
+        false,
+    )
+    .await;
+    assert!(
+        !undone,
+        "an older version never stands in for the newest: {reply}"
+    );
+    assert_eq!(states(&reply), ["failed", "blocked"]);
+
+    // The older copy lost, the newest kept: the file is kept.
+    let (undone, reply) = two_versions(
+        version("aa", Some((1_000, 1_100))),
+        false,
+        version("bb", Some((2_000, 2_100))),
+        true,
+    )
+    .await;
+    assert!(undone, "{reply}");
+    assert_eq!(reply["ok"], true);
+}
+
+#[tokio::test]
+async fn the_same_bytes_kept_in_any_collection_keep_the_file() {
+    let (undone, reply) = two_versions(
+        version("aa", Some((1_000, 1_100))),
+        true,
+        version("aa", Some((2_000, 2_100))),
+        false,
+    )
+    .await;
+    assert!(undone, "{reply}");
+    assert_eq!(reply["ok"], true);
+}
+
+#[tokio::test]
+async fn versions_read_while_each_other_was_read_are_all_kept() {
+    // The first collection began earlier, but read the file while the
+    // second did: either may hold its latest state.
+    for (lost_first, lost_second) in [(true, false), (false, true)] {
+        let (undone, reply) = two_versions(
+            version("aa", Some((1_000, 2_500))),
+            !lost_first,
+            version("bb", Some((2_000, 2_100))),
+            !lost_second,
+        )
+        .await;
+        assert!(!undone, "{reply}");
+        assert_eq!(states(&reply), ["failed", "blocked"], "{reply}");
+    }
+    let (undone, reply) = two_versions(
+        version("aa", Some((1_000, 2_500))),
+        true,
+        version("bb", Some((2_000, 2_100))),
+        true,
+    )
+    .await;
+    assert!(undone, "both versions are kept: {reply}");
+}
+
+#[tokio::test]
+async fn a_clock_that_moved_backwards_orders_nothing() {
+    // Read "later" by a clock that went back: neither version is known to
+    // be the newest, so losing either keeps the file.
+    for second in [
+        version("bb", Some((2_100, 2_000))),
+        version("bb", Some((500, 600))),
+        version("bb", None),
+    ] {
+        let (undone, reply) =
+            two_versions(version("aa", Some((1_000, 1_100))), false, second, true).await;
+        assert!(!undone, "{reply}");
+        assert_eq!(states(&reply), ["failed", "blocked"], "{reply}");
     }
 }
 

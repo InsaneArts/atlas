@@ -121,6 +121,35 @@ pub struct Kept {
     pub path: PathBuf,
     pub size: u64,
     pub sha256: String,
+    /// When this version of the source was read, by this Mac's clock;
+    /// none in a receipt from before Atlas kept it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub read: Option<ReadSpan>,
+}
+
+/// When one version of a file was read: from its first part to its
+/// verified digest, in milliseconds since 1970 by this Mac's clock. The
+/// bytes kept are the file as it stood somewhere in between.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ReadSpan {
+    pub started: u64,
+    pub finished: u64,
+}
+
+impl ReadSpan {
+    /// Whether this span can be trusted to order versions, for a collection
+    /// made at `collected`: a clock that moved backwards while it was read,
+    /// or since the collection began, leaves it out of order.
+    pub fn trusted(&self, collected: u64) -> bool {
+        collected <= self.started && self.started <= self.finished
+    }
+
+    /// Whether this version was read wholly before `other` began: only then
+    /// is `other` the newer of the two.
+    pub fn before(&self, other: &Self) -> bool {
+        self.finished < other.started
+    }
 }
 
 /// A collection's receipt file, beside its copies.
@@ -412,6 +441,7 @@ impl One<'_> {
             return Err(fail(Refused::Exists));
         }
 
+        let started = now_ms();
         let mut partial = OpenOptions::new()
             .write(true)
             .create_new(true)
@@ -515,6 +545,10 @@ impl One<'_> {
             path,
             size: identity.size,
             sha256,
+            read: Some(ReadSpan {
+                started,
+                finished: now_ms(),
+            }),
         })
     }
 }

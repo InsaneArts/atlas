@@ -188,7 +188,9 @@ async fn results_name_paths_sizes_and_digests_never_contents() {
         .cloned()
         .collect();
     keys.sort();
-    assert_eq!(keys, ["inHome", "path", "sha256", "size", "source"]);
+    assert_eq!(keys, ["inHome", "path", "read", "sha256", "size", "source"]);
+    let read = &reply["collected"][0]["read"];
+    assert!(read["started"].as_u64().unwrap() <= read["finished"].as_u64().unwrap());
 }
 
 #[tokio::test]
