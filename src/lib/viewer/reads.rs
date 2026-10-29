@@ -149,7 +149,7 @@ impl Viewer {
                     (seen.record.key.clone(), apps)
                 })
                 .collect();
-            crate::session_view::Records {
+            crate::session_view::HistorySource {
                 records: &records,
                 rows: &rows,
                 captures: &captures,

@@ -363,7 +363,7 @@ pub(crate) struct PastPlan {
 }
 
 /// What the viewer's history is read from.
-pub(crate) struct Records<'a> {
+pub(crate) struct HistorySource<'a> {
     /// Every record kept, newest last seen first.
     pub records: &'a [Record],
     /// The newest activity rows, newest first.
@@ -380,7 +380,7 @@ pub(crate) struct Records<'a> {
     pub now: u64,
 }
 
-impl Records<'_> {
+impl HistorySource<'_> {
     /// The sessions last seen within the days records are kept for, newest
     /// first, at most [`HISTORY`].
     pub(crate) fn history(&self) -> Vec<Past> {

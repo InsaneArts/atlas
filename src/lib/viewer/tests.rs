@@ -1450,7 +1450,7 @@ fn a_session_ends_an_hour_after_it_was_last_seen_and_is_listed_for_seven_days() 
         record("quiet", 2 * hour),
         record("week", 8 * 24 * hour),
     ];
-    let history = crate::session_view::Records {
+    let history = crate::session_view::HistorySource {
         records: &records,
         rows: &[],
         captures: &Default::default(),
