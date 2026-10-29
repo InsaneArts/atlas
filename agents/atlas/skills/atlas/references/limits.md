@@ -105,22 +105,26 @@ than a week are removed the next time one is taken; you need not remove them.
   nothing more is sent. Text is checked every 16 characters. Atlas never
   brings the app forward itself: click where it shows.
 - `--window NUMBER` (from `atlas windows`) on `type` and `key` sends only
-  while that window has keyboard focus with no sheet or dialog over it; on
-  `click X Y`, `scroll` and `drag`, only while it is the top one at the point
-  (a drag's start). Use it for a document that may open a sheet, or an app
-  another agent also uses. The number stays the same while the title changes.
+  while that window has keyboard focus with nothing of the app in front of
+  it, a sheet, dialog, popup or panel; on `click X Y`, `scroll` and `drag`,
+  only while it is the top one at the point (a drag's start). Use it for a
+  document that may open a sheet, or an app another agent also uses. The
+  number stays the same while the title changes.
 - `--field NAME` on `type` and `key` sends only while the focused field has
   that name, as `atlas elements --name` matches it (often an identifier, such
-  as TextEdit's `First Text View`). A name alone cannot tell two fields of
-  that name apart, so pair it with `--window`. Type each field with its own
-  command: a tab or return in the text leaves the field, and the next part is
-  refused. Browsers and custom views often do not say which field has focus,
-  and are refused every time: use `--window` there.
-- Atlas checks before each 16 characters, and before the first key of a
-  `key` command (a later key may move focus on purpose). It cannot promise
-  every character lands: up to the rest of one part may follow a change into
-  what took focus, and `typed` says how much was sent. Atlas never switches
-  back or brings anything forward for you.
+  as TextEdit's `First Text View`); only a text field, text area, combo box
+  or search field counts. A name alone cannot tell two fields of that name
+  apart, so pair it with `--window`. Type each field with its own command: a
+  tab or return in the text leaves the field. Browsers and custom views often
+  do not say which field has focus, and are refused every time: use
+  `--window` there.
+- Atlas checks before each 16 characters it types, and before the first key
+  of a `key` command (a later key may move focus on purpose). A check sees
+  focus as the app reports it, which can lag behind keys already sent, so
+  text sent after focus moved may land where focus went before a check sees
+  the change. `typed` counts the characters Atlas sent, not the ones that
+  reached the field: look before typing more. Atlas never switches back or
+  brings anything forward for you.
 - In one `input` batch given `--app`, put a short wait
   (`{"type":"wait","ms":150}`) between a click that brings the app forward
   and the typing after it: focus moves a moment after the click, and the
