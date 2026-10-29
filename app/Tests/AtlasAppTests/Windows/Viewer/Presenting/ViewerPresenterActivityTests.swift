@@ -66,6 +66,29 @@ struct ViewerPresenterActivityTests {
     #expect(plain.first?.words == ViewerStepWords("Typed"))
   }
 
+  @Test(
+    "app operations recorded as run preserve their safe operation words",
+    arguments: ["open", "open-link", "close", "install", "cleanup"]
+  )
+  func appOperationsKeepTheirWords(_ verb: String) throws {
+    let words = try #require(
+      [
+        "open": "opened TextEdit", "open-link": "opened a link", "close": "closed TextEdit",
+        "install": "installed TextEdit", "cleanup": "cleaned up this session's work",
+      ][verb]
+    )
+    let row = ActivityLog.Entry(
+      id: "app",
+      says: words,
+      operation: "run",
+      verb: verb,
+      app: "TextEdit"
+    )
+    let activity = ViewerPresenter.activity(try Self.onActivity([row], sessions: []))
+    #expect(Self.steps(activity).first?.words.text == Words.leadingCapital(words))
+    #expect(Self.steps(activity).first?.kind == .window)
+  }
+
   @Test("a command shows no arguments")
   func aCommandShowsNoArguments() throws {
     let log = [

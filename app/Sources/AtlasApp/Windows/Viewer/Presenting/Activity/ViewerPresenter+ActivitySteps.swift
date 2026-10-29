@@ -85,7 +85,8 @@ extension ViewerPresenter {
   static func stepWords(_ run: ActivityRun, in moment: ActivityMoment) -> ViewerStepWords {
     let entry = run.entry
     let count = run.count > 1 ? "×\(run.count)" : ""
-    if entry.operation == "run", entry.actor != .you {
+    let appOperation = ["open", "open-link", "close", "install", "cleanup"].contains(entry.verb ?? "")
+    if entry.operation == "run", entry.actor != .you, !appOperation {
       let verb =
         switch entry.outcome {
         case .running: ViewerWords.runningCommand
