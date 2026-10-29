@@ -203,6 +203,11 @@ fn focus_changed_names_who_last_used_the_app_in_front() {
         None
     );
     assert_eq!(last_used(&[row(5, &codex, "TextEdit")], "Calculator"), None);
+    assert_eq!(
+        last_used(&[row(5, &codex, "ÉDITEUR")], "Éditeur").as_deref(),
+        Some(codex.key.as_str()),
+        "app names fold case beyond ASCII"
+    );
 }
 
 /// A refusal for a window, sheet or field of the app itself names no one:

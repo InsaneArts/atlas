@@ -11,6 +11,7 @@ use super::{
 use crate::{
     client::Client,
     error::{Holder, Result},
+    text::same_text,
 };
 use serde_json::{Value, json};
 use std::{collections::BTreeMap, time::Duration};
@@ -215,7 +216,7 @@ fn last_used_by(
             let session = row["session"].as_str().and_then(Key::parse)?;
             let used = row["app"]
                 .as_str()
-                .is_some_and(|used| used.eq_ignore_ascii_case(app));
+                .is_some_and(|used| same_text(used, app));
             (used && Some(&session) != own).then_some(session)
         });
 
