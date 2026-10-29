@@ -599,7 +599,7 @@ fn never_installed(
     };
 
     let path = destination(home, &file.payload.target)?;
-    let waiting = candidate(&path, &transaction.plan.id, index, false);
+    let waiting = candidate(&path, &transaction.plan.id, index, false)?;
 
     Ok(fingerprint(&path)?.as_ref() != Some(prepared)
         && fingerprint(&waiting)?.as_ref() == Some(prepared))
@@ -620,7 +620,7 @@ fn apply_file(
     let installed = apply_state(home, transaction, index, ledger)?;
     if !installed && file.operation != Operation::Unchanged {
         ensure_parents(home, transaction, &file.payload.target, store, guard)?;
-        let candidate = candidate(&path, &transaction.plan.id, index, false);
+        let candidate = candidate(&path, &transaction.plan.id, index, false)?;
 
         if transaction.progress[index].prepared.is_none() {
             guard()?;
@@ -699,13 +699,16 @@ fn finish_file(
     store.save(transaction)
 }
 
-fn candidate(path: &Path, id: &str, index: usize, rollback: bool) -> PathBuf {
-    path.parent()
-        .expect("a checked destination lies inside the helper home")
-        .join(format!(
-            ".atlas-{id}-{index}-{}",
-            if rollback { "restore" } else { "install" }
-        ))
+/// Where a file is prepared beside `path` before it is moved over it. A
+/// checked destination lies inside the helper home, so it has a folder.
+fn candidate(path: &Path, id: &str, index: usize, rollback: bool) -> Result<PathBuf> {
+    let folder = path
+        .parent()
+        .ok_or_else(|| problem("A destination needs a folder"))?;
+    Ok(folder.join(format!(
+        ".atlas-{id}-{index}-{}",
+        if rollback { "restore" } else { "install" }
+    )))
 }
 
 /// Write `bytes` beside their destination with the group and attributes of
@@ -819,7 +822,7 @@ pub(super) fn rollback(
             {
                 if let Some(restore) = &transaction.progress[index].restore {
                     let path = destination(home, &file.payload.target)?;
-                    if fingerprint(&candidate(&path, id, index, true))?.as_ref() != Some(restore) {
+                    if fingerprint(&candidate(&path, id, index, true)?)?.as_ref() != Some(restore) {
                         return Err(problem("A prepared restore changed or disappeared"));
                     }
                 } else {
@@ -986,7 +989,7 @@ fn rollback_file(
     // The randomized candidate name is reserved in this durable transaction.
     // A crash can leave its inode prepared before the fingerprint was recorded.
     if transaction.progress[index].prepared.is_none() {
-        let candidate = candidate(&path, &transaction.plan.id, index, false);
+        let candidate = candidate(&path, &transaction.plan.id, index, false)?;
         if let Some(prepared) = fingerprint(&candidate)? {
             if prepared.sha256 != file.payload.sha256
                 || prepared.mode != desired_mode(&file.payload)
@@ -1022,7 +1025,7 @@ fn rollback_file(
                 return Err(problem("Transaction backup changed"));
             }
 
-            let candidate = candidate(&path, &transaction.plan.id, index, true);
+            let candidate = candidate(&path, &transaction.plan.id, index, true)?;
             guard()?;
             transaction.progress[index].restore = Some(prepare_inode(
                 &candidate,
@@ -1044,7 +1047,7 @@ fn rollback_file(
         }
 
         if file.before.is_some() {
-            let candidate = candidate(&path, &transaction.plan.id, index, true);
+            let candidate = candidate(&path, &transaction.plan.id, index, true)?;
             if fingerprint(&candidate)? != transaction.progress[index].restore {
                 return Err(problem("Prepared restore changed"));
             }
@@ -1140,7 +1143,7 @@ fn discard_candidates(
     guard: &impl Fn() -> Result<()>,
 ) -> Result<()> {
     for restore in [false, true] {
-        let candidate = candidate(path, &transaction.plan.id, index, restore);
+        let candidate = candidate(path, &transaction.plan.id, index, restore)?;
         discard_partial(&candidate)?;
 
         if let Some(current) = fingerprint(&candidate)? {
@@ -1182,7 +1185,7 @@ fn release_untouched(
     store: &Store,
     guard: &impl Fn() -> Result<()>,
 ) -> Result<()> {
-    let waiting = candidate(path, &transaction.plan.id, index, false);
+    let waiting = candidate(path, &transaction.plan.id, index, false)?;
     discard_partial(&waiting)?;
 
     let current = fingerprint(&waiting)?;
