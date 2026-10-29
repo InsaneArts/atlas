@@ -238,7 +238,7 @@ final class ViewerReadingLoop {
     }
     viewer.forgetRecoveryOnceNoneNeeded()
     viewer.noteActivitySeen()
-    // The sessions' list is read while two or more sessions are live, which the status says.
+    // Discover and refresh session history; the pane model decides when live sessions also need polling.
     viewer.panesModel.followSessions()
   }
 

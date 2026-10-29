@@ -9,6 +9,29 @@ import Testing
 
 @Suite("ViewerPanesModel+Sessions")
 struct ViewerSessionsReadingTests {
+  @Test("history refreshes with status readings without keeping a polling clock wait")
+  func historyRefreshesWithStatusReadings() async throws {
+    let service = ScriptedService()
+    let clock = ManualClock()
+    var now = Date(timeIntervalSince1970: 1_793_170_000)
+    let viewer = try await ViewerController.watching(service, clock: clock, wallClock: { now })
+    defer { viewer.close() }
+    try await settle("history discovery never ended") {
+      viewer.panes.sessions.list != nil && viewer.panesModel.work.sessions == nil
+    }
+    let asked = service.sessionsCalls
+    await viewer.readingLoop.readStatus()
+    #expect(service.sessionsCalls == asked)
+    viewer.readingLoop.watch(false)
+    #expect(clock.waiting.isEmpty)
+    now = now.addingTimeInterval(10)
+    await viewer.readingLoop.readStatus()
+    try await settle("status never refreshed history") { service.sessionsCalls == asked + 1 }
+    await viewer.panesModel.work.sessions?.value
+    #expect(viewer.panesModel.work.sessions == nil)
+    #expect(clock.waiting.isEmpty)
+  }
+
   /// A status reply listing Claude Code with the helper and Codex waiting, as two live sessions.
   static var twoLive: [String: Any] {
     [
@@ -20,16 +43,19 @@ struct ViewerSessionsReadingTests {
     ]
   }
 
-  @Test("the list of sessions is read only while two sessions are live or one is chosen")
-  func theListIsReadOnlyWhileWanted() async throws {
+  @Test("a fresh visible window reads ended sessions with zero or one live session", arguments: [false, true])
+  func aFreshWindowReadsEndedSessions(oneLive: Bool) async throws {
     let service = ScriptedService()
-    let viewer = try await ViewerController.watching(service)
-    #expect(service.sessionsCalls == 0, "with no sessions shown nothing asks for the list")
-    service.reply = Self.twoLive
+    if oneLive {
+      service.reply = [
+        "ready": true, "canObserve": true,
+        "overview": ["mode": "agent", "state": "working", "hostSessions": [SessionReplies.claudeActing]],
+      ]
+    }
     service.sessionList = HostSessionList(sessions: [
       HostSessionRecord(key: "c0ffee5e5510", name: "Pi · notes-sync", host: .pi, state: .ended)
     ])
-    await viewer.readingLoop.readStatus()
+    let viewer = try await ViewerController.watching(service)
     try await settle("the list was never read") { viewer.panes.sessions.list != nil }
     viewer.send(.toggleEnded)
     let ended = ViewerPresenter.sessions(viewer.snapshot)
