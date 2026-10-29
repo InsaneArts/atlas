@@ -62,7 +62,7 @@ extension ActivityMoments {
       if let ended = run.endedAt { endedAt = max(endedAt ?? ended, ended) }
     }
 
-    /// The moment, its identity its stream's and its oldest line's.
+    /// The moment with an initial identity from its stream and oldest line, reconciled against preceding readings.
     var moment: ActivityMoment {
       ActivityMoment(
         id: "\(stream.id)|\(runs.last?.id ?? "")",

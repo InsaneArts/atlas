@@ -5,7 +5,7 @@ import Foundation
 /// applies, so a moment keeps its identity whichever filter shows it. Time comes in and is never read.
 public struct ActivityMoments: Sendable {
   /// 120 s: the longest pause inside a moment, between its oldest line so far and the line before it. An agent's run
-  /// of work is a string of actions seconds apart, as ``ActivityGrouping`` reads Now; a longer pause starts a new
+  /// of work is a string of actions seconds apart; a longer pause starts a new
   /// moment, even in the same app.
   static let momentGap: TimeInterval = 120
   /// 5 min: how lately a moment must have ended to stay open on its own.
@@ -30,7 +30,13 @@ public struct ActivityMoments: Sendable {
   ///   - grouping: The rules over the reading, which say when each row started and on which day.
   ///   - captures: The screenshots the service lists, for the screenshot rows.
   ///   - scope: Whose rows to form moments from.
-  public init(_ grouping: ActivityGrouping, captures: [Screenshot], scope: ActivityScope) {
+  ///   - previous: The preceding reading's moments, for retaining identities where their rows overlap.
+  public init(
+    _ grouping: ActivityGrouping,
+    captures: [Screenshot],
+    scope: ActivityScope,
+    preserving previous: [ActivityMoment] = []
+  ) {
     let calendar = grouping.calendar
     let days = grouping.runs(captures: captures, first: calendar.startOfDay(for: grouping.now)) {
       calendar.startOfDay(for: $0)
@@ -39,6 +45,22 @@ public struct ActivityMoments: Sendable {
     runs = days.map { (ActivityStream($0.run.entry), $0.run) }
     now = grouping.now
     moments = Self.formed(days)
+    var available = previous
+    for index in moments.indices {
+      let moment = moments[index]
+      let rows = Set(moment.runs.flatMap(\.rowIDs))
+      let matches = available.indices.filter {
+        available[$0].stream == moment.stream && available[$0].day == moment.day
+          && !rows.isDisjoint(with: available[$0].runs.flatMap(\.rowIDs))
+      }
+      guard
+        let match = matches.max(by: {
+          rows.intersection(available[$0].runs.flatMap(\.rowIDs)).count
+            < rows.intersection(available[$1].runs.flatMap(\.rowIDs)).count
+        })
+      else { continue }
+      moments[index].id = available.remove(at: match).id
+    }
   }
 
   /// The moments the tab lists: each with only the lines the filter and the search keep, a moment left with none

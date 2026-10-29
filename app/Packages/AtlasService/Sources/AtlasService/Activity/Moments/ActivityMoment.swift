@@ -6,7 +6,7 @@ public struct ActivityMoment: Equatable, Sendable, Identifiable {
   /// 8: the most steps an open moment shows before "Show N more".
   public static let mostSteps = 8
 
-  /// The moment's identity: its stream's and its oldest line's, which stays as newer lines join it.
+  /// The moment's identity, retained across readings with overlapping rows, even when its oldest row leaves.
   public var id: String
   /// Whose work it follows.
   public var stream: ActivityStream

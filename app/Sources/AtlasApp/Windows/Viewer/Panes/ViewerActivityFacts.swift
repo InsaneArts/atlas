@@ -7,6 +7,8 @@ import Foundation
 struct ViewerActivityFacts {
   /// The log, newest first; nil before the first reading.
   var log: ActivityLog?
+  /// The preceding reading's moments, whose identities survive overlapping log windows.
+  var moments: [ActivityMoment] = []
   /// When the log was read, which each row's age counts back from.
   var readAt: Date?
   /// Why the last reading failed, while it has; nil once one worked.

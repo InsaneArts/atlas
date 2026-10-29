@@ -118,12 +118,14 @@ public struct ActivityGrouping: Sendable {
       if let started { current = part(started) }
       let run = ActivityRun(entry: entry, startedAt: started, shot: shots[entry.id])
       if let last = runs.last, last.part == current, Self.repeats(last.run, run) {
-        runs[runs.count - 1].run = ActivityRun(
+        var joined = ActivityRun(
           entry: entry,
           startedAt: started,
           count: last.run.count + 1,
           endedAt: last.run.endedAt
         )
+        joined.rowIDs = last.run.rowIDs.union(run.rowIDs)
+        runs[runs.count - 1].run = joined
       } else {
         runs.append((current, run))
       }
@@ -132,13 +134,18 @@ public struct ActivityGrouping: Sendable {
   }
 
   /// Whether a row is the same action as the line just above it, by the same actor in the same host session, with the
-  /// same outcome: a running row and a screenshot row always stand alone.
+  /// same outcome, at most a moment gap apart: running and screenshot rows always stand alone.
   ///
   /// - Parameters:
   ///   - newer: The line above.
   ///   - older: The row under it.
   /// - Returns: Whether the row joins the line.
   static func repeats(_ newer: ActivityRun, _ older: ActivityRun) -> Bool {
+    if let newerStart = newer.startedAt, let olderEnd = older.endedAt,
+      newerStart.timeIntervalSince(olderEnd) > ActivityMoments.momentGap
+    {
+      return false
+    }
     let above = newer.entry
     let below = older.entry
     guard above.outcome != .running, above.operation != screenshotOperation, below.operation != screenshotOperation

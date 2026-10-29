@@ -82,6 +82,35 @@ struct ActivityMomentsTests {
     #expect(moments.map { $0.runs.map(\.id) } == [["c4", "c3"], ["c2", "c1"]], "120 s joins, 121 s does not")
   }
 
+  @Test("identical actions more than two minutes apart stay in separate moments")
+  func identicalActionsRespectMomentGaps() {
+    let moments = Self.moments([
+      Self.row("new", 10, "scroll", says: "scrolled"),
+      Self.row("old", 610, "scroll", says: "scrolled"),
+    ])
+    .moments
+    #expect(moments.map { $0.runs.map(\.id) } == [["new"], ["old"]])
+  }
+
+  @Test("overlapping repeat runs retain their moment identity after their oldest row leaves")
+  func overlappingRepeatsRetainTheirMomentIdentity() {
+    let before = Self.moments([
+      Self.row("b", 10, "scroll", says: "scrolled"),
+      Self.row("a", 20, "scroll", says: "scrolled"),
+    ])
+    let after = ActivityMoments(
+      ActivityGroupingTests.rules([
+        Self.row("c", 5, "scroll", says: "scrolled"),
+        Self.row("b", 10, "scroll", says: "scrolled"),
+      ]),
+      captures: [],
+      scope: .all,
+      preserving: before.moments
+    )
+    #expect(after.moments.map(\.id) == before.moments.map(\.id))
+    #expect(after.moments.first?.runs.first?.id == "b")
+  }
+
   @Test("another app starts a new moment, and the same app by bundle id joins whatever its name's case")
   func anotherAppStartsANewMoment() {
     let moments = Self.moments([

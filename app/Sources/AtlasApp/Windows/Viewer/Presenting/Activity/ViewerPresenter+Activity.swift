@@ -4,11 +4,10 @@ import AtlasUI
 import Foundation
 
 extension ViewerPresenter {
-  /// The Activity pane: whose work it lists and today's count for VoiceOver, the summary of the latest stretch of
-  /// work, the filters with how many problems and screenshots there are, and the moments with their steps, narrowed by
-  /// the filter and the sidebar's search, or why nothing shows. Moments form from every row in scope before the filter,
-  /// so each keeps its identity whichever filter shows it. With nothing in the log yet there is no summary and nothing
-  /// to filter. Times are the person's own clock.
+  /// The Activity pane: whose work it lists and today's count for VoiceOver, the filters with their problem and
+  /// screenshot counts, and the moments with their steps, narrowed by the filter and the sidebar's search, or why
+  /// nothing shows. Moments form from every row in scope before the filter, so each keeps its identity whichever
+  /// filter shows it. With nothing in the log yet there is nothing to filter. Times are the person's own clock.
   ///
   /// - Parameter snapshot: What the controller holds.
   /// - Returns: The pane.
@@ -31,7 +30,12 @@ extension ViewerPresenter {
     }
     let rules = ActivityGrouping(log: log, readAt: readAt, now: snapshot.date, calendar: snapshot.zonedCalendar)
     let scope = ActivityScope(snapshot.shownSessions)
-    let moments = ActivityMoments(rules, captures: snapshot.panes.shots.shots ?? [], scope: scope)
+    let moments = ActivityMoments(
+      rules,
+      captures: snapshot.panes.shots.shots ?? [],
+      scope: scope,
+      preserving: facts.moments
+    )
     let query = snapshot.session.search.query
     let shown = moments.shown(filter: activityFilter(facts.filter), query: query)
     let counts = [ViewerActivityFilter.problems, .screenshots].reduce(into: [ViewerActivityFilter: Int]()) {

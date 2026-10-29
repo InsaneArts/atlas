@@ -4,10 +4,10 @@ import CoreGraphics
 import Foundation
 import Observation
 
-/// The Activity, Apps and Screenshots tabs: each reads only while it shows and the window is on screen, one reading
-/// at a time on the injected clock, and a reply that arrives after its tab was left or the window hidden has no
+/// The Activity, Apps and Screenshots panes: each reads only while it shows and the window is on screen, one reading
+/// at a time on the injected clock, and a reply that arrives after its pane was left or the window hidden has no
 /// effect. Activity reads the log, and the screenshots with it while a screenshot's row can show its capture. Apps
-/// lists the helper's apps, and Show on screen outlines a window on the Screen tab and acts on nothing in the helper.
+/// lists the helper's apps, and Show on screen outlines a window on the Screen pane and acts on nothing in the helper.
 /// The apps' icons, which Activity's rows and Apps' apps both want, are found once each, a couple at a time off the
 /// main actor (`ViewerPanesModel+Icons`). Screenshots has the selection, which the arrows move and Esc clears, the large view with
 /// Previous and Next, Copy, Save and Show in Finder: Copy and Save take the picture as taken, of the large screenshot
@@ -15,7 +15,7 @@ import Observation
 /// screenshot in the folder the service names. The screenshots' thumbnails, which Activity's screenshot lines
 /// and the Screenshots grid share, are read through one queue a couple at a time as their tiles come into view,
 /// decoded off the main actor, kept by name within a bound, and dropped when they come back after the queue was let
-/// go. The host sessions' list is read while the window wants it, whichever tab shows. ``ViewerController`` owns one;
+/// go. The host sessions' list is read while the window wants it, whichever pane shows. ``ViewerController`` owns one;
 /// its state is written here alone.
 @Observable
 final class ViewerPanesModel {
@@ -37,21 +37,21 @@ final class ViewerPanesModel {
   /// request slots.
   static let thumbnailsAtOnce = 2
 
-  /// What the Activity, Apps and Screenshots tabs hold, written by this model alone, here and in its extensions.
+  /// What the Activity, Apps and Screenshots lists hold, written by this model alone, here and in its extensions.
   var panes = ViewerPanes()
 
-  /// The window these tabs belong to: whether it is on screen, the place it shows, and its tab switch. Weak, as the
+  /// The window these sidebar destinations belong to: whether it is on screen and the place it shows. Weak, as the
   /// window owns them.
   @ObservationIgnored private weak var viewer: ViewerController?
   /// The viewer service it reads.
   @ObservationIgnored private let service: any ViewerService
   /// The clock every wait runs on; a cancelled wait ends at once.
   @ObservationIgnored private let clock: any Clock<Duration>
-  /// The date and time now, which the tabs tell times and days by.
+  /// The date and time now, which the panes tell times and days by.
   @ObservationIgnored private let wallClock: @MainActor () -> Date
   /// Where a copied screenshot goes, and how its file is shown.
   @ObservationIgnored private let shotOutlet: ShotOutlet
-  /// The tabs' reading and thumbnails under way.
+  /// The panes' reading and thumbnails under way.
   @ObservationIgnored private(set) var work = ViewerPaneWork()
   /// What the window does once the sessions' list is read, before the next reading is waited for.
   @ObservationIgnored private let onSessionsRead: @MainActor (HostSessionList) async -> Void
@@ -60,7 +60,7 @@ final class ViewerPanesModel {
   /// The icon queue's working parts.
   @ObservationIgnored var iconWork = ViewerIconWork()
 
-  /// Creates tabs that have read nothing yet.
+  /// Creates panes that have read nothing yet.
   ///
   /// - Parameters:
   ///   - viewer: The window they belong to.
@@ -80,7 +80,7 @@ final class ViewerPanesModel {
     self.onSessionsRead = onSessionsRead
   }
 
-  /// Reads the shown tab while the window is on screen, every its own pause, and stops reading any other. The
+  /// Reads the shown pane while the window is on screen, every its own pause, and stops reading any other. The
   /// thumbnails being read are let go unless Activity or Screenshots shows, and the large picture follows the window.
   /// With the window gone, nothing shows, and the sessions' list is not read.
   func followPane() {
@@ -112,7 +112,7 @@ final class ViewerPanesModel {
     }
   }
 
-  /// The pause between a tab's readings.
+  /// The pause between a pane's readings.
   ///
   /// - Parameter place: The place.
   /// - Returns: Its pause.
@@ -138,7 +138,7 @@ final class ViewerPanesModel {
     }
   }
 
-  /// Applies one of the other tabs' events.
+  /// Applies one of the other panes' events.
   ///
   /// - Parameter event: What the person did.
   func sendPane(_ event: ViewerEvent) {
@@ -232,12 +232,26 @@ final class ViewerPanesModel {
       let wantsShots = log.entries.contains { $0.operation == ActivityGrouping.screenshotOperation }
       let list = wantsShots ? try? await service.screenshots() : nil
       guard number == work.generation else { return }
+      let grouping = ActivityGrouping(
+        log: log,
+        readAt: readAt,
+        now: readAt,
+        calendar: viewer?.snapshot.zonedCalendar ?? .current
+      )
+      panes.activity.moments =
+        ActivityMoments(
+          grouping,
+          captures: list?.shots ?? panes.shots.shots ?? [],
+          scope: .all,
+          preserving: panes.activity.moments
+        )
+        .moments
       panes.activity.log = log
       panes.activity.readAt = readAt
       panes.activity.failure = nil
       wantIcons(for: log.entries)
       if let list { keep(list) }
-      // What the tab now shows is seen, also while the picture, and with it the status, is paused.
+      // What the pane now shows is seen, also while the picture, and with it the status, is paused.
       viewer?.noteActivitySeen()
     } catch {
       guard number == work.generation, !error.isCancelled else { return }

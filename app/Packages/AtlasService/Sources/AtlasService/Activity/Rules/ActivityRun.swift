@@ -5,6 +5,8 @@ import Foundation
 public struct ActivityRun: Equatable, Sendable, Identifiable {
   /// The run's earliest row: the line keeps its id, which a newer repeat never changes, and says what was done.
   public var entry: ActivityLog.Entry
+  /// Every retained row's identity, for matching moments across overlapping readings.
+  var rowIDs: Set<String>
   /// When the run started: its earliest row's start, when known.
   public var startedAt: Date?
   /// When the run's newest row started, when known: its start for a row on its own.
@@ -27,6 +29,7 @@ public struct ActivityRun: Equatable, Sendable, Identifiable {
   ///   - endedAt: When its newest row started; its start when nil, as for a row on its own.
   init(entry: ActivityLog.Entry, startedAt: Date?, count: Int = 1, shot: String? = nil, endedAt: Date? = nil) {
     self.entry = entry
+    rowIDs = [entry.id]
     self.startedAt = startedAt
     self.endedAt = endedAt ?? startedAt
     self.count = count
