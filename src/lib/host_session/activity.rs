@@ -148,6 +148,30 @@ impl Reading<'_> {
             .collect()
     }
 
+    /// The background jobs `key`'s tasks started, as their records last
+    /// noted them: by ID, name and state, never their arguments.
+    fn jobs(&self, key: &Key) -> Vec<Value> {
+        self.tasks
+            .iter()
+            .filter(|task| task.session == *key)
+            .flat_map(|task| &task.jobs)
+            .map(|job| json!({"id": job.id, "name": job.name, "state": job.state}))
+            .collect()
+    }
+
+    /// The collections `key`'s tasks made: each receipt, and how many files
+    /// and bytes it kept, never their names.
+    fn outputs(&self, key: &Key) -> Vec<Value> {
+        self.tasks
+            .iter()
+            .filter(|task| task.session == *key)
+            .flat_map(|task| &task.outputs)
+            .map(|output| {
+                json!({"receipt": output.receipt, "count": output.files, "bytes": output.bytes})
+            })
+            .collect()
+    }
+
     /// How far the newest unfinished cleanup of `key`'s work got, when one
     /// has not finished.
     fn cleanup(&self, key: &Key) -> Option<crate::task::record::CleanupState> {
@@ -217,6 +241,14 @@ impl Reading<'_> {
         let installs = self.installs(subject.key);
         if !installs.is_empty() {
             reply["installs"] = installs.iter().map(|app| json!({"app": app})).collect();
+        }
+        let jobs = self.jobs(subject.key);
+        if !jobs.is_empty() {
+            reply["jobs"] = json!(jobs);
+        }
+        let outputs = self.outputs(subject.key);
+        if !outputs.is_empty() {
+            reply["outputs"] = json!(outputs);
         }
         if let Some(state) = self.cleanup(subject.key) {
             reply["cleanup"] = json!(state);

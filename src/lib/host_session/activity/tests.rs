@@ -402,3 +402,62 @@ fn a_previous_session_with_leftovers_is_mentioned_and_one_without_is_not() {
     let reply = list(&client, Some(&third), false, None, 10).unwrap();
     assert!(reply.get("previous").is_none(), "the second left nothing");
 }
+
+#[test]
+fn a_sessions_jobs_and_collections_are_listed_without_their_names_or_arguments() {
+    use crate::{
+        daemon::{
+            job::JobState,
+            protocol::{Expected, JobId},
+        },
+        task::{
+            Task,
+            record::{JobEntry, OutputEntry},
+            store::Store as Tasks,
+        },
+    };
+
+    let directory = tempfile::tempdir().unwrap();
+    let client = client(directory.path());
+    let codex = session(Host::Codex, "jobs");
+    act(&client, &codex, "click", json!({"ok": true}));
+    let output = client.output_dir().unwrap();
+    let task = Task::of(codex.key(), None).unwrap();
+    Tasks::at(output)
+        .update(&task, 1, |record| {
+            record.noted_job(JobEntry {
+                id: JobId::parse("7c2e91a04b3f").unwrap(),
+                name: "web".into(),
+                started_at: 1,
+                expected: Expected {
+                    boot: "B".into(),
+                    pid: 4312,
+                    start: [1, 2],
+                    pgid: 4312,
+                },
+                state: JobState::Running,
+                how: None,
+                ended_at: None,
+                later: serde_json::Map::new(),
+            });
+            record.noted_output(OutputEntry {
+                receipt: crate::collect::ReceiptId::parse("1761650000123-a1b2c3").unwrap(),
+                at: 1,
+                files: 2,
+                bytes: 30,
+                later: serde_json::Map::new(),
+            });
+            Ok(())
+        })
+        .unwrap();
+
+    let one = list(&client, Some(&codex), false, None, 10).unwrap();
+    assert_eq!(
+        one["jobs"],
+        json!([{"id": "7c2e91a04b3f", "name": "web", "state": "running"}])
+    );
+    assert_eq!(
+        one["outputs"],
+        json!([{"receipt": "1761650000123-a1b2c3", "count": 2, "bytes": 30}])
+    );
+}
