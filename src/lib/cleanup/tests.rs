@@ -46,6 +46,8 @@ struct Fake {
     daemon_jobs: RefCell<Vec<plan::Job>>,
     /// Whether the helper's list of its jobs cannot be read.
     unlisted: Cell<bool>,
+    /// Whether an earlier outcome is unknown.
+    unknown: Cell<bool>,
     stopped: Cell<bool>,
     log: RefCell<Vec<String>>,
 }
@@ -194,6 +196,10 @@ impl Hands for Fake {
 
     fn stopped(&self) -> bool {
         self.stopped.get()
+    }
+
+    fn unknown(&self) -> bool {
+        self.unknown.get()
     }
 
     fn interrupted(&self) -> bool {
@@ -2059,5 +2065,58 @@ async fn a_job_list_that_cannot_be_read_holds_every_removal_back_until_it_can() 
     let reply = place.apply(&fake, &own(&key)).await;
     assert_eq!(reply["ok"], true, "{reply}");
     assert!(fake.logged().contains(&format!("stop job {unknown}")));
+    assert!(fake.logged().contains(&format!("undo {plan}")));
+}
+
+#[tokio::test]
+async fn while_an_outcome_is_unknown_only_jobs_stop_and_copies_are_checked() {
+    let place = Place::new();
+    let key = session("unknown-outcome");
+    let task = default_task(&key);
+    let copy = place.copy(Some(&key));
+    place.claim(&task, Owned::Copy { id: copy.clone() });
+    let plan = plan_claimed(&place, &task);
+    let job = job_started(&place, &task, "web");
+    let receipt = collected(&place, &task);
+    let fake = Fake::at(&place.root);
+    fake.unknown.set(true);
+
+    let reply = place.apply(&fake, &own(&key)).await;
+    assert_eq!(reply["ok"], false, "{reply}");
+    assert_eq!(reply["state"], "incomplete");
+    assert_eq!(reply["uncertain"], false);
+    assert_eq!(
+        kinds(&reply),
+        [
+            "check-outputs",
+            "quit",
+            "stop-job",
+            "undo-plan",
+            "remove-copy"
+        ]
+    );
+    assert_eq!(
+        states(&reply),
+        ["done", "blocked", "done", "blocked", "blocked"]
+    );
+    for n in [1, 3, 4] {
+        assert_eq!(reply["steps"][n]["reason"], "uncertain", "{reply}");
+    }
+    assert!(
+        reply["error"]
+            .as_str()
+            .unwrap()
+            .contains("outcome is unknown")
+    );
+    let log = fake.logged();
+    assert!(log.contains(&format!("check {receipt}")));
+    assert!(log.contains(&format!("stop job {job}")));
+    assert!(!log.contains(&format!("undo {plan}")), "nothing is undone");
+    assert!(place.folder(&copy).exists(), "nothing is removed");
+
+    // Recovered, the rest runs.
+    fake.unknown.set(false);
+    let reply = place.apply(&fake, &own(&key)).await;
+    assert_eq!(reply["ok"], true, "{reply}");
     assert!(fake.logged().contains(&format!("undo {plan}")));
 }

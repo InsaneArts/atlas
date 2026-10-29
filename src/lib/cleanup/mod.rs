@@ -231,8 +231,9 @@ async fn apply_scope(client: &Client, scope: &Scope) -> Result<Value> {
         may_adopt(loaded.record.as_ref(), &loaded.tasks)?;
     }
     // Held to the end, as close holds it, so no other open, close or
-    // cleanup interleaves with one.
-    let ownership = client.controller.acquire(false)?;
+    // cleanup interleaves with one. While an earlier outcome is unknown, it
+    // only stops background jobs and checks collected copies.
+    let (ownership, unknown) = client.controller.acquire_for_cleanup()?;
     // The session may have acted while this one waited for control: it is
     // judged again, on what its records say now.
     let loaded = Loaded::of(output, scope)?;
@@ -244,7 +245,7 @@ async fn apply_scope(client: &Client, scope: &Scope) -> Result<Value> {
         _ => Adopter::Person,
     });
     apply(
-        &live::Live::acting(client, &ownership),
+        &live::Live::acting(client, &ownership).knowing(unknown),
         output,
         scope,
         &loaded,

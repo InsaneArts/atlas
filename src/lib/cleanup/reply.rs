@@ -189,6 +189,17 @@ fn unfinished(receipt: &Receipt) -> String {
              --apply again."
                 .to_owned()
         }
+        CleanupState::Incomplete
+            if receipt.steps.iter().any(|entry| {
+                entry.reason == Some(super::receipt::Reason::Uncertain)
+                    && entry.state == StepState::Blocked
+            }) =>
+        {
+            "Cleanup is not finished: an earlier action's outcome is unknown, so only background \
+             jobs were stopped and collected copies checked. Recover first (look, then atlas \
+             restart if the action was yours), then run atlas cleanup --apply again."
+                .to_owned()
+        }
         CleanupState::Blocked => "Cleanup stopped: the person stopped agents, or the helper \
              could not be reached to stop a background job. Ask the person before running atlas \
              cleanup --apply again."

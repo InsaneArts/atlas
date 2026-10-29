@@ -71,6 +71,9 @@ pub(crate) trait Hands {
     async fn stop_job(&self, task: &Key, id: &JobId) -> Result<Value>;
     /// Whether the person has stopped agents.
     fn stopped(&self) -> bool;
+    /// Whether an earlier action's outcome is unknown: only steps that
+    /// recover nothing and change no app run until it is recovered.
+    fn unknown(&self) -> bool;
     /// Whether a signal asked this command to stop.
     fn interrupted(&self) -> bool;
 }
@@ -106,10 +109,23 @@ pub(crate) async fn run(
             break;
         }
 
-        let waiting = receipt.steps[place]
-            .after
-            .iter()
-            .any(|n| receipt.step(*n).is_none_or(|entry| !entry.state.finished()));
+        // While an outcome is unknown, only background jobs are stopped and
+        // collected copies checked; the rest waits for recovery.
+        let contained = matches!(
+            receipt.steps[place].step,
+            Step::CheckOutputs { .. } | Step::StopJob { .. } | Step::FindJobs
+        );
+        if hands.unknown() && !contained {
+            receipt.steps[place].set(StepState::Blocked, Some(Reason::Uncertain));
+            save(receipt)?;
+            continue;
+        }
+
+        let waiting = !hands.unknown()
+            && receipt.steps[place]
+                .after
+                .iter()
+                .any(|n| receipt.step(*n).is_none_or(|entry| !entry.state.finished()));
         if waiting {
             receipt.steps[place].set(StepState::Failed, Some(Reason::NeedsStep));
             save(receipt)?;

@@ -29,6 +29,8 @@ pub(crate) struct Live<'a> {
     /// only reads.
     ownership: Option<&'a Ownership>,
     copies: PathBuf,
+    /// Whether an earlier outcome was unknown when control was taken.
+    unknown: bool,
 }
 
 impl<'a> Live<'a> {
@@ -38,6 +40,7 @@ impl<'a> Live<'a> {
             client,
             ownership: None,
             copies: PathBuf::from(crate::handoff::ROOT),
+            unknown: false,
         }
     }
 
@@ -47,6 +50,11 @@ impl<'a> Live<'a> {
             ownership: Some(ownership),
             ..Self::reading(client)
         }
+    }
+
+    /// These hands, acting while an earlier outcome is `unknown`.
+    pub fn knowing(self, unknown: bool) -> Self {
+        Self { unknown, ..self }
     }
 
     fn held(&self) -> Result<&Ownership> {
@@ -153,6 +161,10 @@ impl Hands for Live<'_> {
     async fn stop_job(&self, task: &Key, id: &JobId) -> Result<Value> {
         self.held()?;
         crate::jobs::stop_for_cleanup(self.client, task, id).await
+    }
+
+    fn unknown(&self) -> bool {
+        self.unknown
     }
 
     fn stopped(&self) -> bool {

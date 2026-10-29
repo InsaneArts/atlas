@@ -850,6 +850,33 @@ impl Controller {
 
     /// [`Controller::acquire`] for `purpose`.
     fn acquire_for(&self, purpose: Purpose) -> Result<Ownership> {
+        let lock = self.take_lock()?;
+        match purpose {
+            Purpose::Recovery => self.require_nothing_running()?,
+            Purpose::Change(beside) => self.require_known_beside(beside)?,
+        }
+        Ok(self.owning(lock))
+    }
+
+    /// [`Controller::acquire`] for a cleanup, and whether an earlier
+    /// outcome is unknown. While one is, a cleanup still stops background
+    /// jobs and checks collected copies, which recover nothing and change no
+    /// app, and leaves every other step to after recovery; it holds control
+    /// as any change does, so recovery cannot begin while it runs, and its
+    /// own changes are claimed as any change's are. A command still running,
+    /// the person's control and a Stop refuse it as they refuse any change.
+    pub(crate) fn acquire_for_cleanup(&self) -> Result<(Ownership, bool)> {
+        let lock = self.take_lock()?;
+        let unknown = match self.require_known_beside(Beside::Nothing) {
+            Ok(()) => false,
+            Err(error) if error.code == "uncertain" => true,
+            Err(error) => return Err(error),
+        };
+        Ok((self.owning(lock), unknown))
+    }
+
+    /// The controller lock, taken as [`Controller::take`] takes it.
+    fn take_lock(&self) -> Result<File> {
         // Nothing new starts once a signal asked this command to stop.
         self.interrupt.check()?;
         self.make_directory()?;
@@ -859,17 +886,16 @@ impl Controller {
 
         // Nobody held it, so a note left by a viewer that ended is stale.
         let _ = fs::remove_file(&self.person);
+        Ok(lock)
+    }
 
-        match purpose {
-            Purpose::Recovery => self.require_nothing_running()?,
-            Purpose::Change(beside) => self.require_known_beside(beside)?,
-        }
-
-        Ok(Ownership {
+    /// Ownership of `lock`, held, with the note naming its holder.
+    fn owning(&self, lock: File) -> Ownership {
+        Ownership {
             _lock: lock,
             person: None,
             holder: self.note_holder(),
-        })
+        }
     }
 
     /// Name this controller's host session beside the lock it now holds, or

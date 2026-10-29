@@ -442,3 +442,28 @@ fn an_abandoned_command_is_an_unknown_outcome_and_never_settled() {
         "uncertain"
     );
 }
+
+#[test]
+fn a_cleanup_takes_control_while_an_outcome_is_unknown_and_says_so() {
+    let directory = tempfile::tempdir().unwrap();
+    let (first, other) = pair(directory.path());
+    let (held, unknown) = other.acquire_for_cleanup().unwrap();
+    assert!(!unknown, "nothing is pending");
+    drop(held);
+
+    drop(first.quarantine().unwrap());
+    let (held, unknown) = other.acquire_for_cleanup().unwrap();
+    assert!(unknown);
+    // It holds control: recovery cannot begin while it runs.
+    assert_eq!(first.acquire(true).unwrap_err().code, "busy");
+    drop(held);
+    assert_eq!(other.acquire(false).unwrap_err().code, "uncertain");
+}
+
+#[test]
+fn a_cleanup_still_waits_for_a_command_that_runs() {
+    let directory = tempfile::tempdir().unwrap();
+    let (running, other) = pair(directory.path());
+    let _command = running.quarantine_command().unwrap();
+    assert_eq!(other.acquire_for_cleanup().unwrap_err().code, "busy");
+}

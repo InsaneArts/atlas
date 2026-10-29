@@ -82,7 +82,11 @@ impl Receipt {
         let any = |state: StepState| self.steps.iter().any(|step| step.state == state);
         if any(StepState::Uncertain) {
             CleanupState::Uncertain
-        } else if any(StepState::Blocked) {
+        } else if self
+            .steps
+            .iter()
+            .any(|step| step.state == StepState::Blocked && step.reason != Some(Reason::Uncertain))
+        {
             CleanupState::Blocked
         } else if self.steps.iter().all(|step| step.state.finished()) {
             CleanupState::Complete
@@ -297,6 +301,9 @@ pub(crate) enum Reason {
     OtherAccount,
     /// Blocked: the helper could not be reached, or cannot keep jobs.
     Daemon,
+    /// Blocked: an earlier action's outcome is unknown, so the step waits
+    /// for recovery.
+    Uncertain,
 }
 
 impl Reason {
@@ -312,6 +319,7 @@ impl Reason {
                 | Self::NeedsStep
                 | Self::OutputNotKept
                 | Self::StillStopping
+                | Self::Uncertain
         )
     }
 
@@ -336,6 +344,7 @@ impl Reason {
             Self::Identity => "identity",
             Self::OtherAccount => "other-account",
             Self::Daemon => "daemon",
+            Self::Uncertain => "uncertain",
         }
     }
 }
