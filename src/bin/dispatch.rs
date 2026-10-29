@@ -1,8 +1,8 @@
 //! Command execution, activity attribution and helper-change policy.
 use super::{
     cli::{
-        AgentPicks, AgentsCommand, Command, CursorHookEvent, EnvironmentCommand, JobCommand, OnOff,
-        OnboardingCommand, WindowState,
+        AgentPicks, AgentsCommand, AppTarget, Command, CursorHookEvent, EnvironmentCommand,
+        JobCommand, OnOff, OnboardingCommand, WindowState,
     },
     doctor, help,
     output::print,
@@ -242,15 +242,13 @@ async fn carry_out(
             commands,
             errors,
         } => {
-            if skill {
-                print(&agent::skill());
-            } else if commands {
-                print(&help::command_reference());
-            } else if errors {
-                print(agent::ERRORS);
-            } else {
-                print(agent::GUIDE);
-            }
+            let guide = match (skill, commands, errors) {
+                (true, _, _) => agent::skill(),
+                (_, true, _) => help::command_reference(),
+                (_, _, true) => agent::ERRORS.to_owned(),
+                _ => agent::GUIDE.to_owned(),
+            };
+            print(&guide);
             Ok(Value::Null)
         }
         Command::SessionInfo => atlas::native::session_info(),
@@ -301,66 +299,14 @@ async fn carry_out(
             as_yourself("init")?;
             atlas::init::run(config).await
         }
-        Command::Onboarding { step } => {
-            use atlas::onboarding;
-
-            match step {
-                OnboardingCommand::Status => onboarding::status(config).await,
-                OnboardingCommand::Choose { account } => onboarding::choose(config, &account),
-                OnboardingCommand::Create { account, full_name } => {
-                    onboarding::create(config, &account, &full_name)
-                }
-                OnboardingCommand::Accept {
-                    controller_uid,
-                    controller_name,
-                } => onboarding::accept(controller_uid, &controller_name),
-                OnboardingCommand::AcceptWorker { ticket } => {
-                    onboarding::accept_worker(&ticket).await
-                }
-                OnboardingCommand::Window { state } => {
-                    onboarding::window(state == WindowState::Open)
-                }
-                OnboardingCommand::Forget => onboarding::forget(config),
-                OnboardingCommand::Close { helper: false } => onboarding::close_leftovers(config),
-                OnboardingCommand::Close { helper: true } => onboarding::close_helper(config),
-                OnboardingCommand::Finish => onboarding::finish(config).await,
-                OnboardingCommand::Login { state } => onboarding::login(config, state == OnOff::On),
-            }
-        }
+        Command::Onboarding { step } => onboarding(config, step).await,
         Command::Agents { action } => {
-            match action.unwrap_or(AgentsCommand::Status { brief: false }) {
-                AgentsCommand::Status { brief: true } => {
-                    print(&format!("{}\n", atlas::agents::brief(config, host).await));
-                    Ok(Value::Null)
-                }
-                AgentsCommand::Status { brief: false } => {
-                    let _spinner = Spinner::new("Checking agent connections…");
-                    Ok(atlas::agents::status())
-                }
-                AgentsCommand::CursorHook { event } => {
-                    let event = match event {
-                        CursorHookEvent::SessionStart => "session-start",
-                        CursorHookEvent::BeforeShell => "before-shell",
-                    };
-                    let reply = atlas::agents::hook(config, event, std::io::stdin().lock()).await;
-                    print(&format!("{reply}\n"));
-                    Ok(Value::Null)
-                }
-                AgentsCommand::Project { dir } => {
-                    atlas::agents::project(&dir.unwrap_or_else(|| PathBuf::from(".")))
-                }
-                AgentsCommand::Forget { dir } => {
-                    atlas::agents::forget(&dir.unwrap_or_else(|| PathBuf::from(".")))
-                }
-                AgentsCommand::Install { picks } => {
-                    let _spinner = Spinner::new("Connecting…");
-                    changed(&picks, Change::Connect)
-                }
-                AgentsCommand::Remove { picks } => {
-                    let _spinner = Spinner::new("Disconnecting…");
-                    changed(&picks, Change::Disconnect)
-                }
-            }
+            agents(
+                config,
+                host,
+                action.unwrap_or(AgentsCommand::Status { brief: false }),
+            )
+            .await
         }
         Command::Uninstall {
             keep_config,
@@ -412,54 +358,21 @@ async fn carry_out(
         Command::Doctor { verbose, .. } => Ok(doctor(&client()?, verbose).await),
         Command::VerifyNative { fixture } => atlas::capability::verify(&client()?, &fixture).await,
         Command::Environment {
+            command: Some(command),
+            ..
+        } => environment_command(&client()?, command).await,
+        Command::Environment {
             manifest,
             apply,
-            command,
+            command: None,
         } => {
-            let client = client()?;
-
-            match command {
-                Some(EnvironmentCommand::Profile { profile, apply }) => {
-                    environment::profile::sync(&client, &profile, apply).await
-                }
-                Some(EnvironmentCommand::Run { argv, timeout }) => {
-                    environment::run(&client, argv, Duration::from_secs(timeout))
-                        .await
-                        .map(with_output)
-                }
-                Some(EnvironmentCommand::Apply { plan_id }) => {
-                    environment::apply(&client, &plan_id).await
-                }
-                Some(EnvironmentCommand::List { all }) => environment::list(&client, all).await,
-                Some(EnvironmentCommand::Rollback {
-                    transaction_id,
-                    apply,
-                }) => environment::rollback(&client, &transaction_id, apply).await,
-                Some(EnvironmentCommand::Discover {
-                    tools,
-                    apps,
-                    environment,
-                    references,
-                }) => {
-                    environment::discovery::discover(
-                        &client,
-                        &tools,
-                        &apps,
-                        &environment,
-                        &references,
-                    )
-                    .await
-                }
-                None => {
-                    let manifest = manifest.ok_or_else(|| {
-                    Error::new(
-                        "usage",
-                        "atlas environment needs a profile file, or a command such as discover or run.",
-                    )
-                })?;
-                    environment::sync(&client, &manifest, apply).await
-                }
-            }
+            let manifest = manifest.ok_or_else(|| {
+                Error::new(
+                    "usage",
+                    "atlas environment needs a profile file, or a command such as discover or run.",
+                )
+            })?;
+            environment::sync(&client()?, &manifest, apply).await
         }
         Command::Install => client()?.install(),
         Command::StartInput => client()?.start_input().await,
@@ -494,28 +407,7 @@ async fn carry_out(
             render,
             serve,
             ..
-        } => {
-            let client = client()?;
-            let program = menubar::Program::new(config)?;
-
-            match render {
-                Some(directory) => viewer::render_menubar(client, &program, &directory).await,
-                None if serve || menubar::started_at_login() => {
-                    // Its own session: closing the terminal that started it
-                    // does not hang it up.
-                    if serve {
-                        let _ = nix::unistd::setsid();
-                    }
-                    viewer::serve(client, port, program).await?;
-                    Ok(Value::Null)
-                }
-                None => {
-                    let output = client.output_dir()?.to_path_buf();
-                    menubar::start(config, port, &output).await?;
-                    Ok(Value::Null)
-                }
-            }
-        }
+        } => menu_bar(config, client()?, port, render, serve).await,
         Command::Screenshot {
             target,
             region,
@@ -538,34 +430,13 @@ async fn carry_out(
             count,
             modifiers,
         } => {
-            let client = client()?;
-
-            match (x, y, target.target()) {
-                (Some(x), Some(y), target) => {
-                    agent::act(
-                        &client,
-                        agent::Expected::new(target, window, None)?.as_ref(),
-                        &agent::click(x, y, button.into(), count, &modifiers),
-                    )
-                    .await
-                }
-                (None, None, Some(target)) => {
-                    let filter = agent::ElementFilter { role, name };
-                    agent::click_element(
-                        &client,
-                        &target,
-                        &filter,
-                        button.into(),
-                        count,
-                        &modifiers,
-                    )
-                    .await
-                }
-                _ => Err(Error::new(
-                    "usage",
-                    "Give X Y, or --app/--pid with --name/--role",
-                )),
-            }
+            let filter = agent::ElementFilter { role, name };
+            let press = Press {
+                button: button.into(),
+                count,
+                modifiers,
+            };
+            click(&client()?, (x, y), target, window, &filter, &press).await
         }
         Command::Elements {
             target,
@@ -639,20 +510,7 @@ async fn carry_out(
         } => {
             let expected = target.expected(window, field)?;
             let client = client()?;
-
-            let text = match text {
-                Some(text) if !stdin => text,
-                _ => {
-                    const LIMIT: u64 = 1 << 20;
-                    let mut text = String::new();
-                    std::io::stdin().take(LIMIT + 1).read_to_string(&mut text)?;
-                    if text.len() as u64 > LIMIT {
-                        return Err(Error::new("input", "Text from stdin exceeds 1 MiB"));
-                    }
-                    text
-                }
-            };
-
+            let text = text_to_type(text, stdin)?;
             agent::type_text(&client, &text, expected.as_ref()).await
         }
         Command::Key {
@@ -701,27 +559,7 @@ async fn carry_out(
         }
         Command::Input { actions, target } => {
             let client = client()?;
-            // The most an actions batch may take, in bytes.
-            const LIMIT: u64 = 32 * 1024;
-
-            let bytes = if let Some(path) = actions.strip_prefix('@') {
-                let mut bytes = Vec::new();
-                std::fs::File::open(path)
-                    .map_err(|error| Error::new("io", format!("Could not read {path}: {error}")))?
-                    .take(LIMIT + 1)
-                    .read_to_end(&mut bytes)?;
-                bytes
-            } else {
-                actions.into_bytes()
-            };
-
-            if bytes.len() as u64 > LIMIT {
-                return Err(Error::new(
-                    "input",
-                    "Input exceeds 32 KiB; use short observed batches",
-                ));
-            }
-
+            let bytes = actions_batch(actions)?;
             agent::act(
                 &client,
                 target.expected(None, None)?.as_ref(),
@@ -729,23 +567,7 @@ async fn carry_out(
             )
             .await
         }
-        Command::Job { command } => {
-            let client = client()?;
-            match command {
-                JobCommand::Start {
-                    name,
-                    timeout,
-                    argv,
-                } => atlas::jobs::start(&client, argv, Duration::from_secs(timeout), name).await,
-                JobCommand::List { all } => atlas::jobs::list(&client, all).await,
-                JobCommand::Log { id, bytes, task } => {
-                    atlas::jobs::log(&client, &id, bytes, task.as_ref()).await
-                }
-                JobCommand::Stop { id, grace, task } => {
-                    atlas::jobs::stop(&client, &id, Duration::from_secs(grace), task.as_ref()).await
-                }
-            }
-        }
+        Command::Job { command } => job(&client()?, command).await,
         Command::Collect { files, max_size } => {
             atlas::collect::collect(&client()?, &files, max_size).await
         }
@@ -760,24 +582,252 @@ async fn carry_out(
             let _spinner = Spinner::new("Restarting the helper…");
             client.restart().await
         }
-        Command::Logout { force, yes } => {
-            let client = client()?;
+        Command::Logout { force, yes } => logout(&client()?, force, yes).await,
+    }
+}
 
-            if !yes
-                && !ui::prompt::confirm(
-                    "Log out the helper? Its apps quit, and agents can't use it until you log in \
-                     to it again.",
-                    false,
-                    "pass --yes",
-                )?
-            {
-                return Err(ui::prompt::cancelled());
+/// Which button a click presses, how often, and with which keys held.
+struct Press {
+    button: atlas::actions::Button,
+    count: u8,
+    modifiers: Vec<String>,
+}
+
+/// `atlas click`: at X Y, or on the element `filter` finds in `target`'s
+/// app.
+async fn click(
+    client: &Client,
+    at: (Option<f64>, Option<f64>),
+    target: AppTarget,
+    window: Option<i64>,
+    filter: &agent::ElementFilter,
+    press: &Press,
+) -> Result<Value> {
+    match (at, target.target()) {
+        ((Some(x), Some(y)), target) => {
+            agent::act(
+                client,
+                agent::Expected::new(target, window, None)?.as_ref(),
+                &agent::click(x, y, press.button, press.count, &press.modifiers),
+            )
+            .await
+        }
+        ((None, None), Some(target)) => {
+            agent::click_element(
+                client,
+                &target,
+                filter,
+                press.button,
+                press.count,
+                &press.modifiers,
+            )
+            .await
+        }
+        _ => Err(Error::new(
+            "usage",
+            "Give X Y, or --app/--pid with --name/--role",
+        )),
+    }
+}
+
+/// The text `atlas type` types: as given, or read from stdin, at most 1 MiB.
+fn text_to_type(text: Option<String>, stdin: bool) -> Result<String> {
+    const LIMIT: u64 = 1 << 20;
+
+    match text {
+        Some(text) if !stdin => Ok(text),
+        _ => {
+            let mut text = String::new();
+            read_at_most(std::io::stdin(), LIMIT).read_to_string(&mut text)?;
+            if text.len() as u64 > LIMIT {
+                return Err(Error::new("input", "Text from stdin exceeds 1 MiB"));
             }
-
-            let _spinner = Spinner::new("Logging out the helper…");
-            client.logout(force).await
+            Ok(text)
         }
     }
+}
+
+/// `atlas onboarding`: the steps Atlas.app's setup window runs.
+async fn onboarding(config: &Path, step: OnboardingCommand) -> Result<Value> {
+    use atlas::onboarding;
+
+    match step {
+        OnboardingCommand::Status => onboarding::status(config).await,
+        OnboardingCommand::Choose { account } => onboarding::choose(config, &account),
+        OnboardingCommand::Create { account, full_name } => {
+            onboarding::create(config, &account, &full_name)
+        }
+        OnboardingCommand::Accept {
+            controller_uid,
+            controller_name,
+        } => onboarding::accept(controller_uid, &controller_name),
+        OnboardingCommand::AcceptWorker { ticket } => onboarding::accept_worker(&ticket).await,
+        OnboardingCommand::Window { state } => onboarding::window(state == WindowState::Open),
+        OnboardingCommand::Forget => onboarding::forget(config),
+        OnboardingCommand::Close { helper: false } => onboarding::close_leftovers(config),
+        OnboardingCommand::Close { helper: true } => onboarding::close_helper(config),
+        OnboardingCommand::Finish => onboarding::finish(config).await,
+        OnboardingCommand::Login { state } => onboarding::login(config, state == OnOff::On),
+    }
+}
+
+/// `atlas agents`: which agents are connected, connecting and
+/// disconnecting them, a project's section, and Cursor's hook.
+async fn agents(config: &Path, host: Option<&HostSession>, action: AgentsCommand) -> Result<Value> {
+    match action {
+        AgentsCommand::Status { brief: true } => {
+            print(&format!("{}\n", atlas::agents::brief(config, host).await));
+            Ok(Value::Null)
+        }
+        AgentsCommand::Status { brief: false } => {
+            let _spinner = Spinner::new("Checking agent connections…");
+            Ok(atlas::agents::status())
+        }
+        AgentsCommand::CursorHook { event } => {
+            let event = match event {
+                CursorHookEvent::SessionStart => "session-start",
+                CursorHookEvent::BeforeShell => "before-shell",
+            };
+            let reply = atlas::agents::hook(config, event, std::io::stdin().lock()).await;
+            print(&format!("{reply}\n"));
+            Ok(Value::Null)
+        }
+        AgentsCommand::Project { dir } => {
+            atlas::agents::project(&dir.unwrap_or_else(|| PathBuf::from(".")))
+        }
+        AgentsCommand::Forget { dir } => {
+            atlas::agents::forget(&dir.unwrap_or_else(|| PathBuf::from(".")))
+        }
+        AgentsCommand::Install { picks } => {
+            let _spinner = Spinner::new("Connecting…");
+            changed(&picks, Change::Connect)
+        }
+        AgentsCommand::Remove { picks } => {
+            let _spinner = Spinner::new("Disconnecting…");
+            changed(&picks, Change::Disconnect)
+        }
+    }
+}
+
+/// `atlas environment <command>`: a plan's steps, its runs and its list.
+async fn environment_command(client: &Client, command: EnvironmentCommand) -> Result<Value> {
+    match command {
+        EnvironmentCommand::Profile { profile, apply } => {
+            environment::profile::sync(client, &profile, apply).await
+        }
+        EnvironmentCommand::Run { argv, timeout } => {
+            environment::run(client, argv, Duration::from_secs(timeout))
+                .await
+                .map(with_output)
+        }
+        EnvironmentCommand::Apply { plan_id } => environment::apply(client, &plan_id).await,
+        EnvironmentCommand::List { all } => environment::list(client, all).await,
+        EnvironmentCommand::Rollback {
+            transaction_id,
+            apply,
+        } => environment::rollback(client, &transaction_id, apply).await,
+        EnvironmentCommand::Discover {
+            tools,
+            apps,
+            environment,
+            references,
+        } => {
+            environment::discovery::discover(client, &tools, &apps, &environment, &references).await
+        }
+    }
+}
+
+/// `atlas menubar`: draw its menu into `render`, serve it (when `serve`,
+/// or once started at login), or start it in the background.
+async fn menu_bar(
+    config: &Path,
+    client: Client,
+    port: u16,
+    render: Option<PathBuf>,
+    serve: bool,
+) -> Result<Value> {
+    let program = menubar::Program::new(config)?;
+
+    match render {
+        Some(directory) => viewer::render_menubar(client, &program, &directory).await,
+        None if serve || menubar::started_at_login() => {
+            // Its own session: closing the terminal that started it does
+            // not hang it up.
+            if serve {
+                let _ = nix::unistd::setsid();
+            }
+            viewer::serve(client, port, program).await?;
+            Ok(Value::Null)
+        }
+        None => {
+            let output = client.output_dir()?.to_path_buf();
+            menubar::start(config, port, &output).await?;
+            Ok(Value::Null)
+        }
+    }
+}
+
+/// `atlas job`: start, list, read and stop background jobs.
+async fn job(client: &Client, command: JobCommand) -> Result<Value> {
+    match command {
+        JobCommand::Start {
+            name,
+            timeout,
+            argv,
+        } => atlas::jobs::start(client, argv, Duration::from_secs(timeout), name).await,
+        JobCommand::List { all } => atlas::jobs::list(client, all).await,
+        JobCommand::Log { id, bytes, task } => {
+            atlas::jobs::log(client, &id, bytes, task.as_ref()).await
+        }
+        JobCommand::Stop { id, grace, task } => {
+            atlas::jobs::stop(client, &id, Duration::from_secs(grace), task.as_ref()).await
+        }
+    }
+}
+
+/// `atlas logout`: log the helper out once the person agrees, unless `yes`.
+async fn logout(client: &Client, force: bool, yes: bool) -> Result<Value> {
+    if !yes
+        && !ui::prompt::confirm(
+            "Log out the helper? Its apps quit, and agents can't use it until you log in to it \
+             again.",
+            false,
+            "pass --yes",
+        )?
+    {
+        return Err(ui::prompt::cancelled());
+    }
+
+    let _spinner = Spinner::new("Logging out the helper…");
+    client.logout(force).await
+}
+
+/// An actions batch as given, or read from the file `@path` names: at most
+/// 32 KiB.
+fn actions_batch(actions: String) -> Result<Vec<u8>> {
+    const LIMIT: u64 = 32 * 1024;
+    let too_long = || Error::new("input", "Input exceeds 32 KiB; use short observed batches");
+
+    let bytes = match actions.strip_prefix('@') {
+        Some(path) => {
+            let mut bytes = Vec::new();
+            let file = std::fs::File::open(path)
+                .map_err(|error| Error::new("io", format!("Could not read {path}: {error}")))?;
+            read_at_most(file, LIMIT).read_to_end(&mut bytes)?;
+            bytes
+        }
+        None => actions.into_bytes(),
+    };
+    if bytes.len() as u64 > LIMIT {
+        return Err(too_long());
+    }
+    Ok(bytes)
+}
+
+/// `reader`, read no further than one byte past `limit`: enough to tell
+/// that what it holds is too long.
+fn read_at_most(reader: impl Read, limit: u64) -> impl Read {
+    reader.take(limit + 1)
 }
 
 /// Lock the screen so the person can switch to the helper (or `account`)
