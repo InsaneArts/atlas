@@ -101,7 +101,8 @@ final class ViewerHost {
   ///   - isReady: Whether layout or drawing has reached the state to sample.
   /// - Throws: A failed requirement if the state never arrives, or a sampling failure.
   func render(until failure: String, _ isReady: () throws -> Bool) throws {
-    let bound = ContinuousClock.now.advanced(by: Ceiling.work)
+    let bound = ContinuousClock.now
+      .advanced(by: Ceiling.work)
     while try !isReady() {
       try #require(ContinuousClock.now < bound, Comment(rawValue: failure))
       render()
