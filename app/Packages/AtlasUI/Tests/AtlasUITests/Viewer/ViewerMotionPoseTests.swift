@@ -13,13 +13,7 @@ struct ViewerMotionPoseTests {
     for (name, state) in states {
       switch state.pane {
       case .activity(let activity):
-        let ids = activity.days.flatMap { day in
-          (day.title.isEmpty ? [] : ["day.\(day.id)"])
-            + day.moments.flatMap { moment in
-              ["moment.\(moment.id)"] + moment.steps.map { "step.\($0.id)" }
-                + (moment.more.map { ["more.\($0.moment)"] } ?? [])
-            }
-        }
+        let ids = activity.days.flatMap(Self.rows(of:))
         #expect(Set(ids).count == ids.count, "\(name) draws a row twice")
       case .apps(let apps):
         let ids = apps.cards
@@ -29,6 +23,17 @@ struct ViewerMotionPoseTests {
         break
       }
     }
+  }
+
+  private static func rows(of day: ViewerActivityDay) -> [String] {
+    let title: [String] = day.title.isEmpty ? [] : ["day.\(day.id)"]
+    return title + day.moments.flatMap(rows(in:))
+  }
+
+  private static func rows(in moment: ViewerActivityMoment) -> [String] {
+    let steps: [String] = moment.steps.map { "step.\($0.id)" }
+    let more: [String] = moment.more.map { ["more.\($0.moment)"] } ?? []
+    return ["moment.\(moment.id)"] + steps + more
   }
 
   @MainActor

@@ -8,7 +8,13 @@ import Testing
 @Suite("ScreenZoom", .serialized, AppKitState())
 @MainActor
 struct ScreenZoomTests {
-  @Test("the small screen and the stage share one geometry id")
+  @Test(
+    "the small screen and the stage share one geometry id",
+    .disabled(
+      if: ProcessInfo.processInfo.environment["CI"] != nil,
+      "macOS 26 draws the zoom's held first frame differently; it is checked on macOS 27"
+    )
+  )
   func theSmallScreenAndTheStageShareOneGeometryID() throws {
     // On the Screen, the stage's picture fills the middle of the window.
     #expect(try ViewerHost(try Self.state(.screen)).colour(at: Self.middle) == .stage)
@@ -16,9 +22,13 @@ struct ScreenZoomTests {
     // to shrink into the corner. Two pictures would leave the stage's own in the middle as it fades.
     let leaving = try ViewerHost.firstFrame(
       from: try Self.state(.screen),
-      to: try Self.state(.activity),
-      at: [Self.middle]
-    )
+      to: try Self.state(.activity)
+    ) { host in
+      try host.render(until: "the incoming small screen has not been laid out at the held first frame") {
+        host.frames["picture \(PictureColour.corner.rawValue)"] != nil
+      }
+      return try host.colours(at: [Self.middle])
+    }
     #expect(leaving == [.corner])
     // Over Activity, the small screen sits in its corner, drawn through the window's live slot (which paints its
     // picture blue here), and Activity has the middle.
@@ -29,9 +39,13 @@ struct ScreenZoomTests {
     // never in the middle, where it would stand apart from it.
     let coming = try ViewerHost.firstFrame(
       from: try Self.state(.activity),
-      to: try Self.state(.screen),
-      at: [Self.middle, Self.corner]
-    )
+      to: try Self.state(.screen)
+    ) { host in
+      try host.render(until: "the incoming stage picture has not been laid out at the held first frame") {
+        host.frames["picture \(PictureColour.stage.rawValue)"] != nil
+      }
+      return try host.colours(at: [Self.middle, Self.corner])
+    }
     #expect(coming == [nil, .corner])
   }
 

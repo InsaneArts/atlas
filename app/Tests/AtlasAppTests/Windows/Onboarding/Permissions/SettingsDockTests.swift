@@ -8,78 +8,9 @@ import Testing
 @MainActor
 @Suite("SettingsDock", .serialized, AppKitState())
 struct SettingsDockTests {
-  /// A see-through window that takes no clicks, ordered in so the dock counts it as shown, docked beside a sample
-  /// System Settings window, its first glide ended.
-  final class Docked {
-    /// The panel's window.
-    let window: NSWindow
-    /// The glides it was given.
-    let glides = HeldGlides()
-    /// System Settings' window frame, which a test moves.
-    let settings: SettingsFrame
-    /// The clock the looks wait on.
-    let clock = ManualClock()
-    /// Whether a mouse button is down, as the test says.
-    let pointer = HeldPointer()
-    /// The screen's visible frame.
-    let visible: CGRect
-    /// The ghost the dock shows.
-    let ghost = DragGhost()
-    /// The panel's frame size.
-    let size = OnboardingPlacement.size(guiding: true)
-    /// The dock under test.
-    let dock: SettingsDock
-
-    /// Docks the panel.
-    ///
-    /// - Parameter reduceMotion: Whether following should move at once.
-    /// - Throws: A failed requirement with no screen.
-    init(reduceMotion: @escaping @MainActor () -> Bool = { false }) throws {
-      let screen = try #require(NSScreen.main, "a screen to dock on")
-      visible = screen.visibleFrame
-      window = NSWindow(
-        contentRect: NSRect(origin: visible.origin, size: OnboardingPlacement.size(guiding: false)),
-        styleMask: [.borderless],
-        backing: .buffered,
-        defer: false
-      )
-      window.isReleasedWhenClosed = false
-      window.alphaValue = 0
-      window.ignoresMouseEvents = true
-      window.orderFrontRegardless()
-      settings = SettingsFrame(CGRect(x: visible.minX + 40, y: visible.maxY - 560, width: 600, height: 520))
-      let glide = WindowGlide(window: window, reduceMotion: { false }, motion: glides.motion)
-      dock = SettingsDock(
-        window: window,
-        glide: glide,
-        clock: clock,
-        ghost: ghost,
-        settingsFrame: { [settings] in settings.frame },
-        waitingFor: { nil },
-        lost: {},
-        mouseDown: { [pointer] in pointer.isDown },
-        reduceMotion: reduceMotion
-      )
-      dock.start(size: size, visible: visible)
-      glides.endAll()
-    }
-
-    /// Where the panel belongs beside System Settings now.
-    var place: CGPoint {
-      OnboardingPlacement.docked(frame: size, beside: settings.frame, visible: visible)
-    }
-
-    /// Ends the dock and the window.
-    func close() {
-      dock.close()
-      ghost.close()
-      window.orderOut(nil)
-    }
-  }
-
   @Test("the first move into the dock glides, and following a short move of System Settings moves at once")
   func theFirstMoveGlidesAndFollowingIsInstant() async throws {
-    let docked = try Docked()
+    let docked = try SettingsDockFixture()
     defer { docked.close() }
     #expect(docked.glides.travels.count == 1, "the window glides into the dock")
     #expect(docked.glides.contentFades == [0, 1], "its content fades around the glide")
@@ -87,7 +18,9 @@ struct SettingsDockTests {
     #expect(first.origin == docked.place)
 
     // The person moves System Settings a little: at the next look the window is beside it again, set there.
+    let before = docked.place
     docked.settings.frame = docked.settings.frame.offsetBy(dx: 12, dy: -10)
+    try #require(docked.place == CGPoint(x: before.x + 12, y: before.y - 10), "a short move stays on the same side")
     try await docked.clock.untilSleeping(for: SettingsDock.followEvery, "the dock waits for its next look")
     docked.clock.advance(by: SettingsDock.followEvery)
     try await docked.clock.untilSleeping(for: SettingsDock.followEvery, "the dock looked and waits again")
@@ -97,14 +30,19 @@ struct SettingsDockTests {
 
   @Test("while the person drags System Settings, the panel follows it every frame, not every eighth of a second")
   func draggingIsFollowedEveryFrame() async throws {
-    let docked = try Docked()
+    let docked = try SettingsDockFixture()
     defer { docked.close() }
     try await docked.clock.untilSleeping(for: SettingsDock.followEvery, "the dock waits for its next look")
     docked.pointer.isDown = true
     docked.clock.advance(by: SettingsDock.followEvery)
-    for step in 1...6 {
+    for step in 1...SettingsDockFixture.dragFrames {
       try await docked.clock.untilSleeping(for: SettingsDock.followFrame, "the dock never looked a frame later")
-      docked.settings.frame = docked.settings.frame.offsetBy(dx: 8, dy: 0)
+      let before = docked.place
+      docked.settings.frame = docked.settings.frame.offsetBy(dx: SettingsDockFixture.dragStep, dy: 0)
+      try #require(
+        docked.place == CGPoint(x: before.x + SettingsDockFixture.dragStep, y: before.y),
+        "frame \(step) asks for one short following move"
+      )
       docked.clock.advance(by: SettingsDock.followFrame)
       try await docked.clock.untilSleeping(for: SettingsDock.followFrame, "the dock stopped following")
       #expect(docked.window.frame.origin == docked.place, "frame \(step) of the drag")
@@ -116,7 +54,7 @@ struct SettingsDockTests {
     arguments: [false, true]
   )
   func aJumpRespectsReduceMotion(reduced: Bool) async throws {
-    let docked = try Docked(reduceMotion: { reduced })
+    let docked = try SettingsDockFixture(reduceMotion: { reduced })
     defer { docked.close() }
     let start = docked.window.frame.origin
     docked.settings.frame = docked.settings.frame.offsetBy(dx: 0, dy: -200)

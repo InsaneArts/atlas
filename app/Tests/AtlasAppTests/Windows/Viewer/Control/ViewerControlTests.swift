@@ -290,7 +290,7 @@ struct ViewerControlTests {
     } onChange: {
       MainActor.assumeIsolated {
         // Unstructured, so it runs as the next job on the main actor, after the turn that set the lease.
-        Task {
+        _ = Task<Void, Never> { @MainActor in
           let state = viewer.state
           let seen = [
             viewer.control.canInput,

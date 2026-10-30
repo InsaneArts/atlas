@@ -9,6 +9,11 @@ import { ViewerClient, recordPath, textChunks } from '../scripts/viewer-client.m
 
 const wait = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
+async function until(condition, limit = 2000) {
+  const deadline = Date.now() + limit;
+  while (!condition() && Date.now() < deadline) await wait(10);
+}
+
 /** A local service that records every request and answers like the real one. */
 async function stub(answer = () => null) {
   const requests = [];
@@ -119,7 +124,9 @@ test('input names the latest frame, and the keep-alive renews with it', async ()
   const client = new ViewerClient(service.url, { frameEvery: 20, renewEvery: 50 });
   try {
     await client.acquire();
-    await wait(140);
+    await until(
+      () => posts(service.requests, 'control/renew').length >= 2 && client.latest.id !== 'frame-1',
+    );
     const latest = client.latest.id;
     await client.key('cmd+a');
     const input = posts(service.requests, 'input')[0].body;
@@ -164,7 +171,7 @@ test('a refused renewal ends control and is the next error', async () => {
   const client = new ViewerClient(service.url, { frameEvery: 1000, renewEvery: 20 });
   try {
     await client.acquire();
-    await wait(80);
+    await until(() => client.lease === null);
     assert.equal(client.lease, null);
     await assert.rejects(client.key('escape'), { code: 'lease-lost' });
   } finally {
@@ -265,7 +272,12 @@ test('a failed renewal stops input and still sends the owner release', async () 
   const client = new ViewerClient(service.url, { frameEvery: 1000, renewEvery: 20 });
   try {
     await client.acquire();
-    await wait(80);
+    await until(
+      () =>
+        client.lease === null &&
+        client.owner === null &&
+        posts(service.requests, 'control/release').length > 0,
+    );
     assert.equal(client.lease, null);
     assert.equal(client.owner, null);
     await assert.rejects(client.key('escape'), { status: 503 });
