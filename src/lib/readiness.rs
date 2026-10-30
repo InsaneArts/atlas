@@ -77,7 +77,22 @@ pub(crate) fn tool_status(reply: &Value, output: &[u8]) -> (&'static str, String
 /// helper PATH when no environment profile is installed.
 async fn probe(client: &Client, home: &str, name: &str) -> Result<(Value, &'static str)> {
     let argv = vec![name.to_owned(), "--version".to_owned()];
-    match environment_run(client, argv, crate::client::RUN_TIMEOUT).await {
+    probe_using(
+        client,
+        home,
+        name,
+        environment_run(client, argv, crate::client::RUN_TIMEOUT),
+    )
+    .await
+}
+
+async fn probe_using(
+    client: &Client,
+    home: &str,
+    name: &str,
+    environment: impl Future<Output = Result<Value>>,
+) -> Result<(Value, &'static str)> {
+    match environment.await {
         Ok(reply) => Ok((reply, "environment")),
         // An older helper build refused with the generic code; its wording
         // is matched only for that.
@@ -270,7 +285,7 @@ pub async fn readiness(client: &Client, tools: &[String], apps: &[String]) -> Re
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::test_support::{Helper, completed, exited};
+    use crate::test_support::{Helper, UID, completed};
 
     fn reply(exit: i64) -> Value {
         json!({"exitCode": exit, "timedOut": false, "signal": null})
@@ -391,40 +406,64 @@ mod tests {
     /// until its reply settles it.
     #[tokio::test]
     async fn the_path_version_probe_runs_under_control() {
+        if !crate::test_support::isolated(
+            "readiness::tests::the_path_version_probe_runs_under_control",
+        ) {
+            return;
+        }
         let directory = tempfile::tempdir().unwrap();
-        let (client, helper) = helped(directory.path());
+        let (client, helper) = Helper::client(directory.path(), UID);
         let mut fallbacks = 0;
 
-        let report = helper
-            .serve(readiness(&client, &["cat".into()], &[]), |request| {
-                let argv = request["argv"].as_array().unwrap();
-                if argv[1] == "environment-worker" {
-                    let packet = std::path::Path::new(argv[2].as_str().unwrap());
-                    let name = packet.parent().unwrap().file_name().unwrap();
-                    let refusal = json!({"ok": false, "code": crate::environment::NO_PROFILE,
-                        "error": "No helper environment profile is installed",
-                        "refusal": name.to_string_lossy()});
-                    return Some(exited(
-                        crate::environment::WORKER_REFUSED,
-                        &refusal.to_string(),
-                    ));
-                }
-
-                if argv[0] == "/usr/bin/env" {
+        // Profile staging has its own account and ACL tests in environment.
+        // This test controls its result without starting timed subprocesses.
+        let missing = async { Err(Error::new(crate::environment::NO_PROFILE, "No profile")) };
+        let (reply, context) = helper
+            .serve(
+                probe_using(&client, "/Users/helper", "cat", missing),
+                |request| {
+                    let argv = request["argv"].as_array().unwrap();
+                    assert_eq!(argv[0], "/usr/bin/env");
                     fallbacks += 1;
                     assert_eq!(argv[2..], [json!("cat"), json!("--version")]);
                     assert!(!client.controller.pending().unwrap().is_empty());
                     assert_eq!(client.controller.acquire(false).unwrap_err().code, "busy");
-                    return Some(completed("cat 1.0\n"));
-                }
-
-                found(request)
-            })
+                    Some(completed("cat 1.0\n"))
+                },
+            )
             .await
             .unwrap();
         assert_eq!(fallbacks, 1);
-        assert_eq!(report["items"][0]["status"], "ready", "{report}");
-        assert_eq!(report["items"][0]["context"], "path");
+        assert_eq!(context, "path");
+        assert_eq!(
+            tool_status(&reply, &run_output(&reply, 16384).unwrap()).0,
+            "ready"
+        );
+        assert!(client.controller.pending().unwrap().is_empty());
+    }
+
+    #[tokio::test]
+    async fn a_profile_probe_success_or_failure_is_returned_without_a_path_fallback() {
+        let directory = tempfile::tempdir().unwrap();
+        let client = crate::test_support::client(directory.path());
+        let expected = completed("cat 1.0\n");
+        let (reply, context) = probe_using(&client, "/Users/helper", "cat", async {
+            Ok(expected.clone())
+        })
+        .await
+        .unwrap();
+        assert_eq!(reply, expected);
+        assert_eq!(context, "environment");
+
+        for code in [Code::Permission, Code::Busy, Code::Environment] {
+            let error = probe_using(&client, "/Users/helper", "cat", async {
+                Err(Error::new(code, "Profile probe failed"))
+            })
+            .await
+            .unwrap_err();
+            assert_eq!(error.code, code);
+            assert_eq!(error.error, "Profile probe failed");
+        }
         assert!(client.controller.pending().unwrap().is_empty());
     }
 
