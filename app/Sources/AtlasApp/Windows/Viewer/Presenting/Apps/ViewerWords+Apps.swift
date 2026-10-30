@@ -1,6 +1,6 @@
 import Foundation
 
-/// The Apps tab's words that depend on what it holds: unnamed apps and windows, the counts, the groups, the cards'
+/// The Apps pane's words that depend on what it holds: unnamed apps and windows, the counts, the groups, the cards'
 /// lines and tags, a window's labels and the empty messages. Fixed copy stays in its view.
 extension ViewerWords {
   /// A window with no title.

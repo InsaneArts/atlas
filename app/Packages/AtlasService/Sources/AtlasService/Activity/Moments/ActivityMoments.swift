@@ -1,6 +1,6 @@
 import Foundation
 
-/// The Activity tab's moments, all pure: which lines form one moment, which the filters and the search keep, which
+/// The Activity pane's moments, all pure: which lines form one moment, which the filters and the search keep, which
 /// moments show their steps, and what followed a problem. Moments form from every line in scope before any filter
 /// applies, so a moment keeps its identity whichever filter shows it. Time comes in and is never read.
 public struct ActivityMoments: Sendable {
@@ -14,15 +14,13 @@ public struct ActivityMoments: Sendable {
   static let mostOpen = 3
   /// 120 s: how soon after a problem the same stream's next line must start to be what it did next.
   static let followUpSpan: TimeInterval = 120
-  /// 60: the most moments the tab draws, which the service's 200 rows never pass in practice.
+  /// 60: the most moments the pane draws, which the service's 200 rows never pass in practice.
   public static let mostMoments = 60
 
   /// Every moment in scope, newest first, each with every line.
   public var moments: [ActivityMoment]
   /// Every line in scope, newest first, each with its stream.
   var runs: [(stream: ActivityStream, run: ActivityRun)]
-  /// The time now, which a moment's end is measured from.
-  var now: Date
 
   /// Forms the moments of one reading of the log.
   ///
@@ -30,7 +28,7 @@ public struct ActivityMoments: Sendable {
   ///   - grouping: The rules over the reading, which say when each row started and on which day.
   ///   - captures: The screenshots the service lists, for the screenshot rows.
   ///   - scope: Whose rows to form moments from.
-  ///   - previous: The preceding reading's moments, for retaining identities where their rows overlap.
+  ///   - previous: The preceding reading's moments, for retaining identities where their actions overlap.
   public init(
     _ grouping: ActivityGrouping,
     captures: [Screenshot],
@@ -43,27 +41,47 @@ public struct ActivityMoments: Sendable {
     }
     .filter { scope.admits($0.run.entry) }
     runs = days.map { (ActivityStream($0.run.entry), $0.run) }
-    now = grouping.now
     moments = Self.formed(days)
+    Self.reconcile(&moments, preserving: previous)
+  }
+
+  /// Reserves inherited identities before naming split fragments. A fragment's oldest action can have seeded an
+  /// identity now inherited by another fragment, so its seed alone is no longer necessarily available.
+  private static func reconcile(_ moments: inout [ActivityMoment], preserving previous: [ActivityMoment]) {
     var available = previous
+    var inherited: Set<Int> = []
+    var reserved: Set<String> = []
     for index in moments.indices {
       let moment = moments[index]
-      let rows = Set(moment.runs.flatMap(\.rowIDs))
+      let actions = Set(moment.runs.flatMap(\.logicalIDs))
       let matches = available.indices.filter {
         available[$0].stream == moment.stream && available[$0].day == moment.day
-          && !rows.isDisjoint(with: available[$0].runs.flatMap(\.rowIDs))
+          && !reserved.contains(available[$0].id)
+          && !actions.isDisjoint(with: available[$0].runs.flatMap(\.logicalIDs))
       }
       guard
         let match = matches.max(by: {
-          rows.intersection(available[$0].runs.flatMap(\.rowIDs)).count
-            < rows.intersection(available[$1].runs.flatMap(\.rowIDs)).count
+          actions.intersection(available[$0].runs.flatMap(\.logicalIDs)).count
+            < actions.intersection(available[$1].runs.flatMap(\.logicalIDs)).count
         })
       else { continue }
       moments[index].id = available.remove(at: match).id
+      inherited.insert(index)
+      reserved.insert(moments[index].id)
+    }
+    for index in moments.indices where !inherited.contains(index) {
+      let seed = moments[index].id
+      var identity = seed
+      var fragment = 1
+      while !reserved.insert(identity).inserted {
+        identity = "\(seed)|fragment:\(fragment)"
+        fragment += 1
+      }
+      moments[index].id = identity
     }
   }
 
-  /// The moments the tab lists: each with only the lines the filter and the search keep, a moment left with none
+  /// The moments the pane lists: each with only the lines the filter and the search keep, a moment left with none
   /// left out, at most ``mostMoments``. The search matches what a line did, or the moment's app by name, which keeps
   /// each of its lines the filter keeps.
   ///
@@ -89,16 +107,18 @@ public struct ActivityMoments: Sendable {
   /// that ended within ``openSpan`` are open, at most ``mostOpen`` in all, the held ones counted.
   ///
   /// - Parameters:
-  ///   - shown: The moments the tab lists, newest first.
-  ///   - filter: The tab's filter.
+  ///   - shown: The moments the pane lists, newest first.
+  ///   - filter: The pane's filter.
   ///   - uncertainRow: The id of the row whose outcome is unknown, while one is.
   ///   - choices: The person's own choice for a moment, by its id: true to open it, false to fold it.
+  ///   - now: The current time, measured against each moment's end without reforming it.
   /// - Returns: Each moment's fold, by its id.
   public func folds(
     of shown: [ActivityMoment],
     filter: ActivityFilter,
     uncertainRow: String?,
-    choices: [String: Bool]
+    choices: [String: Bool],
+    now: Date
   ) -> [String: ActivityMoment.Fold] {
     var folds: [String: ActivityMoment.Fold] = [:]
     var opened = 0

@@ -44,12 +44,12 @@ public struct ActivityGrouping: Sendable {
     entry.startedAt ?? entry.ageSeconds.map { readAt.addingTimeInterval(-$0) }
   }
 
-  /// How many rows started today, whatever the filter or the search: the pane's count.
+  /// How many actions started today, whatever the filter or the search: the pane's count.
   public var countToday: Int {
     countToday(in: .all)
   }
 
-  /// How many of a scope's rows started today, whatever the filter or the search: the pane's count for one host
+  /// How many of a scope's actions started today, whatever the filter or the search: the pane's count for one host
   /// session.
   ///
   /// - Parameter scope: Whose rows to count.
@@ -61,7 +61,26 @@ public struct ActivityGrouping: Sendable {
           && start(of: entry)
             .map { calendar.isDate($0, inSameDayAs: now) } ?? false
       }
-      .count
+      .reduce(0) { Self.addingActions($1.count, to: $0) }
+  }
+
+  /// How many actions a row or an already aggregated run carries, with at least one for a missing or invalid count.
+  ///
+  /// - Parameter count: The recorded action count, or nil when none was supplied.
+  /// - Returns: The action count, defaulting to one.
+  static func actionCount(_ count: Int?) -> Int {
+    max(1, count ?? 1)
+  }
+
+  /// Adds a row or run's actions, saturating like the service so valid decoded counts cannot trap the app.
+  ///
+  /// - Parameters:
+  ///   - count: The action count, defaulting to one when missing or invalid.
+  ///   - total: The nonnegative total so far.
+  /// - Returns: The total, capped at the largest representable count.
+  static func addingActions(_ count: Int?, to total: Int) -> Int {
+    let (sum, overflow) = total.addingReportingOverflow(actionCount(count))
+    return overflow ? .max : sum
   }
 
   /// The capture each screenshot row that worked took: the one the row names, when the screenshots list it; for a row
@@ -121,10 +140,13 @@ public struct ActivityGrouping: Sendable {
         var joined = ActivityRun(
           entry: entry,
           startedAt: started,
-          count: last.run.count + 1,
+          count: Self.addingActions(1, to: last.run.count),
           endedAt: last.run.endedAt
         )
-        joined.rowIDs = last.run.rowIDs.union(run.rowIDs)
+        joined.entry.bundleId = joined.entry.bundleId ?? last.run.entry.bundleId
+        joined.entry.app = joined.entry.app ?? last.run.entry.app
+        joined.logicalIDs = last.run.logicalIDs.union(run.logicalIDs)
+        joined.actions = Self.addingActions(run.actions, to: last.run.actions)
         runs[runs.count - 1].run = joined
       } else {
         runs.append((current, run))
@@ -145,6 +167,11 @@ public struct ActivityGrouping: Sendable {
       newerStart.timeIntervalSince(olderEnd) > ActivityMoments.momentGap
     {
       return false
+    }
+    switch (ActivityApp(newer.entry), ActivityApp(older.entry)) {
+    case (nil, nil): break
+    case (let above?, let below?) where above.isSame(as: below): break
+    default: return false
     }
     let above = newer.entry
     let below = older.entry

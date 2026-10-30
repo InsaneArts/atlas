@@ -103,6 +103,30 @@ struct ViewerPresenterSessionsTests {
     #expect(sessions.choices.last == .one("c0ffee5e5510"), "↓ reaches it where it is drawn")
   }
 
+  @Test("a selected ended session stays represented when a newer ending pushes it past the recent history cap")
+  func selectedHistoryOutlivesTheRecentCap() throws {
+    var snapshot = try ViewerSnapshot.listing(Self.three)
+    var history =
+      (0..<ViewerPresenter.mostEnded)
+      .map {
+        HostSessionRecord(key: "ended-\($0)", name: "Codex · \($0)", host: .codex, state: .ended)
+      }
+    let chosen = try #require(history.last?.key)
+    snapshot.panes.sessions.list = HostSessionList(sessions: history)
+    snapshot.session.chosenSession = .one(chosen)
+    history.insert(HostSessionRecord(key: "new", name: "Codex · new", host: .codex, state: .ended), at: 0)
+    snapshot.panes.sessions.list = HostSessionList(sessions: history)
+    for open in [false, true] {
+      snapshot.session.endedShown = open
+      let sessions = ViewerPresenter.sessions(snapshot)
+      #expect(sessions.rows(.ended).contains { $0.id == chosen })
+      #expect(sessions.endedCount == ViewerPresenter.mostEnded + 1)
+      #expect(snapshot.shownSessions == .one(chosen))
+    }
+    snapshot.session.chosenSession = .all
+    #expect(ViewerPresenter.sessions(snapshot).rows(.ended).count == ViewerPresenter.mostEnded)
+  }
+
   @Test("the search keeps the rows whose name or line holds the query and folds empty sections")
   func theSearchKeepsTheRowsThatHoldTheQuery() throws {
     var snapshot = try ViewerSnapshot.listing(Self.three)
@@ -235,11 +259,8 @@ struct ViewerPresenterSessionsTests {
     snapshot.panes.activity.log = ActivityLog(entries: rows)
     snapshot.panes.activity.readAt = snapshot.date
     let moments = ViewerPresenter.activity(snapshot)
-      .items
-      .compactMap { item -> ViewerActivityMoment? in
-        if case .moment(let moment) = item { return moment }
-        return nil
-      }
+      .days
+      .flatMap(\.moments)
     #expect(moments.map(\.session?.name) == ["Terminal", "Cursor · opie", "You", "Claude Code · understudy"])
     #expect(moments.map(\.title) == ["Commands", "Opie", "Opie", "TextEdit"])
     #expect(moments[2].session?.icon == nil, "the person's own moment leads with their mark")
@@ -283,7 +304,7 @@ struct ViewerPresenterSessionsTests {
       HostSessionRecord(key: "c0ffee5e5510", name: "Pi · notes-sync", host: .pi, state: .ended)
     ])
     #expect(snapshot.shownSessions == .one("c0ffee5e5510"), "the list still names it as ended")
-    var unread = ViewerSnapshot()
+    var unread = ViewerSnapshot.presenterSample
     unread.session.chosenSession = .one("3f9a1c07b2e4")
     #expect(unread.shownSessions == .one("3f9a1c07b2e4"), "before the first reading the choice holds")
   }

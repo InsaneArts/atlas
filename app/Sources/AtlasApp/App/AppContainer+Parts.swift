@@ -32,7 +32,11 @@ extension AppContainer: WindowParts {
         loginTime: LoginRecords.loginTime(of:),
         shotOutlet: .live(NSWorkspace.shared),
         openSettings: coordinator.panelLinks().openSettings,
-        icons: appIcons
+        icons: appIcons,
+        appWindows: {
+          let outcome = await commands.run(.listWindows)
+          return outcome.ok ? outcome.decode(HelperOccluderList.self) : nil
+        }
       )
     )
   }

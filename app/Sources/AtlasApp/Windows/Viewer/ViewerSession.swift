@@ -61,7 +61,7 @@ struct ViewerSession {
   var toast: String?
   /// Take Control's refusals counted, so each one is its own footer line and only the newest toast's wait removes it.
   var refusals = 0
-  /// What the person has seen of the helper's activity: what the Activity tab showed, or the first reading's; nil
+  /// What the person has seen of the helper's activity: what the Activity pane showed, or the first reading's; nil
   /// before the first reading, when nothing is unseen yet.
   var activitySeen: ViewerSeenActivity?
   /// The corner the small screen keeps to, as the person last left it.

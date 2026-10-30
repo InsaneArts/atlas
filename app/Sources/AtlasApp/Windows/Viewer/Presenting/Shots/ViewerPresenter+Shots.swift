@@ -193,7 +193,7 @@ extension ViewerPresenter {
   /// - Returns: "Mon 19 Oct", or empty for any other group.
   static func dayName(_ period: ShotPeriod, _ snapshot: ViewerSnapshot) -> String {
     guard case .day(let start) = period else { return "" }
-    return Words.dayName(start, locale: snapshot.locale, timeZone: snapshot.timeZone)
+    return Words.dayName(start, locale: snapshot.locale, calendar: snapshot.zonedCalendar, timeZone: snapshot.timeZone)
   }
 
   /// A moment on the person's clock.
@@ -203,6 +203,6 @@ extension ViewerPresenter {
   ///   - snapshot: What the controller holds.
   /// - Returns: "10:31:44".
   static func clock(_ date: Date, _ snapshot: ViewerSnapshot) -> String {
-    Words.clockTime(date, locale: snapshot.locale, timeZone: snapshot.timeZone)
+    Words.clockTime(date, locale: snapshot.locale, calendar: snapshot.zonedCalendar, timeZone: snapshot.timeZone)
   }
 }

@@ -124,9 +124,8 @@
     ///   - snapshot: The facts to change.
     static func onPlace(_ place: ViewerPlace, at date: Date, _ snapshot: inout ViewerSnapshot) {
       snapshot.session.place = place
+      onClock(&snapshot)
       snapshot.date = date
-      snapshot.timeZone = TimeZone(secondsFromGMT: 0) ?? .current
-      snapshot.locale = Locale(identifier: "de_DE")
     }
 
     @Test("each main window sample is what the window shows for the same facts")

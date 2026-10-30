@@ -13,7 +13,7 @@ struct ViewerPresenterTests {
   /// - Parameter status: What the service reports.
   /// - Returns: The snapshot.
   func watching(_ status: ViewerStatus) -> ViewerSnapshot {
-    var snapshot = ViewerSnapshot()
+    var snapshot = ViewerSnapshot.presenterSample
     snapshot.reading.status = status
     snapshot.reading.hasStatus = true
     snapshot.reading.ready = true
@@ -37,7 +37,7 @@ struct ViewerPresenterTests {
     #expect(ViewerPresenter.status(snapshot).label == "Connecting")
     snapshot.reading.status = try status(["overview": ["mode": "stopped", "state": "stopped"]])
     #expect(ViewerPresenter.status(snapshot).label == "Stopped", "a stop the window knows of stays")
-    #expect(ViewerPresenter.status(ViewerSnapshot()).label == "Connecting")
+    #expect(ViewerPresenter.status(ViewerSnapshot.presenterSample).label == "Connecting")
   }
 
   @Test("the account reads the full name, then the session's user, then the short name, then Helper")
@@ -147,7 +147,7 @@ struct ViewerPresenterTests {
     notReady.reading.status = try status(["overview": ["mode": "unavailable", "state": "notReady"]])
     notReady.reading.ready = false
     #expect(ViewerPresenter.state(notReady).footer.controls.control == nil)
-    #expect(ViewerPresenter.state(ViewerSnapshot()).footer.controls.control == nil, "connecting")
+    #expect(ViewerPresenter.state(ViewerSnapshot.presenterSample).footer.controls.control == nil, "connecting")
     let idle = watching(try status(["overview": ["mode": "observing", "state": "idle"]]))
     #expect(ViewerPresenter.state(idle).footer.controls.control?.event == .takeControl, "a ready helper offers it")
   }
@@ -168,7 +168,7 @@ struct ViewerPresenterTests {
     "the screen explains a missing picture: logged out, paused, connecting or not ready, with the button that helps"
   )
   func theScreenExplainsAMissingPicture() throws {
-    var snapshot = ViewerSnapshot()
+    var snapshot = ViewerSnapshot.presenterSample
     #expect(ViewerPresenter.state(snapshot).screen.empty?.message.headline == ViewerWords.connectingHeadline)
     snapshot.session.paused = true
     #expect(ViewerPresenter.state(snapshot).screen.empty?.message.headline == ViewerWords.pausedHeadline)
@@ -182,7 +182,7 @@ struct ViewerPresenterTests {
 
   @Test("a permission failure offers Settings and its guidance instead of recovery")
   func aPermissionFailureOffersSettings() throws {
-    var snapshot = ViewerSnapshot()
+    var snapshot = ViewerSnapshot.presenterSample
     snapshot.reading.status = try status([
       "ready": false, "canObserve": false, "nextSteps": ["Allow Screen Recording."],
       "overview": [
@@ -201,7 +201,7 @@ struct ViewerPresenterTests {
 
   @Test("an input failure that recovery can fix offers Recover")
   func aRecoverableInputFailureOffersRecover() throws {
-    var snapshot = ViewerSnapshot()
+    var snapshot = ViewerSnapshot.presenterSample
     snapshot.reading.status = try status([
       "ready": false, "canObserve": true,
       "overview": [

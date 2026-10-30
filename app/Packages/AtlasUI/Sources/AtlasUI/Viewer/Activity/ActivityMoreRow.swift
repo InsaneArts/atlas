@@ -7,7 +7,7 @@ struct ActivityMoreRow: View {
   let more: ViewerMoreSteps
   /// Receives what the person does.
   let send: @MainActor (ViewerEvent) -> Void
-  @Environment(\.accessibilityReduceMotion) private var reduceMotion
+  @Environment(\.motionReduced) private var reduceMotion
 
   /// The link, at the words' edge.
   var body: some View {
@@ -17,6 +17,7 @@ struct ActivityMoreRow: View {
       }
     }
     .buttonStyle(.textLink)
+    .layoutFrame("more \(more.moment)")
     .fixedSize()
     .frame(minHeight: ViewerLayout.stepHeight)
     .padding(.leading, ViewerLayout.stepLeading)

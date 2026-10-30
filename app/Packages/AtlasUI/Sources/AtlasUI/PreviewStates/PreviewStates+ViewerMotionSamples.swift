@@ -12,21 +12,10 @@
       var state = viewerActivity
       var pane = workingActivity
       pane.meta = "18 actions today"
-      pane.items = pane.items.compactMap { item in
-        switch item {
-        case .step(let step) where step.id == "o6":
-          return nil
-        case .step(var step) where step.id == "o5":
-          step.mark = .live
-          step.words = ViewerStepWords("Scrolling")
-          return .step(step)
-        case .moment(var moment) where moment.id == "session:|o1":
-          moment.span = "5 actions · 10:31"
-          return .moment(moment)
-        default:
-          return item
-        }
-      }
+      pane.days[0].moments[0].span = "5 actions · 10:31"
+      pane.days[0].moments[0].steps.removeAll { $0.id == "o6" }
+      pane.days[0].moments[0].steps[0].mark = .live
+      pane.days[0].moments[0].steps[0].words = ViewerStepWords("Scrolling")
       state.pane = .activity(pane)
       return state
     }()
@@ -35,24 +24,18 @@
     @MainActor static let viewerActivityEveryStep: ViewerState = {
       var state = viewerActivityOpened
       guard case .activity(var pane) = state.pane else { return state }
-      pane.items = pane.items.flatMap { item -> [ViewerActivityItem] in
-        switch item {
-        case .step(var step) where step.id == "e2":
-          step.isLast = false
-          return [.step(step)]
-        case .more(let more) where more.moment == "session:|e1":
-          let opened = ViewerActivityStep(
-            id: "e1",
-            kind: .window,
-            words: ViewerStepWords("Opened TextEdit"),
-            time: "10 min",
-            isLast: true
-          )
-          return [.step(opened)]
-        default:
-          return [item]
-        }
-      }
+      guard let index = pane.days[0].moments.firstIndex(where: { $0.id == "session:|e1" }) else { return state }
+      pane.days[0].moments[index].steps[pane.days[0].moments[index].steps.count - 1].isLast = false
+      pane.days[0].moments[index].steps.append(
+        ViewerActivityStep(
+          id: "e1",
+          kind: .window,
+          words: ViewerStepWords("Opened TextEdit"),
+          time: "10 min",
+          isLast: true
+        )
+      )
+      pane.days[0].moments[index].more = nil
       state.pane = .activity(pane)
       return state
     }()
@@ -63,45 +46,32 @@
       var state = viewerActivity
       var pane = workingActivity
       pane.meta = "20 actions today"
-      let safari: [ViewerActivityItem] = [
-        .moment(
-          ViewerActivityMoment(
-            id: "session:|s1",
-            icon: sampleApp(SampleAppIcons.safari, "Safari"),
-            title: "Safari",
-            time: "10:32",
-            span: "1 action · 10:32",
-            age: "now",
-            isOpen: true,
-            canFold: false
-          )
+      pane.days[0].moments[0].steps[0].mark = .quiet
+      pane.days[0].moments[0].steps[0].words = ViewerStepWords("Clicked", target: "Show Center")
+      pane.days[0].moments[0].canFold = true
+      pane.days[0].moments.insert(
+        ViewerActivityMoment(
+          id: "session:|s1",
+          icon: sampleApp(SampleAppIcons.safari, "Safari"),
+          title: "Safari",
+          time: "10:32",
+          span: "1 action · 10:32",
+          age: "now",
+          isOpen: true,
+          canFold: false,
+          steps: [
+            ViewerActivityStep(
+              id: "s1",
+              kind: .window,
+              mark: .live,
+              words: ViewerStepWords("Opening Safari"),
+              time: "now",
+              isLast: true
+            )
+          ]
         ),
-        .step(
-          ViewerActivityStep(
-            id: "s1",
-            kind: .window,
-            mark: .live,
-            words: ViewerStepWords("Opening Safari"),
-            time: "now",
-            isLast: true
-          )
-        ),
-      ]
-      pane.items =
-        safari
-        + pane.items.map { item in
-          switch item {
-          case .step(var step) where step.id == "o6":
-            step.mark = .quiet
-            step.words = ViewerStepWords("Clicked", target: "Show Center")
-            return .step(step)
-          case .moment(var moment) where moment.id == "session:|o1":
-            moment.canFold = true
-            return .moment(moment)
-          default:
-            return item
-          }
-        }
+        at: 0
+      )
       state.pane = .activity(pane)
       return state
     }()

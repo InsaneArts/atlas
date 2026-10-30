@@ -65,7 +65,7 @@ extension ActivityMoments {
     /// The moment with an initial identity from its stream and oldest line, reconciled against preceding readings.
     var moment: ActivityMoment {
       ActivityMoment(
-        id: "\(stream.id)|\(runs.last?.id ?? "")",
+        id: "\(stream.id)|\(runs.last?.entry.logicalId ?? "")",
         stream: stream,
         subject: app.map(ActivityMoment.Subject.app) ?? .appless(runs),
         runs: runs,

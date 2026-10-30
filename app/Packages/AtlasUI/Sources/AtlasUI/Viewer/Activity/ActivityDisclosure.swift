@@ -11,6 +11,13 @@ struct ActivityDisclosure: Layout {
   /// The room kept under the rows while any show, which grows and shrinks with them.
   var below: CGFloat
 
+  /// A row starts fading only after its entire text and callout fit above the disclosure edge. The same geometry
+  /// hides it before folding can cut its letters, and reversing the spring reverses the fade without queued work.
+  static func opacity(row: CGRect, bounds: CGRect?) -> Double {
+    guard let bounds else { return 1 }
+    return Double(min(max((bounds.maxY - row.maxY) / Spacing.s, .zero), 1))
+  }
+
   /// The share, which an animation moves frame by frame.
   var animatableData: CGFloat {
     get { share }

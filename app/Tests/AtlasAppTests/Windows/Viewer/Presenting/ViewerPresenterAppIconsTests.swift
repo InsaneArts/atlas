@@ -71,7 +71,7 @@ struct ViewerPresenterAppIconsTests {
       bundle: "/Users/atlas-helper/Library/Application Support/Atlas/Copies/Probe.app",
       bundleId: "test.atlas.probe"
     )
-    let card = ViewerPresenter.appCard(copy, among: [copy], showsOrigin: true, ViewerSnapshot())
+    let card = ViewerPresenter.appCard(copy, showsOrigin: true, ViewerSnapshot.presenterSample)
     #expect(card.icon == .monogram(AppMonogram(letter: "P", tint: MonogramTint(name: "Probe"))))
   }
 }

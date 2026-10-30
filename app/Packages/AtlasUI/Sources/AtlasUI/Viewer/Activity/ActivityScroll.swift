@@ -15,6 +15,6 @@ enum ActivityScroll {
   /// - Returns: The animation, or nil.
   static func moving(isAtTop: Bool, reduceMotion: Bool) -> Animation? {
     guard isAtTop else { return nil }
-    return Motion.animation(Motion.state, reduceMotion: reduceMotion)
+    return Motion.layout(Motion.state, reduceMotion: reduceMotion)
   }
 }

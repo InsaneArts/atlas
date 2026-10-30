@@ -48,8 +48,6 @@ struct ViewerPresenterSessionMenuTests {
   @Test("a row's tooltip lists its host, folder, start and last activity")
   func aRowsTooltipListsItsFacts() throws {
     var snapshot = try ViewerSnapshot.listing(ViewerPresenterSessionsTests.three)
-    snapshot.timeZone = TimeZone(secondsFromGMT: 0) ?? .current
-    snapshot.locale = Locale(identifier: "de_DE")
     snapshot.panes.sessions.list = HostSessionList(sessions: [
       HostSessionRecord(
         key: Self.key,

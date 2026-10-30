@@ -107,7 +107,7 @@ final class ViewerControl {
     input.sink = self
   }
 
-  /// Take Control from any tab: the Screen tab shows first, since control acts on the picture. Pressed while the
+  /// Take Control from any pane: the Screen pane shows first, since control acts on the picture. Pressed while the
   /// picture is paused, it resumes the picture first and takes control once a fresh one arrives.
   func takeControlOnScreen() async {
     if let viewer, viewer.session.place != .screen { viewer.show(.screen) }
@@ -115,7 +115,7 @@ final class ViewerControl {
   }
 
   /// Take control with the picture on screen. The attempt is reserved before anything is awaited, so leaving the
-  /// window or the tab meanwhile cancels it, and it is checked again after every wait. A release the service refused
+  /// window or the pane meanwhile cancels it, and it is checked again after every wait. A release the service refused
   /// before is sent again first, outside the attempt's own control work. The request and its reply count as control
   /// work under way (``ControlBarrier``), so the helper's commands wait for it; a grant that arrives after the attempt
   /// was cancelled, or once one of the helper's commands started, is given back before that work ends, and a reply
@@ -185,7 +185,7 @@ final class ViewerControl {
   }
 
   /// Whether a grant for acquisition `generation` is still wanted: nothing newer happened, the window shows the
-  /// Screen tab with a ready, unpaused picture and takes the keyboard, and none of the helper's commands runs.
+  /// Screen pane with a ready, unpaused picture and takes the keyboard, and none of the helper's commands runs.
   ///
   /// - Parameter generation: The acquisition's number.
   /// - Returns: Whether to keep the grant; never once the window is gone.
@@ -237,7 +237,7 @@ final class ViewerControl {
 
   /// Take Control pressed while the picture is paused: the picture resumes, which gives back nothing, as nothing is
   /// held, and forgets the old frame; the button says Connecting… while the window waits for a fresh picture, which
-  /// takes control as it arrives (``pictureArrived()``). Leaving the tab or the window, pausing again or Give Back
+  /// takes control as it arrives (``pictureArrived()``). Leaving the pane or the window, pausing again or Give Back
   /// ends the wait, as they end any acquisition (``releaseControl(_:)``); one that lasts ``freshPictureWait`` gives
   /// up, saying so.
   private func awaitFreshPicture() {

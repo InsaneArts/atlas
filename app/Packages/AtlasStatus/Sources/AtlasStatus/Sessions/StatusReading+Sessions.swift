@@ -29,7 +29,17 @@ extension StatusReading {
   /// The session whose action may not have finished, while sessions show and an outcome is unknown: the first that
   /// needs the person, in the service's order. A command killed outright leaves no row, so no session is named.
   public var causer: ViewerStatus.HostSession? {
-    guard showsSessions, status.overview.pending > 0 else { return nil }
+    showsSessions ? unresolvedSession : nil
+  }
+
+  /// The unresolved action's row, even with one session, when no session label is drawn.
+  public var uncertainRow: String? {
+    unresolvedSession?.uncertainRow
+  }
+
+  /// Recovery follows the unresolved action independently of how many session labels are visible.
+  private var unresolvedSession: ViewerStatus.HostSession? {
+    guard status.overview.pending > 0 else { return nil }
     return liveSessions.first { $0.state == .needsYou }
   }
 

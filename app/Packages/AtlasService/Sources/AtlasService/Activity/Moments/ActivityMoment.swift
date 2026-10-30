@@ -1,12 +1,12 @@
 import Foundation
 
-/// A moment of the Activity tab: one stream's work in one app, its actions at most two minutes apart on one day,
+/// A moment of the Activity pane: one stream's work in one app, its actions at most two minutes apart on one day,
 /// newest first. Actions in no app, such as a screenshot or a command, belong to the moment around them.
 public struct ActivityMoment: Equatable, Sendable, Identifiable {
   /// 8: the most steps an open moment shows before "Show N more".
   public static let mostSteps = 8
 
-  /// The moment's identity, retained across readings with overlapping rows, even when its oldest row leaves.
+  /// The moment's identity, retained across readings with overlapping actions, even when its oldest row leaves.
   public var id: String
   /// Whose work it follows.
   public var stream: ActivityStream
@@ -55,9 +55,9 @@ public struct ActivityMoment: Equatable, Sendable, Identifiable {
     return nil
   }
 
-  /// How many actions its lines hold, each repeat counted.
+  /// How many actions its lines hold, including repeats and aggregated personal input.
   public var actions: Int {
-    runs.reduce(0) { $0 + $1.count }
+    runs.reduce(0) { ActivityGrouping.addingActions($1.actions, to: $0) }
   }
 
   /// Whether one of its lines is still under way.

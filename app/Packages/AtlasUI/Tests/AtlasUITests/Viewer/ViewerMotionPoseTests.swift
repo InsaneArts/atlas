@@ -13,8 +13,13 @@ struct ViewerMotionPoseTests {
     for (name, state) in states {
       switch state.pane {
       case .activity(let activity):
-        let ids = activity.items
-          .map(\.id)
+        let ids = activity.days.flatMap { day in
+          (day.title.isEmpty ? [] : ["day.\(day.id)"])
+            + day.moments.flatMap { moment in
+              ["moment.\(moment.id)"] + moment.steps.map { "step.\($0.id)" }
+                + (moment.more.map { ["more.\($0.moment)"] } ?? [])
+            }
+        }
         #expect(Set(ids).count == ids.count, "\(name) draws a row twice")
       case .apps(let apps):
         let ids = apps.cards

@@ -13,7 +13,7 @@ struct ViewerPresenterFooterTests {
   /// - Parameter status: What the service reports.
   /// - Returns: The snapshot.
   func watching(_ status: ViewerStatus) -> ViewerSnapshot {
-    var snapshot = ViewerSnapshot()
+    var snapshot = ViewerSnapshot.presenterSample
     snapshot.reading.status = status
     snapshot.reading.hasStatus = true
     snapshot.reading.ready = true
@@ -135,7 +135,7 @@ struct ViewerPresenterFooterTests {
 
   @Test("connecting says the helper is starting the first time and Reconnecting… once a picture was lost")
   func connectingSaysWhetherItIsTheFirstTime() throws {
-    var snapshot = ViewerSnapshot()
+    var snapshot = ViewerSnapshot.presenterSample
     #expect(ViewerPresenter.state(snapshot).footer.latest.words == "Starting the helper…")
     #expect(ViewerPresenter.state(snapshot).header.who == "Connecting")
     snapshot.reading.lastPicture = SampleDesktop.picture

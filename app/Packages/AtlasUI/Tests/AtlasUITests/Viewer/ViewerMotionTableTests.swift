@@ -54,10 +54,6 @@ struct ViewerMotionTableTests {
         ActivityMotion.fold(reduceMotion: true)
       ),
       (
-        "moment steps fading", ActivityMotion.reveal(reduceMotion: false), Motion.state,
-        ActivityMotion.reveal(reduceMotion: true)
-      ),
-      (
         "Activity filter", ActivityMotion.filter(reduceMotion: false), Motion.listMove,
         ActivityMotion.filter(reduceMotion: true)
       ),
@@ -101,7 +97,6 @@ struct ViewerMotionTableTests {
     // do, and fade over 0.15 seconds.
     #expect(AppsMotion.layout(reduceMotion: true) == nil)
     #expect(ActivityMotion.fold(reduceMotion: true) == nil)
-    #expect(ActivityMotion.reveal(reduceMotion: true) == Motion.crossfadeReduced)
     #expect(ActivityScroll.moving(isAtTop: true, reduceMotion: true) == nil)
     // A colour change, the disc's or the picture's, is no movement, so Reduce Motion keeps it, and it is short.
     #expect(ActivityMotion.disc == Animation.easeOut(duration: 0.2))

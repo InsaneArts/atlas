@@ -15,7 +15,13 @@ extension ViewerPresenter {
     let facts = snapshot.panes.activity
     let chosen = snapshot.shownSessions.key
     let title = chosen.map { resolvedSession($0, snapshot).name } ?? ViewerWords.place(.activity)
-    guard let log = facts.log, let readAt = facts.readAt else {
+    guard let log = facts.log, let readAt = facts.readAt,
+      let prepared = facts.prepared(
+        captures: snapshot.panes.shots.shots ?? [],
+        calendar: snapshot.zonedCalendar,
+        now: snapshot.date
+      )
+    else {
       let failed = facts.failure.map {
         EmptyMessageState(headline: ViewerWords.activityFailed, message: Words.sentence($0))
       }
@@ -23,32 +29,30 @@ extension ViewerPresenter {
         title: title,
         meta: "",
         filters: activityFilters(facts.filter, counts: [:]),
-        items: [],
+        days: [],
         empty: failed,
         showsFilters: false
       )
     }
     let rules = ActivityGrouping(log: log, readAt: readAt, now: snapshot.date, calendar: snapshot.zonedCalendar)
     let scope = ActivityScope(snapshot.shownSessions)
-    let moments = ActivityMoments(
-      rules,
-      captures: snapshot.panes.shots.shots ?? [],
-      scope: scope,
-      preserving: facts.moments
-    )
+    var moments = prepared.moments
+    if case .session(let key) = scope {
+      moments.moments = moments.moments.filter { $0.stream == .session(key) }
+    }
     let query = snapshot.session.search.query
     let shown = moments.shown(filter: activityFilter(facts.filter), query: query)
     let counts = [ViewerActivityFilter.problems, .screenshots].reduce(into: [ViewerActivityFilter: Int]()) {
       $0[$1] = moments.shown(filter: activityFilter($1), query: "")
         .reduce(0) { $0 + $1.runs.count }
     }
-    let items = activityItems(shown, moments: moments, snapshot)
+    let days = activityDays(shown, moments: moments, snapshot)
     return ViewerActivityState(
       title: title,
       meta: log.entries.isEmpty ? "" : ViewerWords.actionsToday(rules.countToday(in: scope)),
       filters: activityFilters(facts.filter, counts: counts),
-      items: items,
-      empty: items.isEmpty ? activityEmpty(log, moments, facts, query: query, chosen: chosen != nil) : nil,
+      days: days,
+      empty: days.isEmpty ? activityEmpty(log, moments, facts, query: query, chosen: chosen != nil) : nil,
       showsFilters: !moments.moments.isEmpty
     )
   }

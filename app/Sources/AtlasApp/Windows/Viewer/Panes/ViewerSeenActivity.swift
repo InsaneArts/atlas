@@ -1,9 +1,9 @@
 import AtlasStatus
 
 /// What of the helper's activity the person has seen: whatever is newer than all of it is unseen, and
-/// Activity's tab carries a dot for it until it is chosen, orange once an unseen action failed.
+/// Activity's pane carries a dot for it until it is chosen, orange once an unseen action failed.
 struct ViewerSeenActivity: Equatable {
-  /// The actions seen, by id: those the Activity tab showed, or those the first reading held, so what the helper did
+  /// The actions seen, by id: those the Activity pane showed, or those the first reading held, so what the helper did
   /// before the window opened is never new. Empty when there were none, so every action since is unseen.
   var ids: Set<String>
   /// Whether an action not yet seen failed. Kept from the reading that held it until Activity shows, so the dot stays

@@ -14,7 +14,7 @@ struct ViewerDependencies {
   var preferences: ViewerPreferences
   /// The time now, in seconds of uptime, which never steps back: what a picture's age is told by.
   var uptime: @MainActor () -> TimeInterval
-  /// The clock every wait runs on: the pause between readings and the tabs', the heartbeat, the picture's tick, gathering
+  /// The clock every wait runs on: the pause between readings and the panes', the heartbeat, the picture's tick, gathering
   /// scrolls, the reading input asks for, and Take Control's retry. A cancelled wait ends at once.
   var clock: any Clock<Duration>
   /// One heartbeat tick; the app passes ``ViewerControl/heartbeatEvery``.
@@ -29,7 +29,7 @@ struct ViewerDependencies {
   var connectedAgents: @MainActor () async -> [AgentID]? = { nil }
   /// When an account logged in, if it is logged in now: the helper's Logged in fact.
   var loginTime: @MainActor (String) -> Date? = { _ in nil }
-  /// The date and time now, which the tabs tell times and days by.
+  /// The date and time now, which the panes tell times and days by.
   var wallClock: @MainActor () -> Date = { Date() }
   /// Where a copied screenshot goes, and how its file is shown; by default nowhere.
   var shotOutlet = ShotOutlet(copy: { _ in }, reveal: { _ in })
@@ -37,4 +37,6 @@ struct ViewerDependencies {
   var openSettings: @MainActor () -> Void = {}
   /// Where apps' icons are found and kept; by default none is, and every app draws its tile.
   var icons = AppIcons.none
+  /// Reads all covering windows through the guarded helper command; nil disables window crops.
+  var appWindows: @MainActor () async -> HelperOccluderList? = { nil }
 }

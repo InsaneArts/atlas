@@ -1,10 +1,12 @@
 import AtlasService
 
-/// What the Apps tab last read and the window shown on the screen. The sidebar's search narrows it. No picture of a
+/// What the Apps pane last read and the window shown on the screen. The sidebar's search narrows it. No picture of a
 /// window is kept here: a card's is cut from the live picture each time the pane is drawn.
 struct ViewerAppsFacts {
   /// The apps, front to back; nil before the first reading.
   var apps: [HelperApp]?
+  /// The complete covering window observation, separate from the regular apps; nil suppresses crops.
+  var occluders: HelperOccluderList?
   /// The host sessions the apps' origins name, by key.
   var sessions: [String: HostSessionSummary] = [:]
   /// The windows that stood in the same place and at the same size in the last two readings, by number, whose

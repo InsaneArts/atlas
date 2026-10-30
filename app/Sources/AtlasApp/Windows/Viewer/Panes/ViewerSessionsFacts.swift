@@ -12,6 +12,9 @@ struct ViewerSessionsFacts {
   /// When the service last answered that it offers no list, as an older one does; nil while it offers one.
   var notOfferedAt: Date?
 
+  /// When that answer arrived, measured on the injected monotonic clock.
+  var notOfferedUptime: TimeInterval?
+
   /// 60 s: how long a service that offers no list is left before it is asked again: one updated meanwhile shows its
   /// sessions within a minute, and an older one is asked once a minute at most.
   static let askAgainAfter: TimeInterval = 60
@@ -19,10 +22,10 @@ struct ViewerSessionsFacts {
   /// Whether to ask for the list now: always while the service offers it, else once ``askAgainAfter`` has passed
   /// since it last said it does not.
   ///
-  /// - Parameter now: The time now.
+  /// - Parameter now: The monotonic time now.
   /// - Returns: Whether to ask.
-  func asks(at now: Date) -> Bool {
-    notOfferedAt.map { now.timeIntervalSince($0) >= Self.askAgainAfter } ?? true
+  func asks(at now: TimeInterval) -> Bool {
+    notOfferedUptime.map { now - $0 >= Self.askAgainAfter } ?? true
   }
 
   /// A live session as the list has it, in the status's shape: one the status had no room for, say.

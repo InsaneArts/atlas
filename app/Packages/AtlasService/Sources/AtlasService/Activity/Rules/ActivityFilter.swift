@@ -1,4 +1,4 @@
-/// Which rows the Activity tab lists: every one, those that did not work, the screenshots taken, or the text typed
+/// Which rows the Activity pane lists: every one, those that did not work, the screenshots taken, or the text typed
 /// and keys pressed.
 public enum ActivityFilter: Sendable, CaseIterable {
   /// Every row.

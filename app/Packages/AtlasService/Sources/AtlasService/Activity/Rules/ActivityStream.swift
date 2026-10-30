@@ -1,4 +1,4 @@
-/// Whose work a moment of the Activity tab follows: one host session's agents, or the person. Each has its own
+/// Whose work a moment of the Activity pane follows: one host session's agents, or the person. Each has its own
 /// stream, so two agents working at once never cut each other's moments into pieces.
 public enum ActivityStream: Hashable, Sendable {
   /// The person, through a viewer.

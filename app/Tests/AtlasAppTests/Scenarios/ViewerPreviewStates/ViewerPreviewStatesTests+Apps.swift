@@ -25,6 +25,12 @@
       let onApps = { (apps: [HelperApp], snapshot: inout ViewerSnapshot) in
         Self.onPlace(.apps, at: Self.activityReadAt, &snapshot)
         snapshot.panes.apps.apps = apps
+        snapshot.panes.apps.occluders = HelperOccluderList(
+          windows: apps.filter { !$0.hidden }
+            .flatMap(\.windows)
+            .sorted { ($0.order ?? Int.max) < ($1.order ?? Int.max) }
+            .map { HelperOccluder(window: $0) }
+        )
         snapshot.panes.apps.sessions = Self.appSessions
         snapshot.panes.apps.steadyWindows = Set(apps.flatMap(\.windows).map(\.id))
         snapshot.panes.icons = Self.icons

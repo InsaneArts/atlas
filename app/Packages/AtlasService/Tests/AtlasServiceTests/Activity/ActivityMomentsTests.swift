@@ -17,6 +17,7 @@ struct ActivityMomentsTests {
   ///   - outcome: How it went.
   ///   - actor: Who did it.
   ///   - session: Its session's key; nil for none.
+  ///   - label: The recorded target, when it identifies the action.
   ///   - operation: Its operation; a screenshot's for the screenshot verb, else input.
   /// - Returns: The row.
   static func row(
@@ -29,6 +30,7 @@ struct ActivityMomentsTests {
     outcome: ActivityLog.Outcome = .worked,
     actor: ActivityLog.Actor = .agent,
     session: String? = "claude",
+    label: String? = nil,
     operation: String? = nil
   ) -> ActivityLog.Entry {
     ActivityLog.Entry(
@@ -41,6 +43,7 @@ struct ActivityMomentsTests {
       session: session,
       verb: verb,
       app: app,
+      label: label,
       bundleId: bundleId
     )
   }
@@ -53,6 +56,155 @@ struct ActivityMomentsTests {
   /// - Returns: The rules.
   static func moments(_ entries: [ActivityLog.Entry], scope: ActivityScope = .all) -> ActivityMoments {
     ActivityMoments(ActivityGroupingTests.rules(entries), captures: [], scope: scope)
+  }
+
+  @Test("a screenshot reassigned to a new app leaves both split moments with independent folds")
+  func aScreenshotSplitsWithoutSharingIdentity() throws {
+    let click = Self.row("textedit", 30, app: "TextEdit")
+    let screenshot = Self.row("screenshot", 20, "screenshot", app: nil)
+    let before = Self.moments([screenshot, click])
+    let after = ActivityMoments(
+      ActivityGroupingTests.rules([Self.row("calculator", 10, app: "Calculator"), screenshot, click]),
+      captures: [],
+      scope: .all,
+      preserving: before.moments
+    )
+    #expect(after.moments.map { $0.runs.map(\.id) } == [["calculator", "screenshot"], ["textedit"]])
+    try Self.expectIndependentFolds(after, preserving: before.moments)
+  }
+
+  @Test("a command completing after a long gap leaves both split moments with independent folds")
+  func aCompletedCommandSplitsWithoutSharingIdentity() throws {
+    let click = Self.row("click", 600)
+    var running = Self.row("start", 590, "run", app: nil, outcome: .running, operation: "run")
+    running.logicalId = "command"
+    let before = Self.moments([running, click])
+    var completed = Self.row("end", 10, "run", app: nil, operation: "run")
+    completed.logicalId = running.logicalId
+    let after = ActivityMoments(
+      ActivityGroupingTests.rules([completed, click]),
+      captures: [],
+      scope: .all,
+      preserving: before.moments
+    )
+    #expect(after.moments.map { $0.runs.map(\.id) } == [["end"], ["click"]])
+    try Self.expectIndependentFolds(after, preserving: before.moments)
+  }
+
+  /// Both split fragments can be folded independently, and repeating the same reading keeps their identities.
+  private static func expectIndependentFolds(_ after: ActivityMoments, preserving before: [ActivityMoment]) throws {
+    try #require(after.moments.count == 2)
+    let ids = after.moments.map(\.id)
+    try #require(Set(ids).count == 2)
+    #expect(ids[0] == before.first?.id)
+    for opensFirst in [true, false] {
+      let folds = after.folds(
+        of: after.moments,
+        filter: .all,
+        uncertainRow: nil,
+        choices: [ids[0]: opensFirst, ids[1]: !opensFirst],
+        now: ActivityGroupingTests.readAt
+      )
+      #expect(folds[ids[0]] == (opensFirst ? .open : .folded))
+      #expect(folds[ids[1]] == (opensFirst ? .folded : .open))
+    }
+    let reread = ActivityMoments(
+      ActivityGroupingTests.rules(after.moments.flatMap { $0.runs.map(\.entry) }),
+      captures: [],
+      scope: .all,
+      preserving: after.moments
+    )
+    #expect(reread.moments.map(\.id) == ids)
+  }
+
+  @Test("a moment holding a running command keeps its identity and its fold choice when the command finishes")
+  func aRunningCommandsMomentKeepsItsIdentityAndFoldChoice() throws {
+    var running = Self.row("start", 10, outcome: .running)
+    running.logicalId = "command"
+    let before = Self.moments([running, Self.row("older", 20)])
+    let id = try #require(before.moments.first?.id)
+    let choices = [id: false]
+    #expect(
+      before.folds(
+        of: before.moments,
+        filter: .all,
+        uncertainRow: nil,
+        choices: choices,
+        now: ActivityGroupingTests.readAt
+      )[id] == .held
+    )
+
+    var completed = Self.row("end", 5)
+    completed.logicalId = running.logicalId
+    let after = ActivityMoments(
+      ActivityGroupingTests.rules([completed]),
+      captures: [],
+      scope: .all,
+      preserving: before.moments
+    )
+    // No row id overlaps, and the oldest row that seeded the moment has left.
+    #expect(after.moments.map(\.id) == [id])
+    #expect(after.moments.first?.runs.first?.id == "end")
+    #expect(
+      after.folds(
+        of: after.moments,
+        filter: .all,
+        uncertainRow: nil,
+        choices: choices,
+        now: ActivityGroupingTests.readAt
+      )[id] == .folded
+    )
+    #expect(
+      after.folds(
+        of: after.moments,
+        filter: .all,
+        uncertainRow: nil,
+        choices: [id: true],
+        now: ActivityGroupingTests.readAt
+      )[id] == .open
+    )
+  }
+
+  @Test("a growing personal input run keeps its moment identity and fold choice")
+  func aGrowingInputRunKeepsItsMoment() throws {
+    var input = Self.row("first", 10, actor: .you, session: nil)
+    input.logicalId = "2000000000"
+    let before = Self.moments([input])
+    let id = try #require(before.moments.first?.id)
+    var grown = Self.row("newest", 1, actor: .you, session: nil)
+    grown.logicalId = input.logicalId
+    let after = ActivityMoments(
+      ActivityGroupingTests.rules([grown]),
+      captures: [],
+      scope: .all,
+      preserving: before.moments
+    )
+    #expect(after.moments.map(\.id) == [id])
+    #expect(after.moments.first?.runs.first?.id == "newest")
+    #expect(
+      after.folds(
+        of: after.moments,
+        filter: .all,
+        uncertainRow: nil,
+        choices: [id: false],
+        now: ActivityGroupingTests.readAt
+      )[id] == .folded
+    )
+  }
+
+  @Test("moment action totals include aggregated input while repeated rows keep their own count")
+  func actionTotalsSurviveRowCollapsing() throws {
+    let entries = [
+      ActivityLog.Entry(id: "new", says: "sent input", actor: .you, ageSeconds: 1, count: 2107),
+      ActivityLog.Entry(id: "old", says: "sent input", actor: .you, ageSeconds: 2, count: 12),
+      ActivityLog.Entry(id: "plain", says: "clicked", actor: .you, ageSeconds: 3),
+    ]
+    let moment = try #require(Self.moments(entries).moments.first)
+    #expect(moment.runs.count == 2)
+    #expect(moment.runs.first?.count == 2)
+    #expect(moment.runs.first?.actions == 2119)
+    #expect(moment.actions == 2120)
+    #expect(Self.moments([entries[0]]).moments.first?.actions == 2107)
   }
 
   @Test("consecutive actions in one app form one moment")
@@ -68,6 +220,31 @@ struct ActivityMomentsTests {
     #expect(moments.first?.actions == 3)
     #expect(moments.first?.startedAt == ActivityGroupingTests.readAt.addingTimeInterval(-90))
     #expect(moments.first?.endedAt == ActivityGroupingTests.readAt.addingTimeInterval(-10))
+  }
+
+  @Test("identical words in same-named apps with different bundle identities retain both moments")
+  func identicalWordsCannotEraseBundleIdentity() {
+    let entries = [
+      Self.row("one", 5, app: "Opie", bundleId: "com.one.opie", says: "clicked in Opie"),
+      Self.row("two", 10, app: "Opie", bundleId: "com.two.opie", says: "clicked in Opie"),
+    ]
+    let moments = Self.moments(entries).moments
+    #expect(moments.count == 2)
+    #expect(moments.map { $0.app?.bundleId } == ["com.one.opie", "com.two.opie"])
+    #expect(moments.map(\.actions) == [1, 1])
+  }
+
+  @Test("a repeat with no bundle keeps the known bundle and cannot bridge two different apps")
+  func repeatsRetainKnownIdentity() {
+    let entries = [
+      Self.row("one", 5, app: "Opie", bundleId: "com.one.opie", says: "clicked in Opie"),
+      Self.row("unknown", 10, app: "Opie", says: "clicked in Opie"),
+      Self.row("two", 15, app: "Opie", bundleId: "com.two.opie", says: "clicked in Opie"),
+    ]
+    let moments = Self.moments(entries).moments
+    #expect(moments.count == 2)
+    #expect(moments.map { $0.app?.bundleId } == ["com.one.opie", "com.two.opie"])
+    #expect(moments.map(\.actions) == [2, 1])
   }
 
   @Test("a gap of more than two minutes starts a new moment in the same app")
@@ -238,11 +415,17 @@ struct ActivityMomentsTests {
       Self.row("a1", 600, app: "Opie"),
     ])
     let shown = rules.shown(filter: .all, query: "")
-    let folds = rules.folds(of: shown, filter: .all, uncertainRow: nil, choices: [:])
+    let folds = rules.folds(of: shown, filter: .all, uncertainRow: nil, choices: [:], now: ActivityGroupingTests.readAt)
     #expect(shown.map { folds[$0.id] } == [.open, .open, .open, .folded, .folded], "at most three")
     let old = Self.moments([Self.row("b1", 900, app: "Notes"), Self.row("a1", 1000, app: "Opie")])
     let oldShown = old.shown(filter: .all, query: "")
-    let oldFolds = old.folds(of: oldShown, filter: .all, uncertainRow: nil, choices: [:])
+    let oldFolds = old.folds(
+      of: oldShown,
+      filter: .all,
+      uncertainRow: nil,
+      choices: [:],
+      now: ActivityGroupingTests.readAt
+    )
     #expect(oldShown.map { oldFolds[$0.id] } == [.open, .folded], "the newest opens however old")
   }
 
@@ -256,9 +439,21 @@ struct ActivityMomentsTests {
     let shown = rules.shown(filter: .all, query: "")
     let ids = shown.map(\.id)
     let choices = [ids[0]: false, ids[1]: false, ids[2]: true]
-    let folds = rules.folds(of: shown, filter: .all, uncertainRow: "b1", choices: choices)
+    let folds = rules.folds(
+      of: shown,
+      filter: .all,
+      uncertainRow: "b1",
+      choices: choices,
+      now: ActivityGroupingTests.readAt
+    )
     #expect(shown.map { folds[$0.id] } == [.held, .held, .open])
-    let unchosen = rules.folds(of: shown, filter: .all, uncertainRow: nil, choices: [ids[0]: false])
+    let unchosen = rules.folds(
+      of: shown,
+      filter: .all,
+      uncertainRow: nil,
+      choices: [ids[0]: false],
+      now: ActivityGroupingTests.readAt
+    )
     #expect(shown.map { unchosen[$0.id] } == [.held, .folded, .folded])
     #expect(unchosen[ids[0]]?.isOpen == true && unchosen[ids[1]]?.isOpen == false)
   }
@@ -275,7 +470,13 @@ struct ActivityMomentsTests {
     let problems = rules.shown(filter: .problems, query: "")
     #expect(problems.map { $0.runs.map(\.id) } == [["c1"]], "a row not sent is no problem")
     #expect(problems.map(\.id) == [all[0].id])
-    let folds = rules.folds(of: problems, filter: .problems, uncertainRow: nil, choices: [all[0].id: false])
+    let folds = rules.folds(
+      of: problems,
+      filter: .problems,
+      uncertainRow: nil,
+      choices: [all[0].id: false],
+      now: ActivityGroupingTests.readAt
+    )
     #expect(folds[all[0].id] == .held)
   }
 
@@ -326,18 +527,22 @@ struct ActivityMomentsTests {
   @Test("a problem says what the agent did next")
   func aProblemSaysWhatTheAgentDidNext() {
     let retried = Self.moments([
-      Self.row("c2", 10, app: "Notes"),
+      Self.row("c2", 10, app: "Notes", label: "Save"),
       Self.row("b1", 12, app: "Mail", session: "codex"),
-      Self.row("c1", 20, app: "Notes", outcome: .failed),
+      Self.row("c1", 20, app: "Notes", outcome: .failed, label: "Save"),
     ])
     let problem = retried.moments[0].runs[1]
     #expect(problem.id == "c1")
     #expect(retried.followUp(to: problem) == .workedOnRetry, "another session's action between is not what it did")
-    let again = Self.moments([Self.row("c2", 10, outcome: .failed), Self.row("c1", 20, outcome: .failed)])
+    let again = Self.moments([
+      Self.row("c2", 10, outcome: .failed, label: "Save"), Self.row("c1", 20, outcome: .failed, label: "Save"),
+    ])
     #expect(again.followUp(to: again.moments[0].runs[1]) == .failedAgain)
     let then = Self.moments([Self.row("t1", 10, "type"), Self.row("c1", 20, outcome: .notSent)])
     #expect(then.followUp(to: then.moments[0].runs[1]) == .then(then.moments[0].runs[0]))
-    let underWay = Self.moments([Self.row("c2", 10, outcome: .running), Self.row("c1", 20, outcome: .failed)])
+    let underWay = Self.moments([
+      Self.row("c2", 10, outcome: .running, label: "Save"), Self.row("c1", 20, outcome: .failed, label: "Save"),
+    ])
     #expect(underWay.followUp(to: underWay.moments[0].runs[1]) == nil, "a retry under way says nothing yet")
     let late = Self.moments([Self.row("c2", 10), Self.row("c1", 131, outcome: .failed)])
     #expect(late.followUp(to: late.moments[1].runs[0]) == nil, "past two minutes nothing followed")

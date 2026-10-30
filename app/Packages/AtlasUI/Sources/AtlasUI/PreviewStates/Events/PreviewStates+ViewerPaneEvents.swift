@@ -76,27 +76,26 @@
     ) -> ViewerActivityState {
       var next = activity
       next.filters.selected = filter
-      var kept: [ViewerActivityItem] = []
-      for item in activity.items {
-        switch item {
-        case .step(let step):
-          let passes =
-            switch filter {
-            case .all: true
-            case .problems: step.mark == .failed
-            case .screenshots: step.kind == .screenshot
-            case .typing: step.kind == .typing || step.kind == .keys
-            }
-          if passes, query.isEmpty || step.words.text.localizedCaseInsensitiveContains(query) {
-            kept.append(item)
+      next.days = activity.days.compactMap { day in
+        var kept = day
+        kept.moments = day.moments.compactMap { moment in
+          var shown = moment
+          shown.steps = moment.steps.filter { step in
+            let passes =
+              switch filter {
+              case .all: true
+              case .problems: step.mark == .failed
+              case .screenshots: step.kind == .screenshot
+              case .typing: step.kind == .typing || step.kind == .keys
+              }
+            return passes && (query.isEmpty || step.words.text.localizedCaseInsensitiveContains(query))
           }
-        case .moment, .day, .more:
-          kept.append(item)
+          return !shown.steps.isEmpty || (filter == .all && query.isEmpty) ? shown : nil
         }
+        return kept.moments.isEmpty ? nil : kept
       }
-      next.items = withoutEmptyMoments(kept, keepFolded: filter == .all && query.isEmpty)
       next.empty =
-        next.items.isEmpty
+        next.days.isEmpty
         ? EmptyMessageState(headline: "No actions match", message: "Choose All, or search for other words.") : nil
       return next
     }
@@ -116,69 +115,22 @@
       every: Bool = false
     ) -> ViewerActivityState {
       var next = activity
-      var items: [ViewerActivityItem] = []
-      var inMoment = false
-      for item in activity.items {
-        if case .moment(var moment) = item {
-          inMoment = moment.id == id
-          if inMoment {
-            moment.isOpen = opens
-            items.append(.moment(moment))
-            if opens { items += sampleSteps(of: id, every: every) }
-            continue
-          }
-        } else if inMoment {
-          continue
+      for day in next.days.indices {
+        for index in next.days[day].moments.indices where next.days[day].moments[index].id == id {
+          next.days[day].moments[index].isOpen = opens
+          let sample = sampleMoments.first { $0.id == id && !$0.steps.isEmpty }
+          next.days[day].moments[index].steps = opens ? sample?.steps ?? [] : []
+          next.days[day].moments[index].more = opens && !every ? sample?.more : nil
         }
-        items.append(item)
       }
-      next.items = items
       return next
     }
 
-    /// Every sample's rows, for the steps a moment opened in a preview shows.
-    @MainActor private static var sampleRows: [ViewerActivityItem] {
+    /// Every sample's moments, for the steps a moment opened in a preview shows.
+    @MainActor private static var sampleMoments: [ViewerActivityMoment] {
       [openedActivity, workingActivity, bySessionActivity, oneSessionActivity, manyActivity, daysActivity]
-        .flatMap(\.items)
-    }
-
-    /// The steps a sample lists under a moment, and Show N more unless every step shows.
-    ///
-    /// - Parameters:
-    ///   - id: The moment's identity.
-    ///   - every: Whether every step shows.
-    /// - Returns: The rows.
-    @MainActor private static func sampleSteps(of id: String, every: Bool) -> [ViewerActivityItem] {
-      var steps: [ViewerActivityItem] = []
-      var inMoment = false
-      for item in sampleRows {
-        if case .moment(let moment) = item {
-          if inMoment, !steps.isEmpty { break }
-          inMoment = moment.id == id
-          continue
-        }
-        guard inMoment else { continue }
-        if case .more = item, every { continue }
-        steps.append(item)
-      }
-      return steps
-    }
-
-    /// The rows less the moments a filter or a search left with no steps.
-    ///
-    /// - Parameters:
-    ///   - items: The rows.
-    ///   - keepFolded: Whether folded moments stay, as under All with no search.
-    /// - Returns: The rows.
-    private static func withoutEmptyMoments(_ items: [ViewerActivityItem], keepFolded: Bool) -> [ViewerActivityItem] {
-      items.enumerated()
-        .filter { index, item in
-          guard case .moment = item, !keepFolded else { return true }
-          let next = items.index(after: index)
-          guard next < items.endIndex, case .step = items[next] else { return false }
-          return true
-        }
-        .map(\.element)
+        .flatMap(\.days)
+        .flatMap(\.moments)
     }
 
     /// The Screenshots sample after one of its events.

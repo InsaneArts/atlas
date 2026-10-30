@@ -9,7 +9,7 @@ import Testing
 struct ViewerPresenterShotsTests {
   @Test("opening a screenshot zooms it from its own tile")
   func openingZoomsFromItsOwnTile() throws {
-    var snapshot = ViewerSnapshot()
+    var snapshot = ViewerSnapshot.presenterSample
     snapshot.panes.shots.shots = ["a.png", "b.png", "c.png"]
       .enumerated()
       .map { index, name in
@@ -36,8 +36,7 @@ struct ViewerPresenterShotsTests {
 
   @Test("screenshots group as Activity's lines do: the last hour is Now and the rest of today one group")
   func screenshotsGroupAsActivityDoes() throws {
-    var snapshot = ViewerSnapshot()
-    snapshot.timeZone = TimeZone(secondsFromGMT: 0) ?? .current
+    var snapshot = ViewerSnapshot.presenterSample
     // 17:30 UTC: a quarter of an hour ago, the afternoon and the morning.
     snapshot.date = Date(timeIntervalSince1970: 1_792_690_200)
     snapshot.panes.shots.shots = [-900.0, -4 * 3600, -8 * 3600]
@@ -51,7 +50,7 @@ struct ViewerPresenterShotsTests {
 
   @Test("selection and large screenshot navigation follow the grid's newest first order")
   func selectionAndNavigationFollowTheGridOrder() throws {
-    var snapshot = ViewerSnapshot()
+    var snapshot = ViewerSnapshot.presenterSample
     snapshot.panes.shots.shots = [
       Screenshot(name: "oldest.png", takenAt: snapshot.date.addingTimeInterval(-7200)),
       Screenshot(name: "newest.png", takenAt: snapshot.date),
@@ -89,7 +88,7 @@ struct ViewerPresenterShotsTests {
 
   @Test("with no screenshot yet the header says nothing beside its title")
   func noScreenshotsLeaveTheHeaderQuiet() {
-    var snapshot = ViewerSnapshot()
+    var snapshot = ViewerSnapshot.presenterSample
     snapshot.panes.shots.shots = []
     let shots = ViewerPresenter.shots(snapshot)
     #expect(shots.meta.isEmpty)
@@ -98,7 +97,7 @@ struct ViewerPresenterShotsTests {
 
   @Test("with nothing in the log or no app open, there is no count and nothing to filter")
   func emptyPanesHaveNoCountAndNoSearch() {
-    var snapshot = ViewerSnapshot()
+    var snapshot = ViewerSnapshot.presenterSample
     snapshot.panes.activity.log = ActivityLog()
     snapshot.panes.activity.readAt = snapshot.date
     let activity = ViewerPresenter.activity(snapshot)

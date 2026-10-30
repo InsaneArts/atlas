@@ -12,6 +12,48 @@ struct ViewerPanesIconsTests {
   /// Notes, where it is installed.
   static let notes = "/System/Applications/Notes.app"
 
+  @Test("Activity retains every active icon beyond the shared cache limit without reading unchanged apps again")
+  func activeIconsOutliveCacheEviction() async throws {
+    let count = AppIconRepository.memoryLimit + 1
+    let data = png(width: 16, height: 16)
+    let entries = (0..<count)
+      .map {
+        ActivityLog.Entry(id: "\($0)", says: "clicked \($0)", app: "App \($0)", bundleId: "test.app.\($0)")
+      }
+    let pairs = (0..<count)
+      .map { ("test.app.\($0)", "/Applications/App\($0).app") }
+    let bundles = Dictionary(uniqueKeysWithValues: pairs)
+    let lookups = IconLookups()
+    let icons = AppIcons(
+      store: AppIconStore(caches: nil),
+      lookup: lookups.lookup(icons: bundles.values.reduce(into: [:]) { $0[$1] = data }, ids: bundles),
+      home: "/Users/person"
+    )
+    let viewer = try await ViewerController.watching(ScriptedService(), icons: icons)
+    defer { viewer.close() }
+    viewer.panesModel.wantIcons(for: entries)
+    try await settle("the active icons never finished loading") {
+      viewer.panes.icons.images.count == count && viewer.panesModel.iconRequests.isEmpty
+    }
+    #expect(icons.repository.cachedCount == AppIconRepository.memoryLimit)
+    let reads = await lookups.asked
+    #expect(reads.count == count * 2)
+    for _ in 0..<3 {
+      viewer.panesModel.wantIcons(for: entries)
+      #expect(viewer.panesModel.iconRequests.isEmpty)
+      #expect(entries.allSatisfy { viewer.panes.icons.image(bundleId: $0.bundleId, name: $0.app ?? "") != nil })
+    }
+    #expect(await lookups.asked == reads)
+
+    let remaining = Array(entries.dropFirst())
+    viewer.panesModel.wantIcons(for: remaining)
+    #expect(viewer.panes.icons.images.count == remaining.count)
+    #expect(viewer.panes.icons.images["bundle:test.app.0"] == nil)
+    #expect(viewer.panesModel.iconRequests.isEmpty)
+    viewer.panesModel.wantIcons(for: [ActivityLog.Entry]())
+    #expect(viewer.panes.icons.images.isEmpty, "images leave the presentation when no longer active")
+  }
+
   @Test("an app draws its initial until its icon is found, then its icon, and later readings look for it no more")
   func foundOnce() async throws {
     let service = ScriptedService()
@@ -71,38 +113,41 @@ struct ViewerPanesIconsTests {
 
   @Test("new live evidence retries an earlier Activity icon miss")
   func liveEvidenceRetriesAMiss() async throws {
-    let viewer = try await ViewerController.watching(ScriptedService(), icons: .none)
+    let icons = AppIcons.none
+    let viewer = try await ViewerController.watching(ScriptedService(), icons: icons)
     let weak = try #require(AppIconWant.named(bundleId: "test.atlas.probe", name: "Probe"))
-    viewer.panesModel.land(nil, for: weak)
-    #expect(viewer.panesModel.iconWork.missed.contains(weak.key.text))
+    #expect(await icons.find(weak) == nil)
     let app = HelperApp(pid: 9, name: "Probe", bundleId: "test.atlas.probe", icon: png(width: 128, height: 128))
     viewer.panesModel.wantIcons(for: [app])
-    #expect(!viewer.panesModel.iconWork.missed.contains(weak.key.text))
     try await settle("the live icon never replaced the miss") { viewer.panes.icons.images[weak.key.text] != nil }
-    #expect(viewer.panesModel.iconWork.readLive[weak.key.text]?.served == app.icon)
     viewer.close()
   }
 
   @Test("live icon work waits behind a weaker in-flight lookup and finishes only after processing")
   func liveEvidenceWaitsBehindAWeakerLookup() async throws {
-    let viewer = try await ViewerController.watching(ScriptedService(), icons: .none)
+    let gate = IconLookupGate()
+    defer { gate.release() }
+    var lookup = AppIconLookup.none
+    lookup.bundleOfId = { _ in
+      await gate.read()
+      return nil
+    }
+    let icons = AppIcons(store: AppIconStore(caches: nil), lookup: lookup, home: "/Users/person")
+    let viewer = try await ViewerController.watching(ScriptedService(), icons: icons)
     let weak = try #require(AppIconWant.named(bundleId: "test.atlas.probe", name: "Probe"))
-    // Hold the weaker work deterministically until its completion is delivered below.
-    viewer.panesModel.iconWork.loading[weak.key.text] = Task {}
-    viewer.panesModel.iconWork.active[weak.key.text] = weak
+    viewer.panesModel.wantIcons(for: [ActivityLog.Entry(id: "1", says: "Probe", app: "Probe", bundleId: weak.bundleId)])
+    try await settle("the weaker lookup never started") { gate.count == 1 }
     let app = HelperApp(pid: 9, name: "Probe", bundleId: "test.atlas.probe", icon: png(width: 128, height: 128))
     let bundled = HelperApp(pid: 9, name: "Probe", bundle: "/Applications/Probe.app", bundleId: "test.atlas.probe")
     viewer.panesModel.wantIcons(for: [bundled])
     viewer.panesModel.wantIcons(for: [app])
     viewer.panesModel.wantIcons(for: [app])
-    #expect(viewer.panesModel.iconWork.wanted.count == 1)
-    #expect(viewer.panesModel.iconWork.wanted.first?.bundle == "/Applications/Probe.app")
-    #expect(viewer.panesModel.iconWork.wanted.first?.served == app.icon)
-    #expect(viewer.panesModel.iconWork.readLive[weak.key.text] == nil)
-    viewer.panesModel.land(nil, for: weak)
+    #expect(icons.repository.waiterCount == 1, "new evidence updates this window's existing waiter")
+    #expect(viewer.panesModel.iconRequests.count == 1)
+    #expect(viewer.panes.icons.images[weak.key.text] == nil)
+    gate.release()
     try await settle("the stronger icon request was lost") { viewer.panes.icons.images[weak.key.text] != nil }
-    #expect(viewer.panesModel.iconWork.wanted.isEmpty)
-    #expect(viewer.panesModel.iconWork.readLive[weak.key.text]?.served == app.icon)
+    #expect(gate.count == 1)
     viewer.close()
   }
 

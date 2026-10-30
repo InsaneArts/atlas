@@ -157,8 +157,8 @@ struct ActivityGroupingTests {
     #expect(found("") == ["yours", "agent"])
   }
 
-  @Test("today's count holds every row started today, whatever repeats or filters show")
-  func countTodayCountsRows() {
+  @Test("today's count holds every action started today, whatever repeats or filters show")
+  func countTodayCountsActions() {
     let rules = Self.rules([
       Self.row("3", 140, actor: .you),
       Self.row("2", 150, actor: .you),
@@ -166,6 +166,71 @@ struct ActivityGroupingTests {
       Self.row("yesterday", 12 * 3600),
     ])
     #expect(rules.countToday == 3)
+  }
+
+  @Test("a row of the person's input holding many actions counts the same in the day's total and in its moment")
+  func personalInputCountsTheSameInTheDayAndItsMoment() throws {
+    let rules = Self.rules([
+      ActivityLog.Entry(id: "personal", actor: .you, ageSeconds: 0, count: 2107)
+    ])
+    let moment = try #require(ActivityMoments(rules, captures: [], scope: .all).moments.first)
+    #expect(rules.countToday == 2107)
+    #expect(moment.actions == rules.countToday)
+  }
+
+  @Test("today's action total preserves repeats and defaults missing or invalid counts to one")
+  func repeatsAndDefaultCountsUseActions() throws {
+    let rules = Self.rules([
+      ActivityLog.Entry(id: "newer", ageSeconds: 0, count: 7),
+      ActivityLog.Entry(id: "older", ageSeconds: 1, count: 3),
+      ActivityLog.Entry(id: "missing", ageSeconds: 2),
+      ActivityLog.Entry(id: "zero", ageSeconds: 3, count: 0),
+      ActivityLog.Entry(id: "negative", ageSeconds: 4, count: -2),
+    ])
+    let moment = try #require(ActivityMoments(rules, captures: [], scope: .all).moments.first)
+    #expect(moment.runs.count == 1)
+    #expect(moment.runs.first?.count == 5)
+    #expect(rules.countToday == 13)
+    #expect(moment.actions == rules.countToday)
+  }
+
+  @Test("today's action total counts only dated rows in the chosen session")
+  func actionTotalsKeepTheirDateAndSessionScope() {
+    let rules = Self.rules([
+      ActivityLog.Entry(id: "chosen", ageSeconds: 0, count: 7, session: "chosen"),
+      ActivityLog.Entry(id: "other", ageSeconds: 1, count: 3, session: "other"),
+      ActivityLog.Entry(id: "personal", actor: .you, ageSeconds: 2, count: 2107),
+      ActivityLog.Entry(id: "yesterday", ageSeconds: 12 * 3600, count: 100, session: "chosen"),
+      ActivityLog.Entry(id: "undated", count: 200, session: "chosen"),
+    ])
+    #expect(rules.countToday == 2117)
+    #expect(rules.countToday(in: .session("chosen")) == 7)
+    #expect(rules.countToday(in: .session("other")) == 3)
+    #expect(rules.countToday(in: .session("")) == 0)
+  }
+
+  @Test(
+    "daily, repeated-run and moment action totals saturate at the integer boundary",
+    arguments: [Int.max - 1, Int.max],
+    [false, true]
+  )
+  func actionTotalsSaturate(count: Int, repeats: Bool) throws {
+    let body = Data(
+      """
+      {"activity": [
+        {"id": "newer", "ageSeconds": 0, "count": \(count), "says": "clicked"},
+        {"id": "older", "ageSeconds": 1, "count": 1, "says": "\(repeats ? "clicked" : "scrolled")"},
+        {"id": "oldest", "ageSeconds": 2, "count": 1, "says": "\(repeats ? "clicked" : "typed")"}
+      ]}
+      """.utf8
+    )
+    let log = try ViewerClient.activity(body, response: reply(200))
+    let rules = Self.rules(log.entries)
+    let moment = try #require(ActivityMoments(rules, captures: [], scope: .all).moments.first)
+    #expect(rules.countToday == .max)
+    #expect(moment.actions == .max)
+    #expect(moment.runs.count == (repeats ? 1 : 3))
+    #expect(moment.runs.first?.actions == (repeats ? .max : count))
   }
 
   @Test("a row's time is the same at every reading when the service gives its start")

@@ -1,7 +1,7 @@
 import AtlasService
 import Foundation
 
-/// The Screenshots tab's words that depend on what it holds: the count, the time groups, which are Activity's, a
+/// The Screenshots pane's words that depend on what it holds: the count, the time groups, which are Activity's, a
 /// screenshot's label, caption and file name, and the empty messages. Fixed copy, such as the pane's title and its
 /// tiles' tooltip, stays in its view.
 extension ViewerWords {
@@ -20,7 +20,7 @@ extension ViewerWords {
     today == 0 ? "None today" : "\(today) today"
   }
 
-  /// A group of screenshots' label, in the Activity tab's words: the last hour is Now, the rest of today one group.
+  /// A group of screenshots' label, in the Activity pane's words: the last hour is Now, the rest of today one group.
   ///
   /// - Parameters:
   ///   - period: The stretch of time.

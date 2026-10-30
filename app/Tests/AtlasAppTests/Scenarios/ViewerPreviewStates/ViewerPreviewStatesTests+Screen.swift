@@ -13,8 +13,11 @@
     /// - Parameter snapshot: The facts to change.
     static func onClock(_ snapshot: inout ViewerSnapshot) {
       snapshot.date = activityReadAt
-      snapshot.timeZone = TimeZone(secondsFromGMT: 0) ?? .current
+      snapshot.timeZone = .gmt
       snapshot.locale = Locale(identifier: "de_DE")
+      snapshot.calendar = Calendar(identifier: .gregorian)
+      snapshot.calendar.locale = snapshot.locale
+      snapshot.calendar.timeZone = snapshot.timeZone
     }
 
     /// The Screen tab's samples' facts, by the sample's name: each top-row state, alert and empty message.

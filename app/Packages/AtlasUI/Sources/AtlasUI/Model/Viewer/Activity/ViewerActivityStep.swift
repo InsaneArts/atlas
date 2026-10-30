@@ -1,6 +1,6 @@
 /// One step of an open moment: its disc on the moment's line, what was done, when, the screenshot it took, and for
 /// one that did not work, a callout that says what happened, why and what came next.
-public struct ViewerActivityStep: Equatable, Sendable {
+public struct ViewerActivityStep: Equatable, Sendable, Identifiable {
   /// The step's identity: its earliest row's id, never reused.
   public var id: String
   /// What kind of thing it did, which its disc's glyph shows.

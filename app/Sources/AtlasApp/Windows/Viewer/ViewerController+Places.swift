@@ -25,7 +25,7 @@ extension ViewerController {
     panesModel.followPane()
   }
 
-  /// What the person has seen of the helper's activity. While the Activity tab shows, everything it shows is
+  /// What the person has seen of the helper's activity. While the Activity pane shows, everything it shows is
   /// seen: its own log once read, which reads on while the picture is paused, else the status's actions. At
   /// the first reading the status's actions are seen, so what the helper did before the window opened is
   /// never new. Otherwise an unseen action that failed is remembered until Activity shows, even once newer

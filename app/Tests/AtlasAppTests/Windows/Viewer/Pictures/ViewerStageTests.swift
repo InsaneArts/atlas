@@ -79,8 +79,8 @@ struct ViewerStageTests {
   static func activity(lines: Int) throws -> ViewerState {
     var state = PreviewStates.viewerActivity
     guard case .activity(var activity) = state.pane,
-      let moment = activity.items.first,
-      case .step(let step)? = activity.items.first(where: { if case .step = $0 { true } else { false } })
+      var moment = activity.days.first?.moments.first,
+      let step = moment.steps.first
     else {
       return state
     }
@@ -93,9 +93,10 @@ struct ViewerStageTests {
         line.mark = .quiet
         line.shot = nil
         line.isLast = index == 0
-        return ViewerActivityItem.step(line)
+        return line
       }
-    activity.items = [moment] + many
+    moment.steps = many
+    activity.days = [ViewerActivityDay(id: "today", title: "", moments: [moment])]
     state.pane = .activity(activity)
     return state
   }

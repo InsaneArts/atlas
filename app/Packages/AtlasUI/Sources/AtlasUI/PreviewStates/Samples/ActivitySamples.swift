@@ -88,20 +88,15 @@
 
     /// The working sample's steps, and the problems sample's.
     private var steps: [ViewerActivityStep] {
-      (PreviewStates.workingActivity.items + PreviewStates.problemsActivity.items)
-        .compactMap { item in
-          if case .step(let step) = item { return step }
-          return nil
-        }
+      (PreviewStates.workingActivity.days + PreviewStates.problemsActivity.days)
+        .flatMap(\.moments)
+        .flatMap(\.steps)
     }
 
     /// The working sample's moments, and the session sample's.
     private var moments: [ViewerActivityMoment] {
-      (PreviewStates.workingActivity.items + PreviewStates.bySessionActivity.items)
-        .compactMap { item in
-          if case .moment(let moment) = item { return moment }
-          return nil
-        }
+      (PreviewStates.workingActivity.days + PreviewStates.bySessionActivity.days)
+        .flatMap(\.moments)
     }
   }
 #endif

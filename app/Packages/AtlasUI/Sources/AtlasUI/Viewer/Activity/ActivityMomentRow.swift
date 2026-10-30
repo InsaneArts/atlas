@@ -11,7 +11,7 @@ struct ActivityMomentRow: View {
   let moment: ViewerActivityMoment
   /// Receives what the person does.
   let send: @MainActor (ViewerEvent) -> Void
-  @Environment(\.accessibilityReduceMotion) private var reduceMotion
+  @Environment(\.motionReduced) private var reduceMotion
 
   /// The header, one button whether or not the moment can fold, so a moment that comes to rest keeps its one header
   /// where it stands; held open, its press does nothing and its capsule never shows.
@@ -24,6 +24,7 @@ struct ActivityMomentRow: View {
     } label: {
       label
     }
+    .layoutFrame("moment \(moment.id)")
     .buttonStyle(ActivityMomentStyle(isOpen: moment.isOpen, canFold: moment.canFold))
     .accessibilityHint(hint)
     .padding(.horizontal, -ViewerLayout.capsuleReach)

@@ -9,7 +9,7 @@ struct ActivityMomentStyle: ButtonStyle {
   /// Whether the person can fold or open it.
   let canFold: Bool
   @Environment(\.hoverPaused) private var hoverPaused
-  @Environment(\.accessibilityReduceMotion) private var reduceMotion
+  @Environment(\.motionReduced) private var reduceMotion
 
   /// The header on its capsule.
   func makeBody(configuration: Configuration) -> some View {

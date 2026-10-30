@@ -26,21 +26,24 @@ public enum ActivityFollowUp: Equatable, Sendable {
     }
   }
 
-  /// Whether a row does again what an earlier one did: the same verb, or the same kind for rows that name none, in
-  /// the same app or in none.
+  /// Whether retained evidence identifies the same action and target. Typed text, coordinates and commands are
+  /// deliberately absent from the log, so those actions cannot establish a retry.
   ///
   /// - Parameters:
   ///   - next: The newer row.
   ///   - problem: The earlier row.
   /// - Returns: Whether `next` is a retry of `problem`.
   static func retries(_ next: ActivityLog.Entry, _ problem: ActivityLog.Entry) -> Bool {
-    let sameVerb =
-      if let verb = next.verb, let earlier = problem.verb {
-        verb == earlier
-      } else {
-        ActivityAction(next) == ActivityAction(problem)
-      }
-    guard sameVerb else { return false }
+    guard let verb = next.verb, verb == problem.verb, next.operation == problem.operation,
+      next.keys == problem.keys, next.label == problem.label
+    else { return false }
+    switch verb {
+    case "key":
+      guard !next.keys.isEmpty || next.label?.isEmpty == false else { return false }
+    case "click", "double-click", "right-click", "open", "open-link", "close", "install":
+      guard next.label?.isEmpty == false else { return false }
+    default: return false
+    }
     switch (ActivityApp(next), ActivityApp(problem)) {
     case (nil, nil): return true
     case (let app?, let earlier?): return app.isSame(as: earlier)

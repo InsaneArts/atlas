@@ -338,7 +338,7 @@ public enum Motion {
   ///   - reduceMotion: Whether the Reduce Motion setting is on.
   /// - Returns: `base`, or `nil` under Reduce Motion.
   static func animation(_ base: Animation, reduceMotion: Bool) -> Animation? {
-    reduceMotion ? nil : base
+    layout(base, reduceMotion: reduceMotion)
   }
 
   /// An animation, or a gentler one under Reduce Motion, such as ``reduced`` in place of a spring.

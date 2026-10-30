@@ -77,10 +77,14 @@ struct ViewerPresenterAppsTests {
   static func listing(_ apps: (Date) -> [HelperApp]) throws -> ViewerSnapshot {
     var snapshot = try ViewerSnapshot.listing(ViewerPresenterSessionsTests.three)
     snapshot.session.place = .apps
-    snapshot.timeZone = TimeZone(secondsFromGMT: 0) ?? .current
-    snapshot.locale = Locale(identifier: "de_DE")
     let read = apps(snapshot.date)
     snapshot.panes.apps.apps = read
+    snapshot.panes.apps.occluders = HelperOccluderList(
+      windows: read.filter { !$0.hidden }
+        .flatMap(\.windows)
+        .sorted { ($0.order ?? Int.max) < ($1.order ?? Int.max) }
+        .map { HelperOccluder(window: $0) }
+    )
     snapshot.panes.apps.steadyWindows = ViewerPanesModel.steadyWindows(read, since: read)
     return snapshot
   }
@@ -95,7 +99,7 @@ struct ViewerPresenterAppsTests {
 
   @Test("an app with no windows still lists, with no window rows and no picture", arguments: ["", "Find"])
   func appWithNoWindowsLists(query: String) {
-    var snapshot = ViewerSnapshot()
+    var snapshot = ViewerSnapshot.presenterSample
     snapshot.panes.apps.apps = [
       HelperApp(pid: 4, name: "Opie", windows: [HelperWindow(id: 1, title: "Starter", width: 1080, height: 590)]),
       HelperApp(pid: 5, name: "Finder"),
@@ -195,6 +199,17 @@ struct ViewerPresenterAppsTests {
     #expect(opie.windows.map(\.isFront) == [true, false], "the front window of the app in front is marked")
   }
 
+  @Test("searching for a rear window never promotes it to the front window")
+  func searchingPreservesTheFrontWindowIdentity() throws {
+    var snapshot = try Self.listing(Self.every)
+    for (query, ids, front) in [("Starter", [11], []), ("Ring", [12], [12]), ("Opie", [12, 11], [12])] {
+      snapshot.session.search.query = query
+      let card = try #require(ViewerPresenter.apps(snapshot).cards.first { $0.name == "Opie" })
+      #expect(card.windows.map(\.id) == ids)
+      #expect(card.windows.filter(\.isFront).map(\.id) == front)
+    }
+  }
+
   @Test("the front window's picture is cut from the live picture only while it is in view")
   func theFrontWindowIsCutOnlyWhileInView() throws {
     let snapshot = try Self.listing(Self.every)
@@ -224,6 +239,36 @@ struct ViewerPresenterAppsTests {
     }
   }
 
+  @Test(
+    "menus and accessory windows suppress crops even though they have no Apps cards",
+    arguments: ["Menu", "Accessory"]
+  )
+  func everyCoveringWindowSuppressesTheCrop(owner: String) throws {
+    var snapshot = try Self.listing(Self.every)
+    let window = try #require(snapshot.panes.apps.apps?.first?.windows.first)
+    let cover = HelperOccluder(
+      window: HelperWindow(id: 999, x: window.x, y: window.y, width: window.width, height: window.height / 2),
+      owner: owner
+    )
+    snapshot.panes.apps.occluders?.windows.insert(cover, at: 0)
+    let cards = ViewerPresenter.apps(snapshot).cards
+    #expect(cards.first { $0.name == owner } == nil)
+    #expect(cards.first { $0.name == "Opie" }?.picture?.window == nil)
+    snapshot.panes.apps.occluders = nil
+    #expect(ViewerPresenter.apps(snapshot).cards.first { $0.name == "Opie" }?.picture?.window == nil)
+  }
+
+  @Test("display-wide system pass-through layers preserve visible crops", arguments: ["Dock", "Notification Center"])
+  func passThroughLayersDoNotHideCrops(owner: String) throws {
+    var snapshot = try Self.listing(Self.every)
+    let display = try #require(snapshot.reading.frame?.display)
+    snapshot.panes.apps.occluders?.windows.insert(
+      HelperOccluder(window: HelperWindow(id: 999, width: display.width, height: display.height), owner: owner),
+      at: 0
+    )
+    #expect(ViewerPresenter.apps(snapshot).cards.first { $0.name == "Opie" }?.picture?.window != nil)
+  }
+
   @Test("no window's picture is kept once Apps closes: no other place draws one")
   func noPictureOutlivesApps() throws {
     var snapshot = try Self.listing(Self.every)
@@ -248,7 +293,7 @@ struct ViewerPresenterAppsTests {
 
   @Test("the apps list's sessions name an agent's card once the status no longer lists its session")
   func theAppsListNamesItsSessions() throws {
-    var snapshot = ViewerSnapshot()
+    var snapshot = ViewerSnapshot.presenterSample
     snapshot.panes.apps.apps = [Self.opie(snapshot.date)]
     snapshot.panes.apps.sessions = [Self.claude: HostSessionSummary(name: "Claude Code · atlas", host: .claude)]
     #expect(ViewerPresenter.apps(snapshot).cards.first?.origin?.name == "Claude Code · atlas")

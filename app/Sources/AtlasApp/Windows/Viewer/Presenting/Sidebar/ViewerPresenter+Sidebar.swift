@@ -6,7 +6,7 @@ import Foundation
 extension ViewerPresenter {
   /// The most icons All sessions stacks.
   static let mostStackedIcons = 3
-  /// 20: the most ended sessions the sidebar lists.
+  /// 20: the recent ended sessions the sidebar lists, plus the chosen session if it is older.
   static let mostEnded = 20
 
   /// The sidebar: hidden while the person hid it, else beside the card, until the window's width hides it
@@ -30,7 +30,8 @@ extension ViewerPresenter {
   /// stacked on All sessions with how many are live, then each live session by what it does, in the service's order:
   /// those that need the person under Needs you, first and only while one does, those acting or waiting their turn
   /// under Working, and the rest under Idle; the status's sessions first, then those it had no room to list, from the
-  /// last read of the list. Then the sessions that list says ended, newest first, at most ``mostEnded``, counted under
+  /// last read of the list. Then the sessions that list says ended, newest first, the recent ``mostEnded`` plus any
+  /// older chosen session, counted under
   /// Ended and listed only while it is open, but for the chosen one, which stays listed under the folded heading. An
   /// open search keeps only the sessions whose name or line holds its query, and a section left with none folds away.
   /// An older service that offers no list gives the status's sessions alone and no Ended.
@@ -46,9 +47,11 @@ extension ViewerPresenter {
       .filter { !listedKeys.contains($0.key) && $0.isLive && $0.state != .ended }
     let live = listed + rest
     let liveKeys = Set(live.map(\.key))
-    let ended = (snapshot.panes.sessions.list?.sessions ?? [])
+    let history = (snapshot.panes.sessions.list?.sessions ?? [])
       .filter { $0.isEnded && !liveKeys.contains($0.key) }
-      .prefix(mostEnded)
+    let ended = history.enumerated()
+      .filter { $0.offset < mostEnded || chosen == .one($0.element.key) }
+      .map(\.element)
     let icons =
       live
       .prefix(mostStackedIcons)

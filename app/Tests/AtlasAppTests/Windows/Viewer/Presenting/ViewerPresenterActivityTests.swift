@@ -166,7 +166,7 @@ struct ViewerPresenterActivityTests {
     #expect(Self.moments(ViewerPresenter.activity(snapshot)).map(\.title) == ["Notes"])
     snapshot.session.search.query = "nothing like it"
     let none = ViewerPresenter.activity(snapshot)
-    #expect(none.items.isEmpty)
+    #expect(none.days.isEmpty)
     #expect(none.empty?.headline == ViewerWords.noActivityMatch("nothing like it"))
     #expect(none.showsFilters, "a search that finds nothing keeps the filters")
   }
@@ -181,6 +181,25 @@ struct ViewerPresenterActivityTests {
     #expect(activity.meta == "6 actions today")
     #expect(Self.moments(activity).map(\.title) == ["Opie"])
     #expect(Self.moments(activity).allSatisfy { $0.session == nil }, "one session's moments need no name")
+  }
+
+  @Test("All sessions preserves historical attribution and VoiceOver names after every session ends")
+  func historyKeepsSessionAttribution() throws {
+    var snapshot = try Self.onActivity(Self.mixedLog, sessions: [])
+    snapshot.panes.activity.log?.sessions = [
+      Self.claude: HostSessionSummary(name: "Claude Code · history", host: .claude),
+      Self.codex: HostSessionSummary(name: "Codex · history", host: .codex),
+    ]
+    let moments = Self.moments(ViewerPresenter.activity(snapshot))
+    let claude = try #require(moments.first { $0.title == "Opie" && $0.session?.name == "Claude Code · history" })
+    let codex = try #require(moments.first { $0.title == "Notes" })
+    #expect(claude.session?.icon != nil)
+    #expect(codex.session?.icon != nil)
+    #expect(claude.label.contains("Claude Code · history"))
+    #expect(codex.label.contains("Codex · history"))
+    snapshot.reading.hasStatus = false
+    snapshot.session.chosenSession = .one(Self.claude)
+    #expect(Self.moments(ViewerPresenter.activity(snapshot)).allSatisfy { $0.session == nil })
   }
 
   @Test("only the causing session's uncertain step offers Recover, and its moment stays open")
@@ -224,6 +243,62 @@ struct ViewerPresenterActivityTests {
     #expect(Self.moments(activity).first?.canFold == false, "the moment holding it offers no fold")
   }
 
+  @Test("a lone session's unresolved action holds its folded moment open and offers recovery")
+  func oneSessionCannotFoldAwayRecovery() throws {
+    var snapshot = try Self.onActivity(
+      [Self.row("c1", "clicked in Opie", verb: "click", app: "Opie", age: 0, outcome: .failed, session: Self.claude)],
+      sessions: [SessionReplies.claudeNeedsYou],
+      mode: "recovering",
+      state: "needsYou",
+      pending: 1
+    )
+    let first = try #require(Self.moments(ViewerPresenter.activity(snapshot)).first)
+    snapshot.panes.activity.choices[first.id] = false
+    let activity = ViewerPresenter.activity(snapshot)
+    #expect(snapshot.reading.statusReading.causer == nil, "one session needs no session label")
+    #expect(Self.moments(activity).first?.isOpen == true)
+    #expect(Self.moments(activity).first?.canFold == false)
+    #expect(Self.steps(activity).filter(\.offersRecovery).map(\.id) == ["c1"])
+  }
+
+  @Test("an aggregated personal input row has the same action total in its moment, Library and VoiceOver summary")
+  func personalInputCountsAgreeAcrossTheViewer() throws {
+    let row = ActivityLog.Entry(id: "personal", says: "sent 2107 actions", actor: .you, ageSeconds: 0, count: 2107)
+    var snapshot = try Self.onActivity([row], sessions: [])
+    let activity = ViewerPresenter.activity(snapshot)
+    #expect(Self.moments(activity).first?.span.hasPrefix("2107 actions ·") == true)
+    #expect(activity.meta == "2107 actions today")
+    #expect(ViewerPresenter.library(snapshot).first { $0.place == .activity }?.count == 2107)
+
+    let moment = try #require(Self.moments(activity).first)
+    snapshot.panes.activity.choices[moment.id] = false
+    let folded = try #require(Self.moments(ViewerPresenter.activity(snapshot)).first)
+    #expect(!folded.isOpen)
+    #expect(folded.label.contains("2107 actions"))
+
+    snapshot.panes.activity.filter = .problems
+    snapshot.session.search.query = "no match"
+    let filtered = ViewerPresenter.activity(snapshot)
+    #expect(filtered.days.isEmpty)
+    #expect(filtered.meta == activity.meta)
+    #expect(ViewerPresenter.library(snapshot).first { $0.place == .activity }?.count == 2107)
+  }
+
+  @Test("a session's Library and VoiceOver summary count its actions and exclude personal input")
+  func sessionActionCountsAgreeAcrossTheViewer() throws {
+    let rows = [
+      ActivityLog.Entry(id: "chosen", ageSeconds: 0, count: 7, session: Self.claude),
+      ActivityLog.Entry(id: "other", ageSeconds: 1, count: 3, session: Self.codex),
+      ActivityLog.Entry(id: "personal", actor: .you, ageSeconds: 2, count: 2107),
+    ]
+    var snapshot = try Self.onActivity(rows)
+    snapshot.session.chosenSession = .one(Self.claude)
+    let activity = ViewerPresenter.activity(snapshot)
+    #expect(activity.meta == "7 actions today")
+    #expect(Self.moments(activity).first?.span.hasPrefix("7 actions ·") == true)
+    #expect(ViewerPresenter.library(snapshot).first { $0.place == .activity }?.count == 7)
+  }
+
   @Test("a refusal before anything was sent is no problem, and says what the agent did next")
   func aRefusalIsNoProblem() throws {
     let log = [
@@ -244,10 +319,37 @@ struct ViewerPresenterActivityTests {
     #expect(step.kind == .typing)
     #expect(
       step.problem
-        == ViewerActivityProblem(why: "Another app was in front.", next: "The agent tried again, and it worked.")
+        == ViewerActivityProblem(why: "Another app was in front.", next: "Then it typed.")
     )
     snapshot.panes.activity.filter = .problems
-    #expect(ViewerPresenter.activity(snapshot).items.isEmpty)
+    #expect(ViewerPresenter.activity(snapshot).days.isEmpty)
+  }
+
+  @Test("a personal moment's follow-up names the person after its step has removed the actor prefix")
+  func personalFollowUpsKeepTheirActor() throws {
+    let log = [
+      ActivityLog.Entry(
+        id: "next",
+        says: "clicked Cancel in Notes",
+        actor: .you,
+        ageSeconds: 1,
+        verb: "click",
+        app: "Notes",
+        label: "Cancel"
+      ),
+      ActivityLog.Entry(
+        id: "failed",
+        says: "couldn't click Save in Notes",
+        outcome: .failed,
+        actor: .you,
+        ageSeconds: 3,
+        verb: "click",
+        app: "Notes",
+        label: "Save"
+      ),
+    ]
+    let steps = Self.steps(ViewerPresenter.activity(try Self.onActivity(log, sessions: [])))
+    #expect(steps.last?.problem?.next == "Then you clicked Cancel.")
   }
 
   /// The Activity tab over `log` while Claude Code acts, Codex waits and Cursor is idle, read at the snapshot's time.
@@ -356,10 +458,7 @@ struct ViewerPresenterActivityTests {
   /// - Parameter activity: The pane.
   /// - Returns: Its moments, in order.
   static func moments(_ activity: ViewerActivityState) -> [ViewerActivityMoment] {
-    activity.items.compactMap { item in
-      if case .moment(let moment) = item { return moment }
-      return nil
-    }
+    activity.days.flatMap(\.moments)
   }
 
   /// The steps a pane lists.
@@ -367,9 +466,8 @@ struct ViewerPresenterActivityTests {
   /// - Parameter activity: The pane.
   /// - Returns: Its steps, in order.
   static func steps(_ activity: ViewerActivityState) -> [ViewerActivityStep] {
-    activity.items.compactMap { item in
-      if case .step(let step) = item { return step }
-      return nil
-    }
+    activity.days
+      .flatMap(\.moments)
+      .flatMap(\.steps)
   }
 }

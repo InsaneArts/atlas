@@ -34,11 +34,11 @@ struct ViewerSnapshot {
   var timeZone = TimeZone.current
   /// The locale the facts tell their times in, and the lists their times and days.
   var locale = Locale.current
-  /// What the Activity, Apps and Screenshots tabs hold.
+  /// What the Activity, Apps and Screenshots panes hold.
   var panes = ViewerPanes()
-  /// The date and time now, which the tabs tell Now, today and the last hour by.
+  /// The date and time now, which the panes tell Now, today and the last hour by.
   var date = Date()
-  /// The calendar the tabs tell days and hours by; its time zone is ``timeZone``'s.
+  /// The calendar the panes tell days and hours by; its time zone is ``timeZone``'s.
   var calendar = Calendar(identifier: .gregorian)
 
   /// Whether this window holds control.

@@ -128,10 +128,9 @@
     /// - Returns: Whether Notes is folded.
     private static func isFolded(_ state: ViewerState) -> Bool {
       guard case .activity(let activity) = state.pane else { return false }
-      return activity.items.contains { item in
-        guard case .moment(let moment) = item else { return false }
-        return moment.id == notes && !moment.isOpen
-      }
+      return activity.days
+        .flatMap(\.moments)
+        .contains { $0.id == notes && !$0.isOpen }
     }
 
     /// `state` showing `sample`'s list with its small screen, unless it shows that place already.

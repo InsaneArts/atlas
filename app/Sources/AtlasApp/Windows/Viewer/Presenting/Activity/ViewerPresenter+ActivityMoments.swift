@@ -4,7 +4,7 @@ import AtlasUI
 import Foundation
 
 extension ViewerPresenter {
-  /// The rows the Activity list draws, in order: a quiet heading over each day before today, each moment's header,
+  /// The days the Activity list draws, each owning its moments, with a quiet heading before today,
   /// and under an open moment its newest steps, its last where its line ends, then "Show N more" while it holds more
   /// than it lists and the person has not asked for them all. A moment is open by default while it is the newest or
   /// ended within five minutes, the person's choice wins after that, and a moment with a step under way, the action of
@@ -14,39 +14,49 @@ extension ViewerPresenter {
   ///   - shown: The moments the filter and the search keep, newest first.
   ///   - moments: Every moment in scope, for what followed a problem.
   ///   - snapshot: What the controller holds.
-  /// - Returns: The rows.
-  static func activityItems(
+  /// - Returns: The nested days.
+  static func activityDays(
     _ shown: [ActivityMoment],
     moments: ActivityMoments,
     _ snapshot: ViewerSnapshot
-  ) -> [ViewerActivityItem] {
+  ) -> [ViewerActivityDay] {
     let facts = snapshot.panes.activity
     let folds = moments.folds(
       of: shown,
       filter: activityFilter(facts.filter),
-      uncertainRow: snapshot.reading.statusReading.causer?.uncertainRow,
-      choices: facts.choices
+      uncertainRow: snapshot.reading.statusReading.uncertainRow,
+      choices: facts.choices,
+      now: snapshot.date
     )
     let today = snapshot.zonedCalendar.startOfDay(for: snapshot.date)
-    var items: [ViewerActivityItem] = []
+    var days: [ViewerActivityDay] = []
     var day: Date?
     for moment in shown {
       if moment.day != day {
         day = moment.day
-        if moment.day < today { items.append(.day(dayHeading(moment.day, snapshot))) }
+        days.append(
+          ViewerActivityDay(
+            id: "\(Int(moment.day.timeIntervalSince1970))",
+            title: moment.day < today ? dayHeading(moment.day, snapshot) : "",
+            moments: []
+          )
+        )
       }
       let fold = folds[moment.id] ?? .folded
-      items.append(.moment(momentHeader(moment, fold: fold, snapshot)))
-      guard fold.isOpen else { continue }
-      let (steps, more) = moment.steps(expanded: facts.expanded.contains(moment.id))
-      for (index, run) in steps.enumerated() {
-        var step = activityStep(run, in: moment, moments: moments, snapshot)
-        step.isLast = index == steps.count - 1
-        items.append(.step(step))
+      var nested = momentHeader(moment, fold: fold, snapshot)
+      if fold.isOpen {
+        let (steps, more) = moment.steps(expanded: facts.expanded.contains(moment.id))
+        nested.steps = steps.enumerated()
+          .map { index, run in
+            var step = activityStep(run, in: moment, moments: moments, snapshot)
+            step.isLast = index == steps.count - 1
+            return step
+          }
+        if more > 0 { nested.more = ViewerMoreSteps(moment: moment.id, count: more) }
       }
-      if more > 0 { items.append(.more(ViewerMoreSteps(moment: moment.id, count: more))) }
+      days[days.count - 1].moments.append(nested)
     }
-    return items
+    return days
   }
 
   /// The quiet heading over a day before today: "Yesterday", or the day's name.
@@ -55,13 +65,14 @@ extension ViewerPresenter {
   ///   - day: The day's first moment.
   ///   - snapshot: What the controller holds.
   /// - Returns: The heading.
-  static func dayHeading(_ day: Date, _ snapshot: ViewerSnapshot) -> ViewerActivityDay {
+  static func dayHeading(_ day: Date, _ snapshot: ViewerSnapshot) -> String {
     let calendar = snapshot.zonedCalendar
     let yesterday = calendar.date(byAdding: .day, value: -1, to: calendar.startOfDay(for: snapshot.date))
     let title =
       day == yesterday
-      ? ViewerWords.yesterdayGroup : Words.dayName(day, locale: snapshot.locale, timeZone: snapshot.timeZone)
-    return ViewerActivityDay(id: "\(Int(day.timeIntervalSince1970))", title: title)
+      ? ViewerWords.yesterdayGroup
+      : Words.dayName(day, locale: snapshot.locale, calendar: snapshot.zonedCalendar, timeZone: snapshot.timeZone)
+    return title
   }
 
   /// A moment's header: its app's icon and name, or for a moment in no app the person's mark and "You", or Commands
@@ -80,7 +91,9 @@ extension ViewerPresenter {
   ) -> ViewerActivityMoment {
     let (icon, title) = momentSubject(moment, snapshot)
     let clock = { (date: Date?) in
-      date.map { Words.clockMinute($0, locale: snapshot.locale, timeZone: snapshot.timeZone) } ?? Words.unknown
+      date.map {
+        Words.clockMinute($0, locale: snapshot.locale, calendar: snapshot.zonedCalendar, timeZone: snapshot.timeZone)
+      } ?? Words.unknown
     }
     let age = moment.endedAt.map { stepAge($0, snapshot) } ?? ""
     return ViewerActivityMoment(
@@ -122,7 +135,7 @@ extension ViewerPresenter {
   }
 
   /// Whose work a moment was, as its header names it: the person's own always, and a host session's only while every
-  /// session's work shows and the status lists two or more, so one agent's moments are not all named alike.
+  /// session's work shows and its history names multiple agents, including sessions that have ended.
   ///
   /// - Parameters:
   ///   - stream: Whose work it follows.
@@ -133,7 +146,11 @@ extension ViewerPresenter {
     case .you:
       return ViewerMomentSession(icon: nil, name: ViewerWords.youGroup)
     case .session(let key):
-      guard snapshot.shownSessions.key == nil, snapshot.reading.statusReading.showsSessions else { return nil }
+      let sessions = Set(
+        (snapshot.panes.activity.log?.entries ?? []).filter { $0.actor != .you }
+          .map { $0.session ?? "" }
+      )
+      guard snapshot.shownSessions.key == nil, sessions.count > 1 else { return nil }
       let session = resolvedSession(key, snapshot)
       return ViewerMomentSession(icon: session.icon, name: session.name)
     }
@@ -148,7 +165,12 @@ extension ViewerPresenter {
   static func stepAge(_ date: Date, _ snapshot: ViewerSnapshot) -> String {
     ViewerWords.stepAge(
       max(0, snapshot.date.timeIntervalSince(date)),
-      clock: Words.clockMinute(date, locale: snapshot.locale, timeZone: snapshot.timeZone)
+      clock: Words.clockMinute(
+        date,
+        locale: snapshot.locale,
+        calendar: snapshot.zonedCalendar,
+        timeZone: snapshot.timeZone
+      )
     )
   }
 }

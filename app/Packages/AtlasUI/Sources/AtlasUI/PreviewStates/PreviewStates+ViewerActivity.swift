@@ -104,7 +104,7 @@
         ViewerActivityState(
           meta: "",
           filters: activityFilters(),
-          items: [],
+          days: [],
           empty: EmptyMessageState(
             headline: "Nothing has happened yet",
             message: "What agents and you do in the helper shows up here."

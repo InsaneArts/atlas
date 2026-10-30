@@ -1,7 +1,7 @@
 import AtlasUI
 import Foundation
 
-/// The Activity tab's words that depend on what it holds: the filters, the moments, a step's words and
+/// The Activity pane's words that depend on what it holds: the filters, the moments, a step's words and
 /// times, what followed a problem, and the empty messages. Fixed copy, such as Show large, stays in its view.
 extension ViewerWords {
   /// The Activity filters, for VoiceOver.
@@ -94,11 +94,13 @@ extension ViewerWords {
 
   /// What a step did before a reason: the next step's words after "Then it" or "Then you".
   ///
-  /// - Parameter words: The next step's words, such as "Typed into Name" or "You clicked".
+  /// - Parameters:
+  ///   - words: The next step's words, with any actor prefix already removed.
+  ///   - personal: Whether the person performed the action.
   /// - Returns: "Then it typed into Name.", or "Then you clicked." for the person's own.
-  static func then(_ words: String) -> String {
-    if words.hasPrefix("You ") { return "Then you \(words.dropFirst(4))." }
-    return "Then it \(words.prefix(1).lowercased() + words.dropFirst())."
+  static func then(_ words: String, personal: Bool) -> String {
+    let subject = personal ? "you" : "it"
+    return "Then \(subject) \(words.prefix(1).lowercased() + words.dropFirst())."
   }
 
   /// When a step was done, or how long ago a folded moment ended: "now" under 10 seconds, then seconds and minutes

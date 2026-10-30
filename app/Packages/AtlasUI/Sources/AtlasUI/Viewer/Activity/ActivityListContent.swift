@@ -6,7 +6,7 @@ struct ActivityListContent: View {
   let state: ViewerActivityState
   /// Receives what the person does.
   let send: @MainActor (ViewerEvent) -> Void
-  @Environment(\.accessibilityReduceMotion) private var reduceMotion
+  @Environment(\.motionReduced) private var reduceMotion
   @Environment(\.listIsAtTop) private var isAtTop
 
   /// 48: above and below an empty filtered list's message.
@@ -29,15 +29,21 @@ struct ActivityListContent: View {
     .padding(.horizontal, ViewerLayout.swapInset)
   }
 
-  /// The filters, a capsule track at the list's leading edge, scrolling sideways in a pane too narrow for it; the
-  /// chosen one changes at once.
+  /// A whole capsule track: narrow panes omit visible counts and use smaller insets, keeping the counts spoken.
+  /// Extremely narrow panes scroll with a visible indicator. The thumb still slides and drags in either size.
   private var filters: some View {
     ViewThatFits(in: .horizontal) {
       tabs
+        .layoutFrame("activity filters")
+      tabs
+        .controlSize(.small)
+        .layoutFrame("activity filters")
       ScrollView(.horizontal) {
         tabs
+          .controlSize(.small)
+          .layoutFrame("activity filters")
       }
-      .scrollIndicators(.hidden)
+      .scrollIndicators(.visible)
     }
     .frame(maxWidth: .infinity, minHeight: ViewerLayout.filtersHeight, alignment: .leading)
     .padding(.top, ViewerLayout.activityTop)
@@ -57,31 +63,29 @@ struct ActivityListContent: View {
   /// opening and folding as one (``ActivityMomentBlock``).
   private var rows: some View {
     LazyVStack(alignment: .leading, spacing: .zero) {
-      ForEach(ActivityListBlock.blocks(state.items)) { block in
-        self.block(block)
-          .transition(ActivityMotion.row(isAtTop: isAtTop, reduceMotion: reduceMotion))
+      ForEach(state.days) { day in
+        if !day.title.isEmpty {
+          ListHeading(title: day.title)
+            .frame(height: ViewerLayout.dayHeight)
+            .padding(.top, ViewerLayout.dayAbove)
+            .id("day.\(day.id)")
+            .transition(ActivityMotion.row(isAtTop: isAtTop, reduceMotion: reduceMotion))
+        }
+        ForEach(day.moments) { moment in
+          ActivityMomentBlock(moment: moment, send: send)
+            .id("moment.\(moment.id)")
+            .transition(ActivityMotion.row(isAtTop: isAtTop, reduceMotion: reduceMotion))
+        }
       }
     }
     .scrollTargetLayout()
     .transaction(value: state.newest) { transaction in
       // A change the person made keeps the animation it was made in, so a filter's rows wait for those leaving.
-      guard transaction.animation == nil else { return }
-      transaction.animation = ActivityScroll.moving(isAtTop: isAtTop, reduceMotion: reduceMotion)
+      transaction.animation = Motion.layout(
+        transaction.animation ?? ActivityScroll.moving(isAtTop: isAtTop, reduceMotion: reduceMotion),
+        reduceMotion: reduceMotion
+      )
     }
   }
 
-  /// One element: a day's heading, or a moment with its steps.
-  ///
-  /// - Parameter block: The element.
-  /// - Returns: Its view.
-  @ViewBuilder private func block(_ block: ActivityListBlock) -> some View {
-    switch block {
-    case .day(let day):
-      ListHeading(title: day.title)
-        .frame(height: ViewerLayout.dayHeight)
-        .padding(.top, ViewerLayout.dayAbove)
-    case .moment(let moment, let rows):
-      ActivityMomentBlock(moment: moment, rows: rows, send: send)
-    }
-  }
 }

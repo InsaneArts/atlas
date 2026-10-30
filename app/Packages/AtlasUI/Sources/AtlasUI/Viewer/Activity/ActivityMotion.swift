@@ -9,34 +9,25 @@ enum ActivityMotion {
   /// How a moment opens or folds, and how "Show N more" opens the rest: its disclosure grows or shrinks on
   /// ``Motion/state``, one spring with no bounce that turns back from where it is when pressed again, revealing or
   /// covering its steps in place as the moments below move with it; under Reduce Motion the height changes at once,
-  /// and the steps only fade (``reveal(reduceMotion:)``).
+  /// and fully fitting steps appear in place.
   ///
   /// - Parameter reduceMotion: Whether the Reduce Motion setting is on.
   /// - Returns: The animation, or nil for none.
   static func fold(reduceMotion: Bool) -> Animation? {
-    Motion.animation(Motion.state, reduceMotion: reduceMotion)
-  }
-
-  /// How a moment's steps fade as it opens or folds: softly with its height on ``Motion/state``; a short fade under
-  /// Reduce Motion, the one change that shows there.
-  ///
-  /// - Parameter reduceMotion: Whether the Reduce Motion setting is on.
-  /// - Returns: The animation.
-  static func reveal(reduceMotion: Bool) -> Animation {
-    Motion.animation(Motion.state, reduceMotion: reduceMotion, reduced: Motion.crossfadeReduced)
+    Motion.layout(Motion.state, reduceMotion: reduceMotion)
   }
 
   /// How the list changes as the person picks a filter or asks for more steps: the rows that stay move into place
-  /// once the rows leaving have faded (``Motion/listMove``); a fade under Reduce Motion.
+  /// once the rows leaving have faded (``Motion/listMove``); geometry changes at once under Reduce Motion.
   ///
   /// - Parameter reduceMotion: Whether the Reduce Motion setting is on.
   /// - Returns: The animation.
-  static func filter(reduceMotion: Bool) -> Animation {
-    Motion.animation(Motion.listMove, reduceMotion: reduceMotion, reduced: Motion.crossfadeReduced)
+  static func filter(reduceMotion: Bool) -> Animation? {
+    Motion.layout(Motion.listMove, reduceMotion: reduceMotion)
   }
 
   /// How a row comes and goes: out with a quick fade where it stands on ``Motion/swapOut``, before anything moves
-  /// over it; in, once the rows moving have made room, with a fade and a drop of ``ActivityMotionLayout/drop`` on
+  /// over it; in, once the rows moving have made room, with a fade and a drop of ``Spacing/xsPlus`` on
   /// ``Motion/listIn``; only fading under Reduce Motion, and with no transition at all while the person has scrolled
   /// down, so what they read never moves.
   ///
@@ -51,7 +42,7 @@ enum ActivityMotion {
         .animation(Motion.crossfadeReduced)
     }
     let dropped = AnyTransition.opacity
-      .combined(with: .offset(y: -ActivityMotionLayout.drop))
+      .combined(with: .offset(y: -Spacing.xsPlus))
     return .asymmetric(
       insertion: dropped.animation(Motion.listIn),
       removal: AnyTransition.opacity
@@ -60,9 +51,8 @@ enum ActivityMotion {
   }
 
   /// How a row under an open moment's header comes and goes while the moment stays open: the newest, at the top, as
-  /// any row comes into the list (``row(isAtTop:reduceMotion:)``); any other comes with no transition, as the rest
-  /// "Show N more" opens, which the moment's growing edge reveals; and any row leaves with a quick fade on
-  /// ``Motion/swapOut``.
+  /// any row comes into the list (``row(isAtTop:reduceMotion:)``). Other rows wait for the departing link to fade on
+  /// ``Motion/swapOut`` before fading in, so Show more never overprints its replacement. Only opacity changes.
   ///
   /// - Parameters:
   ///   - index: The row's place under the header, the newest first.
@@ -73,9 +63,10 @@ enum ActivityMotion {
     guard index > 0 else { return row(isAtTop: isAtTop, reduceMotion: reduceMotion) }
     guard isAtTop else { return .identity }
     return .asymmetric(
-      insertion: .identity,
+      insertion: AnyTransition.opacity
+        .animation(Motion.swapInAfterOut),
       removal: AnyTransition.opacity
-        .animation(reduceMotion ? Motion.crossfadeReduced : Motion.swapOut)
+        .animation(Motion.swapOut)
     )
   }
 

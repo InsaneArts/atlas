@@ -25,7 +25,7 @@ extension ViewerPresenter {
     let scoped = scopedApps(apps, scope)
     let kept = scoped.compactMap { $0.matching(query) }
       .sorted(by: opensBefore)
-    let card = { (app: HelperApp) in appCard(app, among: apps, showsOrigin: scope == .all, snapshot) }
+    let card = { (app: HelperApp) in appCard(app, showsOrigin: scope == .all, snapshot) }
     let groups: [ViewerAppGroup] =
       switch scope {
       case .one:
@@ -115,7 +115,7 @@ extension ViewerPresenter {
     return EmptyMessageState(headline: ViewerWords.noAppsMatch(query), message: ViewerWords.noAppsMatchMessage)
   }
 
-  /// The window shown from the Apps tab, outlined over the picture: its edges as shares of the helper's
+  /// The window shown from the Apps pane, outlined over the picture: its edges as shares of the helper's
   /// display, which the view letterboxes as a click maps. None before the picture's display is known.
   ///
   /// - Parameter snapshot: What the controller holds.

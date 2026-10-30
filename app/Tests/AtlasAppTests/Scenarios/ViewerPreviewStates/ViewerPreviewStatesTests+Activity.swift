@@ -8,6 +8,32 @@
   import AtlasUI
 
   extension ViewerPreviewStatesTests {
+    @Test(
+      "Activity samples match after starting with different locales calendars clocks and time zones",
+      arguments: ["en_US", "de_DE"],
+      ["America/Los_Angeles", "Asia/Tokyo"]
+    )
+    func activitySamplesIgnoreInitialEnvironment(locale: String, timeZone: String) throws {
+      var initial = ViewerSnapshot.presenterSample
+      initial.locale = Locale(identifier: locale)
+      initial.timeZone = try #require(TimeZone(identifier: timeZone))
+      initial.calendar = Calendar(identifier: .buddhist)
+      initial.calendar.locale = initial.locale
+      initial.calendar.timeZone = initial.timeZone
+      // Just after a different day's midnight, far from the sample's morning.
+      initial.date = try #require(
+        initial.calendar.date(from: DateComponents(year: 2569, month: 10, day: 30, second: 1))
+      )
+      let samples = Self(initialSnapshot: initial)
+      let presented = try samples.activitySamples()
+        .merging(samples.sessionsSamples()) { _, state in state }
+      for preview in PreviewStates.viewer {
+        guard case .activity = preview.value.pane else { continue }
+        let state = try #require(presented[preview.name], "\(preview.name) has no facts")
+        #expect(preview.value == state, "\(preview.name), starting in \(locale), \(timeZone)")
+      }
+    }
+
     /// The Activity tab's samples' facts, by the sample's name: times on a German clock in UTC, for
     /// deterministic timestamps.
     ///

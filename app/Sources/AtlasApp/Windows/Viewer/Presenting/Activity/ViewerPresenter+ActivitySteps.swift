@@ -22,7 +22,7 @@ extension ViewerPresenter {
     _ snapshot: ViewerSnapshot
   ) -> ViewerActivityStep {
     let entry = run.entry
-    let offersRecovery = run.id == snapshot.reading.statusReading.causer?.uncertainRow
+    let offersRecovery = run.id == snapshot.reading.statusReading.uncertainRow
     let mark: ViewerStepMark =
       switch (offersRecovery, entry.outcome) {
       case (true, _), (false, .failed): .failed
@@ -126,7 +126,7 @@ extension ViewerPresenter {
     case .failedAgain:
       ViewerWords.failedAgain
     case .then(let next):
-      ViewerWords.then(stepWords(next, in: moment).text)
+      ViewerWords.then(stepWords(next, in: moment).text, personal: next.entry.actor == .you)
     }
   }
 

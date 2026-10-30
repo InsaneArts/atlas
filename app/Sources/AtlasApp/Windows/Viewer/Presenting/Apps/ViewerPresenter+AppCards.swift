@@ -9,17 +9,19 @@ extension ViewerPresenter {
   ///
   /// - Parameters:
   ///   - app: The app, with the windows the search keeps.
-  ///   - apps: Every app open in the helper, whose windows may cover its own.
   ///   - showsOrigin: Whether its card names the session that opened it, as while every session's apps show.
   ///   - snapshot: What the controller holds.
   /// - Returns: The card.
   static func appCard(
     _ app: HelperApp,
-    among apps: [HelperApp],
     showsOrigin: Bool,
     _ snapshot: ViewerSnapshot
   ) -> ViewerAppCard {
     let name = app.name.isEmpty ? ViewerWords.unnamedApp : app.name
+    // Search may remove the front window; it must never promote the first matching window.
+    let frontWindow = snapshot.panes.apps.apps?
+      .first { $0.pid == app.pid && $0.front }?
+      .windows.first?.id
     let origin: ViewerAppOrigin? = app.origin.flatMap { origin in
       guard showsOrigin else { return nil }
       let session = resolvedSession(origin.session, snapshot)
@@ -33,16 +35,16 @@ extension ViewerPresenter {
       line: appLine(app, showsOrigin: showsOrigin, snapshot),
       tags: appTags(app),
       isFront: app.front,
-      picture: appPicture(app, among: apps, snapshot),
-      windows: app.windows.enumerated()
-        .map { index, window in
+      picture: appPicture(app, snapshot),
+      windows: app.windows
+        .map { window in
           let title = windowTitle(window)
           return ViewerWindowRow(
             id: window.id,
             title: title,
             size: windowSize(window),
             showLabel: ViewerWords.showWindowLabel(title),
-            isFront: app.front && index == 0
+            isFront: app.front && window.id == frontWindow
           )
         }
     )
@@ -58,8 +60,12 @@ extension ViewerPresenter {
   ///   - snapshot: What the controller holds.
   /// - Returns: The line.
   static func appLine(_ app: HelperApp, showsOrigin: Bool, _ snapshot: ViewerSnapshot) -> String {
-    let clock = { (date: Date) in Words.clockMinute(date, locale: snapshot.locale, timeZone: snapshot.timeZone) }
-    let day = { (date: Date) in Words.dayName(date, locale: snapshot.locale, timeZone: snapshot.timeZone) }
+    let clock = { (date: Date) in
+      Words.clockMinute(date, locale: snapshot.locale, calendar: snapshot.zonedCalendar, timeZone: snapshot.timeZone)
+    }
+    let day = { (date: Date) in
+      Words.dayName(date, locale: snapshot.locale, calendar: snapshot.zonedCalendar, timeZone: snapshot.timeZone)
+    }
     let today = { (date: Date) in snapshot.zonedCalendar.isDate(date, inSameDayAs: snapshot.date) }
     guard let origin = app.origin else {
       guard let launched = app.launchedAt else { return ViewerWords.alreadyOpen }

@@ -113,13 +113,13 @@ struct ViewerPanesModelTests {
     let viewer = try await Self.onShots(service)
     service.shot = png(width: 1, height: 1)
     viewer.send(.thumbnailNeeded(Self.newer))
-    let stale = viewer.panesModel.work.thumbnails.loading[Self.newer]
+    let stale = viewer.panesModel.thumbnails.work.loading[Self.newer]
     try await settle("the first thumbnail was never asked for") { service.heldShots.count == 1 }
     viewer.send(.show(.screen))
     viewer.send(.show(.screenshots))
     service.shot = png(width: 2, height: 2)
     viewer.send(.thumbnailNeeded(Self.newer))
-    let fresh = viewer.panesModel.work.thumbnails.loading[Self.newer]
+    let fresh = viewer.panesModel.thumbnails.work.loading[Self.newer]
     try await settle("the requests were never made") { service.heldShots.count == 2 }
     service.heldShots[1].answered = true
     service.heldShots[1].resume.resume()
@@ -137,7 +137,7 @@ struct ViewerPanesModelTests {
     let viewer = try await Self.onShots(service)
     for name in ["1-capture.png", "2-capture.png", "3-capture.png"] { viewer.send(.thumbnailNeeded(name)) }
     try await settle("two thumbnails were never asked for") { service.heldShots.count == 2 }
-    let first = viewer.panesModel.work.thumbnails.loading["1-capture.png"]
+    let first = viewer.panesModel.thumbnails.work.loading["1-capture.png"]
     viewer.send(.show(.apps))
     try await Self.answer(service, "1-capture.png", full: false)
     try await Self.ended(first, "the first thumbnail's reply never came back")
@@ -168,37 +168,37 @@ struct ViewerPanesModelTests {
     service.shot = png(width: 1, height: 1)
     for name in [Self.newer, Self.older, queued, removed] { viewer.send(.thumbnailNeeded(name)) }
     try await settle("two thumbnails were never asked for") { service.heldShots.count == 2 }
-    let stale = Array(viewer.panesModel.work.thumbnails.loading.values)
+    let stale = Array(viewer.panesModel.thumbnails.work.loading.values)
     viewer.setVisible(false)
     viewer.setVisible(false)
     for task in stale { #expect(task.isCancelled) }
-    #expect(viewer.panesModel.work.thumbnails.loading.isEmpty)
+    #expect(viewer.panesModel.thumbnails.work.loading.isEmpty)
     service.shots.removeAll { $0.name == removed }
     await viewer.panesModel.readShots(viewer.panesModel.work.generation)
     service.shot = png(width: 2, height: 2)
     viewer.setVisible(true)
     try await settle("the cancelled thumbnails were not requested again") { service.heldShots.count == 4 }
-    let fresh = Array(viewer.panesModel.work.thumbnails.loading.values)
+    let fresh = Array(viewer.panesModel.thumbnails.work.loading.values)
     for name in [Self.newer, Self.older] { try await Self.answer(service, name, full: false) }
     for task in stale { try await Self.ended(task, "a stale thumbnail never replied") }
     #expect(viewer.panes.thumbnails[Self.newer] == nil)
     #expect(viewer.panes.thumbnails[Self.older] == nil)
-    #expect(viewer.panesModel.work.thumbnails.loading.count == 2)
+    #expect(viewer.panesModel.thumbnails.work.loading.count == 2)
     #expect(service.heldShots.count == 4, "late replies do not start the queued thumbnail")
     for name in [Self.newer, Self.older] { try await Self.answer(service, name, full: false) }
     for task in fresh { try await Self.ended(task, "a resumed thumbnail never arrived") }
     try await settle("the queued thumbnail was never requested") { service.heldShots.count == 5 }
-    let last = viewer.panesModel.work.thumbnails.loading[queued]
+    let last = viewer.panesModel.thumbnails.work.loading[queued]
     try await Self.answer(service, queued, full: false)
     try await Self.ended(last, "the queued thumbnail never arrived")
     for name in [Self.newer, Self.older, queued] {
       #expect(viewer.panes.thumbnails[name]?.image.width == 2)
     }
-    #expect(viewer.panesModel.work.thumbnails.wanted.isEmpty)
+    #expect(viewer.panesModel.thumbnails.work.wanted.isEmpty)
     #expect(!service.heldShots.contains { $0.name == removed })
     viewer.setVisible(false)
     viewer.setVisible(true)
-    #expect(viewer.panesModel.work.thumbnails.loading.isEmpty, "cached thumbnails need no new requests")
+    #expect(viewer.panesModel.thumbnails.work.loading.isEmpty, "cached thumbnails need no new requests")
   }
 
   @Test(
@@ -227,7 +227,7 @@ struct ViewerPanesModelTests {
       service.resumeAllShots()
     }
     viewer.send(.openShot(Self.older))
-    let load = try #require(viewer.panesModel.work.large.load)
+    let load = try #require(viewer.panesModel.screenshots.load)
     if loaded {
       try await Self.answer(service, Self.older, full: true)
       try await Self.ended(load, "the large screenshot never arrived")
@@ -238,7 +238,7 @@ struct ViewerPanesModelTests {
     #expect(viewer.panes.shots.large == nil)
     #expect(viewer.panes.shots.selected == nil)
     #expect(viewer.panes.shots.full == nil)
-    #expect(viewer.panesModel.work.large.load == nil)
+    #expect(viewer.panesModel.screenshots.load == nil)
     if !loaded {
       #expect(load.isCancelled)
       try await Self.answer(service, Self.older, full: true)
@@ -248,11 +248,11 @@ struct ViewerPanesModelTests {
     #expect(ViewerPresenter.selectedShot(viewer.snapshot) == newest)
     #expect(viewer.panesModel.actedShot == newest)
     viewer.send(.copyShot)
-    let copy = viewer.panesModel.work.large.copy
+    let copy = viewer.panesModel.exports.pending
     try await Self.answer(service, newest, full: true)
     try await Self.ended(copy, "Copy never finished")
     viewer.panesModel.saveShot()
-    let save = viewer.panesModel.work.large.copy
+    let save = viewer.panesModel.exports.pending
     try await Self.answer(service, newest, full: true)
     try await Self.ended(save, "Save never finished")
     #expect(copied == [service.shotData[newest]])
@@ -274,11 +274,11 @@ struct ViewerPanesModelTests {
     let viewer = try await Self.onShots(service, shotOutlet: ShotOutlet(copy: { copied.append($0) }, reveal: { _ in }))
     viewer.send(.openShot(Self.newer))
     viewer.send(.copyShot)
-    let firstCopy = viewer.panesModel.work.large.copy
+    let firstCopy = viewer.panesModel.exports.pending
     viewer.send(.nextShot)
-    let olderLoad = viewer.panesModel.work.large.load
+    let olderLoad = viewer.panesModel.screenshots.load
     viewer.send(.copyShot)
-    let secondCopy = viewer.panesModel.work.large.copy
+    let secondCopy = viewer.panesModel.exports.pending
     try await Self.answer(service, Self.older, full: true)
     try await Self.ended(olderLoad, "the older screenshot never arrived")
     viewer.send(.copyShot)
@@ -311,14 +311,14 @@ struct ViewerPanesModelTests {
     )
     viewer.send(.selectShot(Self.newer))
     viewer.panesModel.saveShot()
-    let save = try #require(viewer.panesModel.work.large.copy)
+    let save = try #require(viewer.panesModel.exports.pending)
     try await settle("the screenshot was never asked for") { service.heldShots.count == 1 }
     viewer.close()
     try await Self.answer(service, Self.newer, full: true)
     try await Self.ended(save, "the screenshot's reply never came back")
     #expect(!saved)
     #expect(save.isCancelled)
-    #expect(viewer.panesModel.work.large.copy == nil)
+    #expect(viewer.panesModel.exports.pending == nil)
   }
 
   @Test("a large screenshot read while the window hides never lands, and is read again once it shows")
@@ -326,13 +326,13 @@ struct ViewerPanesModelTests {
     let service = ScriptedService()
     let viewer = try await Self.onShots(service)
     viewer.send(.openShot(Self.newer))
-    let hiddenLoad = viewer.panesModel.work.large.load
+    let hiddenLoad = viewer.panesModel.screenshots.load
     viewer.setVisible(false)
     try await Self.answer(service, Self.newer, full: true)
     try await Self.ended(hiddenLoad, "the picture's reply never came back")
     #expect(viewer.panes.shots.full == nil)
     viewer.setVisible(true)
-    let shownLoad = try #require(viewer.panesModel.work.large.load, "the picture is read again")
+    let shownLoad = try #require(viewer.panesModel.screenshots.load, "the picture is read again")
     try await Self.answer(service, Self.newer, full: true)
     try await Self.ended(shownLoad, "the picture read again never arrived")
     #expect(viewer.panes.shots.full != nil)
@@ -345,7 +345,7 @@ struct ViewerPanesModelTests {
     let service = ScriptedService()
     let viewer = try await Self.onShots(service)
     viewer.send(.openShot(Self.newer))
-    let load = viewer.panesModel.work.large.load
+    let load = viewer.panesModel.screenshots.load
     viewer.close()
     try await Self.answer(service, Self.newer, full: true)
     try await Self.ended(load, "the picture's reply never came back")
@@ -362,12 +362,12 @@ struct ViewerPanesModelTests {
     viewer.send(.show(.screenshots))
     try await settle("the screenshots were never read") { viewer.panes.shots.shots != nil }
     viewer.send(.openShot(Self.newer))
-    try await Self.ended(viewer.panesModel.work.large.load, "the failed read never ended")
-    #expect(viewer.panesModel.work.large.load == nil)
+    try await Self.ended(viewer.panesModel.screenshots.load, "the failed read never ended")
+    #expect(viewer.panesModel.screenshots.load == nil)
     service.fail = []
     service.shot = png()
     await viewer.panesModel.readShots(viewer.panesModel.work.generation)
-    let retry = try #require(viewer.panesModel.work.large.load, "the next reading reads it again")
+    let retry = try #require(viewer.panesModel.screenshots.load, "the next reading reads it again")
     try await Self.ended(retry, "the second read never ended")
     #expect(viewer.panes.shots.full != nil)
     viewer.close()

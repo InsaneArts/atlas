@@ -5,7 +5,7 @@ import Observation
 /// The main window's one observed object: what this window is doing (the place, watching or paused, the alert asked)
 /// and the helper's facts, composed with its three parts, each with state of its own: ``control`` (the lease, its heartbeat and
 /// the input that belongs to it), ``readingLoop`` (the status and the picture) and ``panesModel`` (the Activity, Apps
-/// and Screenshots tabs). Pictures stay in memory only. Every effect is a request to the viewer service or one of the
+/// and Screenshots panes). Pictures stay in memory only. Every effect is a request to the viewer service or one of the
 /// helper's commands, which own the helper's safety; ``ViewerPresenter`` decides what the window shows from
 /// ``snapshot``. Its own parts are in `ViewerController+Places`, `+Sidebar`, `+Size`, `+Sessions`, `+Picture`,
 /// `+Alert`, `+Cleanup` and `+Helper`.
@@ -27,7 +27,7 @@ final class ViewerController {
   @ObservationIgnored private(set) lazy var control = ViewerControl(viewer: self, dependencies: dependencies)
   /// The status and the picture, read one at a time while the window shows, and the picture's rate.
   @ObservationIgnored private(set) lazy var readingLoop = ViewerReadingLoop(viewer: self, dependencies: dependencies)
-  /// The Activity, Apps and Screenshots tabs, and the thumbnails they share.
+  /// The Activity, Apps and Screenshots panes, and the thumbnails they share.
   @ObservationIgnored private(set) lazy var panesModel = ViewerPanesModel(viewer: self, dependencies: dependencies) {
     [weak self] list in
     await self?.sessionsRead(list)
@@ -95,7 +95,7 @@ final class ViewerController {
   /// What the last reading showed.
   var reading: ViewerReading { readingLoop.reading }
 
-  /// What the Activity, Apps and Screenshots tabs hold.
+  /// What the Activity, Apps and Screenshots panes hold.
   var panes: ViewerPanes { panesModel.panes }
 
   /// Whether this window holds control.

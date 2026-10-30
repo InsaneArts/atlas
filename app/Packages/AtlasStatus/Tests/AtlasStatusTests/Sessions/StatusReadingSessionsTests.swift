@@ -105,6 +105,20 @@ struct StatusReadingSessionsTests {
     #expect(killed.liveSessions.map(killed.line(of:)) == [.waitingForRecovery, .waitingForRecovery])
   }
 
+  @Test("one session exposes its unresolved row without drawing a session label, only while recovery is pending")
+  func oneSessionExposesItsUnresolvedRow() throws {
+    for pending in [0, 1] {
+      let reading = try reading([
+        "sessionsShown": false, "pending": pending,
+        "hostSessions": [
+          hostSession("claude", host: "claude", name: "Claude Code", state: "needsYou", uncertainRow: "r9")
+        ],
+      ])
+      #expect(reading.causer == nil)
+      #expect(reading.uncertainRow == (pending == 1 ? "r9" : nil))
+    }
+  }
+
   @Test("each state has its line")
   func eachStateHasItsLine() throws {
     let ended = Date(timeIntervalSince1970: 1_793_168_160)
