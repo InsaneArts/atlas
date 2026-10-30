@@ -143,9 +143,31 @@ impl Engine {
         accessibility_trusted()
     }
 
-    pub(super) fn check(&mut self) -> Result<()> {
+    /// An independent proof for the AX worker. No gate lock survives this
+    /// callback, and every call reads the exact session and permission anew.
+    pub(super) fn preparation_guard(&self) -> impl Fn() -> Result<()> + Send + 'static {
+        let epoch = self.epoch.clone();
+        let grant = self.grant.clone();
+        move || {
+            let grant = grant
+                .as_ref()
+                .ok_or_else(|| Error::new(Code::LeaseLost, "Input has no controller"))?;
+            drop(grant.authorize()?);
+            Self::check_epoch(&epoch)?;
+            if !objc2_core_graphics::CGPreflightPostEventAccess() {
+                return Err(Error::new(
+                    Code::Permission,
+                    "The input process may not post events (Accessibility)",
+                ));
+            }
+            drop(grant.authorize()?);
+            Ok(())
+        }
+    }
+
+    fn check_epoch(epoch: &InputEpoch) -> Result<()> {
         let current = InputEpoch::from_proof(&session_info()?, std::process::id())?;
-        if current != self.epoch {
+        if &current != epoch {
             return Err(Error::new(
                 Code::Identity,
                 "Native input requires the configured hidden graphical session",
@@ -158,6 +180,12 @@ impl Engine {
                 "The input process does not have Accessibility permission",
             ));
         }
+
+        Ok(())
+    }
+
+    pub(super) fn check(&mut self) -> Result<()> {
+        Self::check_epoch(&self.epoch)?;
 
         // Without it macOS drops posted events silently: refuse instead.
         // The answer is trusted for a moment (see `POST_ACCESS_TTL`).

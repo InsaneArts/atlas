@@ -1,6 +1,6 @@
 //! Where an agent's input must land, and sending a batch there: an app, or
 //! a window and so its app, and the field with keyboard focus, found once
-//! control is held and checked by the helper before each action.
+//! control is held, brought forward and checked by the helper before input.
 use super::{
     target::{Target, target_pid, target_pid_among},
     windows::verified_window_list,
@@ -14,7 +14,7 @@ use crate::{
 use serde_json::Value;
 
 /// Send `actions` as one batch. With an expectation, the app is found once
-/// control is held, and the helper refuses each action before it starts
+/// control is held. The helper brings its target forward, then refuses input
 /// unless it lands where expected: text and keys while the app, and the
 /// window and field when named, have keyboard focus, pointer actions where
 /// the app's own window, or the named one, is the top one.

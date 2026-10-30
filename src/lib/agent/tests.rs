@@ -8,7 +8,7 @@ use crate::{
     interrupt::Interrupt,
     native::{
         ax::{Element, Frame, Stop},
-        windows::{Bounds, Dock, MENU_BAR_LAYER, MENU_LAYER, Screen, Window, owning_window},
+        windows::{Bounds, MENU_BAR_LAYER, MENU_LAYER, Window, owning_window},
     },
     select::{ElementFilter, NameMatch},
     session::Display,
@@ -181,43 +181,6 @@ fn only_a_point_check_asks_the_window_probe_for_the_dock() {
     let read = windows_probe(&client, DockRead::Read);
     assert_eq!(skip[1..], ["windows-info"]);
     assert_eq!(read[1..], ["windows-info", "--dock"]);
-}
-
-/// A named click refused under the Dock says it is the Dock, and when
-/// the Dock could not be read, that Atlas could not tell.
-#[test]
-fn a_named_click_under_the_dock_says_it_is_the_dock() {
-    let dock = Window {
-        number: 1,
-        pid: 2,
-        owner: Some("Dock".into()),
-        title: None,
-        layer: 20,
-        alpha: 1.0,
-        bounds: Bounds::display(1000.0, 800.0),
-    };
-    let app = Window {
-        number: 3,
-        owner: Some("TextEdit".into()),
-        layer: 0,
-        pid: 4,
-        ..dock.clone()
-    };
-    let windows = [dock, app];
-    let display = Bounds::display(1000.0, 800.0);
-    let icons = Dock::Icons(vec![Bounds {
-        x: 200.0,
-        y: 740.0,
-        width: 600.0,
-        height: 60.0,
-    }]);
-    let said =
-        |dock: Dock, y| hidden_element(&windows, 300.0, y, &Screen::new(display.clone(), dock));
-
-    assert!(said(icons.clone(), 770.0).starts_with("The Dock covers"));
-    assert!(said(Dock::Other, 300.0).starts_with("The Dock covers"));
-    assert!(said(Dock::Unread, 300.0).contains("could not read where the Dock takes clicks"));
-    assert!(said(icons, 300.0).starts_with("The element is not visible"));
 }
 
 /// The process a name resolves to from the window list alone.
@@ -2822,4 +2785,127 @@ fn an_app_name_keeps_its_identity_only_when_its_processes_agree() {
         )
         .is_none()
     );
+}
+
+#[test]
+fn a_covered_named_element_requires_its_exact_window_at_the_native_boundary() {
+    let mut target = shown(0, "AXTextField", None, Some("Email"));
+    target.window = Some(frame(10.0, 20.0, 300.0, 200.0));
+    let own = window(42, 812, "Editor", 0);
+    let cover = window(43, 900, "Other", 0);
+    let check = element_check(&target, &[cover, own], 812, (20.0, 40.0)).unwrap();
+    match check {
+        crate::client::Check::Required(expect) => {
+            assert_eq!(expect.pid(), 812);
+            assert_eq!(expect.window(), Some(42));
+        }
+        _ => panic!("a named click requires the final native check"),
+    }
+}
+
+#[test]
+fn missing_or_ambiguous_owning_windows_refuse_named_clicks() {
+    let mut target = shown(0, "AXButton", Some("Save"), None);
+    target.window = Some(frame(10.0, 20.0, 300.0, 200.0));
+    for windows in [
+        vec![],
+        vec![window(42, 812, "Editor", 0), window(43, 812, "Editor", 0)],
+    ] {
+        let error = element_check(&target, &windows, 812, (20.0, 40.0)).unwrap_err();
+        assert_eq!(error.code, Code::Elements);
+    }
+}
+
+#[test]
+fn menu_titles_and_open_items_require_the_app_without_raising_a_menu_window() {
+    let mut title = shown(0, "AXMenuBarItem", Some("File"), None);
+    let bar = window(2, 1, "Window Server", MENU_BAR_LAYER);
+    title.window = Some(frame(10.0, 20.0, 300.0, 200.0));
+    let check = element_check(&title, &[bar], 812, (20.0, 21.0)).unwrap();
+    assert!(
+        matches!(check, crate::client::Check::Required(expect) if expect.window().is_none() && expect.pid() == 812)
+    );
+    let mut item = shown(0, "AXMenuItem", Some("Save"), None);
+    item.menu = true;
+    item.window = title.window;
+    let check = element_check(
+        &item,
+        &[window(3, 812, "Editor", MENU_LAYER)],
+        812,
+        (20.0, 21.0),
+    )
+    .unwrap();
+    assert!(matches!(check, crate::client::Check::Required(expect) if expect.window().is_none()));
+}
+
+#[tokio::test]
+async fn incomplete_or_ambiguous_element_scans_never_dispatch_input() {
+    use crate::test_support::{Helper, UID, completed};
+    for incomplete in [true, false] {
+        let directory = tempfile::tempdir().unwrap();
+        let (client, helper) = Helper::client(directory.path(), UID);
+        let mut reads = 0;
+        let error = helper
+            .serve(
+                click_element(
+                    &client,
+                    &Target::Pid(812),
+                    &named("Save"),
+                    Button::Left,
+                    1,
+                    &[],
+                ),
+                |request| {
+                    if request["argv"][1] == "elements-info" {
+                        reads += 1;
+                        let elements = vec![
+                            shown(0, "AXButton", Some("Save"), None),
+                            shown(1, "AXButton", Some("Save"), None),
+                        ];
+                        Some(completed(
+                            &json!({"ok":true,"elements":elements,"truncated":incomplete})
+                                .to_string(),
+                        ))
+                    } else {
+                        textedit_reads(request)
+                    }
+                },
+            )
+            .await
+            .unwrap_err();
+        assert_eq!(error.code, Code::Elements);
+        assert_eq!(reads, 1);
+        assert!(client.controller.pending().unwrap().is_empty());
+    }
+}
+
+#[test]
+fn a_named_sheet_button_keeps_the_exact_sheet_or_parent_number_from_the_scan() {
+    let mut button = shown(0, "AXButton", Some("OK"), None);
+    button.frame = Some(frame(100.0, 120.0, 60.0, 24.0));
+    let parent = window(42, 812, "TextEdit", 0);
+    let sheet = Window {
+        number: 43,
+        bounds: Bounds {
+            x: 0.0,
+            y: 40.0,
+            width: 500.0,
+            height: 180.0,
+        },
+        ..parent.clone()
+    };
+    for (owning, listed, number) in [
+        (
+            frame(0.0, 40.0, 500.0, 180.0),
+            vec![sheet, parent.clone()],
+            43,
+        ),
+        (frame(10.0, 20.0, 300.0, 200.0), vec![parent], 42),
+    ] {
+        button.window = Some(owning);
+        let check = element_check(&button, &listed, 812, (130.0, 132.0)).unwrap();
+        assert!(
+            matches!(check, crate::client::Check::Required(expect) if expect.pid() == 812 && expect.window() == Some(number))
+        );
+    }
 }

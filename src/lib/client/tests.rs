@@ -3267,3 +3267,106 @@ async fn an_app_capture_records_its_identity_but_never_caches_window_titles() {
         }
     }
 }
+
+#[tokio::test]
+async fn a_lost_preparation_reply_stays_pending_after_acknowledged_release() {
+    let (dir, client, listener, session) = native_client();
+    let expect = Expect::new(812).unwrap().in_window(42).unwrap();
+    let mut caller = Box::pin(checked_input(&client, &session, Some(expect)));
+    let mut acquire = dispatched(&mut caller, &listener, "acquire").await;
+    answer(&mut acquire, json!({"ok":true})).await;
+    let (input, request) = received(&mut caller, &listener, "input").await;
+    assert_eq!(request["expect"], json!({"pid":812,"window":42}));
+    drop(input);
+    let mut release = dispatched(&mut caller, &listener, "release").await;
+    answer(&mut release, json!({"ok":true})).await;
+    assert!(caller.await.unwrap_err().uncertain);
+    let other = another(&client, dir.path());
+    assert_eq!(other.controller.pending().unwrap().len(), 1);
+    assert_eq!(
+        other.controller.acquire(false).unwrap_err().code,
+        Code::Uncertain
+    );
+}
+
+#[tokio::test]
+async fn checked_window_input_echoes_the_exact_target_without_an_extra_request() {
+    let (_dir, client, listener, session) = native_client();
+    let expect = Expect::new(812)
+        .unwrap()
+        .in_window(42)
+        .unwrap()
+        .in_field("Email")
+        .unwrap();
+    let mut caller = Box::pin(checked_input(&client, &session, Some(expect.clone())));
+    let mut acquire = dispatched(&mut caller, &listener, "acquire").await;
+    answer(&mut acquire, json!({"ok":true})).await;
+    let (mut input, request) = received(&mut caller, &listener, "input").await;
+    assert_eq!(request["expect"], json!(expect));
+    let reply = json!({"ok":true,"performed":1,"expect":expect,"field":{"role":"AXTextField"}});
+    answer(&mut input, reply.clone()).await;
+    let mut release = dispatched(&mut caller, &listener, "release").await;
+    answer(&mut release, json!({"ok":true})).await;
+    let mut actual = caller.await.unwrap();
+    assert!(actual["elapsedMs"].is_number());
+    actual.as_object_mut().unwrap().remove("elapsedMs");
+    assert_eq!(actual, reply);
+    assert!(client.controller.pending().unwrap().is_empty());
+}
+
+#[tokio::test]
+async fn a_focus_write_with_an_unknown_outcome_keeps_its_claim_after_cleanup() {
+    let (dir, client, listener, session) = native_client();
+    let mut caller = Box::pin(checked_input(&client, &session, textedit()));
+    let mut acquire = dispatched(&mut caller, &listener, "acquire").await;
+    answer(&mut acquire, json!({"ok":true})).await;
+    let mut input = dispatched(&mut caller, &listener, "input").await;
+    answer(&mut input, json!({"ok":false,"code":"uncertain","error":"The app did not acknowledge the focus request","performed":0,"partial":false,"uncertain":true})).await;
+    let mut release = dispatched(&mut caller, &listener, "release").await;
+    answer(&mut release, json!({"ok":true})).await;
+    let reply = caller.await.unwrap();
+    assert_eq!(reply["performed"], 0);
+    assert_eq!(reply["uncertain"], true);
+    assert_eq!(
+        another(&client, dir.path())
+            .controller
+            .pending()
+            .unwrap()
+            .len(),
+        1
+    );
+}
+
+#[tokio::test]
+async fn a_named_click_sends_its_window_and_keeps_a_native_dock_refusal() {
+    let (_dir, client, listener, session) = native_client();
+    let mut caller = Box::pin(async {
+        let _ownership = client.controller.acquire(false)?;
+        let actions = json!([{"type":"click","x":20,"y":80}]);
+        let expect = Expect::new(812)?.in_window(42)?;
+        client
+            .input_in_session(&actions, None, None, Some(expect), &session)
+            .await
+    });
+    let mut acquire = dispatched(&mut caller, &listener, "acquire").await;
+    answer(&mut acquire, json!({"ok":true})).await;
+    let (mut input, request) = received(&mut caller, &listener, "input").await;
+    assert_eq!(request["expect"], json!({"pid":812,"window":42}));
+    assert_eq!(request["actions"][0]["type"], "click");
+    let refused = json!({"ok":false,"code":"focus-changed","reason":"point","found":{"app":"Dock","pid":2},"error":"The Dock is at that point","performed":0,"partial":false,"uncertain":false});
+    answer(&mut input, refused.clone()).await;
+    let mut release = dispatched(&mut caller, &listener, "release").await;
+    answer(&mut release, json!({"ok":true})).await;
+    let reply = caller.await.unwrap();
+    for field in [
+        "code",
+        "reason",
+        "found",
+        "performed",
+        "partial",
+        "uncertain",
+    ] {
+        assert_eq!(reply[field], refused[field]);
+    }
+    assert!(client.controller.pending().unwrap().is_empty());
+}

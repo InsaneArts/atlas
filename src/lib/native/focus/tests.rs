@@ -59,6 +59,7 @@ struct Seen {
     focus_reads: usize,
     window_reads: usize,
     keyboard_reads: usize,
+    app_focused: bool,
 }
 
 impl Seen {
@@ -86,6 +87,10 @@ impl Seen {
 }
 
 impl Look for Seen {
+    fn app_focused(&mut self, _: i64) -> Result<bool> {
+        Ok(self.app_focused)
+    }
+
     fn focused(&mut self) -> Result<Option<i64>> {
         self.focus_reads += 1;
         match &self.focused {
@@ -1278,36 +1283,41 @@ fn a_drag_is_checked_at_its_press_point_only() {
 }
 
 #[test]
-fn the_check_never_activates_raises_or_focuses_anything() {
-    // What the check reads with: this module and the Accessibility
-    // reads, keyboard focus among them, which make copies and set only
-    // messaging timeouts.
-    for source in [
-        include_str!("../focus.rs"),
-        include_str!("../ax.rs"),
-        include_str!("../ax/batch.rs"),
-        include_str!("../ax/ffi.rs"),
-        include_str!("../ax/keyboard.rs"),
-        include_str!("../ax/menus.rs"),
-        include_str!("../ax/model.rs"),
-        include_str!("../ax/scan.rs"),
-        include_str!("../ax/stop.rs"),
-        include_str!("../ax/system.rs"),
-        include_str!("../ax/text.rs"),
-        include_str!("../ax/tree.rs"),
-    ] {
-        let code = source.split("#[cfg(test)]").next().unwrap_or_default();
-        for setter in [
-            "set_attribute_value",
-            "AXUIElementSetAttributeValue",
-            "perform_action",
-            "AXUIElementPerformAction",
-            "activateWithOptions",
-            "activate(",
-            "AXRaise",
-            "makeKeyAndOrderFront",
-        ] {
-            assert!(!code.contains(setter), "{setter}");
-        }
+fn read_only_verification_leaves_wrong_and_absent_focus_in_place() {
+    for focused in [None, Some(OTHER)] {
+        let mut look = Seen::focused(focused);
+        assert_eq!(refusal(keys_with(&mut look))["reason"], "app");
+        assert_eq!(look.focused.as_ref().unwrap().as_ref().unwrap(), &focused);
+        assert_eq!(look.keyboard_reads, 0);
+        assert_eq!(refusal(keys_with(&mut look))["reason"], "app");
     }
+}
+
+#[test]
+fn absent_system_focus_accepts_direct_app_proof_and_still_checks_the_window_and_field() {
+    let mut look = inside_with(typing(field("Email")), vec![document()]);
+    look.focused = Some(Ok(None));
+    look.app_focused = true;
+    assert!(expecting(&in_document().in_field("Email").unwrap(), &mut look).is_ok());
+    assert_eq!(
+        refusal(expecting(
+            &in_document().in_field("Other").unwrap(),
+            &mut look
+        ))["reason"],
+        "field"
+    );
+    assert_eq!(
+        refusal(expecting(&expect().in_window(999).unwrap(), &mut look))["reason"],
+        "window"
+    );
+    look.app_focused = false;
+    assert_eq!(refusal(expecting(&expect(), &mut look))["reason"], "app");
+    look.app_focused = true;
+    look.focused = Some(Ok(Some(OTHER)));
+    assert_eq!(refusal(expecting(&expect(), &mut look))["reason"], "app");
+    look.focused = Some(Err(Error::new(Code::Native, "unreadable")));
+    assert_eq!(
+        refusal(expecting(&expect(), &mut look))["reason"],
+        "unreadable"
+    );
 }

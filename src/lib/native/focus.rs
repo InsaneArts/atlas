@@ -2,8 +2,8 @@
 //! names, judged inside the helper just before the action is sent: text
 //! and keys need the app, and the window and field when named, to have
 //! keyboard focus; pointer actions need the app's own window, or the named
-//! one, to be the top one at the point. Nothing here activates, raises or
-//! focuses anything: what is not in place is refused, never moved.
+//! one, to be the top one at the point. Preparation requests focus first;
+//! the final verifier independently proves where input would land.
 use super::{
     ax::{self, Element, Focused, Judged, Keyboard, Unread, Within},
     windows::{self, Bounds, Dock, Kind, Listed, Screen, Window},
@@ -32,7 +32,7 @@ const KEYBOARD_TIMEOUT: Duration = Duration::from_millis(300);
 /// reported as focused (a window or a web page while focus moves between
 /// fields or sits in a custom view, a button, a tab group, an unknown
 /// element) is no field, whatever its name.
-const FIELDS: [&str; 5] = [
+pub(super) const FIELDS: [&str; 5] = [
     "AXTextField",
     "AXTextArea",
     "AXComboBox",
@@ -59,7 +59,7 @@ const NOT_SENT: &str = "so this action and the rest were not sent";
 
 /// What an action needs of its app before its first event.
 #[derive(Debug, Clone, Copy, PartialEq)]
-pub(super) enum Need {
+pub(crate) enum Need {
     /// Keyboard focus.
     Keys,
     /// The app's own window on top at this point.
@@ -208,6 +208,8 @@ impl Found {
 trait Look {
     /// The process with keyboard focus; None when no app has it.
     fn focused(&mut self) -> Result<Option<i64>>;
+    /// Direct app evidence when the system-wide focus attribute is absent.
+    fn app_focused(&mut self, pid: i64) -> Result<bool>;
     /// Where keyboard focus is inside process `pid`, as far as what is
     /// `judged` needs.
     fn keyboard(&mut self, pid: i64, judged: Judged) -> Result<Keyboard>;
@@ -258,6 +260,11 @@ impl Look for Live {
         super::ax::focused_pid(left.min(FOCUS_TIMEOUT))
     }
 
+    fn app_focused(&mut self, pid: i64) -> Result<bool> {
+        let left = self.left()?;
+        ax::frontmost(pid, left.min(FOCUS_TIMEOUT))
+    }
+
     /// Read from the app element of the process judged to have focus, so
     /// the app, window and field checks look at the same app.
     fn keyboard(&mut self, pid: i64, judged: Judged) -> Result<Keyboard> {
@@ -305,6 +312,34 @@ pub(super) fn check(
     require(expect, need, display, &mut Live::until(deadline), deadline)
 }
 
+/// Prepare once, then poll with fresh observations. Resolution and writes
+/// leave time for a final read within the same request's deadline.
+pub(super) fn prepare(
+    expect: &Expect,
+    need: Need,
+    display: &Bounds,
+    deadline: Instant,
+    guard: impl Fn() -> Result<()>,
+) -> Result<Option<&'static str>> {
+    if need == Need::Nothing {
+        return Ok(None);
+    }
+    ax::bring(expect, need, deadline, &guard, |number, until| {
+        let selected = match number {
+            Some(number) if expect.window() != Some(number) => expect.clone().in_window(number)?,
+            _ => expect.clone(),
+        };
+        check(&selected, need, display, until)
+    })
+    .map_err(|error| {
+        if error.code == Code::Native {
+            unread_by(error)
+        } else {
+            error
+        }
+    })
+}
+
 /// Refuse with `focus-changed` unless `expect` holds for `need` as `look`
 /// sees it now; once it does, the role of the field it names, one of
 /// [`FIELDS`], when it names one. A look that ends after `deadline` proves
@@ -338,6 +373,9 @@ fn require(
 /// it.
 fn keys(expect: &Expect, look: &mut impl Look) -> Result<Option<&'static str>> {
     let focused = look.focused().map_err(|_| unreadable())?;
+    if focused.is_none() && look.app_focused(expect.pid()).map_err(unread_by)? {
+        return inside(expect, look);
+    }
     let Some(pid) = focused else {
         return Err(refused(
             Reason::App,
@@ -684,7 +722,9 @@ fn at_window(
 /// The menu bar counts as the app's only while the app has keyboard focus.
 fn menu_bar(expect: &Expect, look: &mut impl Look) -> Result<()> {
     let focused = look.focused().map_err(|_| unreadable())?;
-    if focused == Some(expect.pid()) {
+    if focused == Some(expect.pid())
+        || (focused.is_none() && look.app_focused(expect.pid()).map_err(unread_by)?)
+    {
         return Ok(());
     }
 
