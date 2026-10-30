@@ -126,6 +126,20 @@ fn expect() -> Expect {
     Expect::new(APP).unwrap()
 }
 
+pub(in crate::native) fn verify_keyboard(
+    expect: &Expect,
+    keyboard: Keyboard,
+    listed: Vec<Window>,
+    deadline: Instant,
+    slow: Duration,
+) -> Result<Option<&'static str>> {
+    let mut look = Seen::focused(Some(expect.pid()))
+        .showing(listed)
+        .typing_in(keyboard);
+    look.slow = slow;
+    require(expect, Need::Keys, &display(), &mut look, deadline)
+}
+
 /// The refusal's code, reason and what it found, as an agent reads them.
 fn refusal(outcome: Result<Option<&str>>) -> serde_json::Value {
     let error = outcome.unwrap_err();
@@ -944,6 +958,14 @@ fn a_focused_field_that_elements_would_list_by_the_name_passes() {
         ),
         (
             Element {
+                identifier: Some("_NS:9".to_owned()),
+                focused: Some(true),
+                ..element("AXTextField", (120.0, 110.0, 200.0, 22.0))
+            },
+            "_NS:9",
+        ),
+        (
+            Element {
                 title: Some("Search".to_owned()),
                 ..element("AXSearchField", (120.0, 110.0, 200.0, 22.0))
             },
@@ -958,6 +980,38 @@ fn a_focused_field_that_elements_would_list_by_the_name_passes() {
         let mut look = inside_with(typing(focused), vec![document()]);
         assert!(expecting(&in_field(name), &mut look).is_ok(), "{name}");
     }
+}
+
+#[test]
+fn a_find_field_identifier_requires_fresh_app_and_sibling_focus_proof() {
+    let target = in_document().in_field("_NS:9").unwrap();
+    let area = Element {
+        identifier: Some("First Text View".to_owned()),
+        focused: Some(true),
+        ..element("AXTextArea", (100.0, 132.0, 400.0, 268.0))
+    };
+    let mut background = inside_with(typing(area), vec![document()]);
+    background.focused = Some(Ok(Some(OTHER)));
+    assert_eq!(
+        refusal(expecting(&target, &mut background))["reason"],
+        "app"
+    );
+    background.focused = Some(Ok(Some(APP)));
+    assert_eq!(
+        refusal(expecting(&target, &mut background))["reason"],
+        "field"
+    );
+    background.keyboard = Some(typing(Element {
+        identifier: Some("_NS:9".to_owned()),
+        focused: Some(true),
+        ..element("AXTextField", (120.0, 110.0, 200.0, 22.0))
+    }));
+    assert_eq!(
+        expecting(&target, &mut background).unwrap(),
+        Some("AXTextField")
+    );
+    assert_eq!(background.focus_reads, 3);
+    assert_eq!(background.keyboard_reads, 2);
 }
 
 #[test]
@@ -1158,6 +1212,7 @@ fn a_check_that_ran_out_of_time_is_refused_and_says_so() {
         let deadline = Instant::now() + Duration::from_millis(5);
         let error = require(&expect, Need::Keys, &display(), &mut look, deadline).unwrap_err();
         assert_eq!(error.details["reason"], "unreadable");
+        assert_eq!(error.details["unread"], "slow");
         assert!(error.error.contains("could not tell"), "{}", error.error);
         assert!(!error.uncertain);
     }
@@ -1177,6 +1232,29 @@ fn a_check_that_ran_out_of_time_is_refused_and_says_so() {
         "slow",
         "nothing is asked once the time is spent"
     );
+}
+
+#[test]
+fn an_unreadable_verification_that_exceeds_the_deadline_retains_the_slow_marker() {
+    let mut look = inside_with(typing(field("Email")), vec![document()]);
+    look.slow = Duration::from_millis(20);
+    look.unread = Some(Unread::Failed);
+    let deadline = Instant::now() + Duration::from_millis(5);
+    let error = require(
+        &in_field("Email"),
+        Need::Keys,
+        &display(),
+        &mut look,
+        deadline,
+    )
+    .unwrap_err();
+    assert_eq!(error.details["reason"], "unreadable");
+    assert_eq!(error.details["unread"], "slow");
+    assert!(!error.uncertain);
+
+    let mut spent = Live::until(Instant::now());
+    assert_eq!(spent.focused().unwrap_err().details["unread"], "slow");
+    assert_eq!(spent.windows().unwrap_err().details["unread"], "slow");
 }
 
 #[test]

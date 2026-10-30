@@ -12,7 +12,8 @@ use crate::{
         windows::{self, Kind, Listed, Window},
     },
     process::{Info, Instance},
-    select::ElementFilter,
+    select::{ElementFilter, NameMatch},
+    ui::text::same_text,
 };
 use objc2_application_services::AXError;
 use objc2_core_foundation::{CFArray, CFString, CFType, Type};
@@ -562,6 +563,9 @@ impl<A: Backend> Reader<A> {
         let mut seen = Vec::new();
         let mut best = None;
         let mut matches = Vec::new();
+        let mut identifiers = Vec::new();
+        let mut failed_names = false;
+        let mut failed_identifier = false;
         while let Some((element, depth)) = stack.pop() {
             if seen.len() >= ELEMENTS || depth > DEPTH || seen.contains(&element) {
                 return Err(Unread::Deep.error());
@@ -573,7 +577,18 @@ impl<A: Backend> Reader<A> {
                 continue;
             }
             if role.as_deref().is_some_and(|role| FIELDS.contains(&role)) {
-                let described = self.candidate_field(&element)?;
+                let (mut described, failed) = self.field_names(&element)?;
+                failed_names |= failed.contains(&"AXTitle") || failed.contains(&"AXDescription");
+                failed_identifier |= failed.contains(&"AXIdentifier");
+                // Identifiers name their own namespace and only match whole.
+                // Labels cannot create or conceal an identifier duplicate.
+                if described
+                    .identifier
+                    .take()
+                    .is_some_and(|identifier| same_text(&identifier, name))
+                {
+                    identifiers.push((element.clone(), described.enabled));
+                }
                 if let Some(rank) = filter.match_of(&described) {
                     if best.is_none_or(|best| rank > best) {
                         best = Some(rank);
@@ -592,9 +607,26 @@ impl<A: Backend> Reader<A> {
                 stack.push((child, depth + 1));
             }
         }
+        if !identifiers.is_empty() {
+            if failed_identifier {
+                return Err(Unread::Failed.error());
+            }
+            matches = identifiers;
+        } else if (failed_names || failed_identifier) && best.is_some() {
+            return Err(refused(
+                "field",
+                "The fields cannot be told apart because a name could not be read; a whole-name match is required",
+            ));
+        } else if matches.is_empty() && failed_identifier {
+            return Err(Unread::Failed.error());
+        }
         match matches.as_slice() {
             [(_, Some(false))] => Err(refused("disabled", "That field is disabled")),
             [(element, _)] => Ok(element.clone()),
+            [] => Err(refused(
+                "field",
+                "No field in the target window has that name",
+            )),
             _ => Err(refused(
                 "field",
                 "The named field could not be selected uniquely",
@@ -607,9 +639,32 @@ struct Target<A: Backend> {
     reader: Reader<A>,
     app: A::Element,
     window: Option<A::Element>,
+    field: Option<A::Element>,
     number: Option<i64>,
     changed: bool,
     point: Option<(f64, f64)>,
+}
+
+impl<A: Backend> Target<A> {
+    fn verify(
+        &mut self,
+        deadline: Instant,
+        verify: &mut impl FnMut(Option<i64>, Instant) -> Result<Option<&'static str>>,
+    ) -> Result<Option<&'static str>> {
+        let role = verify(self.number, deadline)?;
+        if let Some(field) = &self.field {
+            let focused = self.reader.reference(&self.app, "AXFocusedUIElement")?;
+            // The retained AX elements' safe equality uses CFEqual. A child
+            // editor is deliberately refused: ancestry alone is not identity.
+            if focused.as_ref() != Some(field) {
+                return Err(refused(
+                    "field",
+                    "The selected field did not receive keyboard focus",
+                ));
+            }
+        }
+        Ok(role)
+    }
 }
 
 /// Admit the target even when it is already ready. Each write is guarded
@@ -703,15 +758,45 @@ fn prepare<A: Backend>(
         point,
     )?;
     guard()?;
+    if let (Some(number), Some((x, y))) = (expect.window(), point) {
+        let listed = reader.ask.windows()?;
+        reader.left()?;
+        let window = listed
+            .iter()
+            .find(|window| window.pid == expect.pid() && window.number == number)
+            .ok_or_else(|| refused("window", "The named window is not on screen"))?;
+        if !window.bounds.contains(x, y) {
+            return Err(refused(
+                "window",
+                &format!("Window {number} is not at that point"),
+            ));
+        }
+    }
     if ready(number) {
-        return Ok(Target {
-            reader,
-            app,
-            window,
-            number,
-            changed: false,
-            point,
-        });
+        let mut field = None;
+        if let Some(name) = expect.field()
+            && let Some(focused) = reader.reference(&app, "AXFocusedUIElement")?
+        {
+            let described = reader.field(&focused)?;
+            let filter = ElementFilter {
+                name: Some(name.to_owned()),
+                ..Default::default()
+            };
+            if filter.match_of(&described) == Some(NameMatch::Exact) {
+                field = Some(focused);
+            }
+        }
+        if expect.field().is_none() || field.is_some() {
+            return Ok(Target {
+                reader,
+                app,
+                window,
+                field,
+                number,
+                changed: false,
+                point,
+            });
+        }
     }
     reader.left()?;
     let field = if let Some(name) = expect.field() {
@@ -781,7 +866,6 @@ fn prepare<A: Backend>(
         }
         changed |= status == AXError::Success;
         guard()?;
-        reader.left()?;
         if status != AXError::Success
             && !matches!(
                 status,
@@ -790,8 +874,15 @@ fn prepare<A: Backend>(
                     | AXError::NotImplemented
             )
         {
+            if field.as_ref() == Some(&element) {
+                return Err(refused(
+                    "field",
+                    "The named field did not accept keyboard focus",
+                ));
+            }
             return Err(Unread::Failed.error());
         }
+        reader.left()?;
     }
     reader.blocking(
         &app,
@@ -805,6 +896,7 @@ fn prepare<A: Backend>(
         reader,
         app,
         window,
+        field,
         number,
         changed,
         point,
@@ -835,17 +927,10 @@ fn settle<A: Backend>(
     mut verify: impl FnMut(Option<i64>, Instant) -> Result<Option<&'static str>>,
 ) -> Result<Option<&'static str>> {
     target.reader.deadline = deadline;
+    let mut last_refusal = None;
     loop {
         guard()?;
-        target.reader.blocking(
-            &target.app,
-            target.window.as_ref(),
-            expect.pid(),
-            expect.window().is_some() || target.point.is_some(),
-            target.point,
-        )?;
-        let mut result = verify(target.number, deadline);
-        if result.is_ok() {
+        let result = (|| {
             target.reader.blocking(
                 &target.app,
                 target.window.as_ref(),
@@ -853,28 +938,50 @@ fn settle<A: Backend>(
                 expect.window().is_some() || target.point.is_some(),
                 target.point,
             )?;
-            // Admission is another observation. Its scan may outlive the
-            // earlier proof, so verify the destination again before returning.
-            result = verify(target.number, deadline);
-        }
+            let mut result = target.verify(deadline, &mut verify);
+            if result.is_ok() {
+                target.reader.blocking(
+                    &target.app,
+                    target.window.as_ref(),
+                    expect.pid(),
+                    expect.window().is_some() || target.point.is_some(),
+                    target.point,
+                )?;
+                // Admission is another observation. Its scan may outlive the
+                // earlier proof, so verify the destination again before returning.
+                result = target.verify(deadline, &mut verify);
+            }
+            result
+        })();
         guard()?;
-        target.reader.left()?;
-        if result.is_ok()
-            || !target.changed
-            || result.as_ref().err().is_some_and(|error| {
-                matches!(
-                    error.details.get("reason").and_then(|value| value.as_str()),
-                    Some("sheet" | "disabled" | "unreadable")
-                )
-            })
+        let result = result.and_then(|role| target.reader.left().map(|_| role));
+        let error = match result {
+            Ok(role) => return Ok(role),
+            Err(error) if error.details.get("unread").is_some_and(|why| why == "slow") => {
+                return Err(last_refusal.unwrap_or(error));
+            }
+            Err(error) => error,
+        };
+        if !target.changed
+            || error.code != Code::FocusChanged
+            || !matches!(
+                error.details.get("reason").and_then(|value| value.as_str()),
+                Some("app" | "window" | "point" | "field")
+            )
+            || target.reader.left().is_err()
         {
-            return result;
+            return Err(error);
         }
+        // A refused destination never authorizes input. Keep its actual reason
+        // if waiting for a focus request to take effect exhausts the deadline.
+        last_refusal = Some(error);
         std::thread::sleep(
-            Duration::from_millis(10).min(deadline.saturating_duration_since(Instant::now())),
+            Duration::from_millis(10)
+                .min(deadline.saturating_duration_since(target.reader.ask.now())),
         );
-        if Instant::now() >= deadline {
-            return Err(Unread::Slow.error());
+        if target.reader.ask.now() >= deadline || Instant::now() >= deadline {
+            guard()?;
+            return Err(last_refusal.unwrap());
         }
     }
 }

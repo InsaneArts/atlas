@@ -242,10 +242,7 @@ impl Live {
     fn left(&self) -> Result<Duration> {
         let left = self.deadline.saturating_duration_since(Instant::now());
         if left.is_zero() {
-            return Err(Error::new(
-                Code::Native,
-                "The time to check which app is in front ran out",
-            ));
+            return Err(Unread::Slow.error());
         }
 
         Ok(left)
@@ -268,7 +265,7 @@ impl Look for Live {
     /// Read from the app element of the process judged to have focus, so
     /// the app, window and field checks look at the same app.
     fn keyboard(&mut self, pid: i64, judged: Judged) -> Result<Keyboard> {
-        let left = self.left().map_err(|_| Unread::Slow.error())?;
+        let left = self.left()?;
         ax::keyboard(pid, left.min(KEYBOARD_TIMEOUT), judged)
     }
 
@@ -360,8 +357,14 @@ fn require(
             .and_then(|()| point(expect, to, Spot::Drop, display, look))
             .map(|()| None),
     };
-    if outcome.is_ok() && Instant::now() >= deadline {
-        return Err(unreadable());
+    let unread = outcome.as_ref().is_err_and(|error| {
+        error
+            .details
+            .get("reason")
+            .is_some_and(|why| why == "unreadable")
+    });
+    if (outcome.is_ok() || unread) && Instant::now() >= deadline {
+        return Err(unreadable().with("unread", Unread::Slow));
     }
 
     outcome
@@ -771,4 +774,4 @@ fn refused(reason: Reason, message: String, found: Option<Found>) -> Error {
 }
 
 #[cfg(test)]
-mod tests;
+pub(super) mod tests;

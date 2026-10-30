@@ -1,7 +1,15 @@
 //! How much of an element's text is read: at most a fixed number of UTF-16
 //! units, cut only between characters, and for a long text only its start.
 use super::ffi;
+use objc2_application_services::AXError;
 use objc2_core_foundation::{CFIndex, CFRange, CFString, CFType};
+
+/// AppKit can report this for an absent text attribute or a failed getter.
+/// It yields no text, but does not prove that the attribute is absent.
+pub(super) fn getter_failed(status: AXError, attribute: &str) -> bool {
+    status == AXError::Failure
+        && ["AXTitle", "AXDescription", "AXValue", "AXIdentifier"].contains(&attribute)
+}
 
 /// Longest text reported for any one attribute, in UTF-16 units.
 pub(super) const TEXT_LIMIT: CFIndex = 200;

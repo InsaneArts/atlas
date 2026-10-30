@@ -7,6 +7,7 @@ const APP: usize = 0;
 const WINDOW: usize = 1;
 const FIELD: usize = 2;
 
+#[derive(Clone)]
 struct Fake {
     now: Rc<Cell<Instant>>,
     answers: HashMap<(usize, &'static str), Answer<usize>>,
@@ -23,6 +24,8 @@ struct Fake {
     after_write: Option<fn(&mut Fake)>,
     on_ask: Option<fn(&mut Fake, usize, &'static str)>,
     observed_window: Rc<Cell<usize>>,
+    focused_element: Rc<Cell<usize>>,
+    frontmost: Rc<Cell<bool>>,
 }
 
 impl Fake {
@@ -56,6 +59,8 @@ impl Fake {
             after_write: None,
             on_ask: None,
             observed_window: Rc::new(Cell::new(WINDOW)),
+            focused_element: Rc::new(Cell::new(FIELD)),
+            frontmost: Rc::new(Cell::new(false)),
         };
         fake.lists.insert((APP, "AXWindows"), vec![WINDOW]);
         fake.lists.insert((WINDOW, "AXChildren"), vec![FIELD]);
@@ -457,6 +462,588 @@ fn a_unique_enabled_field_is_focused_after_its_window() {
     assert_eq!(fake.writes.last(), Some(&(FIELD, Write::Flag("AXFocused"))));
 }
 
+fn find_bar() -> Fake {
+    let mut fake = Fake::new();
+    fake.lists.insert((WINDOW, "AXChildren"), vec![4, 5]);
+    for (group, child) in [(4, FIELD), (5, 3)] {
+        fake.answers
+            .insert((group, "AXRole"), Answer::Text("AXGroup".into()));
+        fake.answers
+            .insert((group, "AXParent"), Answer::Element(WINDOW));
+        fake.lists.insert((group, "AXChildren"), vec![child]);
+        fake.answers
+            .insert((child, "AXParent"), Answer::Element(group));
+    }
+    fake.answers
+        .insert((3, "AXRole"), Answer::Text("AXTextArea".into()));
+    fake.answers
+        .insert((3, "AXIdentifier"), Answer::Text("First Text View".into()));
+    for (element, attribute) in [
+        (3, "AXDescription"),
+        (FIELD, "AXTitle"),
+        (FIELD, "AXDescription"),
+    ] {
+        fake.answers
+            .insert((element, attribute), Answer::Failed(AXError::Failure));
+    }
+    fake.answers
+        .insert((FIELD, "AXIdentifier"), Answer::Text("_NS:9".into()));
+    fake.focused_element.set(3);
+    fake.on_ask = Some(|fake, element, attribute| {
+        let answer = match (element, attribute) {
+            (APP, "AXFocusedUIElement") => Answer::Element(fake.focused_element.get()),
+            (APP, "AXFrontmost") => Answer::Flag(fake.frontmost.get()),
+            (_, "AXFocused") => Answer::Flag(element == fake.focused_element.get()),
+            _ => return,
+        };
+        fake.answers.insert((element, attribute), answer);
+    });
+    fake.after_write = Some(|fake| match fake.writes.last().copied().unwrap() {
+        (APP, Write::Flag("AXFrontmost")) => fake.frontmost.set(true),
+        (FIELD, Write::Flag("AXFocused")) => fake.focused_element.set(FIELD),
+        _ => {}
+    });
+    fake
+}
+
+fn read_find_bar(fake: &mut Fake, deadline: Instant) -> super::super::Keyboard {
+    super::super::keyboard::read(
+        fake,
+        &APP,
+        deadline,
+        super::super::Judged {
+            window: true,
+            field: true,
+        },
+    )
+    .unwrap()
+}
+
+#[test]
+fn an_identifier_only_find_field_is_established_from_a_background_sibling_text_area() {
+    let mut fake = find_bar();
+    let expect = named().in_field("_NS:9").unwrap();
+    let deadline = fake.now.get() + Duration::from_millis(450);
+    let mut observation = fake.clone();
+    let initial = read_find_bar(&mut observation, deadline);
+    assert_eq!(
+        initial.focused.unwrap().element.role.as_deref(),
+        Some("AXTextArea")
+    );
+    assert!(!fake.frontmost.get());
+    let target = prepare(
+        &mut fake,
+        &expect,
+        Need::Keys,
+        deadline,
+        &|| Ok(()),
+        &mut |_| observation.frontmost.get(),
+    )
+    .unwrap();
+    let mut reads = 0;
+    let role = settle(target, &expect, deadline, &|| Ok(()), |number, until| {
+        reads += 1;
+        assert!(reads <= 2);
+        assert!(observation.frontmost.get());
+        assert_eq!(number, Some(42));
+        let keyboard = read_find_bar(&mut observation, until);
+        assert_eq!(keyboard.within, Within::Window);
+        let focused = keyboard.focused.unwrap().element;
+        assert_eq!(focused.focused, Some(true));
+        assert!(
+            ElementFilter {
+                name: Some("_NS:9".into()),
+                ..Default::default()
+            }
+            .matches(&focused)
+        );
+        assert_eq!(focused.role.as_deref(), Some("AXTextField"));
+        Ok(Some("AXTextField"))
+    })
+    .unwrap();
+    assert_eq!(role, Some("AXTextField"));
+    assert_eq!(reads, 2);
+    assert_eq!(fake.writes.last(), Some(&(FIELD, Write::Flag("AXFocused"))));
+}
+
+#[test]
+fn a_missing_find_field_name_refuses_before_activating_the_background_app() {
+    let mut fake = find_bar();
+    let error = fake.run(&named().in_field("_NS:10").unwrap()).unwrap_err();
+    assert_eq!(error.details["reason"], "field");
+    assert!(
+        error
+            .error
+            .starts_with("No field in the target window has that name")
+    );
+    assert!(fake.writes.is_empty());
+    assert!(!fake.frontmost.get());
+    assert_eq!(fake.focused_element.get(), 3);
+}
+
+#[test]
+fn duplicate_find_field_identifiers_refuse_even_when_their_name_getters_fail() {
+    let mut fake = find_bar();
+    fake.answers
+        .insert((3, "AXIdentifier"), Answer::Text("_NS:9".into()));
+    reason(fake.run(&named().in_field("_NS:9").unwrap()), "field");
+    assert!(fake.writes.is_empty());
+}
+
+#[test]
+fn a_failed_exact_title_cannot_promote_a_readable_leading_match() {
+    let mut fake = find_bar();
+    // The field's title would be Email, but that getter cannot be read.
+    fake.answers.insert(
+        (FIELD, "AXIdentifier"),
+        Answer::Text("personal-email".into()),
+    );
+    fake.answers
+        .insert((3, "AXTitle"), Answer::Text("Email, Work".into()));
+    let error = fake.run(&named().in_field("Email").unwrap()).unwrap_err();
+    assert_eq!(error.details["reason"], "field");
+    assert!(error.error.contains("told apart"));
+    assert!(fake.writes.is_empty());
+    assert!(!fake.frontmost.get());
+}
+
+#[test]
+fn a_failed_title_cannot_hide_an_exact_duplicate_behind_a_readable_identifier() {
+    for attribute in ["AXTitle", "AXDescription"] {
+        let mut fake = Fake::new();
+        fake.lists.insert((WINDOW, "AXChildren"), vec![FIELD, 3]);
+        fake.answers
+            .insert((FIELD, "AXDescription"), Answer::Absent);
+        fake.answers.insert(
+            (FIELD, "AXIdentifier"),
+            Answer::Text("personal-email".into()),
+        );
+        fake.answers
+            .insert((FIELD, attribute), Answer::Failed(AXError::Failure));
+        fake.answers
+            .insert((3, "AXRole"), Answer::Text("AXTextField".into()));
+        fake.answers
+            .insert((3, "AXParent"), Answer::Element(WINDOW));
+        fake.answers
+            .insert((3, "AXTitle"), Answer::Text("Email".into()));
+        let error = fake.run(&named().in_field("Email").unwrap()).unwrap_err();
+        assert_eq!(error.details["reason"], "field");
+        assert!(error.error.contains("told apart"));
+        assert!(fake.writes.is_empty());
+    }
+}
+
+#[test]
+fn a_plain_failed_identifier_blocks_an_identifier_winner_despite_a_readable_title() {
+    let mut fake = find_bar();
+    fake.answers
+        .insert((3, "AXIdentifier"), Answer::Failed(AXError::Failure));
+    fake.answers
+        .insert((3, "AXTitle"), Answer::Text("Document".into()));
+    let error = fake.run(&named().in_field("_NS:9").unwrap()).unwrap_err();
+    assert_eq!(error.details["unread"], "failed");
+    assert!(fake.writes.is_empty());
+    assert!(!fake.frontmost.get());
+}
+
+#[test]
+fn a_plain_failed_identifier_prevents_selecting_a_readable_title_or_description() {
+    for attribute in ["AXTitle", "AXDescription"] {
+        for name in ["Email, Work", "Email"] {
+            let mut fake = find_bar();
+            for element in [FIELD, 3] {
+                fake.answers
+                    .insert((element, "AXTitle"), Answer::Text("Document".into()));
+                fake.answers
+                    .insert((element, "AXDescription"), Answer::Text("Editor".into()));
+            }
+            fake.answers
+                .insert((FIELD, attribute), Answer::Text(name.into()));
+            fake.answers
+                .insert((3, "AXIdentifier"), Answer::Failed(AXError::Failure));
+            let error = fake.run(&named().in_field("Email").unwrap()).unwrap_err();
+            assert_eq!(error.details["reason"], "field");
+            assert!(error.error.contains("told apart"));
+            assert!(fake.writes.is_empty());
+            assert!(!fake.frontmost.get());
+            assert_eq!(fake.focused_element.get(), 3);
+        }
+    }
+}
+
+#[test]
+fn an_identifier_winner_uses_its_own_namespace_and_accepts_readable_absence() {
+    for title in ["Document", "_NS:9"] {
+        let mut fake = find_bar();
+        fake.answers.insert((3, "AXIdentifier"), Answer::Absent);
+        fake.answers
+            .insert((3, "AXTitle"), Answer::Text(title.into()));
+        fake.run(&named().in_field("_NS:9").unwrap()).unwrap();
+        assert_eq!(fake.focused_element.get(), FIELD);
+        assert_eq!(fake.writes.last(), Some(&(FIELD, Write::Flag("AXFocused"))));
+    }
+}
+
+#[test]
+fn an_exactly_focused_field_skips_search_and_retains_its_identity_without_writes() {
+    let mut fake = find_bar();
+    fake.focused_element.set(FIELD);
+    fake.frontmost.set(true);
+    // Searching the sibling's names would fail; readiness needs no search.
+    fake.answers
+        .insert((3, "AXIdentifier"), Answer::Failed(AXError::CannotComplete));
+    let expect = named().in_field("_NS:9").unwrap();
+    let deadline = fake.now.get() + Duration::from_millis(450);
+    let mut observation = fake.clone();
+    let listed = fake.windows.clone();
+    let mut reads = 0;
+    let mut verify = |number, until| {
+        reads += 1;
+        assert!(reads <= 3);
+        assert_eq!(number, Some(42));
+        let keyboard = read_find_bar(&mut observation, until);
+        crate::native::focus::tests::verify_keyboard(
+            &expect,
+            keyboard,
+            listed.clone(),
+            until,
+            Duration::ZERO,
+        )
+    };
+    let target = prepare(
+        &mut fake,
+        &expect,
+        Need::Keys,
+        deadline,
+        &|| Ok(()),
+        &mut |number| verify(number, deadline).is_ok(),
+    )
+    .unwrap();
+    assert_eq!(target.field, Some(FIELD));
+    assert_eq!(
+        settle(target, &expect, deadline, &|| Ok(()), &mut verify).unwrap(),
+        Some("AXTextField")
+    );
+    assert_eq!(reads, 3);
+    assert!(fake.writes.is_empty());
+}
+
+#[test]
+fn a_leading_focused_field_is_prepared_and_input_is_authorized_for_the_exact_field() {
+    let mut fake = find_bar();
+    for element in [FIELD, 3] {
+        fake.answers
+            .insert((element, "AXDescription"), Answer::Absent);
+    }
+    fake.answers
+        .insert((FIELD, "AXTitle"), Answer::Text("Email".into()));
+    fake.answers
+        .insert((3, "AXTitle"), Answer::Text("Email, Work".into()));
+    fake.frontmost.set(true);
+    let expect = named().in_field("Email").unwrap();
+    let deadline = fake.now.get() + Duration::from_millis(450);
+    let mut observation = fake.clone();
+    let listed = fake.windows.clone();
+    let mut reads = 0;
+    let mut verify = |number, until| {
+        reads += 1;
+        assert!(reads <= 3, "verification must remain bounded");
+        assert_eq!(number, Some(42));
+        let keyboard = read_find_bar(&mut observation, until);
+        crate::native::focus::tests::verify_keyboard(
+            &expect,
+            keyboard,
+            listed.clone(),
+            until,
+            Duration::ZERO,
+        )
+    };
+    let target = prepare(
+        &mut fake,
+        &expect,
+        Need::Keys,
+        deadline,
+        &|| Ok(()),
+        &mut |number| verify(number, deadline).is_ok(),
+    )
+    .unwrap();
+    assert_eq!(
+        settle(target, &expect, deadline, &|| Ok(()), &mut verify).unwrap(),
+        Some("AXTextField")
+    );
+    assert_eq!(reads, 3);
+    assert_eq!(fake.focused_element.get(), FIELD);
+    assert_eq!(fake.writes.last(), Some(&(FIELD, Write::Flag("AXFocused"))));
+}
+
+#[test]
+fn a_window_refusal_survives_a_later_production_verification_that_exceeds_its_deadline() {
+    let mut fake = Fake::new();
+    let deadline = fake.now.get() + Duration::from_millis(150);
+    let mut observation = fake.clone();
+    let mut listed = fake.windows.clone();
+    let mut other = listed[0].clone();
+    other.number = 43;
+    other.bounds.x = 600.0;
+    listed.push(other);
+    let expect = named();
+    let target = prepare(
+        &mut fake,
+        &expect,
+        Need::Keys,
+        deadline,
+        &|| Ok(()),
+        &mut |_| false,
+    )
+    .unwrap();
+    let mut reads = 0;
+    let error = settle(target, &expect, deadline, &|| Ok(()), |_, until| {
+        reads += 1;
+        assert!(reads <= 2, "settlement must remain bounded");
+        let mut keyboard = read_find_bar(&mut observation, until);
+        let slow = if reads == 1 {
+            keyboard.window.as_mut().unwrap().frame.as_mut().unwrap().x = 600.0;
+            Duration::ZERO
+        } else {
+            until.saturating_duration_since(Instant::now()) + Duration::from_millis(1)
+        };
+        crate::native::focus::tests::verify_keyboard(&expect, keyboard, listed.clone(), until, slow)
+    })
+    .unwrap_err();
+    assert_eq!(reads, 2);
+    assert_eq!(error.details["reason"], "window");
+    assert!(error.error.contains("Window 43 has keyboard focus"));
+    assert!(!error.details.contains_key("unread"));
+    assert!(!error.uncertain);
+}
+
+#[test]
+fn a_plain_failed_name_on_the_winner_also_prevents_selection() {
+    for name in ["Email", "Email, Work"] {
+        let mut fake = Fake::new();
+        fake.answers
+            .insert((FIELD, "AXDescription"), Answer::Text(name.into()));
+        fake.answers
+            .insert((FIELD, "AXTitle"), Answer::Failed(AXError::Failure));
+        let error = fake.run(&named().in_field("Email").unwrap()).unwrap_err();
+        assert_eq!(error.details["reason"], "field");
+        assert!(error.error.contains("told apart"));
+        assert!(fake.writes.is_empty());
+    }
+}
+
+#[test]
+fn a_candidate_without_readable_names_refuses_even_beside_an_exact_match() {
+    for readable_exact in [false, true] {
+        let mut fake = find_bar();
+        for attribute in ["AXTitle", "AXDescription", "AXIdentifier"] {
+            fake.answers
+                .insert((3, attribute), Answer::Failed(AXError::Failure));
+        }
+        let name = if readable_exact { "_NS:9" } else { "Email" };
+        let error = fake.run(&named().in_field(name).unwrap()).unwrap_err();
+        assert_eq!(error.details["unread"], "failed");
+        assert!(fake.writes.is_empty());
+        assert!(!fake.frontmost.get());
+    }
+}
+
+#[test]
+fn a_successful_focus_setter_cannot_authorize_input_to_a_leading_sibling_or_inner_editor() {
+    for descendant in [false, true] {
+        let mut fake = find_bar();
+        for element in [FIELD, 3] {
+            fake.answers
+                .insert((element, "AXDescription"), Answer::Absent);
+        }
+        fake.answers
+            .insert((FIELD, "AXTitle"), Answer::Text("Email".into()));
+        fake.answers
+            .insert((3, "AXTitle"), Answer::Text("Email, Work".into()));
+        if descendant {
+            fake.lists.insert((5, "AXChildren"), vec![]);
+            fake.lists.insert((FIELD, "AXChildren"), vec![3]);
+            fake.answers.insert((3, "AXParent"), Answer::Element(FIELD));
+        }
+        fake.after_write = Some(|fake| {
+            if fake.writes.last() == Some(&(APP, Write::Flag("AXFrontmost"))) {
+                fake.frontmost.set(true);
+            }
+        });
+        let expect = named().in_field("Email").unwrap();
+        let deadline = fake.now.get() + Duration::from_millis(450);
+        let mut observation = fake.clone();
+        let now = fake.now.clone();
+        let target = prepare(
+            &mut fake,
+            &expect,
+            Need::Keys,
+            deadline,
+            &|| Ok(()),
+            &mut |_| false,
+        )
+        .unwrap();
+        let mut reads = 0;
+        let mut inputs = 0;
+        let result = settle(target, &expect, deadline, &|| Ok(()), |_, until| {
+            reads += 1;
+            assert!(reads <= 5, "settlement must remain bounded");
+            let keyboard = read_find_bar(&mut observation, until);
+            let focused = keyboard.focused.unwrap().element;
+            assert_eq!(focused.focused, Some(true));
+            assert!(
+                ElementFilter {
+                    name: Some("Email".into()),
+                    ..Default::default()
+                }
+                .matches(&focused)
+            );
+            now.set(now.get() + Duration::from_millis(100));
+            Ok(Some("AXTextArea"))
+        });
+        if result.is_ok() {
+            inputs += 1;
+        }
+        let error = result.unwrap_err();
+        assert_eq!(error.details["reason"], "field");
+        assert_eq!(inputs, 0);
+        assert_eq!(fake.focused_element.get(), 3);
+        assert_eq!(fake.writes.last(), Some(&(FIELD, Write::Flag("AXFocused"))));
+    }
+}
+
+#[test]
+fn an_already_ready_field_still_requires_the_selected_element_to_hold_focus() {
+    let mut fake = find_bar();
+    fake.answers
+        .insert((FIELD, "AXTitle"), Answer::Text("Email".into()));
+    fake.answers
+        .insert((3, "AXTitle"), Answer::Text("Email, Work".into()));
+    fake.frontmost.set(true);
+    fake.focused_element.set(FIELD);
+    let focused = fake.focused_element.clone();
+    let expect = named().in_field("Email").unwrap();
+    let deadline = fake.now.get() + Duration::from_millis(450);
+    let target = prepare(
+        &mut fake,
+        &expect,
+        Need::Keys,
+        deadline,
+        &|| Ok(()),
+        &mut |_| true,
+    )
+    .unwrap();
+    focused.set(3);
+    let mut reads = 0;
+    let error = settle(target, &expect, deadline, &|| Ok(()), |_, _| {
+        reads += 1;
+        assert_eq!(reads, 1);
+        Ok(Some("AXTextArea"))
+    })
+    .unwrap_err();
+    assert_eq!(error.details["reason"], "field");
+    assert!(fake.writes.is_empty());
+}
+
+#[test]
+fn field_identity_is_read_again_after_the_second_destination_verification() {
+    let mut fake = find_bar();
+    fake.focused_element.set(FIELD);
+    fake.frontmost.set(true);
+    let focused = fake.focused_element.clone();
+    let expect = named().in_field("_NS:9").unwrap();
+    let deadline = fake.now.get() + Duration::from_millis(450);
+    let target = prepare(
+        &mut fake,
+        &expect,
+        Need::Keys,
+        deadline,
+        &|| Ok(()),
+        &mut |_| true,
+    )
+    .unwrap();
+    let mut reads = 0;
+    let error = settle(target, &expect, deadline, &|| Ok(()), |_, _| {
+        reads += 1;
+        assert!(reads <= 2);
+        if reads == 2 {
+            focused.set(3);
+        }
+        Ok(Some("AXTextField"))
+    })
+    .unwrap_err();
+    assert_eq!(error.details["reason"], "field");
+    assert_eq!(reads, 2);
+    assert!(fake.writes.is_empty());
+}
+
+#[test]
+fn a_find_field_focus_write_that_is_rejected_has_a_field_reason() {
+    let mut fake = find_bar();
+    fake.after_write = Some(|fake| {
+        if fake.writes.last() == Some(&(FIELD, Write::Flag("AXFocused"))) {
+            fake.status = AXError::Failure;
+        }
+    });
+    let error = fake.run(&named().in_field("_NS:9").unwrap()).unwrap_err();
+    assert_eq!(error.details["reason"], "field");
+    assert!(!error.uncertain);
+    assert_eq!(fake.focused_element.get(), 3);
+}
+
+#[test]
+fn a_find_field_focus_write_that_does_not_take_retains_the_field_refusal_at_the_deadline() {
+    for expires_in_read in [true, false] {
+        let mut fake = find_bar();
+        fake.after_write = Some(|fake| {
+            if fake.writes.last() == Some(&(APP, Write::Flag("AXFrontmost"))) {
+                fake.frontmost.set(true);
+            }
+        });
+        let expect = named().in_field("_NS:9").unwrap();
+        let deadline = fake.now.get() + Duration::from_millis(450);
+        let mut observation = fake.clone();
+        let now = fake.now.clone();
+        let target = prepare(
+            &mut fake,
+            &expect,
+            Need::Keys,
+            deadline,
+            &|| Ok(()),
+            &mut |_| false,
+        )
+        .unwrap();
+        let mut reads = 0;
+        let error = settle(target, &expect, deadline, &|| Ok(()), |_, until| {
+            reads += 1;
+            assert!(reads <= 2, "settlement must remain bounded");
+            if reads == 2 {
+                now.set(deadline);
+                return Err(Unread::Slow.error());
+            }
+            let keyboard = read_find_bar(&mut observation, until);
+            assert_eq!(keyboard.within, Within::Window);
+            assert_eq!(
+                keyboard.focused.unwrap().element.role.as_deref(),
+                Some("AXTextArea")
+            );
+            if expires_in_read {
+                now.set(deadline);
+            }
+            Err(refused(
+                "field",
+                "The field with keyboard focus is not the one named _NS:9",
+            ))
+        })
+        .unwrap_err();
+        assert_eq!(error.details["reason"], "field");
+        assert!(!error.details.contains_key("unread"));
+        assert!(!error.uncertain);
+        assert_eq!(reads, if expires_in_read { 1 } else { 2 });
+        assert_eq!(fake.focused_element.get(), 3);
+    }
+}
+
 #[test]
 fn a_failed_candidate_title_read_refuses_before_any_write() {
     failed_candidate_name("AXTitle");
@@ -479,7 +1066,7 @@ fn failed_candidate_name(attribute: &'static str) {
     fake.answers
         .insert((3, "AXRole"), Answer::Text("AXTextField".into()));
     fake.answers
-        .insert((3, attribute), Answer::Failed(AXError::Failure));
+        .insert((3, attribute), Answer::Failed(AXError::CannotComplete));
     let error = fake.run(&named().in_field("Email").unwrap()).unwrap_err();
     assert_eq!(error.details["unread"], "failed");
     assert!(fake.writes.is_empty());
@@ -636,6 +1223,84 @@ fn an_app_only_point_without_a_candidate_makes_no_writes() {
     .unwrap();
     assert_eq!(error.details["reason"], "point");
     assert!(fake.writes.is_empty());
+}
+
+#[test]
+fn a_point_three_pixels_outside_the_named_document_refuses_before_readiness_or_writes() {
+    for need in [
+        Need::Point(701.0, 310.0),
+        Need::Drag {
+            from: (701.0, 310.0),
+            to: (300.0, 310.0),
+        },
+    ] {
+        let mut fake = Fake::new();
+        fake.windows = [
+            (41633, 210.0, 128.0),
+            (41631, 181.0, 99.0),
+            (41629, 152.0, 70.0),
+        ]
+        .into_iter()
+        .map(|(number, x, y)| Window {
+            number,
+            bounds: Bounds {
+                x,
+                y,
+                width: 517.0,
+                height: 422.0,
+            },
+            ..fake.windows[0].clone()
+        })
+        .collect();
+        for (element, x, y) in [(3, 210.0, 128.0), (WINDOW, 181.0, 99.0), (4, 152.0, 70.0)] {
+            fake.window(element);
+            fake.answers
+                .insert((element, "AXPosition"), Answer::Point(x, y));
+            fake.answers
+                .insert((element, "AXSize"), Answer::Size(517.0, 422.0));
+        }
+        fake.lists.insert((APP, "AXWindows"), vec![3, WINDOW, 4]);
+        let expect = Expect::new(812).unwrap().in_window(41631).unwrap();
+        let deadline = fake.now.get() + Duration::from_millis(450);
+        let error = prepare(&mut fake, &expect, need, deadline, &|| Ok(()), &mut |_| {
+            panic!("verification must not consume the preparation deadline")
+        })
+        .err()
+        .unwrap();
+        assert_eq!(error.code, Code::FocusChanged);
+        assert_eq!(error.details["reason"], "window");
+        assert!(error.error.contains("41631 is not at that point"));
+        assert!(fake.writes.is_empty());
+    }
+}
+
+#[test]
+fn a_window_refusal_is_preserved_when_the_next_admission_scan_runs_out_of_time() {
+    let mut fake = Fake::new();
+    let deadline = fake.now.get() + Duration::from_millis(450);
+    let target = prepare(
+        &mut fake,
+        &named(),
+        Need::Keys,
+        deadline,
+        &|| Ok(()),
+        &mut |_| false,
+    )
+    .unwrap();
+    let now = target.reader.ask.now.clone();
+    target.reader.ask.delay = Duration::from_millis(2);
+    let mut reads = 0;
+    let error = settle(target, &named(), deadline, &|| Ok(()), |_, _| {
+        reads += 1;
+        assert_eq!(reads, 1);
+        // Leave less than one admission read, which advances the fake clock.
+        now.set(deadline - Duration::from_millis(1));
+        Err(refused(
+            "window",
+            "Window 43 has keyboard focus, not window 42",
+        ))
+    });
+    reason(error.map(|_| ()), "window");
 }
 
 #[test]
@@ -900,6 +1565,8 @@ fn field_focus_is_resolved_again_for_each_document_without_remembered_values() {
 #[test]
 fn field_readiness_is_polled_after_a_confirmed_focus_request() {
     let mut fake = Fake::new();
+    fake.answers
+        .insert((APP, "AXFocusedUIElement"), Answer::Element(FIELD));
     let expect = named().in_field("Email").unwrap();
     let deadline = fake.now.get() + Duration::from_millis(450);
     let target = prepare(
@@ -914,6 +1581,7 @@ fn field_readiness_is_polled_after_a_confirmed_focus_request() {
     let mut observations = 0;
     let role = settle(target, &expect, deadline, &|| Ok(()), |_, _| {
         observations += 1;
+        assert!(observations <= 3);
         if observations == 1 {
             Err(refused("field", "The field has not gained focus yet"))
         } else {

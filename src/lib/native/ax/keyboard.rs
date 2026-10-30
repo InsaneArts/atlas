@@ -5,7 +5,10 @@
 //! apart from one that failed or answered something else, and each request
 //! is bounded by what is left of one deadline. Only copies are made;
 //! nothing is set but each element's own messaging timeout.
-use super::{ABSENT, Element, Frame, ffi, text::bounded_string};
+use super::{
+    ABSENT, Element, Frame, ffi,
+    text::{bounded_string, getter_failed},
+};
 use crate::error::{Code, Error, Result};
 use objc2_application_services::{AXError, AXUIElement, AXValue, AXValueType};
 use objc2_core_foundation::{CFBoolean, CFNull, CFRetained, CFString, CFType};
@@ -195,14 +198,19 @@ impl<A: Ask> Reader<A> {
         text(self.answer(element, attribute)?)
     }
 
-    /// One of a field's names. A name getter that fails outright, as an
-    /// AppKit text view's description does every time, gives no name: a
-    /// focused field only needs to prove its own match. Candidate searches
-    /// use strict reads instead, because an unknown name can hide a tie.
-    /// Any other failure is an error.
-    fn name(&mut self, element: &A::Element, attribute: &'static str) -> Result<Option<String>> {
+    /// One name, retaining plain getter failures for candidate ranking.
+    /// Other failures and malformed or incomplete text refuse immediately.
+    fn name(
+        &mut self,
+        element: &A::Element,
+        attribute: &'static str,
+        failed: &mut Vec<&'static str>,
+    ) -> Result<Option<String>> {
         match self.asked(element, attribute)? {
-            Answer::Failed(AXError::Failure) => Ok(None),
+            Answer::Failed(status) if getter_failed(status, attribute) => {
+                failed.push(attribute);
+                Ok(None)
+            }
             Answer::Failed(_) => Err(Unread::Failed.error()),
             answer => text(answer),
         }
@@ -260,29 +268,27 @@ impl<A: Ask> Reader<A> {
     /// enabled and focused. No value is read: a field's value is what was
     /// typed, never its name.
     pub(super) fn field(&mut self, element: &A::Element) -> Result<Element> {
-        self.field_with_names(element, Self::name)
+        self.field_names(element).map(|(field, _)| field)
     }
 
-    /// Every candidate name must be known before uniqueness can be proved.
-    pub(super) fn candidate_field(&mut self, element: &A::Element) -> Result<Element> {
-        self.field_with_names(element, Self::text)
-    }
-
-    fn field_with_names(
+    /// The field and the name attributes whose getters failed plainly.
+    /// Each failed read leaves that name's namespace uncertain.
+    pub(super) fn field_names(
         &mut self,
         element: &A::Element,
-        name: impl Fn(&mut Self, &A::Element, &'static str) -> Result<Option<String>>,
-    ) -> Result<Element> {
-        Ok(Element {
+    ) -> Result<(Element, Vec<&'static str>)> {
+        let mut failed = Vec::new();
+        let field = Element {
             role: self.text(element, "AXRole")?,
             subrole: self.text(element, "AXSubrole")?,
-            title: name(self, element, "AXTitle")?,
-            description: name(self, element, "AXDescription")?,
-            identifier: name(self, element, "AXIdentifier")?,
+            title: self.name(element, "AXTitle", &mut failed)?,
+            description: self.name(element, "AXDescription", &mut failed)?,
+            identifier: self.name(element, "AXIdentifier", &mut failed)?,
             enabled: self.flag(element, "AXEnabled")?,
             focused: self.flag(element, "AXFocused")?,
             ..bare()
-        })
+        };
+        Ok((field, failed))
     }
 
     /// Where `element` sits, walking its parents until [`place`] tells.
@@ -408,7 +414,12 @@ fn place(at_window: bool, role: Option<&str>) -> Step {
 
 /// Where keyboard focus is inside the app whose element is `app`, read
 /// through `ask` until `deadline`, as far as what is `judged` needs.
-fn read<A: Ask>(ask: A, app: &A::Element, deadline: Instant, judged: Judged) -> Result<Keyboard> {
+pub(super) fn read<A: Ask>(
+    ask: A,
+    app: &A::Element,
+    deadline: Instant,
+    judged: Judged,
+) -> Result<Keyboard> {
     let mut reader = Reader { ask, deadline };
     let mut keyboard = Keyboard::default();
     let mut window = if judged.window {

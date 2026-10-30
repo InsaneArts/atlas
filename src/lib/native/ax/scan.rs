@@ -5,17 +5,11 @@ use super::{
     ABSENT, Frame, INCOMPLETE, Stop,
     batch::{BATCH, Batch, Slot, Source},
     ffi,
-    text::{bounded_string, prefix_range, prefix_text},
+    text::{bounded_string, getter_failed, prefix_range, prefix_text},
 };
 use objc2_application_services::{AXError, AXUIElement, AXValue};
 use objc2_core_foundation::{CFArray, CFBoolean, CFIndex, CFNumber, CFRetained, CFString, CFType};
 use std::{collections::BTreeSet, time::Instant};
-
-/// Text attributes an app's own getter may fail for (an AppKit text view
-/// answers Failure for its description every time); the text is then as
-/// good as absent. A tree read that fails so still leaves the scan
-/// incomplete.
-const TEXT_SELECTORS: [&str; 4] = ["AXTitle", "AXDescription", "AXValue", "AXIdentifier"];
 
 /// Attributes a selector matches on; an element whose selector attribute
 /// fails to read (other than being absent) may be an unseen match.
@@ -79,11 +73,12 @@ impl Scan {
         let key = format!("{attribute}:{}", status.0);
         *self.errors.entry(key).or_default() += 1;
 
-        let getter_failed = status == AXError::Failure && TEXT_SELECTORS.contains(&attribute);
-
         if INCOMPLETE.contains(&status) {
             self.stop(Stop::Unread);
-        } else if !ABSENT.contains(&status) && !getter_failed && SELECTORS.contains(&attribute) {
+        } else if !ABSENT.contains(&status)
+            && !getter_failed(status, attribute)
+            && SELECTORS.contains(&attribute)
+        {
             self.unreadable.push(attribute.to_owned());
         }
     }
