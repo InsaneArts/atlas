@@ -5,7 +5,7 @@
     <img src="assets/logo-light.svg" alt="Atlas logo" height="64">
   </picture>
 </p>
-<h3 align="center">hypervised desktop for autonomous agents</h3>
+<h3 align="center">hypervised desktop<br>for autonomous agents</h3>
 <p align="center">Atlas gives your agent a hidden second desktop on your Mac.<br>It clicks, types and tests apps there while you keep working on yours.</p>
 <p align="center">
   <a href="https://github.com/InsaneArts/atlas/actions/workflows/ci.yml"><img alt="CI" src="https://github.com/InsaneArts/atlas/actions/workflows/ci.yml/badge.svg?branch=main"></a>
