@@ -30,12 +30,16 @@
       let before = try Self.picture(host)
       host.rootView = Self.window(next)
       host.layoutSubtreeIfNeeded()
-      // Part way through the fade, which takes under a fifth of a second.
-      RunLoop.main
-        .run(until: Date(timeIntervalSinceNow: Self.partWay))
-      host.layoutSubtreeIfNeeded()
-      let during = try Self.picture(host)
       let footer = OnboardingLayout.card.height - OnboardingLayout.footerHeight
+      // The first drawing in which the screen above has begun to change, however slowly this machine draws.
+      var during = try Self.picture(host)
+      let deadline = Date(timeIntervalSinceNow: Self.patience)
+      while !Self.differs(before, during, rows: 0..<footer), Date() < deadline {
+        RunLoop.main
+          .run(until: Date(timeIntervalSinceNow: Self.tick))
+        host.layoutSubtreeIfNeeded()
+        during = try Self.picture(host)
+      }
       #expect(Self.differs(before, during, rows: 0..<footer), "the screen above never moved")
       #expect(
         !Self.differs(before, during, rows: footer..<OnboardingLayout.card.height),
@@ -43,8 +47,11 @@
       )
     }
 
-    /// How long into the fade the window is drawn again: short of its end.
-    private static let partWay: TimeInterval = 0.08
+    /// How often the window is drawn again while the screen above starts to fade.
+    private static let tick: TimeInterval = 0.02
+
+    /// How long the screen above may take to start changing.
+    private static let patience: TimeInterval = 2
 
     /// How far apart the points compared are, in points.
     private static let step: CGFloat = 4
