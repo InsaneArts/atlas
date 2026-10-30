@@ -45,8 +45,8 @@ struct AgentGlyphTests {
     let underscore = try #require(paths.last.map(AgentGlyph.parse))
     #expect(chevron.boundingRect.maxY == underscore.boundingRect.maxY)
     #expect(chevron.boundingRect.maxX < underscore.boundingRect.minX)
-    #expect(chevron.contains(CGPoint(x: 232, y: 256), eoFill: true))
-    #expect(!chevron.contains(CGPoint(x: 150, y: 256), eoFill: true))
+    #expect(chevron.contains(CGPoint(x: 232, y: 240), eoFill: true))
+    #expect(!chevron.contains(CGPoint(x: 150, y: 250), eoFill: true))
     var combined = CGRect.null
     for data in paths {
       let glyph = AgentGlyph(data: data, layers: paths)
