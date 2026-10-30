@@ -80,7 +80,11 @@ export const ALERT_RENDERS = [
     file: 'alert-recover',
     environment: { ATLAS_RENDER_ALERT: 'recover', ATLAS_RENDER_MODE: 'recovering' },
   },
-  { file: 'alert-switch', environment: { ATLAS_RENDER_ALERT: 'switch' } },
+  {
+    file: 'alert-switch',
+    environment: { ATLAS_RENDER_ALERT: 'switch', ATLAS_RENDER_ALERT_ON_CONSOLE: '1' },
+  },
+  { file: 'alert-switch-off-console', environment: { ATLAS_RENDER_ALERT: 'switch' } },
   { file: 'alert-log-out', environment: { ATLAS_RENDER_ALERT: 'logOut' } },
   { file: 'alert-log-out-anyway', environment: { ATLAS_RENDER_ALERT: 'logOutAnyway' } },
   {

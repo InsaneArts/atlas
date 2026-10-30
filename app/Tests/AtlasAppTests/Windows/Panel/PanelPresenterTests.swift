@@ -18,7 +18,8 @@ struct PanelPresenterTests {
     return PanelSnapshot(
       status: try status(["overview": ["mode": row.mode, "state": row.state]]),
       connecting: name == "Connecting",
-      holdingControl: row.holding
+      holdingControl: row.holding,
+      isOnConsole: true
     )
   }
 

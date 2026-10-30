@@ -11,6 +11,9 @@
   /// facts.
   @Suite("PreviewStates+Viewer")
   struct ViewerPreviewStatesTests {
+    /// The environment a window starts with, before each sample supplies its fixed presentation inputs.
+    var initialSnapshot = ViewerSnapshot.presenterSample
+
     /// An agent's latest actions, in the sample log, newest first.
     static let working: [[String: Any]] = [
       ["operation": "input", "says": "turning Show Center off in Opie", "ok": true, "ageSeconds": 2],
@@ -82,7 +85,8 @@
       unavailable: String? = nil,
       _ change: (inout ViewerSnapshot) -> Void = { _ in }
     ) -> ViewerState {
-      var snapshot = ViewerSnapshot()
+      var snapshot = initialSnapshot
+      snapshot.isOnConsole = true
       snapshot.reading.status = status
       snapshot.reading.hasStatus = true
       snapshot.reading.ready = true

@@ -103,6 +103,7 @@ final class OnboardingController {
   /// The window as it should look now, with whether an agents install runs from any window.
   var state: OnboardingState {
     var shown = snapshot
+    shown.isOnConsole = dependencies.console.isOnConsole
     shown.agentsInstalling = dependencies.installs.isBusy
     return OnboardingPresenter.state(shown)
   }
@@ -199,7 +200,15 @@ final class OnboardingController {
   /// - Returns: The command's outcome, or nil when another one runs, Back stopped it or the window has closed.
   @discardableResult
   func act(_ action: Action, _ words: String, input: Data? = nil) async -> Outcome? {
-    await act(words) { await self.commands.run(action, input: input) }
+    switch action {
+    case .switchTo, .lockScreen:
+      guard dependencies.console.refresh() else {
+        snapshot.problem = SessionConsole.refusal
+        return nil
+      }
+    default: break
+    }
+    return await act(words) { await self.commands.run(action, input: input) }
   }
 
   /// Runs `command` as ``act(_:_:input:)`` runs a command; one that could not start, as an agents install while

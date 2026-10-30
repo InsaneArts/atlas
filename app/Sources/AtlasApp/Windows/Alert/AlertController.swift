@@ -49,7 +49,14 @@ final class AlertController {
   /// The alert as it should read now.
   var state: AlertCardState<AlertChoice> {
     AlertPresenter.state(
-      AlertSnapshot(alert: alert, running: running, failure: failure, done: done, overview: links.overview())
+      AlertSnapshot(
+        alert: alert,
+        isOnConsole: actions.console.isOnConsole,
+        running: running,
+        failure: failure,
+        done: done,
+        overview: links.overview()
+      )
     )
   }
 

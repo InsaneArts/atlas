@@ -16,6 +16,8 @@ struct SettingsFacts {
   var canPause = false
   /// The helper's commands running now, from any window.
   var running: Set<HelperActions.Command> = []
+  /// Whether this process's graphical session is on this Mac's console.
+  var isOnConsole = false
   /// The agents being connected now, from any window, by id.
   var installing: Set<String> = []
   /// Whether the shared agent change removes connections.

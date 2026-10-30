@@ -48,7 +48,7 @@ extension ViewerPresenter {
         .state(overview: overview, progress: progress, askedByPerson: askedByPerson)
     case .switchToHelper:
       HelperAlert.switchToHelper
-        .state(overview: overview, progress: progress, askedByPerson: askedByPerson)
+        .state(overview: overview, progress: progress, askedByPerson: askedByPerson, onConsole: snapshot.isOnConsole)
     case .logOut:
       HelperAlert.logOut
         .state(overview: overview, progress: progress, askedByPerson: askedByPerson)

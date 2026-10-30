@@ -84,6 +84,7 @@ struct HelperCommandsGrantTests {
     let lifetime = ControlBarrier.lateGrant + ControlBarrier.leaseLifetime
     let clock = ManualClock()
     let actions = HelperActions(
+      console: SessionConsole(read: { true }),
       commands: commands,
       service: service,
       barrier: ControlBarrier(service: service, clock: clock)
@@ -121,6 +122,7 @@ struct HelperCommandsGrantTests {
     let lifetime = ControlBarrier.lateGrant + ControlBarrier.leaseLifetime
     let clock = ManualClock()
     let actions = HelperActions(
+      console: SessionConsole(read: { true }),
       commands: commands,
       service: service,
       barrier: ControlBarrier(service: service, clock: clock)

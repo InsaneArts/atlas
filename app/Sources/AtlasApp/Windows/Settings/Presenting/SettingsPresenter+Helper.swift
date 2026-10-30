@@ -30,7 +30,7 @@ extension SettingsPresenter {
       closeLogin: closeLogin(snapshot, canRun: !alertRunning && !waits),
       ready: ready(reading.readinessItems, recoverLines: recoverLines, checking: snapshot.session.checking),
       buttons: SettingsHelperButtons(
-        canSwitch: !running.contains(.switchToHelper) && !alertRunning && !waits,
+        canSwitch: facts.isOnConsole && !running.contains(.switchToHelper) && !alertRunning && !waits,
         canCheck: !snapshot.session.checking,
         canRecover: !facts.connecting && overview.mode != .loggedOut && !running.contains(.recovery) && !alertRunning
           && !waits,

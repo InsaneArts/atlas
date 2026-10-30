@@ -67,6 +67,7 @@ final class ViewerController {
       rate: readingLoop.rate,
       now: readingLoop.now,
       running: actions.running,
+      isOnConsole: actions.console.isOnConsole,
       agentRequests: actions.agentRequests,
       controlBusy: actions.barrier.isBusy,
       agents: helperFacts.agents,

@@ -7,6 +7,31 @@ import Testing
 
 @Suite("OnboardingController switching")
 struct OnboardingControllerSwitchTests {
+  @Test("switch-back and lock-screen requests refuse a session that went off-console after the button was drawn")
+  func switchingBackRechecksTheConsole() async throws {
+    for asker in ["me", nil] as [String?] {
+      var onConsole = true
+      let console = SessionConsole(read: { onConsole })
+      let commands = ScriptedCommands([
+        "onboarding status": OnboardingReplies.helper(asker: asker, accessibility: true, screenCapture: true),
+        "onboarding window": #"{"ok": true}"#,
+      ])
+      let controller = OnboardingController.scripted(commands, console: console)
+      try await controller.whileOpen { _ in
+        try await controller.untilLoaded()
+        #expect(controller.state.footer.next?.isEnabled == true)
+        onConsole = false
+        await controller.switchBack()
+        #expect(!commands.ran.contains { $0.first == "switch" })
+        #expect(controller.snapshot.problem == SessionConsole.refusal)
+        #expect(!controller.closeRequested)
+        #expect(controller.state.footer.next?.isEnabled == false)
+        await controller.lockAndSwitch()
+        #expect(!commands.ran.contains { $0.first == "switch" })
+      }
+    }
+  }
+
   @Test("opening setup, choosing Not Now in the helper, returning and reopening keeps the manual opening instructions")
   func returningAfterNotNowKeepsTheOpeningInstructions() async throws {
     let commands = ScriptedCommands([

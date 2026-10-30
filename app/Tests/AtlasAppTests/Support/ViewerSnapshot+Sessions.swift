@@ -32,7 +32,8 @@ extension ViewerSnapshot {
       "activity": activity, "moreSessions": more,
     ]
     overview["holder"] = sessions.first { $0["holdsHelper"] as? Bool == true }?["key"]
-    var snapshot = ViewerSnapshot()
+    var snapshot = ViewerSnapshot.presenterSample
+    snapshot.isOnConsole = true
     snapshot.reading.status = try status(["ready": true, "canObserve": true, "overview": overview])
     snapshot.reading.hasStatus = true
     snapshot.reading.ready = true

@@ -20,7 +20,7 @@ extension SettingsPresenter {
         .state(overview: overview, progress: progress, askedByPerson: true)
     case .switchToHelper:
       HelperAlert.switchToHelper
-        .state(overview: overview, progress: progress, askedByPerson: true)
+        .state(overview: overview, progress: progress, askedByPerson: true, onConsole: snapshot.facts.isOnConsole)
     case .logOut:
       HelperAlert.logOut
         .state(overview: overview, progress: progress, askedByPerson: true)

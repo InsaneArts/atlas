@@ -52,7 +52,7 @@ extension PanelPresenter {
     case .loggedOut:
       return PanelMainButton(
         title: HelperWords.switchItem,
-        isEnabled: !snapshot.running.contains(.switchToHelper),
+        isEnabled: snapshot.isOnConsole && !snapshot.running.contains(.switchToHelper),
         help: HelperWords.switchHelp,
         event: .askSwitch
       )

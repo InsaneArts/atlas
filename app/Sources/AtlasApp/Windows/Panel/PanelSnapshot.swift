@@ -20,6 +20,8 @@ struct PanelSnapshot {
   var holdingControl = false
   /// The helper's commands running now, from any window, so the buttons and items that start one wait.
   var running: Set<HelperActions.Command> = []
+  /// Whether this process's graphical session is on this Mac's console.
+  var isOnConsole = false
   /// Stop and Resume requests unanswered from any window, so Resume waits.
   var agentRequests = 0
   /// Where Open at Login stands; nil when unknown, as in a render.

@@ -70,7 +70,7 @@ extension ViewerSnapshot {
     return HelperMenuState(
       canRecover: offeredRecovery != nil && !session.recovering && !running.contains(.recovery),
       canRestart: overview.mode.answers && !running.contains(.recovery),
-      canSwitch: !running.contains(.switchToHelper),
+      canSwitch: isOnConsole && !running.contains(.switchToHelper),
       canLogOut: overview.mode.allowsLogOut && !running.contains(.logOut)
     )
   }

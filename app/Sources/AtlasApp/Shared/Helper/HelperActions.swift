@@ -29,6 +29,8 @@ final class HelperActions {
   private(set) var waiting: Set<Command> = []
   /// Stop and Resume requests sent from any window and not answered yet: Resume waits for them, Stop never does.
   private(set) var agentRequests = 0
+  /// Shared with setup and notices so menus cannot offer a lock from an off-console session.
+  let console: SessionConsole
   /// The `atlas` command line each command runs.
   @ObservationIgnored private let commands: any CommandRunning
   /// The viewer service, which ends every viewer's control before a log-out from a controlled helper.
@@ -44,11 +46,13 @@ final class HelperActions {
   /// Creates the commands.
   ///
   /// - Parameters:
+  ///   - console: This process's console session, shared with setup and notices.
   ///   - commands: The `atlas` command line.
   ///   - service: The viewer service.
   ///   - barrier: The app's control work not yet answered.
   ///   - endControl: Ends this app's own control, if a window holds it, its release joining `barrier`.
   init(
+    console: SessionConsole = .shared,
     commands: any CommandRunning,
     service: any ViewerService,
     barrier: ControlBarrier,
@@ -57,6 +61,7 @@ final class HelperActions {
     self.commands = commands
     self.service = service
     self.barrier = barrier
+    self.console = console
     self.endControl = endControl
   }
 
@@ -109,9 +114,11 @@ final class HelperActions {
   /// - Parameter helper: The helper's account.
   /// - Returns: Its outcome, a refused release included, or nil when a switch already runs.
   func switchTo(_ helper: String) async -> Outcome? {
+    guard console.refresh() else { return Self.refusal(SessionConsole.refusal) }
     guard begin(.switchToHelper) else { return nil }
     defer { running.remove(.switchToHelper) }
     if let refused = await freeHelper(.switchToHelper) { return Self.refusal(refused) }
+    guard console.refresh() else { return Self.refusal(SessionConsole.refusal) }
     return await commands.run(.switchTo(helper))
   }
 

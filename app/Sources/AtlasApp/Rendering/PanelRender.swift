@@ -26,7 +26,8 @@ enum PanelRender {
   /// command did not run, one whose command runs, and Recover once it worked.
   nonisolated static let alerts: [(file: String, environment: [String: String])] = [
     ("alert-recover", ["ATLAS_RENDER_ALERT": "recover", "ATLAS_RENDER_MODE": "recovering"]),
-    ("alert-switch", ["ATLAS_RENDER_ALERT": "switch"]),
+    ("alert-switch", ["ATLAS_RENDER_ALERT": "switch", "ATLAS_RENDER_ALERT_ON_CONSOLE": "1"]),
+    ("alert-switch-off-console", ["ATLAS_RENDER_ALERT": "switch"]),
     ("alert-log-out", ["ATLAS_RENDER_ALERT": "logOut"]),
     ("alert-log-out-anyway", ["ATLAS_RENDER_ALERT": "logOutAnyway"]),
     (

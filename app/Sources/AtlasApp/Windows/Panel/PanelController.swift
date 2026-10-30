@@ -104,6 +104,7 @@ final class PanelController {
       session: session,
       holdingControl: links.holdingControl(),
       running: actions.running,
+      isOnConsole: actions.console.isOnConsole,
       agentRequests: actions.agentRequests,
       opensAtLogin: opensAtLogin,
       date: wallClock(),

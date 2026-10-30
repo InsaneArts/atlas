@@ -13,7 +13,8 @@ enum AlertPresenter {
     snapshot.alert.state(
       overview: snapshot.overview,
       progress: .of(running: snapshot.running, failure: snapshot.failure, done: snapshot.done),
-      askedByPerson: true
+      askedByPerson: true,
+      onConsole: snapshot.isOnConsole
     )
   }
 }

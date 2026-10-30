@@ -42,6 +42,7 @@
         status: try status(["overview": ["mode": mode, "state": state, "reason": "", "activity": activity]]),
         picture: SampleDesktop.picture,
         holdingControl: holdingControl,
+        isOnConsole: true,
         icons: icons
       )
     }
@@ -103,7 +104,7 @@
       recovering.mode = .recovering
       let presented: [String: AlertSnapshot] = [
         "Recover": AlertSnapshot(alert: .recover, overview: recovering),
-        "Switch": AlertSnapshot(alert: .switchToHelper),
+        "Switch": AlertSnapshot(alert: .switchToHelper, isOnConsole: true),
         "Log out": AlertSnapshot(alert: .logOut),
         "Log out anyway": AlertSnapshot(alert: .logOutAnyway),
         "Recover refused": AlertSnapshot(alert: .recover, failure: HelperWords.recoverBusy, overview: recovering),

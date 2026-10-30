@@ -218,6 +218,7 @@ struct SettingsControllerTests {
     commands.whileRunning { _ in await gate.wait() }
     let service = ScriptedService()
     let actions = HelperActions(
+      console: SessionConsole(read: { true }),
       commands: commands,
       service: service,
       barrier: ControlBarrier(service: service, clock: ManualClock())

@@ -19,6 +19,7 @@ struct HelperCommandsReleaseTests {
     service.reply = HelperCommandsScenario.idle
     let commands = ScriptedCommands(["switch": #"{"ok": true}"#])
     let actions = HelperActions(
+      console: SessionConsole(read: { true }),
       commands: commands,
       service: service,
       barrier: ControlBarrier(service: service, clock: ManualClock())
@@ -55,6 +56,7 @@ struct HelperCommandsReleaseTests {
     let service = ScriptedService()
     service.reply = HelperCommandsScenario.idle
     let actions = HelperActions(
+      console: SessionConsole(read: { true }),
       commands: ScriptedCommands([:]),
       service: service,
       barrier: ControlBarrier(service: service, clock: ManualClock())

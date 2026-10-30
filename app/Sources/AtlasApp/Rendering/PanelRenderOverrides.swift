@@ -12,6 +12,7 @@ import AtlasUI
 /// - `ATLAS_RENDER_PAUSED=1` pauses the picture.
 /// - `ATLAS_RENDER_ALERT` (`recover`, `switch`, `logOut` or `logOutAnyway`) draws the alert window instead,
 ///   `ATLAS_RENDER_BUSY=1` draws it while its command runs, and `ATLAS_RENDER_ALERT_PHASE=done` once it worked.
+///   `ATLAS_RENDER_ALERT_ON_CONSOLE=1` draws the switch confirmation as asked from the console session.
 /// - `ATLAS_RENDER_NOTICE` (`setUp` or `runningAgain`) draws one of the helper's notices instead.
 /// - `ATLAS_RENDER_SESSIONS` (`one`, `two`, `waiting`, `needsYou` or `more`) shows that many agents at work, each in
 ///   its own host session (``PanelRenderSessions``), in place of the live sessions and rows.
@@ -30,6 +31,8 @@ struct PanelRenderOverrides: Equatable, Sendable {
   var paused: Bool
   /// The alert window's alert to draw instead of the panel; nil draws the panel.
   var alert: HelperAlert?
+  /// Whether the rendered alert was asked from the console session, so Switch can offer its confirmation.
+  var alertOnConsole: Bool
   /// Whether the alert's command runs.
   var busy: Bool
   /// Whether the alert's command worked, so it holds on its done title.
@@ -63,6 +66,7 @@ struct PanelRenderOverrides: Equatable, Sendable {
       case "logOutAnyway": .logOutAnyway
       default: nil
       }
+    alertOnConsole = environment["ATLAS_RENDER_ALERT_ON_CONSOLE"] == "1"
     busy = environment["ATLAS_RENDER_BUSY"] == "1"
     done = environment["ATLAS_RENDER_ALERT_PHASE"] == "done"
     notice = environment["ATLAS_RENDER_NOTICE"].flatMap(NoticeRender.init(rawValue:))
@@ -79,6 +83,7 @@ struct PanelRenderOverrides: Equatable, Sendable {
     alert.map { alert in
       AlertSnapshot(
         alert: alert,
+        isOnConsole: alertOnConsole,
         running: busy,
         failure: message.map(Words.sentence),
         done: done,

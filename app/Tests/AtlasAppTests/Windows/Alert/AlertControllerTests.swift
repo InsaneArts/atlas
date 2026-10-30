@@ -48,6 +48,7 @@ struct AlertControllerTests {
     AlertController(
       alert: alert,
       actions: HelperActions(
+        console: SessionConsole(read: { true }),
         commands: commands,
         service: service,
         barrier: ControlBarrier(service: service, clock: ManualClock())

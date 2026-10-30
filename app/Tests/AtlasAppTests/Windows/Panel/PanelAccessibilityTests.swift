@@ -19,6 +19,7 @@ struct PanelAccessibilityTests {
         service: service,
         commands: commands,
         actions: HelperActions(
+          console: SessionConsole(read: { true }),
           commands: commands,
           service: service,
           barrier: ControlBarrier(service: service, clock: clock)
