@@ -466,7 +466,7 @@ Examples:
 ```text
 Click a point, or exactly one element of an app.
 
-Click at display point X Y (origin + screenshot pixels × pointsPerPixel), or on exactly one accessibility element of an app with --app and --name/--role. With X Y, --app or --pid sends the click only if that app's window is the top one at the point, and --window only if that window is.
+Click at display point X Y (origin + screenshot pixels × pointsPerPixel), or on exactly one accessibility element of an app with --app and --name/--role. Named input brings its target forward, then checks the same point before clicking. With X Y, --app or --pid selects the app, and --window selects a particular window. A blocked or unreadable target refuses the click. No app is launched.
 
 Usage: atlas click [OPTIONS] [X] [Y]
 
@@ -485,7 +485,7 @@ Options:
           Exact process ID, for apps with several processes
 
       --window <N>
-          Only if window N (from atlas windows) is the top one at the point. Nothing is sent otherwise
+          Bring window N (from atlas windows) forward and check the point. Nothing is sent if it is still covered or unreadable
 
       --name <NAME>
           Exact element title, label text, description or identifier
@@ -527,7 +527,7 @@ Examples:
 ```text
 Type text.
 
-The text is typed as given: a real newline or tab in it (in a shell, $'one\ntwo') or on standard input arrives as a line break or tab, while the two characters \n are typed as they are. Long text is typed in parts without breaking characters, and Atlas keeps control until the last part, so no other input lands in between. With --app or --pid, text is typed only while that app has keyboard focus, and with --window or --field only while that window or field has it too, checked before every 16 characters; Atlas stops at the first check that fails.
+The text is typed as given: a real newline or tab in it (in a shell, $'one\ntwo') or on standard input arrives as a line break or tab, while the two characters \n are typed as they are. Long text is typed in parts without breaking characters, and Atlas keeps control until the last part, so no other input lands in between. With --app or --pid, bring the app forward; --window selects a particular document and --field establishes its named field where supported. Check focus before every 16 characters. A blocked or unreadable target refuses the text. No app is launched.
 
 Usage: atlas type [OPTIONS] [TEXT]
 
@@ -546,10 +546,10 @@ Options:
           Exact process ID, for apps with several processes
 
       --window <N>
-          Only if window N (from atlas windows) has keyboard focus, with no sheet over it. Nothing is sent otherwise
+          Bring window N (from atlas windows) forward; refuse if a sheet blocks it or its focus cannot be proved
 
       --field <NAME>
-          Only if the focused field has this name, as atlas elements --name matches it. Nothing is sent otherwise
+          Establish a named field where supported, as atlas elements --name matches it, then check its focus before sending
 
   -h, --help
           Print help (see a summary with '-h')
@@ -570,7 +570,7 @@ Examples:
 ```text
 Press keys, for example cmd+s or escape.
 
-Keys are pressed in order: `key cmd+s` or `key escape return`. A key is a letter, digit or punctuation mark, or one of return, tab, space, escape, backspace, forwarddelete, left, right, up, down, home, end, pageup, pagedown and f1 to f12; the plus key is written + on its own or at the end of a chord (cmd++). With --app or --pid, each key is pressed only while that app has keyboard focus; --window and --field are checked before the first key, since a key may move them on purpose.
+Keys are pressed in order: `key cmd+s` or `key escape return`. A key is a letter, digit or punctuation mark, or one of return, tab, space, escape, backspace, forwarddelete, left, right, up, down, home, end, pageup, pagedown and f1 to f12; the plus key is written + on its own or at the end of a chord (cmd++). Named input brings the target forward and checks it before the first key. Later keys only check the app, since a key may move the window or field on purpose. A blocked or unreadable target refuses input. No app is launched.
 
 Usage: atlas key [OPTIONS] <KEYS>...
 
@@ -586,10 +586,10 @@ Options:
           Exact process ID, for apps with several processes
 
       --window <N>
-          Only if window N (from atlas windows) has keyboard focus, with no sheet over it. Nothing is sent otherwise
+          Bring window N (from atlas windows) forward; refuse if a sheet blocks it or its focus cannot be proved
 
       --field <NAME>
-          Only if the focused field has this name, as atlas elements --name matches it. Nothing is sent otherwise
+          Establish a named field where supported, as atlas elements --name matches it, then check its focus before sending
 
   -h, --help
           Print help (see a summary with '-h')
@@ -640,7 +640,7 @@ Examples:
 ```text
 Drag from one point to another.
 
-What is dragged (a window, a slider's knob, a selection) moves by exactly the distance between the points; the button itself is released up to one point past the end, in the direction of travel, never off the display. Drag-and-drop onto a target (selected text, files, list items) does not begin in the helper: macOS starts such a drag only from a real mouse. With --app or --pid, nothing is sent unless that app's window is the top one at the start point and at the end point; with --window, unless that window is the top one at the start point.
+What is dragged (a window, a slider's knob, a selection) moves by exactly the distance between the points; the button itself is released up to one point past the end, in the direction of travel, never off the display. Drag-and-drop onto a target (selected text, files, list items) does not begin in the helper: macOS starts such a drag only from a real mouse. With --app or --pid, bring the target forward, then check that app at both ends. --window selects the starting window. A blocked or unreadable target refuses the drag; no app is launched.
 
 Usage: atlas drag [OPTIONS] <FROM_X> <FROM_Y> <TO_X> <TO_Y>
 
@@ -692,7 +692,7 @@ Examples:
 ```text
 Scroll at a point.
 
-Scroll at X Y by lines, as a mouse wheel's notches (about 10 points each, as the app has it); negative values scroll up or left. With --app or --pid, nothing is sent unless that app's window is the top one at the point, and with --window unless that window is.
+Scroll at X Y by lines, as a mouse wheel's notches (about 10 points each, as the app has it); negative values scroll up or left. With --app or --pid, bring the target forward and check the same point; --window selects a particular window. A blocked or unreadable target refuses the scroll. No app is launched.
 
 Usage: atlas scroll [OPTIONS] <X> <Y>
 
@@ -721,7 +721,7 @@ Options:
           Exact process ID, for apps with several processes
 
       --window <N>
-          Only if window N (from atlas windows) is the top one at the point. Nothing is sent otherwise
+          Bring window N (from atlas windows) forward and check the point. Nothing is sent if it is still covered or unreadable
 
   -h, --help
           Print help (see a summary with '-h')
