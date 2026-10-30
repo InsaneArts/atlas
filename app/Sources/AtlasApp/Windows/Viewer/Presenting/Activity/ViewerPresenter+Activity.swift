@@ -15,7 +15,7 @@ extension ViewerPresenter {
     let facts = snapshot.panes.activity
     let chosen = snapshot.shownSessions.key
     let title = chosen.map { resolvedSession($0, snapshot).name } ?? ViewerWords.place(.activity)
-    guard let log = facts.log, let readAt = facts.readAt,
+    guard facts.failure == nil, let log = facts.log, let readAt = facts.readAt,
       let prepared = facts.prepared(
         captures: snapshot.panes.shots.shots ?? [],
         calendar: snapshot.zonedCalendar,

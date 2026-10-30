@@ -492,6 +492,13 @@ pub fn recent(directory: &Path, limit: usize) -> Vec<Row> {
     snapshot::recent(directory, limit)
 }
 
+/// Like [`recent`], but reports an unreadable or refused log instead of
+/// returning only the rows that could be read. Missing logs are empty;
+/// malformed rows are still skipped within the same byte budget.
+pub fn try_recent(directory: &Path, limit: usize) -> std::io::Result<Vec<Row>> {
+    snapshot::try_recent(directory, limit)
+}
+
 /// Select commands and complete personal input runs from ordered candidates.
 fn selected(candidates: &[Row], limit: usize) -> Vec<Row> {
     if limit == 0 {
@@ -1062,6 +1069,10 @@ mod tests {
         let expected = ((READ_LIMIT - 1) / line.len() as u64) as usize;
         assert_eq!(rows.len(), expected);
         assert_eq!(recent(dir.path(), 1)[0].action_count, Some(expected as u64));
+        assert_eq!(
+            try_recent(dir.path(), 1).unwrap()[0].action_count,
+            Some(expected as u64)
+        );
     }
 
     #[test]

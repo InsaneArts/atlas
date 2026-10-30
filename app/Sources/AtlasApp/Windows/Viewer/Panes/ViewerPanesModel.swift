@@ -170,7 +170,7 @@ final class ViewerPanesModel {
   }
 
   /// Reads the log, and the screenshots while the log has a screenshot's row. A reply overtaken by a newer start or
-  /// stop has no effect; a failure is kept to say only while nothing was read, and a cancelled request says nothing.
+  /// stop has no effect; a failure is kept until a reading succeeds, and a cancelled request says nothing.
   ///
   /// - Parameter number: The reading's generation.
   func readActivity(_ number: Int) async {

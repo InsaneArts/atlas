@@ -7,6 +7,23 @@ import Testing
 
 @Suite("ViewerPresenter+Activity")
 struct ViewerPresenterActivityTests {
+  @Test("a failed Activity read replaces the empty state and any earlier rows until a read succeeds")
+  func aReadFailureTakesPrecedence() throws {
+    for rows in [[], Self.textEditLog] {
+      var snapshot = try Self.onActivity(rows, sessions: [])
+      snapshot.panes.activity.failure = "The activity log could not be read."
+      let failed = ViewerPresenter.activity(snapshot)
+      #expect(failed.empty?.headline == ViewerWords.activityFailed)
+      #expect(failed.empty?.message == "The activity log could not be read.")
+      #expect(failed.days.isEmpty)
+      #expect(!failed.showsFilters)
+      snapshot.panes.activity.failure = nil
+      let recovered = ViewerPresenter.activity(snapshot)
+      #expect(recovered.empty?.headline != ViewerWords.activityFailed)
+      #expect(recovered.days.isEmpty == rows.isEmpty)
+    }
+  }
+
   @Test("each kind of action has its glyph, and a problem has the warning glyph")
   func eachKindHasItsGlyph() {
     let rows: [(entry: ActivityLog.Entry, kind: ViewerActivityKind)] = [
