@@ -6,7 +6,7 @@ If an operation reports `uncertain: true`, go directly to [unknown outcomes](#an
 
 ## The command is missing or uses the wrong settings
 
-If your shell says `atlas` is not found, check that Atlas.app is installed and that `~/.local/bin` is on `PATH`. Follow the [PATH instructions](getting-started.md#install-after-the-public-release). Public downloads become available when Atlas is open source; an unpublished release is not a helper failure.
+If your shell says `atlas` is not found, check that Atlas.app is installed and that `~/.local/bin` is on `PATH`. Follow the [PATH instructions](getting-started.md#install).
 
 If Atlas says it is not set up, inspect `atlas config` and any `--config` argument or `ATLAS_CONFIG` value you selected. An installed app uses `~/.config/atlas.toml`, while a development executable may use a checkout-local file. See [Configuration](configuration.md).
 
@@ -111,7 +111,7 @@ Tool availability and helper readiness are separate. Check both before changing 
 
 ## Update or uninstall did not finish
 
-For an update, keep its failure message and check whether the failure was downloading, verifying or moving the helper to the new app. An unpublished public release needs no local repair. A failed handover has a resumable update record: fix the named cause and follow the instruction to run `atlas update` again. Do not bypass signature checks.
+For an update, keep its failure message and check whether the failure was downloading, verifying or moving the helper to the new app. A failed handover has a resumable update record: fix the named cause and follow the instruction to run `atlas update` again. Do not bypass signature checks.
 
 For uninstall, read what was removed and what stayed. Atlas stops before deleting a helper account it cannot identify or confirm as logged out. Settings that cannot be loaded can leave the helper job in place. Agent-host disconnection can also fail independently and appear in warnings.
 

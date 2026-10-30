@@ -2,7 +2,7 @@
 
 Atlas runs apps in a separate macOS account called the helper. You keep using your own desktop while an agent works in the helper's desktop on the same Mac. This guide covers installation, account setup and the first check that Atlas is ready.
 
-Public downloads will become available when Atlas is open source. The installer below is for use after that release. If it reports that Atlas has no public release yet, there is nothing to install from that channel. Contributors can follow [Building from source](../CONTRIBUTING.md); a local CLI build does not replace the signed helper app.
+Install Atlas with the command below. Contributors can follow [Building from source](../CONTRIBUTING.md); a local CLI build does not replace the signed helper app.
 
 ## Requirements
 
@@ -10,7 +10,7 @@ You need macOS 14 or later and an administrator account for installation and set
 
 The helper is an ordinary account on your Mac. It has its own desktop and files, but shares the Mac's hardware and network. It is not a virtual machine.
 
-## Install after the public release
+## Install
 
 Run the installer from a terminal in your own administrator account. Do not run the command with `sudo`.
 

@@ -37,10 +37,9 @@ These commands compile development executables. They do not package, sign or
 notarize Atlas.app. The helper daemon must run from Atlas's Developer ID-signed
 app; do not substitute an unsigned or ad-hoc signed build.
 
-Public downloads become available when Atlas is open source. Once a signed
-release is available, follow [Getting started](docs/getting-started.md) to set up
-the helper, then run `target/debug/atlas` against that installation. Until then,
-native helper testing requires an appropriately signed Atlas installation.
+Follow [Getting started](docs/getting-started.md) to install the signed release and
+set up the helper, then run `target/debug/atlas` against that installation. Native
+helper testing requires an appropriately signed Atlas installation.
 You can still run the automated checks below without starting a helper.
 
 Release packaging lives in `xtask/`. `cargo xtask dist --sign IDENTITY` requires a

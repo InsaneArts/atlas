@@ -18,7 +18,7 @@
 
 ## Install
 
-Requires macOS 14 or later and an administrator account for setup. Public downloads will be available when Atlas is open source:
+Requires macOS 14 or later and an administrator account for setup:
 
 ```sh
 curl -fsSL https://atlas.insanearts.io/install.sh | sh

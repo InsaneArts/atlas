@@ -11,8 +11,6 @@ Choose the operation that matches the problem. Updating changes Atlas's version.
 | Remove Atlas and delete the helper account and its files   | `atlas uninstall --remove-helper`                               |
 | Remove Atlas while keeping configuration, records and logs | `atlas uninstall --keep-config`                                 |
 
-Public releases become available when Atlas is open source. Until then, the public updater can report that there is no release. This is separate from whether a development build exists.
-
 ## Update
 
 Use the installed `atlas` command from your own account. Finish current helper work and give back control before updating.

@@ -77,4 +77,4 @@ These options affect the command or installer in your account. They do not autom
 | `ATLAS_VERSION`       | Selects a release tag for `install.sh`. The CLI updater uses `--version TAG` instead.                                                                                                                |
 | `ATLAS_NO_OPEN`       | A nonempty value prevents `install.sh` from opening Atlas after installation.                                                                                                                        |
 
-Public releases become available when Atlas is open source. Changing download options does not create a release or make an unsigned development app a supported helper installation.
+Changing download options does not create a release or make an unsigned development app a supported helper installation.
