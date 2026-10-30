@@ -48,8 +48,8 @@ final class PanelController {
   @ObservationIgnored let commands: any CommandRunning
   /// Where Recent's apps' icons are found.
   @ObservationIgnored let appIcons: AppIcons
-  /// The icons asked for already, found or not, by their key's text, so each is looked for once a launch.
-  @ObservationIgnored var iconsAsked: Set<String> = []
+  /// This panel's pending icon deliveries, with at most one waiter for each key.
+  @ObservationIgnored var iconRequests: [String: Task<Void, Never>] = [:]
   /// The helper's own commands, shared with every window.
   @ObservationIgnored let actions: HelperActions
   /// The app's login item.

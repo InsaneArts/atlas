@@ -13,6 +13,35 @@ struct AppIconsTests {
   /// A copy only the helper can read.
   static let copy = "/Users/atlas-helper/Library/Application Support/Atlas/Copies/Probe.app"
 
+  @Test("live window titles and bounds never enter an app's icon request or disk index")
+  func windowDetailsStayOutOfTheIconCache() async throws {
+    let folder = try TemporaryFolder()
+    defer { folder.remove() }
+    let icon = png(width: 128, height: 128)
+    var app = HelperApp(
+      pid: 3,
+      name: "Notes",
+      bundle: Self.notes,
+      bundleId: "com.apple.Notes",
+      windows: [HelperWindow(id: 7, title: "Private window sentinel", x: 123, y: 456, width: 789, height: 321)]
+    )
+    let want = try #require(AppIconWant.open(app, home: Self.home, live: true))
+    app.windows = [HelperWindow(id: 8, title: "Another private title", width: 900, height: 500)]
+    #expect(AppIconWant.open(app, home: Self.home, live: true) == want)
+    let icons = AppIcons(
+      store: AppIconStore(caches: folder.url),
+      lookup: IconLookups().lookup(icons: [Self.notes: icon]),
+      home: Self.home
+    )
+    _ = try #require(await icons.find(want))
+    let index = folder.url.appendingPathComponent("AppIcons/v1/\(AppIconStore.indexName)")
+    let json = try #require(try JSONSerialization.jsonObject(with: Data(contentsOf: index)) as? [String: Any])
+    let entry = try #require((json["icons"] as? [String: [String: Any]])?["com.apple.Notes"])
+    #expect(Set(entry.keys) == ["file", "name", "used", "read", "bytes", "sha"])
+    #expect(entry["name"] as? String == "Notes")
+    #expect(!String(decoding: try Data(contentsOf: index), as: UTF8.self).contains("Private window sentinel"))
+  }
+
   @Test("an app's icon comes from the open app, then the cache, then its bundle id, else none")
   func order() async throws {
     let folder = try TemporaryFolder()

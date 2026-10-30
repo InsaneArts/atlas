@@ -131,6 +131,95 @@ struct AppIconStoreTests {
     #expect(FileManager.default.fileExists(atPath: lock.path))
   }
 
+  @Test(
+    "a symlink at any cache ancestor is refused before reading, writing or cleaning",
+    arguments: ["Library", "Caches", "Atlas"]
+  )
+  func linkedAncestorsAreRefused(component: String) async throws {
+    let root = try TemporaryFolder()
+    let elsewhere = try TemporaryFolder()
+    defer {
+      root.remove()
+      elsewhere.remove()
+    }
+    let components = ["Library", "Caches", "Atlas"]
+    let position = try #require(components.firstIndex(of: component))
+    let parent = components.prefix(position)
+      .reduce(root.url) { $0.appendingPathComponent($1) }
+    try FileManager.default
+      .createDirectory(at: parent, withIntermediateDirectories: true)
+    let target = components.dropFirst(position + 1)
+      .reduce(elsewhere.url) { $0.appendingPathComponent($1) }
+      .appendingPathComponent("AppIcons/v1")
+    try FileManager.default
+      .createDirectory(at: target, withIntermediateDirectories: true)
+    let sentinel = target.appendingPathComponent("untouched")
+    try Data("keep me".utf8)
+      .write(to: sentinel)
+    try FileManager.default
+      .createSymbolicLink(at: parent.appendingPathComponent(component), withDestinationURL: elsewhere.url)
+    let caches = root.url.appendingPathComponent("Library/Caches/Atlas")
+    #expect(AppIconStore.made(caches) == nil)
+    let store = AppIconStore(caches: caches)
+    await store.keep(png(width: 64, height: 64), bundleId: "com.apple.Notes", name: "Notes")
+    await store.learn(name: "notes", bundleId: "com.apple.Notes")
+    #expect(await store.icon(bundleId: "com.apple.Notes") == nil)
+    #expect(try FileManager.default.contentsOfDirectory(atPath: target.path) == ["untouched"])
+    #expect(try Data(contentsOf: sentinel) == Data("keep me".utf8))
+  }
+
+  @Test("a verified cache handle cannot be redirected by replacing an ancestor")
+  func ancestorReplacementCannotRedirectOperations() throws {
+    let root = try TemporaryFolder()
+    let elsewhere = try TemporaryFolder()
+    defer {
+      root.remove()
+      elsewhere.remove()
+    }
+    let ancestor = root.url.appendingPathComponent("Library")
+    let caches = ancestor.appendingPathComponent("Caches/Atlas")
+    let directory = try #require(AppIconStore.made(caches))
+    let original = root.url.appendingPathComponent("original")
+    try FileManager.default
+      .moveItem(at: ancestor, to: original)
+    try FileManager.default
+      .createSymbolicLink(at: ancestor, withDestinationURL: elsewhere.url)
+    let redirected = elsewhere.url.appendingPathComponent("Caches/Atlas/AppIcons/v1")
+    try FileManager.default
+      .createDirectory(at: redirected, withIntermediateDirectories: true)
+    let sentinel = redirected.appendingPathComponent("untouched")
+    try Data("outside".utf8)
+      .write(to: sentinel)
+
+    #expect(directory.write(Data("inside".utf8), name: "kept"))
+    #expect(directory.read("kept", largest: 16) == Data("inside".utf8))
+    #expect(directory.write(Data(), name: "stray"))
+    AppIconStore.sweep(directory, keeping: ["kept"])
+    #expect(Set(directory.names) == ["kept"])
+    AppIconStore.empty(directory)
+    #expect(directory.names.isEmpty)
+    #expect(try Data(contentsOf: sentinel) == Data("outside".utf8))
+    #expect(try FileManager.default.contentsOfDirectory(atPath: redirected.path) == ["untouched"])
+  }
+
+  @Test("leaf links cannot be read and replacing one never writes to its target")
+  func leafLinksCannotRedirectFiles() throws {
+    let root = try TemporaryFolder()
+    defer { root.remove() }
+    let target = root.url.appendingPathComponent("target")
+    try Data("outside".utf8)
+      .write(to: target)
+    let directory = try #require(AppIconStore.made(root.url))
+    let leaf = root.url.appendingPathComponent("AppIcons/v1/leaf")
+    try FileManager.default
+      .createSymbolicLink(at: leaf, withDestinationURL: target)
+    #expect(directory.read("leaf", largest: 16) == nil)
+    #expect(directory.write(Data("inside".utf8), name: "leaf"))
+    #expect(directory.read("leaf", largest: 16) == Data("inside".utf8))
+    #expect(try Data(contentsOf: target) == Data("outside".utf8))
+    #expect(!directory.write(Data(), name: "../target"))
+  }
+
   /// A file's permissions.
   ///
   /// - Parameter url: The file.

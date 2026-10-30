@@ -57,7 +57,15 @@ public enum AppIconCachePolicy {
   ///   - today: Today's day.
   /// - Returns: Whether ``lookAgainDays`` have passed since it was last read.
   public static func looksAgain(_ entry: AppIconIndex.Entry, today: Int) -> Bool {
-    today - entry.read >= lookAgainDays
+    guard today >= entry.read else { return false }
+    let age = today.subtractingReportingOverflow(entry.read)
+    return age.overflow || age.partialValue >= lookAgainDays
+  }
+
+  /// Cache dates run from 1970 through Foundation's distant future. Refuse corrupt persisted integers before use.
+  static func accepts(day: Int) -> Bool {
+    (0...Self.day(of: .distantFuture))
+      .contains(day)
   }
 
   /// The icons to drop once the index has gone past ``mostIcons`` or ``mostBytes``: the least recently used first,

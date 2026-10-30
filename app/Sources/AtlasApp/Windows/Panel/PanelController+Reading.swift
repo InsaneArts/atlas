@@ -31,6 +31,8 @@ extension PanelController {
       task.cancel()
     }
     polling = []
+    for request in iconRequests.values { request.cancel() }
+    iconRequests = [:]
   }
 
   /// Runs `step` now and then every `pause`, until cancelled or the controller is gone.

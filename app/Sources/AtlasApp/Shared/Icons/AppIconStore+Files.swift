@@ -10,100 +10,46 @@ extension AppIconStore {
   ///
   /// - Parameter caches: Atlas's caches folder.
   /// - Returns: The folder, or nil when it cannot be made.
-  nonisolated static func made(_ caches: URL) -> URL? {
-    let files = FileManager.default
-    if !exists(caches) {
-      // One that cannot be made is refused just below.
-      try? files.createDirectory(at: caches, withIntermediateDirectories: true)
-    }
-    guard isFolder(caches) else { return nil }
-    var folder = caches
-    for part in folderPath {
-      folder = folder.appendingPathComponent(part, isDirectory: true)
-      if !exists(folder) {
-        let attributes: [FileAttributeKey: Any] = [.posixPermissions: folderMode]
-        // One that cannot be made is refused just below.
-        try? files.createDirectory(at: folder, withIntermediateDirectories: false, attributes: attributes)
-      }
-      guard isFolder(folder) else { return nil }
-    }
-    return folder
+  nonisolated static func made(_ caches: URL) -> IconCacheDirectory? {
+    IconCacheDirectory.open(caches, appending: folderPath)
   }
 
-  /// The index as written, checked (``AppIconIndex/checked``); nil when it is missing, too large, does not read or is
-  /// of another shape.
+  /// The checked index, read relative to the verified cache handle.
   ///
-  /// - Parameter folder: The store's folder.
-  /// - Returns: The index, or nil.
-  nonisolated static func readIndex(in folder: URL) -> AppIconIndex? {
-    let file = folder.appendingPathComponent(indexName)
-    guard let data = contents(of: file, largest: AppIconCachePolicy.largestIndex) else { return nil }
+  /// - Parameter folder: The verified store directory.
+  /// - Returns: The index, or nil when it cannot be read or checked.
+  nonisolated static func readIndex(in folder: IconCacheDirectory) -> AppIconIndex? {
+    guard let data = folder.read(indexName, largest: AppIconCachePolicy.largestIndex) else { return nil }
     return (try? JSONDecoder().decode(AppIconIndex.self, from: data))?
       .checked
   }
 
-  /// Removes everything in the store's folder, so the cache starts over.
+  /// Removes direct files without following links or descending into directories.
   ///
-  /// - Parameter folder: The store's folder.
-  nonisolated static func empty(_ folder: URL) {
-    for item in items(in: folder) { remove(item) }
+  /// - Parameter folder: The verified store directory.
+  nonisolated static func empty(_ folder: IconCacheDirectory) {
+    for name in folder.names { folder.remove(name) }
   }
 
-  /// Removes what the index does not name: files left half written and icons no entry keeps.
+  /// Removes files not named by the checked index, relative to the verified handle.
   ///
   /// - Parameters:
-  ///   - folder: The store's folder.
-  ///   - kept: The icons' file names the index keeps.
-  nonisolated static func sweep(_ folder: URL, keeping kept: Set<String>) {
-    for item in items(in: folder) where item.lastPathComponent != indexName && !kept.contains(item.lastPathComponent) {
-      remove(item)
-    }
-  }
-
-  /// The items directly in a folder.
-  ///
-  /// - Parameter folder: The folder.
-  /// - Returns: The items, or none when it cannot be read.
-  nonisolated static func items(in folder: URL) -> [URL] {
-    (try? FileManager.default.contentsOfDirectory(at: folder, includingPropertiesForKeys: nil)) ?? []
-  }
-
-  /// Removes a file, or says nothing when it is already gone.
-  ///
-  /// - Parameter file: The file.
-  nonisolated static func remove(_ file: URL) {
-    try? FileManager.default
-      .removeItem(at: file)
-  }
-
-  /// Writes data as one file at once: to a new file in the folder, the person's alone, then renamed over the old.
-  ///
-  /// - Parameters:
-  ///   - data: The data.
-  ///   - file: The file it replaces.
-  ///   - folder: The folder both are in.
-  /// - Returns: Whether it was written.
-  @discardableResult nonisolated static func write(_ data: Data, to file: URL, in folder: URL) -> Bool {
-    let part = folder.appendingPathComponent(partPrefix + UUID().uuidString)
-    let attributes: [FileAttributeKey: Any] = [.posixPermissions: fileMode]
-    let files = FileManager.default
-    guard files.createFile(atPath: part.path, contents: data, attributes: attributes) else { return false }
-    guard Foundation.rename(part.path, file.path) == 0 else {
-      remove(part)
-      return false
-    }
-    return true
+  ///   - folder: The verified store directory.
+  ///   - kept: The icon names to retain.
+  nonisolated static func sweep(_ folder: IconCacheDirectory, keeping kept: Set<String>) {
+    for name in folder.names where name != indexName && !kept.contains(name) { folder.remove(name) }
   }
 
   /// An icon's file as a picture, when it is the size the index says and decodes within
   /// ``AppIconCachePolicy/largestSide``.
   ///
   /// - Parameters:
-  ///   - file: The icon's file.
+  ///   - file: The icon's file name.
+  ///   - folder: The verified store directory.
   ///   - bytes: Its size, as the index says.
   /// - Returns: The picture, or nil.
-  nonisolated static func read(_ file: URL, bytes: Int) -> CGImage? {
-    guard let data = contents(of: file, largest: AppIconCachePolicy.largestFile), data.count == bytes else {
+  nonisolated static func read(_ file: String, in folder: IconCacheDirectory, bytes: Int) -> CGImage? {
+    guard let data = folder.read(file, largest: AppIconCachePolicy.largestFile), data.count == bytes else {
       return nil
     }
     return picture(data)
@@ -124,39 +70,6 @@ extension AppIconStore {
     else { return nil }
     let options = [kCGImageSourceShouldCacheImmediately: true, kCGImageSourceShouldCache: true] as CFDictionary
     return CGImageSourceCreateImageAtIndex(source, 0, options)
-  }
-
-  /// A file's bytes, when it is a plain file no larger than `largest`; a link or a folder is not read.
-  ///
-  /// - Parameters:
-  ///   - file: The file.
-  ///   - largest: The most bytes read.
-  /// - Returns: The bytes, or nil.
-  nonisolated static func contents(of file: URL, largest: Int) -> Data? {
-    guard let attributes = try? FileManager.default.attributesOfItem(atPath: file.path),
-      attributes[.type] as? FileAttributeType == .typeRegular,
-      let size = attributes[.size] as? Int,
-      size <= largest
-    else { return nil }
-    return try? Data(contentsOf: file)
-  }
-
-  /// Whether something is at a path, a link included, without following it.
-  ///
-  /// - Parameter url: The path.
-  /// - Returns: Whether anything is there.
-  nonisolated static func exists(_ url: URL) -> Bool {
-    (try? FileManager.default.attributesOfItem(atPath: url.path)) != nil
-  }
-
-  /// Whether a path is a folder itself, not a link to one.
-  ///
-  /// - Parameter url: The path.
-  /// - Returns: Whether it is a folder.
-  nonisolated static func isFolder(_ url: URL) -> Bool {
-    let attributes = try? FileManager.default
-      .attributesOfItem(atPath: url.path)
-    return attributes?[.type] as? FileAttributeType == .typeDirectory
   }
 
   /// An icon's file name: the first ``AppIconIndex/Entry/fileDigits`` hexadecimal digits of its bundle identifier's

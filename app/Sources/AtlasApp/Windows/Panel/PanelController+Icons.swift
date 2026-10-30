@@ -3,17 +3,27 @@ import AtlasStatus
 import AtlasUI
 
 extension PanelController {
-  /// Asks for the icon of each app Recent's rows name, once each a launch: found off the main actor, as the main
-  /// window finds its own, from the icons kept between launches or where the app is installed. A row whose icon is
-  /// not found keeps its app's tile.
+  /// Recent chooses its own apps; the shared repository coalesces their lookups with the viewer's and remembers
+  /// misses. Each reading refreshes its bounded snapshot, including live icons the viewer has since supplied.
   func wantRecentIcons() {
-    for item in StatusReading(status).activity(limit: PanelPresenter.recentRows) {
-      guard let want = AppIconWant.named(bundleId: item.row.bundleId, name: item.row.app),
-        iconsAsked.insert(want.key.text).inserted
-      else { continue }
-      Task { [weak self, appIcons] in
-        guard let found = await appIcons.find(want) else { return }
-        self?.icons[want.key.text] = found.drawn(as: want.key.text)
+    let wants =
+      isOpen
+      ? StatusReading(status)
+        .activity(limit: PanelPresenter.recentRows)
+        .compactMap { AppIconWant.named(bundleId: $0.row.bundleId, name: $0.row.app) }
+      : []
+    let keys = Set(wants.map { $0.key.text })
+    for key in Array(iconRequests.keys) where !keys.contains(key) {
+      iconRequests.removeValue(forKey: key)?
+        .cancel()
+    }
+    for want in wants {
+      let key = want.key.text
+      guard iconRequests[key] == nil else { continue }
+      iconRequests[key] = appIcons.request(want) { [weak self] _, images in
+        guard let self, self.isOpen else { return }
+        self.iconRequests[key] = nil
+        self.icons = images
       }
     }
   }

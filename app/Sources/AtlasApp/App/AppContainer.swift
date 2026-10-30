@@ -26,8 +26,8 @@ final class AppContainer {
   let settingsPreferences: SettingsPreferences
   /// Opens and closes every window.
   let coordinator: WindowCoordinator
-  /// Where apps' icons are found and kept between launches, which every main window shares, so an icon is read
-  /// from its app once a launch.
+  /// The app's one icon repository and disk store, shared by the panel and every main window, including reopened
+  /// windows. It owns the concurrency limit, coalesced requests and bounded decoded cache.
   let appIcons: AppIcons
   /// The helper's own commands, which the panel and the main window share, so one of each runs at a time; made at
   /// launch.

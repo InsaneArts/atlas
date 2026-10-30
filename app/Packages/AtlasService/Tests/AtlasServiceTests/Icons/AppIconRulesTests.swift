@@ -103,6 +103,27 @@ struct AppIconRulesTests {
     #expect(AppIconCachePolicy.looksAgain(read, today: 100 + AppIconCachePolicy.lookAgainDays))
   }
 
+  @Test("corrupt persisted days are refused and age arithmetic handles both integer boundaries")
+  func corruptDaysCannotOverflow() {
+    let valid = entry(used: 20_000, bytes: 1)
+    for day in [Int.min, -1, Int.max] {
+      for field in [\AppIconIndex.Entry.read, \.used] {
+        var corrupt = valid
+        corrupt[keyPath: field] = day
+        #expect(AppIconIndex(icons: ["test.app": corrupt]).checked?.icons.isEmpty == true)
+      }
+    }
+    var old = valid
+    old.read = Int.min
+    #expect(AppIconCachePolicy.looksAgain(old, today: Int.max))
+    #expect(!AppIconCachePolicy.looksAgain(old, today: Int.min))
+    old.read = Int.max
+    #expect(!AppIconCachePolicy.looksAgain(old, today: Int.min))
+    #expect(!AppIconCachePolicy.looksAgain(old, today: Int.max))
+    #expect(AppIconCachePolicy.accepts(day: 0))
+    #expect(AppIconCachePolicy.accepts(day: AppIconCachePolicy.day(of: .distantFuture)))
+  }
+
   @Test("the cache keeps no time of use finer than a day")
   func days() {
     let morning = Date(timeIntervalSince1970: 20_000 * 86_400 + 60)

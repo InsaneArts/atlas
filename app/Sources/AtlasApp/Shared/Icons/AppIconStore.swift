@@ -29,7 +29,7 @@ actor AppIconStore {
   /// The index, once read; nil before the first icon is wanted.
   private var index: AppIconIndex?
   /// The store's folder, once made; nil before the first icon is wanted, or when it could not be made.
-  private var folder: URL?
+  private var folder: IconCacheDirectory?
   /// Whether the folder was made, or tried, so a folder that could not be made is not tried again with each icon.
   private var opened = false
 
@@ -60,7 +60,7 @@ actor AppIconStore {
   /// - Returns: The icon and whether it is due to be looked up again, or nil when none is kept.
   func icon(bundleId: String) -> AppIconStore.Kept? {
     guard let folder = loaded(), let entry = index?.icons[bundleId] else { return nil }
-    guard let image = Self.read(folder.appendingPathComponent(entry.file), bytes: entry.bytes) else {
+    guard let image = Self.read(entry.file, in: folder, bytes: entry.bytes) else {
       forget([bundleId], in: folder)
       save(in: folder)
       return nil
@@ -120,7 +120,7 @@ actor AppIconStore {
       return kept
     }
     let file = Self.fileName(bundleId)
-    guard Self.write(png, to: folder.appendingPathComponent(file), in: folder) else { return kept }
+    guard folder.write(png, name: file) else { return kept }
     index?.icons[bundleId] = AppIconIndex.Entry(
       file: file,
       name: boundedName,
@@ -137,7 +137,7 @@ actor AppIconStore {
   /// The folder, made and its index read on the first call; nil when there is no folder to keep icons in.
   ///
   /// - Returns: The folder.
-  private func loaded() -> URL? {
+  private func loaded() -> IconCacheDirectory? {
     guard !opened else { return folder }
     opened = true
     guard let caches, let made = Self.made(caches) else { return nil }
@@ -148,7 +148,7 @@ actor AppIconStore {
     Self.sweep(made, keeping: Set(index.icons.values.map(\.file)))
     let evicted = AppIconCachePolicy.evicted(index)
     for id in evicted {
-      if let file = index.icons.removeValue(forKey: id)?.file { Self.remove(made.appendingPathComponent(file)) }
+      if let file = index.icons.removeValue(forKey: id)?.file { made.remove(file) }
     }
     self.index = index
     if read != index { save(in: made) }
@@ -160,10 +160,10 @@ actor AppIconStore {
   /// - Parameters:
   ///   - ids: The bundle identifiers.
   ///   - folder: The store's folder.
-  private func forget(_ ids: [String], in folder: URL) {
+  private func forget(_ ids: [String], in folder: IconCacheDirectory) {
     for id in ids {
       guard let entry = index?.icons.removeValue(forKey: id) else { continue }
-      Self.remove(folder.appendingPathComponent(entry.file))
+      folder.remove(entry.file)
     }
   }
 
@@ -177,11 +177,11 @@ actor AppIconStore {
   /// Writes the index; a write that fails leaves the last one, which the next write replaces.
   ///
   /// - Parameter folder: The store's folder.
-  private func save(in folder: URL) {
+  private func save(in folder: IconCacheDirectory) {
     guard let index else { return }
     let encoder = JSONEncoder()
     encoder.outputFormatting = [.sortedKeys]
     guard let data = try? encoder.encode(index) else { return }
-    Self.write(data, to: folder.appendingPathComponent(Self.indexName), in: folder)
+    folder.write(data, name: Self.indexName)
   }
 }

@@ -39,12 +39,13 @@ extension AppIconIndex {
     }
 
     /// Whether the entry names a PNG of ``fileDigits`` hexadecimal digits in the cache's own folder, and a size the
-    /// cache would keep.
+    /// cache would keep, with valid persisted days.
     var isWellFormed: Bool {
       guard file.hasSuffix(Self.fileSuffix) else { return false }
       let stem = file.dropLast(Self.fileSuffix.count)
       return stem.count == Self.fileDigits && stem.allSatisfy(\.isHexDigit) && bytes > 0
         && bytes <= AppIconCachePolicy.largestFile
+        && AppIconCachePolicy.accepts(day: used) && AppIconCachePolicy.accepts(day: read)
     }
   }
 }
