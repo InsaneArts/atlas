@@ -367,7 +367,7 @@ impl Client {
         // gave; a recording that fails never fails the capture.
         let request = json!({"op": "screenshot"});
         let reply = match &captured {
-            Ok(saved) => json!({"ok": true, "capture": capture_name(saved)}),
+            Ok(saved) => json!({"ok": true, "capture": capture_name(saved), "app": saved["app"]}),
             Err(error) => json!({"ok": false, "code": recorded_code(error)}),
         };
         let _ = self.record(&request, &reply, started.elapsed()).await;

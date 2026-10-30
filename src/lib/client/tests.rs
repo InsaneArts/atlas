@@ -2587,6 +2587,8 @@ fn a_failed_flush_keeps_every_buffered_action_until_the_log_can_be_written() {
     assert!(gathering.flush().is_err());
 
     fs::remove_dir(blocked).unwrap();
+    // An interrupted writer can leave a prefix even after the disk is usable.
+    fs::write(output.join(activity_log::FILE), b"{\"operation\":").unwrap();
     gathering.flush().unwrap();
     gathering.flush().unwrap();
     let text = fs::read_to_string(output.join(activity_log::FILE)).unwrap();
@@ -3120,7 +3122,8 @@ fn recording_appends_privately_and_rotates_a_full_log() {
         );
     }
 
-    let full = vec![b'x'; 1024 * 1024 + 1];
+    let rows = fs::read(&path).unwrap();
+    let full = rows.repeat(1024 * 1024 / rows.len() + 1);
     fs::write(&path, &full).unwrap();
     client.record_start_blocking(&request).unwrap();
     assert_eq!(fs::read(output.join(activity_log::PREVIOUS)).unwrap(), full);
@@ -3190,4 +3193,77 @@ async fn an_app_list_read_is_never_uncertain() {
     let error = helper.serve(client.apps(), |_| None).await.unwrap_err();
 
     assert_eq!((error.code, error.uncertain), (Code::Protocol, false));
+}
+
+#[test]
+fn app_screenshot_rows_keep_only_safe_identity_from_the_nested_reply() {
+    let directory = tempfile::tempdir().unwrap();
+    let client = client_in(directory.path()).doing(Doing::new("screenshot"));
+    client.record_for_test(
+        &json!({"op": "screenshot", "pid": 812}),
+        &json!({
+            "ok": true, "capture": "1761660429000123456-capture.png",
+            "app": {"pid": 812, "name": "TextEdit", "bundleId": "com.apple.TextEdit",
+                "title": "PRIVATE DOCUMENT TITLE", "bounds": {"x": 12}},
+            "overlapping": [{"title": "ANOTHER PRIVATE TITLE"}], "png": "IMAGE PAYLOAD"
+        }),
+    );
+    let row = activity_log::recent(client.output_dir().unwrap(), 1).remove(0);
+    assert_eq!(row.app.as_deref(), Some("TextEdit"));
+    assert_eq!(row.bundle_id.as_deref(), Some("com.apple.TextEdit"));
+    assert_eq!(row.label, None);
+    assert_eq!(
+        row.capture.as_deref(),
+        Some("1761660429000123456-capture.png")
+    );
+    let log = fs::read_to_string(client.output_dir().unwrap().join(activity_log::FILE)).unwrap();
+    for private in ["PRIVATE", "bounds", "overlapping", "IMAGE PAYLOAD"] {
+        assert!(!log.contains(private), "{private}: {log}");
+    }
+}
+
+#[tokio::test]
+async fn an_app_capture_records_its_identity_but_never_caches_window_titles() {
+    use crate::test_support::{Helper, UID};
+    use base64::{Engine, engine::general_purpose::STANDARD};
+    let directory = tempfile::tempdir().unwrap();
+    let (client, helper) = Helper::client(directory.path(), UID);
+    let client = client.doing(Doing::new("screenshot"));
+    let mut png = b"\x89PNG\r\n\x1a\n\0\0\0\rIHDR".to_vec();
+    png.extend(10_u32.to_be_bytes());
+    png.extend(10_u32.to_be_bytes());
+    png.resize(33, 0);
+    let saved = helper
+        .serve(
+            client.capture(Size::Full, Some(&Crop::App { pid: 812 }), false),
+            |request| {
+                assert_eq!(request["op"], "screenshot");
+                Some(
+                    json!({"ok": true, "png": STANDARD.encode(&png), "width": 10, "height": 10,
+                "region": {"x": 0, "y": 0, "width": 10, "height": 10},
+                "app": {"pid": 812, "name": "TextEdit", "bundleId": "com.apple.TextEdit"},
+                "overlapping": [{"title": "PRIVATE DOCUMENT TITLE"}]}),
+                )
+            },
+        )
+        .await
+        .unwrap();
+    assert_eq!(saved["app"]["bundleId"], "com.apple.TextEdit");
+    let row = activity_log::recent(client.output_dir().unwrap(), 1).remove(0);
+    assert_eq!(row.app.as_deref(), Some("TextEdit"));
+    assert_eq!(row.bundle_id.as_deref(), Some("com.apple.TextEdit"));
+    assert_eq!(row.label, None);
+    for entry in fs::read_dir(client.output_dir().unwrap()).unwrap() {
+        let path = entry.unwrap().path();
+        if matches!(
+            path.extension().and_then(|extension| extension.to_str()),
+            Some("json" | "jsonl")
+        ) {
+            assert!(
+                !fs::read_to_string(path)
+                    .unwrap()
+                    .contains("PRIVATE DOCUMENT TITLE")
+            );
+        }
+    }
 }

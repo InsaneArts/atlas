@@ -173,7 +173,7 @@ fn second(ms: u64) -> Option<String> {
 
 /// The local hour, minute and second of `ms` since 1970.
 fn clock(ms: u64) -> Option<(u8, u8, u8)> {
-    super::sys::local_clock(i64::try_from(ms / 1000).ok()?)
+    crate::time::local_clock(i64::try_from(ms / 1000).ok()?)
 }
 
 /// The first characters of `key`.

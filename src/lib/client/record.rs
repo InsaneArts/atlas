@@ -87,7 +87,7 @@ impl PersonInput {
 
     /// Gather `row`, one input that worked, for `directory`'s log: written
     /// once its span ends, with the earlier gathered row first when that
-    /// span has ended, it is on another UTC day or it is for another log.
+    /// span has ended, it is on another local day or it is for another log.
     fn gather(&self, directory: &Path, row: Row) -> Result<()> {
         let mut gathering = self.lock();
         if let Some((into, gathered, deadline)) = gathering.row.as_mut()
@@ -96,9 +96,7 @@ impl PersonInput {
             && gathered
                 .at_ms()
                 .zip(row.at_ms())
-                .is_some_and(|(earlier, later)| {
-                    earlier / activity_log::DAY_MS == later / activity_log::DAY_MS
-                })
+                .is_some_and(|(earlier, later)| crate::time::same_local_day(earlier, later))
         {
             gathered.action_count =
                 Some(gathered.action_count.unwrap_or(0) + row.action_count.unwrap_or(0));
@@ -217,18 +215,30 @@ fn focus_reason(reply: &Value) -> Option<&'static str> {
     }
 }
 
-/// The app `reply` says a command acted in, by its name, with its bundle
-/// identifier when that is one: the app input landed in, as the helper saw
-/// it, or the app an install placed.
-fn bundle_seen(reply: &Value, installs: bool) -> Option<(String, String)> {
+/// The app a reply names, projected onto the only identity fields the log
+/// keeps. Nested app replies may also contain window data; none is copied.
+fn app_seen(reply: &Value, installs: bool) -> Option<(String, Option<String>)> {
     let (app, id) = if installs {
         let installed = crate::environment::installed_app(reply)?;
-        (installed.app, installed.bundle_id?)
+        (installed.app, installed.bundle_id)
+    } else if reply["app"].is_object() {
+        let app = &reply["app"];
+        (
+            app["name"].as_str()?.to_owned(),
+            app["bundleId"].as_str().map(str::to_owned),
+        )
     } else {
         let app = reply["app"].as_str()?;
-        (app.to_owned(), reply["bundleId"].as_str()?.to_owned())
+        (
+            app.to_owned(),
+            reply["bundleId"].as_str().map(str::to_owned),
+        )
     };
-    Some((app, crate::doing::bundle_id(&id)?))
+    let app = crate::doing::bounded(&app);
+    if app.is_empty() {
+        return None;
+    }
+    Some((app, id.as_deref().and_then(crate::doing::bundle_id)))
 }
 
 /// Whether a mutation did what it was for: the helper accepted it and, for
@@ -241,6 +251,20 @@ pub(super) fn worked(reply: &Value) -> bool {
 }
 
 impl Client {
+    /// Record the app a completed open or close acted on once its identity
+    /// is known. Its command token replaces the lower-level steps on read.
+    pub(crate) async fn record_app_completion(&self, app: &Value, elapsed: Duration) {
+        if self.doing.is_some() {
+            let _ = self
+                .record(
+                    &json!({"op": "run"}),
+                    &json!({"ok": true, "app": app}),
+                    elapsed,
+                )
+                .await;
+        }
+    }
+
     /// Record that a command began, so what it does shows while it runs;
     /// the row it ends with stands for it after.
     pub(super) async fn record_start(&self, request: &Value) -> Result<()> {
@@ -407,22 +431,13 @@ impl Client {
             if start {
                 row.started = Some(true);
             }
-            // Input names the app it landed in, as the helper saw it.
-            if row.app.is_none()
-                && let Some(app) = reply["app"].as_str()
-            {
-                row.app = Some(crate::doing::bounded(app));
-            }
-            // So does its bundle identifier, as an install's does the app it
-            // placed: only an identifier, and only the one of the app the
-            // row names, never another's.
-            if let Some((app, id)) = bundle_seen(reply, doing.verb() == "install")
-                && row
-                    .app
-                    .as_deref()
-                    .is_some_and(|named| same_text(named, &crate::doing::bounded(&app)))
-            {
-                row.bundle_id = Some(id);
+            if let Some((app, id)) = app_seen(reply, doing.verb() == "install") {
+                // A bundle identifier belongs only to the app this row
+                // names, never to another app observed along the way.
+                let named = row.app.get_or_insert_with(|| app.clone());
+                if same_text(named, &app) {
+                    row.bundle_id = id;
+                }
             }
         }
 
@@ -447,10 +462,45 @@ mod tests {
     use super::*;
 
     #[tokio::test(start_paused = true)]
-    async fn input_on_either_side_of_midnight_is_buffered_in_separate_rows() {
+    async fn the_input_timer_keeps_a_newer_command_first_in_recent_activity() {
         let directory = tempfile::tempdir().unwrap();
         let input = PersonInput::default();
-        let midnight = activity_log::DAY_MS;
+        let row = |at: &str, actor: &str| {
+            Row::parse(&json!({
+                "at": at, "operation": "input", "actor": actor,
+                "ok": true, "actionCount": 1
+            }))
+            .unwrap()
+        };
+        input
+            .gather(directory.path(), row("1000000000", "viewer"))
+            .unwrap();
+        let timer = input.untimed().unwrap();
+        activity_log::append(directory.path(), &row("2000000000", "agent")).unwrap();
+        tokio::time::advance(PERSON_INPUT_SPAN).await;
+        input.flush_due(timer).unwrap();
+
+        let one = activity_log::recent(directory.path(), 1);
+        assert_eq!(one[0].at.as_deref(), Some("2000000000"));
+        let both = activity_log::recent(directory.path(), 2);
+        assert_eq!(
+            both.iter().map(Row::actor).collect::<Vec<_>>(),
+            ["agent", "viewer"]
+        );
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn input_on_either_side_of_local_midnight_stays_separate_when_buffered_and_read() {
+        if !crate::test_support::in_timezone(
+            "client::record::tests::input_on_either_side_of_local_midnight_stays_separate_when_buffered_and_read",
+            "Asia/Tbilisi",
+        ) {
+            return;
+        }
+        let directory = tempfile::tempdir().unwrap();
+        let input = PersonInput::default();
+        // Midnight at UTC+4, while both timestamps belong to the same UTC day.
+        let midnight = 72_000_000;
         let times = [midnight - 2, midnight - 1, midnight, midnight + 1];
         for at in times {
             let row = Row::parse(&json!({
@@ -479,5 +529,10 @@ mod tests {
                 (Some(midnight + 1), Some(2), Some(5.0))
             ]
         );
+        let shown = activity_log::recent(directory.path(), 5);
+        assert_eq!(shown.len(), 2);
+        assert_eq!(shown[0].at_ms(), Some(midnight + 1));
+        assert_eq!(shown[1].at_ms(), Some(midnight - 1));
+        assert!(shown.iter().all(|row| row.action_count == Some(2)));
     }
 }

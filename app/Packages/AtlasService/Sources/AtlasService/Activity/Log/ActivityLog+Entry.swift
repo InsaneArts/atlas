@@ -5,6 +5,8 @@ extension ActivityLog {
   public struct Entry: Decodable, Equatable, Sendable, Identifiable {
     /// Names the row; never reused for another. A running command's row is replaced by one with a new id.
     public var id: String
+    /// Names the action across command steps or a growing personal input run; the row id for older services.
+    public var logicalId: String
     /// What was done, in the service's words, such as "typed in TextEdit"; nil when it gives none.
     public var says: String?
     /// How it went.
@@ -48,6 +50,7 @@ extension ActivityLog {
     ///
     /// - Parameters:
     ///   - id: Names the row.
+    ///   - logicalId: Names the action; the row id when none is supplied.
     ///   - says: What was done, in the service's words.
     ///   - outcome: How it went.
     ///   - actor: Who did it.
@@ -65,6 +68,7 @@ extension ActivityLog {
     ///   - keys: A key press's chords as keycaps.
     public init(
       id: String,
+      logicalId: String? = nil,
       says: String? = nil,
       outcome: Outcome = .worked,
       actor: Actor = .agent,
@@ -82,6 +86,7 @@ extension ActivityLog {
       keys: [[String]] = []
     ) {
       self.id = id
+      self.logicalId = logicalId ?? id
       self.says = says
       self.outcome = outcome
       self.actor = actor
@@ -105,6 +110,10 @@ extension ActivityLog {
       case id, says, ok, started, actor, ageSeconds, startedAt, reason, operation, count, session, capture, nothingSent
       /// The fields that name what it did and where.
       case verb, app, label, bundleId, keys
+      /// Whether input was partly sent before a refusal.
+      case partial
+      /// The action's identity across successive rows.
+      case logicalId
     }
 
     /// Decodes a row, keeping a safe default for anything missing or of the wrong type: a row that says nothing
@@ -115,11 +124,13 @@ extension ActivityLog {
     public init(from decoder: any Decoder) throws {
       let container = try decoder.container(keyedBy: CodingKeys.self)
       id = container.lenientText(.id) ?? ""
+      logicalId = container.lenientText(.logicalId) ?? id
       says = container.lenientText(.says)
       outcome = Outcome(
         started: container.lenientFlag(.started),
         ok: container.lenientFlag(.ok),
-        nothingSent: container.lenientFlag(.nothingSent)
+        nothingSent: container.lenientFlag(.nothingSent),
+        partial: container.lenientFlag(.partial)
       )
       actor = Actor(word: container.lenientText(.actor))
       ageSeconds = try? container.decodeIfPresent(Double.self, forKey: .ageSeconds)

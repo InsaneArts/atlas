@@ -50,6 +50,8 @@ struct Daemon {
     capture: Capture,
     /// The session's on-screen windows, front to back.
     windows: fn() -> Result<Vec<windows::Window>>,
+    /// Bundle identity is read in this helper session, never the controller's.
+    bundle_id: fn(i64) -> Option<String>,
     /// Where the Dock in a window list takes clicks.
     dock: fn(&[windows::Window]) -> windows::Dock,
     /// Whether the helper's session is on the console right now.
@@ -74,6 +76,7 @@ impl Daemon {
             manager,
             capture,
             windows: windows::windows,
+            bundle_id: apps::bundle_id,
             dock: read_dock,
             on_console,
             session,
@@ -473,7 +476,11 @@ fn rect(region: Region) -> CGRect {
 
 /// What a cropped screenshot's reply adds: the area captured and, for an
 /// app, which app and what lies in front of it.
-fn crop_keys(area: Region, app: Option<(i64, crop::AppCrop)>) -> serde_json::Map<String, Value> {
+fn crop_keys(
+    area: Region,
+    app: Option<(i64, crop::AppCrop)>,
+    bundle_id: fn(i64) -> Option<String>,
+) -> serde_json::Map<String, Value> {
     let mut keys = serde_json::Map::new();
     keys.insert("region".into(), json!(area));
 
@@ -490,7 +497,10 @@ fn crop_keys(area: Region, app: Option<(i64, crop::AppCrop)>) -> serde_json::Map
                 })
             })
             .collect();
-        keys.insert("app".into(), json!({"pid": pid, "name": found.name}));
+        keys.insert(
+            "app".into(),
+            json!({"pid": pid, "name": found.name, "bundleId": bundle_id(pid)}),
+        );
         keys.insert("overlapping".into(), json!(overlapping));
     }
 
@@ -505,6 +515,7 @@ async fn screenshot(
 ) -> Value {
     let capture = daemon.capture;
     let list = daemon.windows;
+    let bundle_id = daemon.bundle_id;
     let dock = daemon.dock;
     let on_console = daemon.on_console;
     let session = daemon.session;
@@ -581,9 +592,10 @@ async fn screenshot(
         let shot = capture(epoch.display_id as u32, area.map(rect), limit).map_err(refused)?;
         let off_display = off_display_windows(windows.as_deref().unwrap_or_default());
 
+        let cropped = area.map(|area| crop_keys(area, app, bundle_id));
         validate()?;
 
-        Ok((shot, off_display, area.map(|area| crop_keys(area, app))))
+        Ok((shot, off_display, cropped))
     })
     .await;
     match taken {
@@ -848,6 +860,10 @@ mod tests {
         ])
     }
 
+    fn fake_bundle_id(pid: i64) -> Option<String> {
+        (pid == 200).then(|| "com.apple.TextEdit".to_owned())
+    }
+
     fn session() -> Result<Value> {
         Ok(json!({
             "ok": true,
@@ -869,6 +885,7 @@ mod tests {
             session,
         );
         daemon.windows = fake_windows;
+        daemon.bundle_id = fake_bundle_id;
         daemon.dock = |_| windows::Dock::Icons(Vec::new());
         Arc::new(daemon)
     }
@@ -1220,7 +1237,8 @@ mod tests {
                 "width"
             ]
         );
-        assert_eq!(keys(&app["app"]), ["name", "pid"]);
+        assert_eq!(keys(&app["app"]), ["bundleId", "name", "pid"]);
+        assert_eq!(app["app"]["bundleId"], "com.apple.TextEdit");
         assert_eq!(
             keys(&app["overlapping"][0]),
             ["bounds", "owner", "pid", "title"]
@@ -1266,6 +1284,7 @@ mod tests {
     ) -> Arc<Daemon> {
         let mut daemon = Daemon::new("Aqua".into(), capture, || false, session);
         daemon.windows = windows;
+        daemon.bundle_id = fake_bundle_id;
         daemon.dock = |_| windows::Dock::Icons(Vec::new());
         Arc::new(daemon)
     }
@@ -1293,7 +1312,10 @@ mod tests {
             reply["region"],
             json!({"x": 2, "y": 0, "width": 46, "height": 33})
         );
-        assert_eq!(reply["app"], json!({"pid": 200, "name": "TextEdit"}));
+        assert_eq!(
+            reply["app"],
+            json!({"pid": 200, "name": "TextEdit", "bundleId": "com.apple.TextEdit"})
+        );
         assert_eq!(
             reply["overlapping"],
             json!([{

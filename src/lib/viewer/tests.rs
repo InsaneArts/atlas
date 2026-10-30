@@ -38,6 +38,29 @@ async fn unreachable(dir: &Path) -> Arc<Viewer> {
     bound(dir).await.1
 }
 
+#[tokio::test]
+async fn the_async_status_read_never_parses_the_snapshot_on_the_runtime_worker() {
+    let dir = tempfile::tempdir().unwrap();
+    let viewer = http::configured(client(dir.path()), "127.0.0.1:0".to_owned(), None);
+    let client = viewer.client();
+    let output = client.output_dir().unwrap();
+    std::fs::create_dir_all(output).unwrap();
+    std::fs::write(
+        output.join(crate::activity_log::FILE),
+        "{\"at\":\"1\",\"operation\":\"input\",\"ok\":true}\n",
+    )
+    .unwrap();
+    let observation = crate::activity_log::snapshot::Observation::watch(output);
+    let runtime_worker = std::thread::current().id();
+
+    let status = viewer.status().await;
+
+    assert_eq!(status["overview"]["activity"].as_array().unwrap().len(), 1);
+    let threads = observation.threads();
+    assert!(!threads.is_empty(), "the cold status read built a snapshot");
+    assert!(threads.iter().all(|thread| *thread != runtime_worker));
+}
+
 /// A viewer answering on its own port, at most `connections` at once,
 /// and the task serving it.
 async fn served(dir: &Path, connections: usize) -> (Arc<Viewer>, tokio::task::JoinHandle<()>) {
@@ -1205,6 +1228,7 @@ async fn activity_json_never_carries_typed_text() {
             "id",
             "keys",
             "label",
+            "logicalId",
             "nothingSent",
             "ok",
             "operation",
@@ -1443,6 +1467,7 @@ fn an_activity_row_as_the_app_lists_it_holds_exactly_these_fields() {
             "id",
             "keys",
             "label",
+            "logicalId",
             "nothingSent",
             "ok",
             "operation",
@@ -1460,6 +1485,10 @@ fn an_activity_row_as_the_app_lists_it_holds_exactly_these_fields() {
     assert_eq!(shown["app"], "TextEdit");
     assert_eq!(shown["bundleId"], "com.apple.TextEdit");
     assert_eq!(shown["label"], "⇧⌘Z Page Up");
+    assert_eq!(
+        shown["logicalId"], "c1",
+        "a command's steps share its token"
+    );
     assert_eq!(shown["keys"], json!([["⇧", "⌘", "Z"], ["Page Up"]]));
     assert!(!shown.to_string().contains("hunter2"));
 }
@@ -1507,17 +1536,74 @@ fn the_apps_activity_row_keeps_its_fields_and_values() {
     )
     .unwrap();
     let rows = crate::activity_log::recent(dir.path(), 5);
-    let shown: Vec<String> = rows
+    let shown: Vec<Value> = rows
         .iter()
-        .map(|row| activity_row(row, 100_000_000_000).to_string())
+        .map(|row| activity_row(row, 100_000_000_000))
         .collect();
-    assert_eq!(
-        shown,
-        [
-            r#"{"actor":"agent","ageSeconds":99,"app":null,"bundleId":null,"capture":null,"count":null,"id":"18919a007a04e825","keys":null,"label":null,"nothingSent":false,"ok":false,"operation":"run","partial":false,"reason":null,"says":"couldn't run a command","session":null,"started":false,"startedAt":0,"uncertain":false,"verb":null}"#,
-            r#"{"actor":"agent","ageSeconds":10,"app":"Opie","bundleId":null,"capture":"1-capture.png","count":1,"id":"405a9bc9382e3946","keys":null,"label":"Save","nothingSent":true,"ok":false,"operation":"input","partial":true,"reason":"Another window was in front","says":"didn't click Save in Opie","session":"0123456789ab","started":false,"startedAt":90000,"uncertain":false,"verb":"click"}"#,
-        ]
-    );
+    // AtlasService decodes this same fixture, so producer and consumer cannot
+    // silently drift while asserting separate copies of the wire contract.
+    let fixture: Value = serde_json::from_str(include_str!(
+        "../../../tests/fixtures/activity-projection.json"
+    ))
+    .unwrap();
+    assert_eq!(json!({"activity": shown}), fixture);
+}
+
+#[test]
+fn a_commands_logical_id_holds_from_start_to_end_and_an_input_runs_holds_as_it_grows() {
+    use crate::activity_log::{FILE, Row, recent};
+
+    let dir = tempfile::tempdir().unwrap();
+    let start = json!({"at": "1000000000", "operation": "run", "started": true,
+        "command": "0123456789ab"});
+    let input = json!({"at": "2000000000", "operation": "input", "actor": "viewer",
+        "ok": true, "actionCount": 2});
+    let end = json!({"at": "3000000000", "operation": "run", "ok": true,
+        "command": "0123456789ab"});
+    let more_input = json!({"at": "4000000000", "operation": "input", "actor": "viewer",
+        "ok": true, "actionCount": 3});
+    let write = |rows: &[Value]| {
+        std::fs::write(
+            dir.path().join(FILE),
+            rows.iter()
+                .map(|row| format!("{row}\n"))
+                .collect::<String>(),
+        )
+        .unwrap();
+    };
+    let shown = || activity_row(&recent(dir.path(), 1)[0], 5_000_000_000);
+
+    write(std::slice::from_ref(&start));
+    let before = shown();
+    write(&[start, end]);
+    let completed = shown();
+    assert_eq!(before["logicalId"], "0123456789ab");
+    assert_eq!(completed["logicalId"], before["logicalId"]);
+    assert_ne!(completed["id"], before["id"]);
+
+    write(std::slice::from_ref(&input));
+    let before = shown();
+    // The run keeps its first identity even across a log rotation.
+    std::fs::rename(
+        dir.path().join(FILE),
+        dir.path().join(crate::activity_log::PREVIOUS),
+    )
+    .unwrap();
+    write(&[more_input]);
+    let grown = shown();
+    assert_eq!(before["logicalId"], input["at"]);
+    assert_eq!(grown["logicalId"], before["logicalId"]);
+    assert_ne!(grown["id"], before["id"]);
+    assert_eq!(grown["count"], 5);
+    let serialized = serde_json::to_value(&recent(dir.path(), 1)[0]).unwrap();
+    assert!(serialized.get("firstInputId").is_none());
+    assert!(serialized.get("logicalId").is_none());
+    assert!(serialized.get("id").is_none());
+    let mut spoofed = input;
+    spoofed["firstInputId"] = json!("untrusted");
+    assert_eq!(Row::parse(&spoofed).unwrap().logical_id(), "2000000000");
+    let standalone = Row::parse(&json!({"operation": "read"})).unwrap();
+    assert_eq!(activity_row(&standalone, 0)["logicalId"], standalone.id);
 }
 
 #[tokio::test]

@@ -326,6 +326,10 @@ impl Reading<'_> {
             "says": shown.says,
             "ok": shown.ok,
             "ageSeconds": shown.age_seconds,
+            "app": shown.app,
+            "label": shown.label,
+            "bundleId": shown.bundle_id,
+            "keys": shown.keys(),
         });
         if !shown.ok
             && let Some(reason) = shown.reason

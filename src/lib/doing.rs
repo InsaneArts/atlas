@@ -155,6 +155,11 @@ impl Doing {
         self.verb
     }
 
+    /// The safe app name this command keeps, when it names one.
+    pub(crate) fn app_name(&self) -> Option<&str> {
+        self.app.as_deref()
+    }
+
     /// Fill in `row`'s fields for these facts. A control is named only
     /// when the action worked: a name that matched nothing may be
     /// anything. A shortcut is named either way. The field typed text went

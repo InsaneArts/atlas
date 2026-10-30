@@ -91,6 +91,14 @@ pub(crate) struct Shown {
     pub(crate) age_seconds: Option<u64>,
 }
 
+impl Shown {
+    /// Safe keycaps from a key row's retained label; never raw input.
+    pub(crate) fn keys(&self) -> Option<Vec<Vec<String>>> {
+        (self.verb.as_deref() == Some("key"))
+            .then(|| crate::doing::chords(self.label.as_deref().unwrap_or_default()))
+    }
+}
+
 /// `row` as every app shows it, at `now`.
 pub(crate) fn shown(row: &Row, now: u128) -> Shown {
     Shown {
@@ -105,7 +113,7 @@ pub(crate) fn shown(row: &Row, now: u128) -> Shown {
         label: row.label.clone(),
         session: row.session.clone(),
         capture: row.capture.clone(),
-        nothing_sent: row.coded(Code::FocusChanged),
+        nothing_sent: row.coded(Code::FocusChanged) && row.partial != Some(true),
         partial: row.partial == Some(true),
         uncertain: row.coded(Code::Uncertain),
         says: crate::doing::says(row),

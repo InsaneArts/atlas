@@ -10,7 +10,7 @@ use crate::{
     transport::{accepted, run_output},
 };
 use serde_json::{Value, json};
-use std::path::Path;
+use std::{path::Path, time::Instant};
 
 /// `open` inside the helper session: an app by name, files or URLs, or both.
 pub async fn open(
@@ -38,12 +38,14 @@ pub(super) async fn open_in(
     }
 
     let mut argv = open_argv(environment)?;
+    let started = Instant::now();
 
     // Copying, launching and pruning happen under one ownership, so no other
     // open, close or controller interleaves; only commands agents started
     // with `run` go on beside it.
     let ownership = client.controller.acquire_beside_commands()?;
-    let running = handoff::Running::listed(&client.apps().await?);
+    let verified = client.verify().await?;
+    let running = handoff::Running::listed(&client.apps_in(&verified).await?);
     task::settle_copies_gone(client, handoff::prune_in(copies, &running));
 
     let handed = handoff::hand_over(client, &ownership, wanted(app, targets), &running).await?;
@@ -81,6 +83,21 @@ pub(super) async fn open_in(
 
     if !opened {
         return Ok(json!(not_opened(&reply, &copied)));
+    }
+
+    // A newly launched app was absent from the pre-launch list. Its
+    // identity comes from the helper after the successful launch; a read
+    // that fails must not turn an already completed launch into a failure.
+    if let Some(name) = client
+        .doing
+        .as_ref()
+        .and_then(crate::doing::Doing::app_name)
+        && let Ok(current) = client.verify().await
+        && current.session().epoch == verified.session().epoch
+        && let Ok(apps) = client.apps_in(&verified).await
+        && let Some(app) = super::target::named_app(&apps, name)
+    {
+        client.record_app_completion(app, started.elapsed()).await;
     }
 
     let mut value = json!({ "ok": true, "opened": true });

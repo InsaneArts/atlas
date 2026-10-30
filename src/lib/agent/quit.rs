@@ -209,9 +209,16 @@ pub(super) async fn close_in(
     }
 
     let ownership = client.controller.acquire_beside_commands()?;
+    let started = Instant::now();
     let atlas = atlas_bundle();
     let apps = client.apps().await?;
     let processes = selected(&apps, closing, atlas.as_deref());
+    // Keep only identity, before the app disappears from the running list.
+    let identity = match closing {
+        Closing::App(name) => super::target::named_app(&apps, name)
+            .map(|app| json!({"name": app["name"], "bundleId": app["bundleId"]})),
+        Closing::All => None,
+    };
 
     // The helper's session and Atlas's own services are never closed.
     if let Closing::App(app) = closing
@@ -298,5 +305,8 @@ pub(super) async fn close_in(
         }
     }
 
+    if let Some(app) = identity {
+        client.record_app_completion(&app, started.elapsed()).await;
+    }
     Ok(reply)
 }

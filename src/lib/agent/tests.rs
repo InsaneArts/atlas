@@ -976,6 +976,144 @@ fn a_stopped_type_counts_the_parts_the_helper_performed() {
 }
 
 #[tokio::test]
+async fn typing_records_the_whole_commands_outcome_after_its_batches() {
+    use crate::{activity_log, doing::Doing};
+
+    let batches = type_batches(&"private typed text ".repeat(5)).unwrap();
+    assert_eq!(batches.len(), 2);
+    for (completed, performed, partial, uncertain) in [
+        (0, 0, false, false),
+        (0, 1, false, false),
+        (0, 0, true, false),
+        (1, 0, false, false),
+        (1, 1, false, false),
+        (1, 0, false, true),
+        (2, 0, false, false),
+    ] {
+        let directory = tempfile::tempdir().unwrap();
+        let client = crate::test_support::client(directory.path()).doing(
+            Doing::new("type")
+                .app(Some("TextEdit"))
+                .field(Some("Email")),
+        );
+        let interrupt = Interrupt::new(Duration::from_secs(10));
+        let mut sent = 0;
+        let report = type_recorded(&client, &batches, &interrupt, async |actions: &Value| {
+            let reply = if sent < completed {
+                json!({"ok": true, "performed": actions.as_array().unwrap().len(),
+                    "app": {"name": "TextEdit", "bundleId": "com.apple.TextEdit"},
+                    "field": {"role": "AXTextField"}})
+            } else {
+                json!({"ok": false, "code": "focus-changed", "reason": "field",
+                    "performed": performed, "partial": partial, "uncertain": uncertain,
+                    "error": "private failure message"})
+            };
+            client
+                .record(
+                    &json!({"op": "input", "actions": actions}),
+                    &reply,
+                    Duration::ZERO,
+                )
+                .await?;
+            sent += 1;
+            Ok(reply)
+        })
+        .await;
+
+        let rows = activity_log::recent(client.output_dir().unwrap(), 5);
+        assert_eq!(rows.len(), 1, "the terminal row replaces every batch");
+        let row = &rows[0];
+        assert_eq!(
+            row.action_count,
+            Some(6),
+            "all requested type actions count"
+        );
+        assert_eq!(row.worked(), completed == 2);
+        let shown = crate::overview::shown(row, 0);
+        if completed > 0 {
+            assert_eq!(row.bundle_id.as_deref(), Some("com.apple.TextEdit"));
+        }
+        if completed < 2 && !uncertain {
+            let delivered = completed > 0 || performed > 0 || partial;
+            assert_eq!(row.partial, Some(delivered));
+            assert_eq!(shown.nothing_sent, !delivered);
+            assert_eq!(row.reason.as_deref(), Some("field"));
+        }
+        if uncertain {
+            assert!(shown.uncertain);
+            assert!(!shown.nothing_sent);
+        }
+        if completed == 2 {
+            assert_eq!(row.bundle_id.as_deref(), Some("com.apple.TextEdit"));
+            assert_eq!(row.label.as_deref(), Some("Email"));
+            assert_eq!(report["typed"], 95);
+        } else {
+            assert!(row.label.is_none(), "a refused field is never named");
+        }
+        let log =
+            std::fs::read_to_string(client.output_dir().unwrap().join(activity_log::FILE)).unwrap();
+        assert!(!log.contains("private typed text"));
+        assert!(!log.contains("private failure message"));
+    }
+}
+
+#[tokio::test]
+async fn typing_without_a_command_context_keeps_only_its_batch_rows() {
+    let directory = tempfile::tempdir().unwrap();
+    let client = crate::test_support::client(directory.path());
+    let interrupt = Interrupt::new(Duration::from_secs(10));
+    let batches = type_batches(&"x".repeat(100)).unwrap();
+    let report = type_recorded(&client, &batches, &interrupt, async |actions: &Value| {
+        let reply = json!({"ok": true, "performed": actions.as_array().unwrap().len()});
+        client
+            .record(
+                &json!({"op": "input", "actions": actions}),
+                &reply,
+                Duration::ZERO,
+            )
+            .await?;
+        Ok(reply)
+    })
+    .await;
+    assert_eq!(report["typed"], 100);
+    let rows = crate::activity_log::recent(client.output_dir().unwrap(), 5);
+    assert_eq!(rows.len(), 2);
+    assert!(rows.iter().all(|row| row.command.is_none() && row.worked()));
+}
+
+#[tokio::test]
+async fn typing_records_a_stop_between_batches_after_confirmed_text() {
+    use crate::{activity_log, doing::Doing};
+    use nix::sys::signal::Signal;
+
+    let directory = tempfile::tempdir().unwrap();
+    let client = crate::test_support::client(directory.path()).doing(Doing::new("type"));
+    let interrupt = Interrupt::new(Duration::from_secs(10));
+    let batches = type_batches(&"x".repeat(100)).unwrap();
+    let mut sent = 0;
+    let report = type_recorded(&client, &batches, &interrupt, async |actions: &Value| {
+        let reply = json!({"ok": true, "performed": actions.as_array().unwrap().len()});
+        client
+            .record(
+                &json!({"op": "input", "actions": actions}),
+                &reply,
+                Duration::ZERO,
+            )
+            .await?;
+        sent += 1;
+        interrupt.ask(Signal::SIGTERM);
+        Ok(reply)
+    })
+    .await;
+    assert_eq!(sent, 1);
+    assert_eq!(report["typed"], 64);
+    let rows = activity_log::recent(client.output_dir().unwrap(), 5);
+    assert_eq!(rows.len(), 1);
+    assert!(rows[0].coded(Code::Interrupted));
+    assert!(rows[0].failed());
+}
+
+#[tokio::test]
 async fn typing_stops_between_parts_and_says_how_much_was_typed() {
     use nix::sys::signal::Signal;
 
@@ -2506,4 +2644,182 @@ async fn an_app_no_task_installed_is_not_found_by_name_and_nothing_else_is_tried
         (&json!(false), &json!("spawn-failed"))
     );
     assert_eq!(launched, 1);
+}
+
+#[tokio::test]
+async fn an_open_records_the_launched_apps_identity_without_keeping_its_window_title() {
+    use crate::{
+        activity_log,
+        doing::Doing,
+        test_support::{Helper, UID, completed},
+    };
+
+    let directory = tempfile::tempdir().unwrap();
+    let (client, helper) = Helper::client(directory.path(), UID);
+    let client = client.doing(Doing::open(Some("TextEdit"), &[]));
+    let mut launched = false;
+    let reply = helper
+        .serve(
+            open_in(
+                &client,
+                Some("TextEdit"),
+                &[],
+                &[],
+                &directory.path().join("copies"),
+            ),
+            |request| {
+                Some(if request["op"] == "apps" {
+                    if launched {
+                        json!({"ok": true, "apps": [{"pid": 812, "name": "TextEdit",
+                    "bundleId": "com.apple.TextEdit", "title": "PRIVATE DOCUMENT TITLE"}]})
+                    } else {
+                        json!({"ok": true, "apps": []})
+                    }
+                } else {
+                    launched = true;
+                    completed("")
+                })
+            },
+        )
+        .await
+        .unwrap();
+    assert_eq!(reply["opened"], true);
+    let rows = activity_log::recent(client.output_dir().unwrap(), 10);
+    assert_eq!(
+        rows.len(),
+        1,
+        "the completion replaces the lower-level run steps"
+    );
+    assert_eq!(rows[0].app.as_deref(), Some("TextEdit"));
+    assert_eq!(rows[0].bundle_id.as_deref(), Some("com.apple.TextEdit"));
+    assert_eq!(rows[0].label, None);
+    let log =
+        std::fs::read_to_string(client.output_dir().unwrap().join(activity_log::FILE)).unwrap();
+    assert!(!log.contains("PRIVATE DOCUMENT TITLE"));
+}
+
+#[tokio::test]
+async fn an_open_stays_successful_when_its_identity_read_fails_or_the_session_changes() {
+    use crate::{
+        activity_log,
+        doing::Doing,
+        test_support::{Helper, UID, completed},
+    };
+
+    for changed in [false, true] {
+        let directory = tempfile::tempdir().unwrap();
+        let (client, helper) = Helper::client(directory.path(), UID);
+        let helper = if changed {
+            helper.moving_after(2)
+        } else {
+            helper
+        };
+        let client = client.doing(Doing::open(Some("TextEdit"), &[]));
+        let mut lists = 0;
+        let reply = helper
+            .serve(
+                open_in(
+                    &client,
+                    Some("TextEdit"),
+                    &[],
+                    &[],
+                    &directory.path().join("copies"),
+                ),
+                |request| {
+                    Some(if request["op"] == "apps" {
+                        lists += 1;
+                        if lists == 1 {
+                            json!({"ok": true, "apps": []})
+                        } else {
+                            refused("apps")
+                        }
+                    } else {
+                        completed("")
+                    })
+                },
+            )
+            .await
+            .unwrap();
+        assert_eq!(reply["opened"], true);
+        let rows = activity_log::recent(client.output_dir().unwrap(), 10);
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].bundle_id, None);
+        assert!(rows[0].worked());
+        assert_eq!(lists, if changed { 1 } else { 2 });
+    }
+}
+
+#[tokio::test]
+async fn a_close_keeps_the_apps_identity_after_it_has_quit() {
+    use crate::{
+        activity_log,
+        doing::Doing,
+        test_support::{Helper, UID, completed},
+    };
+
+    let directory = tempfile::tempdir().unwrap();
+    let (client, helper) = Helper::client(directory.path(), UID);
+    let client = client.doing(Doing::new("close").app(Some("TextEdit")));
+    let mut signalled = false;
+    let reply = helper
+        .serve(
+            close_in(
+                &client,
+                Closing::App("TextEdit"),
+                &directory.path().join("copies"),
+            ),
+            |request| {
+                Some(if quitting(request) {
+                    signalled = true;
+                    completed("812\n")
+                } else if signalled {
+                    json!({"ok": true, "apps": []})
+                } else {
+                    let mut apps = textedit_running();
+                    apps["apps"][0]["bundleId"] = json!("com.apple.TextEdit");
+                    apps["apps"][0]["title"] = json!("PRIVATE DOCUMENT TITLE");
+                    apps
+                })
+            },
+        )
+        .await
+        .unwrap();
+    assert_eq!(reply["closed"], true);
+    let rows = activity_log::recent(client.output_dir().unwrap(), 10);
+    assert_eq!(rows.len(), 1);
+    assert_eq!(rows[0].bundle_id.as_deref(), Some("com.apple.TextEdit"));
+    assert_eq!(rows[0].app.as_deref(), Some("TextEdit"));
+    assert_eq!(rows[0].label, None);
+    let log =
+        std::fs::read_to_string(client.output_dir().unwrap().join(activity_log::FILE)).unwrap();
+    assert!(!log.contains("PRIVATE DOCUMENT TITLE"));
+}
+
+#[test]
+fn an_app_name_keeps_its_identity_only_when_its_processes_agree() {
+    let apps = |second: Value| {
+        json!({"apps": [
+            {"name": "TextEdit", "bundleId": "com.apple.TextEdit"}, second
+        ]})
+    };
+    assert!(
+        named_app(
+            &apps(json!({"name": "textedit", "bundleId": "com.apple.TextEdit"})),
+            "TextEdit"
+        )
+        .is_some()
+    );
+    for second in [
+        json!({"name": "TextEdit", "bundleId": "other.app"}),
+        json!({"name": "TextEdit", "bundleId": null}),
+    ] {
+        assert!(named_app(&apps(second), "TextEdit").is_none());
+    }
+    assert!(
+        named_app(
+            &apps(json!({"name": "Other", "bundleId": "other.app"})),
+            "Missing"
+        )
+        .is_none()
+    );
 }

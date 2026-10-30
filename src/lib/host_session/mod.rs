@@ -10,8 +10,6 @@ pub(crate) mod names;
 pub(crate) mod record;
 mod recovery;
 pub mod store;
-#[allow(unsafe_code, reason = "FFI: localtime_r has no safe binding")]
-mod sys;
 
 pub use crate::process::Instance;
 pub use recovery::{Asker, Recovery};

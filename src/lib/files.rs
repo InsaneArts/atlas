@@ -236,12 +236,22 @@ fn own_private(file: &File, path: &Path) -> Result<()> {
 /// and it never waits: a pipe in a screenshot's or the log's place does not
 /// hold the reader up.
 pub fn open_plain(path: &Path) -> Option<File> {
-    let file = OpenOptions::new()
+    try_open_plain(path).ok().flatten()
+}
+
+/// Like [`open_plain`], preserving I/O failures so a caller can avoid caching
+/// an incomplete read. A missing path or a non-plain file has no contents.
+pub(crate) fn try_open_plain(path: &Path) -> std::io::Result<Option<File>> {
+    let file = match OpenOptions::new()
         .read(true)
         .custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK)
         .open(path)
-        .ok()?;
-    file.metadata().ok()?.is_file().then_some(file)
+    {
+        Ok(file) => file,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(error) => return Err(error),
+    };
+    Ok(file.metadata()?.is_file().then_some(file))
 }
 
 /// What the plain file at `path` holds, when it is this account's and at

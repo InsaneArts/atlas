@@ -9,6 +9,19 @@ use crate::{
 };
 use serde_json::Value;
 
+/// An app's identity from the helper's app list, when every process of
+/// that name agrees on its bundle. Ambiguous names never borrow an ID.
+pub(super) fn named_app<'a>(apps: &'a Value, name: &str) -> Option<&'a Value> {
+    let mut named = apps["apps"]
+        .as_array()?
+        .iter()
+        .filter(|app| app["name"].as_str().is_some_and(|app| same_text(app, name)));
+    let first = named.next()?;
+    named
+        .all(|app| app["bundleId"] == first["bundleId"])
+        .then_some(first)
+}
+
 /// The app an element command is about: a PID, or a name that must resolve
 /// to exactly one process with a window of its own on screen.
 #[derive(Debug, Clone)]

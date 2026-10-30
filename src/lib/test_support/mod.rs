@@ -49,6 +49,29 @@ pub(crate) fn isolated(test: &str) -> bool {
     false
 }
 
+/// Exercise the real local calendar without changing TZ underneath other
+/// test threads. The child inherits its time zone before libc initializes.
+pub(crate) fn in_timezone(test: &str, timezone: &str) -> bool {
+    if std::env::var("ATLAS_TIME_ZONE_TEST").as_deref() == Ok(test) {
+        assert_eq!(std::env::var("TZ").unwrap(), timezone);
+        return true;
+    }
+    let output = rerun(test)
+        .arg("--nocapture")
+        .env("ATLAS_TIME_ZONE_TEST", test)
+        .env("TZ", timezone)
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "{test} failed: {}\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr),
+    );
+    assert!(String::from_utf8_lossy(&output.stdout).contains("running 1 test"));
+    false
+}
+
 /// The explicit temporary directory makes subprocess entry tests inert normally.
 pub(crate) fn directory() -> Option<PathBuf> {
     std::env::var_os("ATLAS_MUTATION_TEST_DIRECTORY").map(PathBuf::from)

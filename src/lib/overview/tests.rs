@@ -595,17 +595,25 @@ fn a_focus_refusal_atlas_could_not_read_says_so_rather_than_blaming_another_app(
 }
 
 #[test]
-fn a_focus_refusal_sent_nothing_and_is_not_uncertain() {
+fn a_partial_focus_refusal_is_not_nothing_sent_and_is_not_uncertain() {
     let refused = shown(
         &json!({"operation": "input", "ok": false, "code": "focus-changed",
             "verb": "type", "app": "Notes", "partial": true}),
         NOW,
     );
     assert_eq!(refused["ok"], false, "older apps still show it as not done");
-    assert_eq!(refused["nothingSent"], true);
+    assert_eq!(refused["nothingSent"], false);
     assert_eq!(refused["partial"], true);
     assert_eq!(refused["uncertain"], false);
     assert_eq!(refused["says"], "stopped typing in Notes");
+
+    let whole = shown(
+        &json!({"operation": "input", "ok": false, "code": "focus-changed",
+            "partial": false}),
+        NOW,
+    );
+    assert_eq!(whole["nothingSent"], true);
+    assert_eq!(whole["partial"], false);
 
     let unknown = shown(
         &json!({"operation": "input", "ok": false, "code": "uncertain", "verb": "click"}),
@@ -1005,7 +1013,7 @@ fn a_silent_helper_is_explained_without_commands() {
 }
 
 #[test]
-fn older_and_partial_rows_still_read_and_show_as_they_always_did() {
+fn older_and_partial_rows_keep_their_values_when_ordered_by_time() {
     let dir = tempfile::tempdir().unwrap();
     let log = [
         // A row with no outcome, actor or step: from before any of them.
@@ -1031,10 +1039,10 @@ fn older_and_partial_rows_still_read_and_show_as_they_always_did() {
         [
             r#"{"actionCount":null,"actor":"agent","ageSeconds":1,"app":"Calculator","bundleId":null,"capture":null,"id":"436d0e30331dd417","label":null,"nothingSent":false,"ok":false,"operation":"run","partial":false,"reason":"It may not have finished","says":"couldn't open Calculator","session":null,"started":false,"uncertain":true,"verb":"open"}"#,
             r#"{"actionCount":null,"actor":"agent","ageSeconds":5,"app":null,"bundleId":null,"capture":null,"id":"78ca8deb5a96fe76","label":null,"nothingSent":false,"ok":true,"operation":"input","partial":false,"reason":null,"says":"running a command…","session":null,"started":true,"uncertain":false,"verb":"type"}"#,
-            r#"{"actionCount":null,"actor":"agent","ageSeconds":10,"app":null,"bundleId":null,"capture":null,"id":"182c45e5106ca226","label":null,"nothingSent":true,"ok":false,"operation":"input","partial":true,"reason":"A sheet was open over the window","says":"stopped typing","session":"0123456789ab","started":false,"uncertain":false,"verb":"type"}"#,
-            r#"{"actionCount":null,"actor":"viewer","ageSeconds":null,"app":null,"bundleId":null,"capture":"1-capture.png","id":"07e383625bdf0af1","label":null,"nothingSent":false,"ok":false,"operation":"screenshot","partial":false,"reason":"The helper can't record the screen","says":"couldn't take a screenshot","session":null,"started":false,"uncertain":false,"verb":null}"#,
+            r#"{"actionCount":null,"actor":"agent","ageSeconds":10,"app":null,"bundleId":null,"capture":null,"id":"182c45e5106ca226","label":null,"nothingSent":false,"ok":false,"operation":"input","partial":true,"reason":"A sheet was open over the window","says":"stopped typing","session":"0123456789ab","started":false,"uncertain":false,"verb":"type"}"#,
             r#"{"actionCount":3,"actor":"agent","ageSeconds":50,"app":"TextEdit","bundleId":null,"capture":null,"id":"355e7aff1bb0ef3c","label":"⌘S","nothingSent":false,"ok":true,"operation":"input","partial":false,"reason":null,"says":"pressed ⌘S in TextEdit","session":null,"started":false,"uncertain":false,"verb":"key"}"#,
             r#"{"actionCount":null,"actor":"agent","ageSeconds":60,"app":null,"bundleId":null,"capture":null,"id":"6f5d59054d040875","label":null,"nothingSent":false,"ok":false,"operation":"run","partial":false,"reason":null,"says":"couldn't run a command","session":null,"started":false,"uncertain":false,"verb":null}"#,
+            r#"{"actionCount":null,"actor":"viewer","ageSeconds":null,"app":null,"bundleId":null,"capture":"1-capture.png","id":"07e383625bdf0af1","label":null,"nothingSent":false,"ok":false,"operation":"screenshot","partial":false,"reason":"The helper can't record the screen","says":"couldn't take a screenshot","session":null,"started":false,"uncertain":false,"verb":null}"#,
         ]
     );
 }

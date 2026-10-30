@@ -19,13 +19,14 @@ extension ActivityLog {
     ///   - started: Whether the row says it is under way.
     ///   - ok: Whether the row says it worked.
     ///   - nothingSent: Whether the row says it was refused before anything was sent.
-    init(started: Bool, ok: Bool, nothingSent: Bool = false) {
+    ///   - partial: Whether input was partly sent before the refusal.
+    init(started: Bool, ok: Bool, nothingSent: Bool = false, partial: Bool = false) {
       if started {
         self = .running
       } else if ok {
         self = .worked
       } else {
-        self = nothingSent ? .notSent : .failed
+        self = nothingSent && !partial ? .notSent : .failed
       }
     }
   }

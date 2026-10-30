@@ -9,6 +9,7 @@ use crate::{
     interrupt::Interrupt,
 };
 use serde_json::{Value, json};
+use std::time::Instant;
 use unicode_segmentation::UnicodeSegmentation;
 
 /// How much text `atlas type` sends at once: 64 characters, about half a
@@ -137,7 +138,67 @@ pub async fn type_text(client: &Client, text: &str, expected: Option<&Expected>)
             .input_owned(&ownership, actions, &epoch, check.clone())
             .await
     };
-    Ok(type_each(&batches, interrupt, send).await)
+    Ok(type_recorded(client, &batches, interrupt, send).await)
+}
+
+/// The terminal command row must describe all batches, including confirmed
+/// text before a later refusal. The reader replaces the individual batch rows
+/// with this one. Only action counts and the reply's safe projection are kept.
+pub(super) async fn type_recorded(
+    client: &Client,
+    batches: &[String],
+    interrupt: &Interrupt,
+    mut send: impl AsyncFnMut(&Value) -> Result<Value>,
+) -> Value {
+    if client.doing.is_none() {
+        return type_each(batches, interrupt, send).await;
+    }
+    let started = Instant::now();
+    let mut identity = json!({});
+    let mut report = type_each(batches, interrupt, async |actions: &Value| {
+        let outcome = send(actions).await;
+        if let Ok(reply) = &outcome {
+            if !reply["app"].is_null() {
+                identity["app"] = reply["app"].clone();
+                identity["bundleId"] = reply["bundleId"].clone();
+            }
+            if !reply["field"].is_null() {
+                identity["field"] = reply["field"].clone();
+            }
+        }
+        outcome
+    })
+    .await;
+
+    let mut reply = report.clone();
+    if report["uncertain"] == true {
+        reply["code"] = json!(Code::Uncertain);
+    }
+    for field in ["app", "bundleId", "field"] {
+        if let Some(value) = identity.get(field) {
+            reply[field] = value.clone();
+        }
+    }
+    // Count the requested input actions without copying any typed text into
+    // the recording request. This request is never sent to the helper.
+    let actions: Vec<Value> = batches
+        .iter()
+        .flat_map(|batch| type_parts(batch))
+        .map(|_| json!({"type": "type"}))
+        .collect();
+    if client
+        .record(
+            &json!({"op": "input", "actions": actions}),
+            &reply,
+            started.elapsed(),
+        )
+        .await
+        .is_err()
+    {
+        report["warnings"] =
+            json!(["Operation result is valid; local metadata could not be recorded"]);
+    }
+    report
 }
 
 /// Send each of `batches` as `type` actions through `send`, stopping at

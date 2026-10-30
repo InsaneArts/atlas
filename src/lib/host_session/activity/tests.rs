@@ -455,3 +455,50 @@ fn a_sessions_jobs_and_collections_are_listed_without_their_names_or_arguments()
         json!([{"receipt": "1761650000123-a1b2c3", "count": 2, "bytes": 30}])
     );
 }
+
+#[test]
+fn cli_activity_exposes_the_same_safe_app_labels_and_keys_as_the_viewer() {
+    let directory = tempfile::tempdir().unwrap();
+    let client = client(directory.path());
+    let own = session(Host::Codex, "structured-activity");
+    let mut acting = client
+        .clone()
+        .doing(Doing::keys(&["cmd+shift+s".into()]).app(Some("TextEdit")));
+    acting.host_session = Some(own.clone());
+    acting.record_for_test(
+        &json!({"op": "input", "actions": [{"type": "key", "key": "cmd+shift+s"}]}),
+        &json!({"ok": true, "app": "TextEdit", "bundleId": "com.apple.TextEdit"}),
+    );
+    let scope = Scope::Session(own.key());
+    note(
+        &client,
+        &own,
+        Kind::Other,
+        acting.doing.as_ref(),
+        &Ok(json!({"ok": true})),
+    )
+    .unwrap();
+    for (scope, own) in [
+        (Scope::Everyone, None),
+        (Scope::Own, Some(&own)),
+        (scope, None),
+    ] {
+        let reply = list(&client, own, scope, 10).unwrap();
+        let recent = &reply["recent"][0];
+        assert_eq!(recent["app"], "TextEdit");
+        assert_eq!(recent["label"], "⇧⌘S");
+        assert_eq!(recent["bundleId"], "com.apple.TextEdit");
+        assert_eq!(recent["keys"], json!([["⇧", "⌘", "S"]]));
+    }
+
+    let mut unlabelled = client.clone().doing(Doing::new("screenshot"));
+    unlabelled.host_session = acting.host_session.clone();
+    unlabelled.record_for_test(&json!({"op": "screenshot"}), &json!({"ok": true}));
+    let reply = list(&client, None, Scope::Everyone, 1).unwrap();
+    for key in ["app", "label", "bundleId", "keys"] {
+        assert!(
+            reply["recent"][0].get(key).is_some_and(Value::is_null),
+            "{key}"
+        );
+    }
+}

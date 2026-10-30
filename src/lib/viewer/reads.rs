@@ -60,10 +60,15 @@ impl Viewer {
 
         self.start_input_after_login(&client, &status["session"], total == 0 && !active);
 
-        let activity = client
-            .output_dir()
-            .map(|directory| crate::activity_log::recent(directory, crate::overview::ROWS))
-            .unwrap_or_default();
+        let activity_client = client.clone();
+        let activity = tokio::task::spawn_blocking(move || {
+            activity_client
+                .output_dir()
+                .map(|directory| crate::activity_log::recent(directory, crate::overview::ROWS))
+                .unwrap_or_default()
+        })
+        .await
+        .unwrap_or_default();
         let now = crate::client::timestamp();
         status["overview"] = crate::overview::overview(&status, active, pending, &activity, now);
         crate::overview::add_host_sessions(&mut status, &client, now).await;
@@ -414,11 +419,9 @@ pub(super) async fn account_title(
 /// titles, which the log never keeps either.
 pub(super) fn activity_row(row: &crate::activity_log::Row, now: u128) -> Value {
     let shown = crate::overview::shown(row, now);
-    // A key press's keys as keycaps, read from its label.
-    let keys = (shown.verb.as_deref() == Some("key"))
-        .then(|| crate::doing::chords(shown.label.as_deref().unwrap_or_default()));
     json!({
         "id": shown.id,
+        "logicalId": row.logical_id(),
         // When it started, in milliseconds since 1970, so its time never
         // moves between readings.
         "startedAt": row.at_ms(),
@@ -436,7 +439,7 @@ pub(super) fn activity_row(row: &crate::activity_log::Row, now: u128) -> Value {
         "app": shown.app,
         "label": shown.label,
         "bundleId": shown.bundle_id,
-        "keys": keys,
+        "keys": shown.keys(),
         "nothingSent": shown.nothing_sent,
         "partial": shown.partial,
         "uncertain": shown.uncertain,
