@@ -272,7 +272,12 @@ test('a failed renewal stops input and still sends the owner release', async () 
   const client = new ViewerClient(service.url, { frameEvery: 1000, renewEvery: 20 });
   try {
     await client.acquire();
-    await until(() => client.lease === null);
+    await until(
+      () =>
+        client.lease === null &&
+        client.owner === null &&
+        posts(service.requests, 'control/release').length > 0,
+    );
     assert.equal(client.lease, null);
     assert.equal(client.owner, null);
     await assert.rejects(client.key('escape'), { status: 503 });
