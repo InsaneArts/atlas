@@ -23,7 +23,7 @@ final class HeldScrollPlacements {
         self.executions += 1
         place()
       }
-      tasks.append(task)
+      self.tasks.append(task)
       return task
     }
   }
