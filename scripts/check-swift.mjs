@@ -112,5 +112,5 @@ if (process.argv[1] === fileURLToPath(import.meta.url)) {
   }
   console.log('');
   for (const result of results) console.log(summaryLine(result));
-  process.exit(types.status === 0 && results.every((result) => result.ok) ? 0 : 1);
+  process.exitCode = types.status === 0 && results.every((result) => result.ok) ? 0 : 1;
 }
