@@ -1,8 +1,11 @@
 import AppKit
-import AtlasUI
+import AsyncSupportTesting
 import CoreGraphics
 import SwiftUI
 import Testing
+
+@testable import AtlasApp
+@testable import AtlasUI
 
 /// The main window's content in an offscreen window (``ViewerHostContent``): a frame read straight after a change
 /// shows where things stand as its animation begins, and the views AppKit holds, such as a list's scroll view, can be
@@ -14,6 +17,7 @@ final class ViewerHost {
   /// The hosted content.
   private let hosting: NSHostingView<ViewerHostContent>
   private let reduceMotion: Bool
+  private let placement: CardScrollPlacement
   private var frameReport: LayoutFrameReport?
   /// The latest real layout frames reported by named elements.
   private(set) var frames: [String: CGRect] = [:]
@@ -25,13 +29,16 @@ final class ViewerHost {
   ///   - animatesArrivals: Whether the first pane plays its arrival; false for a settled reference.
   ///   - reduceMotion: Whether layout must settle without movement.
   ///   - appearance: The window's appearance; nil follows the Mac.
+  ///   - placement: How the list defers final selection placement.
   init(
     _ state: ViewerState,
     animatesArrivals: Bool = true,
     reduceMotion: Bool = false,
-    appearance: NSAppearance? = nil
+    appearance: NSAppearance? = nil,
+    placement: CardScrollPlacement = CardScrollPlacement()
   ) {
     self.reduceMotion = reduceMotion
+    self.placement = placement
     window = NSWindow(
       contentRect: NSRect(origin: .zero, size: PreviewStates.viewerSize),
       styleMask: [.borderless],
@@ -41,13 +48,19 @@ final class ViewerHost {
     window.isReleasedWhenClosed = false
     window.appearance = appearance
     hosting = NSHostingView(
-      rootView: ViewerHostContent(state: state, animatesArrivals: animatesArrivals, reduceMotion: reduceMotion)
+      rootView: ViewerHostContent(
+        state: state,
+        animatesArrivals: animatesArrivals,
+        reduceMotion: reduceMotion,
+        placement: placement
+      )
     )
     frameReport = LayoutFrameReport { [weak self] id, frame in self?.frames[id] = frame }
     hosting.rootView = ViewerHostContent(
       state: state,
       animatesArrivals: animatesArrivals,
       reduceMotion: reduceMotion,
+      placement: placement,
       frameReport: frameReport
     )
     hosting.frame = NSRect(origin: .zero, size: PreviewStates.viewerSize)
@@ -57,11 +70,15 @@ final class ViewerHost {
 
   /// Shows `state` and lays the window out once: a change's first frame.
   ///
-  /// - Parameter state: What the window shows now.
-  func show(_ state: ViewerState) {
+  /// - Parameters:
+  ///   - state: What the window shows now.
+  ///   - animatesArrivals: Whether pane arrivals play while testing this change.
+  func show(_ state: ViewerState, animatesArrivals: Bool = true) {
     hosting.rootView = ViewerHostContent(
       state: state,
+      animatesArrivals: animatesArrivals,
       reduceMotion: reduceMotion,
+      placement: placement,
       frameReport: frameReport
     )
     hosting.layoutSubtreeIfNeeded()
@@ -74,6 +91,31 @@ final class ViewerHost {
     hosting._renderForTest(interval: ViewerMotionPose.tick)
     hosting._renderForTest(interval: .zero)
     hosting.layoutSubtreeIfNeeded()
+  }
+
+  /// Flushes layout and drawing until the requested state is observable, without advancing held animation time.
+  /// The ceiling only diagnoses missing work; a passing test never waits for elapsed wall time.
+  ///
+  /// - Parameters:
+  ///   - failure: What failed to become ready.
+  ///   - isReady: Whether layout or drawing has reached the state to sample.
+  /// - Throws: A failed requirement if the state never arrives, or a sampling failure.
+  func render(until failure: String, _ isReady: () throws -> Bool) throws {
+    let bound = ContinuousClock.now.advanced(by: Ceiling.work)
+    while try !isReady() {
+      try #require(ContinuousClock.now < bound, Comment(rawValue: failure))
+      render()
+    }
+    render()
+  }
+
+  /// The entire frame at the design renderer's Retina scale, with the current animation moment still held.
+  ///
+  /// - Returns: Its bitmap.
+  /// - Throws: When the frame cannot be drawn or decoded.
+  func bitmap() throws -> NSBitmapImageRep {
+    let data = try #require(PNG.data(of: hosting, appearance: window.effectiveAppearance))
+    return try #require(NSBitmapImageRep(data: data))
   }
 
   /// Presents the test window only for opt-in native focus and scrolling checks run in the hidden helper.

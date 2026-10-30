@@ -29,20 +29,33 @@ struct ListMotionFrameTests {
   )
   func aMomentOpensInOneMotion(name: String) throws {
     let pose = try #require(PreviewStates.viewerMotion.first { $0.name == name })
-    let folder = FileManager.default.temporaryDirectory
-      .appendingPathComponent("atlas-disclosure-\(UUID().uuidString)")
-    try FileManager.default
-      .createDirectory(at: folder, withIntermediateDirectories: true)
-    defer {
-      try? FileManager.default
-        .removeItem(at: folder)
+    let previous = Motion.Pose.moment
+    Motion.Pose.hold(at: .zero)
+    defer { Motion.Pose.hold(at: previous) }
+    // The disclosure starts in a settled pane: its arrival must not hide the rows being measured.
+    let host = ViewerHost(pose.from, animatesArrivals: false, appearance: Appearance.light)
+    try host.render(until: "the disclosure's initial layout has not drawn") {
+      let frame = try host.bitmap()
+      return Self.textEditFoot(in: frame) != nil
+        && Self.inkCentre(of: frame, in: Self.titlePoints) != nil
+        && (name != "moment-fold" || Self.inkCentre(of: frame, in: Self.typedPoints) != nil)
     }
+    withAnimation(pose.animation()) {
+      host.show(pose.to, animatesArrivals: false)
+    }
+    host.render()
+    var held = TimeInterval.zero
     var edges: [CGFloat] = []
     var titles: [CGPoint] = []
     var typed: [CGPoint?] = []
     for step in pose.steps {
-      #expect(ViewerRender.draw(pose, at: step, to: folder, appearance: Appearance.light))
-      let frame = try Self.frame(folder.appendingPathComponent("\(pose.file(at: step)).png"))
+      let moment = pose.moment(at: step)
+      while held < moment {
+        held = min(held + ViewerMotionPose.tick, moment)
+        Motion.Pose.hold(at: held)
+        host.render()
+      }
+      let frame = try host.bitmap()
       edges.append(try #require(Self.textEditFoot(in: frame), "TextEdit's row is drawn at \(step)"))
       titles.append(try #require(Self.inkCentre(of: frame, in: Self.titlePoints), "Notes' title is drawn at \(step)"))
       typed.append(Self.inkCentre(of: frame, in: Self.typedPoints))

@@ -21,6 +21,7 @@ struct CardScroll<Content: View>: View {
   @State private var selection = CardScrollSelection()
   @Environment(\.miniClearance) private var clearance
   @Environment(\.paneSettled) private var paneSettled
+  @Environment(\.cardScrollPlacement) private var placement
 
   /// The list, scrolling under the small screen.
   var body: some View {
@@ -78,7 +79,7 @@ struct CardScroll<Content: View>: View {
         let anchor = CardScrollRoom.revealAnchor(row: frame, viewport: selection.viewport, clearance: clearance)
       else { return }
       // Out of the layout pass that reported the row, as a scroll may lay the list out again.
-      selection.queue(row) { scroll.scrollTo(row, anchor: anchor) }
+      selection.queue(row, using: placement) { scroll.scrollTo(row, anchor: anchor) }
     }
     if !stood {
       scroll.scrollTo(row, anchor: nil)

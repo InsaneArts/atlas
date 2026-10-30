@@ -57,16 +57,15 @@ final class CardScrollSelection {
   ///
   /// - Parameters:
   ///   - row: The selected row's identity.
+  ///   - placement: Schedules the cancellable work after layout.
   ///   - place: What scrolls it into view after layout.
-  func queue(_ row: String, with place: @escaping @MainActor () -> Void) {
+  func queue(
+    _ row: String,
+    using placement: CardScrollPlacement = CardScrollPlacement(),
+    with place: @escaping @MainActor () -> Void
+  ) {
     queued?.task.cancel()
-    queued = (
-      row,
-      Task { @MainActor in
-        guard !Task.isCancelled else { return }
-        place()
-      }
-    )
+    queued = (row, placement.schedule(place))
   }
 
   /// Places `row` with `place` where it stands now, or as soon as it reports where it stands.
