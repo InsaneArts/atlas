@@ -20,22 +20,25 @@ struct FooterAgentButton: View {
 
   /// The capsule, in its slot.
   var body: some View {
-    Button {
-      send(isResume ? .resumeAgent : .stopAgent)
-    } label: {
-      FooterLabel(
-        label: isResume ? Self.resume : Self.stop,
-        room: [Self.stop, Self.resume],
-        symbolFont: Typography.symbol(.row),
-        collapsesTitles: fold.isCircles,
-        showsTitles: fold.showsTitles
-      )
+    LineSwap(label) { shown, isDrawn, isReady in
+      Button {
+        if isReady && isEnabled { send(isResume ? .resumeAgent : .stopAgent) }
+      } label: {
+        FooterLabel(
+          label: shown,
+          room: [Self.stop, Self.resume],
+          symbolFont: Typography.symbol(.row),
+          collapsesTitles: fold.isCircles,
+          showsTitles: fold.showsTitles
+        )
+        .opacity(isDrawn ? 1 : 0)
+      }
+      .buttonStyle(.capsule(.secondary, size: .small, outline: fold.isCircles ? .circle : .symbolPill))
+      .disabled(!isEnabled || !isReady)
+      .help(help)
+      .accessibilityLabel(agent?.accessibilityLabel ?? "")
+      .actionSlot(agent != nil)
     }
-    .buttonStyle(.capsule(.secondary, size: .small, outline: fold.isCircles ? .circle : .symbolPill))
-    .disabled(!isEnabled)
-    .help(help)
-    .accessibilityLabel(agent?.accessibilityLabel ?? "")
-    .actionSlot(agent != nil)
   }
 
   /// Whether Resume stands in place of Stop.
@@ -44,8 +47,14 @@ struct FooterAgentButton: View {
     return true
   }
 
-  /// Whether it can be pressed: Stop always, Resume unless recovery runs.
+  /// The words and symbol whose action may be activated once their replacement settles.
+  private var label: ViewerControlLabel {
+    isResume ? Self.resume : Self.stop
+  }
+
+  /// Whether its action is available, independently of the label's replacement.
   private var isEnabled: Bool {
+    guard agent != nil else { return false }
     guard case .resume(let isEnabled) = agent else { return true }
     return isEnabled
   }

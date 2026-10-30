@@ -85,6 +85,7 @@ struct FooterLatest: View {
       }
       if !line.age.isEmpty {
         Text(verbatim: showsWords ? " · \(line.age)" : line.age)
+          .layoutFrame("footer age")
           .foregroundStyle(Color.textTertiary)
           .fixedSize()
       }

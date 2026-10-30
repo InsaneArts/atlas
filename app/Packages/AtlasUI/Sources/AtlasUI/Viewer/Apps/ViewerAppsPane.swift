@@ -10,7 +10,7 @@ struct ViewerAppsPane: View {
   let state: ViewerAppsState
   /// Receives what the person does.
   let send: @MainActor (ViewerEvent) -> Void
-  @Environment(\.accessibilityReduceMotion) private var reduceMotion
+  @Environment(\.motionReduced) private var reduceMotion
 
   /// The apps, or why there are none.
   var body: some View {
@@ -30,15 +30,14 @@ struct ViewerAppsPane: View {
         VStack(alignment: .leading, spacing: .zero) {
           summary
           ForEach(state.groups) { group in
-            if let title = group.title {
-              heading(title, count: group.cards.count)
-            }
+            if let title = group.title { heading(title, count: group.cards.count) }
             AppCardGrid {
-              ForEach(group.cards) { card in
+              ForEach(group.cards, id: \.scrollID) { card in
                 AppCard(card: card, send: send)
                   .transition(AppsMotion.card(reduceMotion: reduceMotion))
               }
             }
+            .scrollTargetLayout()
             .padding(.top, group.title == nil ? ViewerLayout.appGroupBelow : .zero)
           }
         }

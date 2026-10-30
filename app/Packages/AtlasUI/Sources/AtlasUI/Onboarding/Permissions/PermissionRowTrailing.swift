@@ -7,7 +7,7 @@ import SwiftUI
 struct PermissionRowTrailing: View {
   /// Where the permission stands.
   let standing: OnboardingPermissionStanding
-  @Environment(\.accessibilityReduceMotion) private var reduceMotion
+  @Environment(\.motionReduced) private var reduceMotion
 
   /// The mark and word, or the word, landing in place of the last.
   var body: some View {

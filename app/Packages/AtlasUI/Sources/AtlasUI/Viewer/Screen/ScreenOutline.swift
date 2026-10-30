@@ -1,6 +1,6 @@
 import SwiftUI
 
-/// A window shown from the Apps tab, as a spotlight over the picture: everything but the window dimmed, the outline
+/// A window shown from the Apps pane, as a spotlight over the picture: everything but the window dimmed, the outline
 /// round it, and its label on a chip with the app's icon, the app and window's names, its size and an × that stops
 /// showing it (Escape does too), above the outline or inside it near an edge. Showing another window glides the
 /// outline and its label there; under Reduce Motion they move at once. Only the × takes clicks.
@@ -11,7 +11,7 @@ struct ScreenOutline: View {
   let picture: CGSize
   /// Receives the ×.
   let send: @MainActor (ViewerEvent) -> Void
-  @Environment(\.accessibilityReduceMotion) private var reduceMotion
+  @Environment(\.motionReduced) private var reduceMotion
 
   /// The spotlight and its label, where the window lies in the picture.
   var body: some View {

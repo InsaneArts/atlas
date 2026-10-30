@@ -18,7 +18,7 @@ struct StepRow: View {
   /// Whether a step follows, which the rail runs down to.
   var continues = false
   @Environment(\.drawsListSeparator) private var drawsSeparator
-  @Environment(\.accessibilityReduceMotion) private var reduceMotion
+  @Environment(\.motionReduced) private var reduceMotion
 
   /// The disc and the words, on the current step's wash, with the rail through the disc's column.
   var body: some View {

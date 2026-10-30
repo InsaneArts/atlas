@@ -5,7 +5,7 @@ import SwiftUI
 struct ViewerUnseenDot: View {
   /// What Activity holds unseen.
   let unseen: ViewerUnseen
-  @Environment(\.accessibilityReduceMotion) private var reduceMotion
+  @Environment(\.motionReduced) private var reduceMotion
 
   /// The dot, popping in while something is unseen.
   var body: some View {

@@ -12,7 +12,7 @@ public struct AlertView: View {
   /// Whether the card has settled since the window opened.
   @State private var settled = false
   @Environment(\.animatesArrivals) private var animatesArrivals
-  @Environment(\.accessibilityReduceMotion) private var reduceMotion
+  @Environment(\.motionReduced) private var reduceMotion
 
   /// Creates the alert window's content.
   ///

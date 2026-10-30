@@ -9,7 +9,7 @@ struct AppCard: View {
   let card: ViewerAppCard
   /// Receives what the person does.
   let send: @MainActor (ViewerEvent) -> Void
-  @Environment(\.accessibilityReduceMotion) private var reduceMotion
+  @Environment(\.motionReduced) private var reduceMotion
 
   /// The card's parts on its tile.
   var body: some View {
@@ -28,6 +28,7 @@ struct AppCard: View {
         windows
       }
     }
+    .layoutFrame("app \(card.id)")
     .padding(ViewerLayout.appCardPadding)
     .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
     .background(tile)
@@ -58,20 +59,22 @@ struct AppCard: View {
 
   /// The tags, as many as the card's width holds, the last ones giving way first, in a row a tag high even while it
   /// holds none, so a card never grows or shrinks as "In front" comes and goes. Each way of fitting is kept by how
-  /// many tags it leaves out, so the one holding every tag stays the same view as tags come and go, and a tag fades
-  /// in or out in it while the others stand still.
+  /// many tags it leaves out, so the one holding every tag stays the same view. Semantic status changes at once.
   private var tags: some View {
     ViewThatFits(in: .horizontal) {
       ForEach(0..<max(card.tags.count, 1), id: \.self) { left in
         HStack(spacing: ViewerLayout.appCardTagGap) {
           ForEach(card.tags.dropLast(left)) { tag in
             Tag(text: tag.words, tone: tone(tag.tone))
-              .transition(AppsMotion.tag(reduceMotion: reduceMotion))
+              .transition(.identity)
           }
         }
       }
     }
     .frame(height: Tag.height, alignment: .leading)
+    .layoutFrame("app tags \(card.id)")
+    // The singular front-app status changes immediately, even inside an animated list update.
+    .transaction { $0.animation = nil }
   }
 
   /// The windows the card lists, then "N more".

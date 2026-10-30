@@ -13,7 +13,7 @@ struct PanelPicture: View {
   let send: @MainActor (PanelEvent) -> Void
   /// Whether the pointer is over the screen, which shows the expand symbol.
   @State private var isHovered = false
-  @Environment(\.accessibilityReduceMotion) private var reduceMotion
+  @Environment(\.motionReduced) private var reduceMotion
 
   /// The helper's screen, or the empty stage, in a frame of the screen's shape.
   var body: some View {

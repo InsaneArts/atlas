@@ -15,28 +15,31 @@ struct ViewerMainButton: View {
   var fold = FooterFold(.full)
   /// Receives the press.
   let send: @MainActor (ViewerEvent) -> Void
-  @Environment(\.accessibilityReduceMotion) private var reduceMotion
+  @Environment(\.motionReduced) private var reduceMotion
 
   /// The capsule, its symbol and title.
   var body: some View {
-    Button {
-      if let control { send(control.event) }
-    } label: {
-      FooterLabel(
-        label: control?.label,
-        room: control?.room ?? [],
-        symbolFont: Typography.symbol(.glyph),
-        collapsesTitles: fold.isCircles,
-        showsTitles: fold.showsTitles
-      )
+    LineSwap(control?.label) { shown, isDrawn, isReady in
+      Button {
+        if isReady, let control, control.isEnabled { send(control.event) }
+      } label: {
+        FooterLabel(
+          label: shown,
+          room: control?.room ?? [],
+          symbolFont: Typography.symbol(.glyph),
+          collapsesTitles: fold.isCircles,
+          showsTitles: fold.showsTitles
+        )
+        .opacity(isDrawn ? 1 : 0)
+      }
+      .buttonStyle(.capsule(look, size: .small, outline: outline))
+      .disabled(control?.isEnabled != true || !isReady)
+      .animation(Self.fillMotion(reduceMotion: reduceMotion), value: control?.look)
+      .animation(Self.fillMotion(reduceMotion: reduceMotion), value: control?.isEnabled)
+      .help(control?.help ?? "")
+      .accessibilityLabel(control?.accessibilityLabel ?? "")
+      .actionSlot(control != nil)
     }
-    .buttonStyle(.capsule(look, size: .small, outline: outline))
-    .disabled(control?.isEnabled != true)
-    .animation(Self.fillMotion(reduceMotion: reduceMotion), value: control?.look)
-    .animation(Self.fillMotion(reduceMotion: reduceMotion), value: control?.isEnabled)
-    .help(control?.help ?? "")
-    .accessibilityLabel(control?.accessibilityLabel ?? "")
-    .actionSlot(control != nil)
   }
 
   /// How the fill moves from one look to the next: a short ease, ``Motion/crossfade``, or ``Motion/reduced`` under

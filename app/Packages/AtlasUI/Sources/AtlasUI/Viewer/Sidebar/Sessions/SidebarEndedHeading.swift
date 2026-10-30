@@ -10,7 +10,7 @@ struct SidebarEndedHeading: View {
   let isOpen: Bool
   /// Receives the press.
   let send: @MainActor (ViewerEvent) -> Void
-  @Environment(\.accessibilityReduceMotion) private var reduceMotion
+  @Environment(\.motionReduced) private var reduceMotion
 
   /// The heading as a button.
   var body: some View {
@@ -48,6 +48,7 @@ struct SidebarEndedHeading: View {
       .frame(width: ViewerLayout.headingChevron)
       .rotationEffect(.degrees(!reduceMotion && isOpen ? ViewerLayout.chevronTurn : .zero))
       .contentTransition(.opacity)
+      .animation(reduceMotion ? Motion.crossfadeReduced : Motion.state, value: isOpen)
       .accessibilityHidden(true)
   }
 }

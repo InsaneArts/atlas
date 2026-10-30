@@ -13,7 +13,7 @@ enum AppsMotion {
   /// - Parameter reduceMotion: Whether the Reduce Motion setting is on.
   /// - Returns: The animation, or nil for none.
   static func layout(reduceMotion: Bool) -> Animation? {
-    Motion.animation(Motion.listMove, reduceMotion: reduceMotion)
+    Motion.layout(Motion.listMove, reduceMotion: reduceMotion)
   }
 
   /// How a card comes and goes, in place, from or to ``AppsMotionLayout/grown`` of its size: out with a quick fade on
@@ -42,24 +42,6 @@ enum AppsMotion {
   /// - Returns: The animation.
   static func front(reduceMotion: Bool) -> Animation {
     Motion.animation(Motion.state, reduceMotion: reduceMotion, reduced: Motion.crossfadeReduced)
-  }
-
-  /// How a tag comes and goes, as "In front" moves from one card to another: in with a fade from ``AppsMotionLayout/tagGrown``
-  /// of its size on ``Motion/arrive``, out on ``Motion/leave``; only fading under Reduce Motion.
-  ///
-  /// - Parameter reduceMotion: Whether the Reduce Motion setting is on.
-  /// - Returns: The transition.
-  static func tag(reduceMotion: Bool) -> AnyTransition {
-    guard !reduceMotion else {
-      return AnyTransition.opacity
-        .animation(Motion.crossfadeReduced)
-    }
-    let faded = AnyTransition.opacity
-      .combined(with: .scale(scale: AppsMotionLayout.tagGrown))
-    return .asymmetric(
-      insertion: faded.animation(Motion.arrive),
-      removal: faded.animation(Motion.leave)
-    )
   }
 
   /// How a card's picture changes between the window's picture and the map: a fade on ``Motion/fade``, which Reduce

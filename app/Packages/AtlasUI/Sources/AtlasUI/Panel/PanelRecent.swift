@@ -8,7 +8,7 @@ struct PanelRecent: View {
   let entries: [PanelRecentEntry]
   /// Receives All activity.
   let send: @MainActor (PanelEvent) -> Void
-  @Environment(\.accessibilityReduceMotion) private var reduceMotion
+  @Environment(\.motionReduced) private var reduceMotion
 
   /// The heading with All activity, then a row for each recent action.
   var body: some View {

@@ -7,7 +7,7 @@ import SwiftUI
 struct Shake: ViewModifier {
   /// Counts the refusals seen: each change shakes once.
   let trigger: Int
-  @Environment(\.accessibilityReduceMotion) private var reduceMotion
+  @Environment(\.motionReduced) private var reduceMotion
 
   /// The content, offset by the shake's keyframes each time the trigger changes.
   ///

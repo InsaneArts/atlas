@@ -4,6 +4,8 @@
 public struct ViewerAppCard: Equatable, Sendable, Identifiable {
   /// The app's process id in the helper.
   public var id: Int
+  /// The stable string target used by the card's shared scroll-position binding.
+  public var scrollID: String { String(id) }
   /// Its name.
   public var name: String
   /// Its icon, or the tile drawn from its name.

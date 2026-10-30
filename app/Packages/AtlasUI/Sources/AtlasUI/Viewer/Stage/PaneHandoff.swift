@@ -23,6 +23,12 @@ final class PaneHandoff {
   /// - Parameter place: The latest navigation choice.
   func request(_ place: ViewerPlace) {
     destination = place.isKept ? place : nil
+    if let departing, departing == destination {
+      // Re-admitting the same retained view reverses its existing opacity animation in place.
+      shown = departing
+      self.departing = nil
+      return
+    }
     guard shown != destination || departing != nil else { return }
     departing = shown ?? departing
     shown = departing == nil ? destination : nil

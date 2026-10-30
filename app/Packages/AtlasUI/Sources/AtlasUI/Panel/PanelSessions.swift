@@ -11,7 +11,7 @@ struct PanelSessions: View {
   let more: String?
   /// Receives a row's press and All activity.
   let send: @MainActor (PanelEvent) -> Void
-  @Environment(\.accessibilityReduceMotion) private var reduceMotion
+  @Environment(\.motionReduced) private var reduceMotion
 
   /// The heading with All activity, then a row for each session and the row for the rest.
   var body: some View {

@@ -28,8 +28,8 @@ final class ViewerWindow: NSWindow, NSWindowDelegate, WindowPresenting {
   /// The empty toolbar that gives the title bar its height, so the window buttons line up with the card's header;
   /// taken off in full screen, where it would become the auto-hiding full-screen toolbar.
   private let rowToolbar = NSToolbar(identifier: "viewer")
-  /// Reads the Screenshots list's keys while the window is open.
-  private var shotKeys: Any?
+  /// Whether a screenshot surface itself owns focus; read-only outside the window, including native dispatch tests.
+  private(set) var screenshotFocused = false
   /// Takes the keyboard back from the search field on a press anywhere else in the window.
   private let fieldFocus = FieldFocus()
 
@@ -65,6 +65,9 @@ final class ViewerWindow: NSWindow, NSWindowDelegate, WindowPresenting {
     controller.fitWindow(to: frame.size)
     delegate = self
     let fieldReport = fieldFocus.report
+    let screenshotReport = ScreenshotFocusReport { [weak self] focused in
+      self?.screenshotFocused = focused
+    }
     WindowShell.host(in: self) {
       ViewerView(
         state: controller.state,
@@ -83,6 +86,7 @@ final class ViewerWindow: NSWindow, NSWindowDelegate, WindowPresenting {
         }
       )
       .environment(\.focusedFieldReport, fieldReport)
+      .environment(\.screenshotFocusReport, screenshotReport)
     }
     followTitle()
     followAnnouncements()
@@ -124,7 +128,6 @@ final class ViewerWindow: NSWindow, NSWindowDelegate, WindowPresenting {
       displayIfNeeded()
     }
     isPresented = true
-    watchShotKeys()
     fieldFocus.watch(self)
     if isMiniaturized { deminiaturize(nil) }
     makeKeyAndOrderFront(nil)
@@ -133,17 +136,12 @@ final class ViewerWindow: NSWindow, NSWindowDelegate, WindowPresenting {
     followScreen()
   }
 
-  /// Reads the Screenshots list's keys before the window does, Escape while the sidebar shows over the card, and Escape
-  /// on the Screen while a window is outlined, unless a field takes the keys or an alert is up.
-  private func watchShotKeys() {
-    guard shotKeys == nil else { return }
-    // AppKit runs a local monitor's handler on the main thread, and its handler type is not `@Sendable`, so the
-    // handler shares this window's main-actor isolation and reads the event where it was delivered.
-    shotKeys = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] event in
-      guard let self else { return event }
-      // nil means handled here: AppKit then does nothing more with it.
-      return shotKey(event)
-    }
+  /// Dispatches screenshot keys only while their subtree owns focus; all other events reach the native responder.
+  ///
+  /// - Parameter event: The window event being dispatched.
+  override func sendEvent(_ event: NSEvent) {
+    if event.type == .keyDown, shotKey(event) == nil { return }
+    super.sendEvent(event)
   }
 
   /// A key on the Screenshots list: its event goes to the controller, and the key goes no further.
@@ -155,20 +153,21 @@ final class ViewerWindow: NSWindow, NSWindowDelegate, WindowPresenting {
     let snapshot = controller.snapshot
     guard ViewerPresenter.alert(snapshot) == nil else { return event }
     let held = event.modifierFlags.intersection([.command, .control, .option])
-    if snapshot.session.overlayShown,
-      let dismiss = ShotKeys.overlayEvent(
+    if snapshot.session.overlayShown {
+      if let dismiss = ShotKeys.overlayEvent(
         keyCode: event.keyCode,
         hasModifiers: !held.isEmpty,
         holdingControl: snapshot.holdingControl
-      )
-    {
-      controller.send(dismiss)
-      return nil
+      ) {
+        controller.send(dismiss)
+        return nil
+      }
+      return event
     }
     if snapshot.session.place == .screen {
       return outlineKey(event, hasModifiers: !held.isEmpty, snapshot: snapshot)
     }
-    guard snapshot.session.place == .screenshots else { return event }
+    guard snapshot.session.place == .screenshots, screenshotFocused else { return event }
     let largeShown = snapshot.panes.shots.large != nil
     guard let shot = ShotKeys.event(keyCode: event.keyCode, hasModifiers: !held.isEmpty, largeShown: largeShown)
     else { return event }
@@ -287,8 +286,6 @@ final class ViewerWindow: NSWindow, NSWindowDelegate, WindowPresenting {
   /// - Parameter notification: The window's notification.
   func windowWillClose(_ notification: Notification) {
     isPresented = false
-    if let shotKeys { NSEvent.removeMonitor(shotKeys) }
-    shotKeys = nil
     fieldFocus.stop()
     controller.close()
     // Unstructured, so `closed` runs once AppKit has finished closing the window, not during its notification.

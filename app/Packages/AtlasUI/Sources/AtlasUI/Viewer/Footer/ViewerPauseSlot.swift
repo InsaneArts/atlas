@@ -9,7 +9,7 @@ struct ViewerPauseSlot: View {
   let pause: ViewerToggle?
   /// Receives the press.
   let send: @MainActor (ViewerEvent) -> Void
-  @Environment(\.accessibilityReduceMotion) private var reduceMotion
+  @Environment(\.motionReduced) private var reduceMotion
 
   /// The pause or play button, in its slot.
   var body: some View {

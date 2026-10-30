@@ -11,7 +11,7 @@ struct CornerShift: ViewModifier {
   let isAway: Bool
   /// Whether it arrives as the stage's picture moving into the corner.
   let growsFromStage: Bool
-  @Environment(\.accessibilityReduceMotion) private var reduceMotion
+  @Environment(\.motionReduced) private var reduceMotion
 
   /// The mini screen, faded and scaled while it is away.
   func body(content: Content) -> some View {

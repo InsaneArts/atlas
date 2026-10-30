@@ -22,7 +22,7 @@ struct AlertCard<ID: Hashable & Sendable>: View {
   let send: @MainActor (ID) -> Void
   /// Counts the refusals seen, so each one shakes the card once.
   @State private var refusals = 0
-  @Environment(\.accessibilityReduceMotion) private var reduceMotion
+  @Environment(\.motionReduced) private var reduceMotion
 
   /// The icon, the title, the message and the buttons, on the modal surface.
   var body: some View {

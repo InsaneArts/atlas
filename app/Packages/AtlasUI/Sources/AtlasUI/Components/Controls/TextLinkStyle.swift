@@ -14,7 +14,7 @@ struct TextLinkStyle: ButtonStyle {
   /// How large the link's words are.
   var size = Size.regular
   @Environment(\.isEnabled) private var enabled
-  @Environment(\.accessibilityReduceMotion) private var reduceMotion
+  @Environment(\.motionReduced) private var reduceMotion
 
   /// Draws the label as a link.
   ///

@@ -13,6 +13,8 @@ final class CardScrollSelection {
   var viewport: CGFloat = .zero
   /// The row a step waits to place, and how to place it once it stands; nil while no step waits.
   private var waiting: (row: String, place: @MainActor (CGRect) -> Void)?
+  /// A placement deferred until after the layout pass that reported the row.
+  private var queued: (row: String, task: Task<Void, Never>)?
 
   /// Notes where the selected row stands now, and places it if a step was waiting for it to stand.
   ///
@@ -27,6 +29,46 @@ final class CardScrollSelection {
     waiting.place(frame)
   }
 
+  /// Forgets a deselected row's geometry and cancels a step waiting for it.
+  ///
+  /// - Parameter id: The deselected row's identity.
+  func forget(_ id: String) {
+    if self.id == id {
+      self.id = nil
+      frame = nil
+    }
+    if waiting?.row == id {
+      waiting = nil
+    }
+    if queued?.row == id {
+      queued?.task.cancel()
+      queued = nil
+    }
+  }
+
+  /// Cancels both a step waiting for geometry and a placement queued after layout.
+  func cancelPlacement() {
+    waiting = nil
+    queued?.task.cancel()
+    queued = nil
+  }
+
+  /// Defers a placement out of the layout pass, keeping it cancellable until it runs.
+  ///
+  /// - Parameters:
+  ///   - row: The selected row's identity.
+  ///   - place: What scrolls it into view after layout.
+  func queue(_ row: String, with place: @escaping @MainActor () -> Void) {
+    queued?.task.cancel()
+    queued = (
+      row,
+      Task { @MainActor in
+        guard !Task.isCancelled else { return }
+        place()
+      }
+    )
+  }
+
   /// Places `row` with `place` where it stands now, or as soon as it reports where it stands.
   ///
   /// - Parameters:
@@ -35,8 +77,8 @@ final class CardScrollSelection {
   /// - Returns: Whether it stood already, so it was placed at once.
   @discardableResult
   func place(_ row: String, with place: @escaping @MainActor (CGRect) -> Void) -> Bool {
+    cancelPlacement()
     if id == row, let frame {
-      waiting = nil
       place(frame)
       return true
     }

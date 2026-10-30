@@ -9,7 +9,7 @@ struct OutcomeMark: View {
   let kind: StatusLine.Kind
   /// The mark's side, in points.
   var side = StatusLine.markSide
-  @Environment(\.accessibilityReduceMotion) private var reduceMotion
+  @Environment(\.motionReduced) private var reduceMotion
   @Environment(\.marksSwapAtOnce) private var swapsAtOnce
 
   /// The spinner, the round "!" or the check, one at a time, landing in place of the last.

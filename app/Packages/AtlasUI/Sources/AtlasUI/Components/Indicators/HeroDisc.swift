@@ -15,7 +15,7 @@ struct HeroDisc: View {
   /// How it ended.
   let kind: Kind
   @State private var hasArrived = false
-  @Environment(\.accessibilityReduceMotion) private var reduceMotion
+  @Environment(\.motionReduced) private var reduceMotion
   @Environment(\.animatesArrivals) private var animatesArrivals
 
   /// The disc and its mark.

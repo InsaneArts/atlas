@@ -1,6 +1,6 @@
 import SwiftUI
 
-/// A card's picture: its front window cut from the helper's screen, filling the slot from its top, while the window
+/// A card's picture: its whole front window cut from the helper's screen, fitted in the slot, while the window
 /// is in view; else where its windows sit on the display (``AppScreenMap``). Each new frame replaces the last with no
 /// animation, as the live picture does; the window's picture and the map fade into each other.
 struct AppCardPicture: View {
@@ -14,11 +14,11 @@ struct AppCardPicture: View {
         .fill(Color.fillControl)
       if let window = picture.window {
         Color.clear
-          .overlay(alignment: .top) {
+          .overlay {
             Image(decorative: window.image, scale: 1)
               .resizable()
               .interpolation(.high)
-              .scaledToFill()
+              .scaledToFit()
           }
           .transition(Self.fade)
       } else {

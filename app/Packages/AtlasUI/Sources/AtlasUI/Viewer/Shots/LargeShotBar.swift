@@ -33,7 +33,7 @@ struct LargeShotBar: View {
         .buttonStyle(.capsule(.primary, size: .mini))
         .help("Back to the screenshots")
     }
-    .padding([.vertical, .trailing], Layout.inset)
+    .padding([.vertical, .trailing], LargeShotBarLayout.inset)
     .padding(.leading, Spacing.mPlus)
     .surface(.floating, in: Capsule())
     .elevation(.floating)
@@ -51,12 +51,6 @@ struct LargeShotBar: View {
       Text(word)
     }
   }
-}
-
-/// The bar's own measures for its floating controls.
-private enum Layout {
-  /// 5: the bar's inset above, below and after its buttons; its words start 14 in.
-  static let inset: CGFloat = 5
 }
 
 #if DEBUG

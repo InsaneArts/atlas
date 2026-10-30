@@ -10,7 +10,7 @@ public struct DragGhostView: View {
   private let moment: TimeInterval?
   /// Whether a render draws it as Reduce Motion would, whatever the setting.
   private let drawsStill: Bool
-  @Environment(\.accessibilityReduceMotion) private var reducesMotion
+  @Environment(\.motionReduced) private var reducesMotion
 
   /// Creates the ghost.
   ///

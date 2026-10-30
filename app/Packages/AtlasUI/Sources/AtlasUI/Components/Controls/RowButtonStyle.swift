@@ -6,7 +6,7 @@ import SwiftUI
 struct RowButtonStyle: ButtonStyle {
   /// The fill's corner; small by default.
   var corner = Radius.small
-  @Environment(\.accessibilityReduceMotion) private var reduceMotion
+  @Environment(\.motionReduced) private var reduceMotion
 
   /// Draws the label on its fill.
   ///

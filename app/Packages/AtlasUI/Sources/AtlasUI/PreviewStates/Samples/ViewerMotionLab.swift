@@ -17,7 +17,7 @@
     /// Counts the footer lines a burst has drawn.
     @State private var line = 0
 
-    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @Environment(\.motionReduced) private var reduceMotion
 
     /// The buttons over the window.
     var body: some View {

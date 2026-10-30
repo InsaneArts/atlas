@@ -1,6 +1,6 @@
 import SwiftUI
 
-/// How Activity, Apps and Screenshots show and hide as the tab changes once each has been shown: the pane is kept, so
+/// How Activity, Apps and Screenshots show and hide as the pane changes once each has been shown: the pane is kept, so
 /// a switch back fades the one already built instead of building it again, which took the main thread 15 to 45
 /// milliseconds a switch. The shared ``PaneHandoff`` waits for the outgoing pane to disappear before admitting
 /// the latest destination. Each pane fades on ``PaneShift/arrival`` and ``PaneShift/departure``.
@@ -23,6 +23,7 @@ struct KeptPaneShift: ViewModifier {
   /// Each switch invalidates completions from an interrupted fade.
   @State private var generation = 0
   @Environment(\.animatesArrivals) private var animatesArrivals
+  @Environment(\.motionReduced) private var reduceMotion
 
   /// The pane, faded while hidden.
   func body(content: Content) -> some View {
@@ -48,14 +49,14 @@ struct KeptPaneShift: ViewModifier {
     let current = generation
     settled = false
     if rises {
-      withAnimation(ListRise.motion) { lowered = !shown }
+      withAnimation(Motion.layout(ListRise.motion, reduceMotion: reduceMotion)) { lowered = !shown }
     } else if shown {
       place(lowered: false)
     }
     withAnimation(shown ? PaneShift.arrival : PaneShift.departure, completionCriteria: .removed) {
       drawn = shown
     } completion: {
-      // A fade turned back before it ended leaves the pane hidden, and its indicators with it.
+      // A reversal retargets the existing opacity; the superseded departure must never hide that pane.
       guard generation == current else { return }
       settled = drawn
       guard !drawn else { return }

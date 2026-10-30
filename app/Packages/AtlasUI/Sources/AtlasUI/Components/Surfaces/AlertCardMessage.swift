@@ -11,7 +11,7 @@ struct AlertCardMessage: View {
   let reserving: String
   /// Why its command was refused; nil until it was.
   let refusal: String?
-  @Environment(\.accessibilityReduceMotion) private var reduceMotion
+  @Environment(\.motionReduced) private var reduceMotion
 
   /// The component drawn from its current state.
   var body: some View {

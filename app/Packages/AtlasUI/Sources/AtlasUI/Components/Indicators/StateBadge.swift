@@ -11,7 +11,7 @@ struct StateBadge: View {
   let badge: SessionBadge?
   /// The ground the badge sits on, whose colour its ring takes.
   var ground = Color.groundRecessed
-  @Environment(\.accessibilityReduceMotion) private var reduceMotion
+  @Environment(\.motionReduced) private var reduceMotion
 
   /// The badge in its state, or nothing, at a constant size either way so the icon beside it never moves.
   var body: some View {

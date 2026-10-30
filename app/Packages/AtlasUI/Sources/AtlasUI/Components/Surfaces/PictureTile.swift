@@ -19,7 +19,7 @@ struct PictureTile: View {
   var showsEdge = true
   /// What shows until the picture arrives, and beside it where the frame is not its shape; black by default.
   var ground = Color.letterbox
-  @Environment(\.accessibilityReduceMotion) private var reduceMotion
+  @Environment(\.motionReduced) private var reduceMotion
 
   /// The picture in its frame, with its edge, and its ring outside it.
   var body: some View {

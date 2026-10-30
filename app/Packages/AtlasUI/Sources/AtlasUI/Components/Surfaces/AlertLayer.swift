@@ -10,7 +10,7 @@ struct AlertLayer<ID: Hashable & Sendable>: View {
   let state: AlertCardState<ID>?
   /// Receives the button the person presses.
   let send: @MainActor (ID) -> Void
-  @Environment(\.accessibilityReduceMotion) private var reduceMotion
+  @Environment(\.motionReduced) private var reduceMotion
 
   /// The scrim and the card, while there is an alert.
   var body: some View {

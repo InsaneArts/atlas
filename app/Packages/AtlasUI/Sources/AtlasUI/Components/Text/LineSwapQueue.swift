@@ -2,7 +2,7 @@
 /// is doing. Lines are known by their ids, so the same line with new details, such as its age, is never a swap. The
 /// rule is pure, so it can be followed step by step without a clock:
 /// - A line holds for at least ``Motion/Duration/lineHold`` from the moment it starts to fade in. A line that arrives
-///   during the hold waits for it to end.
+///   during the hold waits for it to end. Action labels skip the hold so obsolete words yield immediately.
 /// - Once the hold is over, a waiting line, or one that arrives later, starts the drawn line fading out; only once it
 ///   has faded out does the waiting line fade in. The two are never drawn together.
 /// - Only the newest line waits: one that arrives while another waits replaces it, and lines in between are skipped.
@@ -10,7 +10,7 @@
 struct LineSwapQueue<ID: Equatable>: Equatable {
   /// What the drawn line is doing.
   enum Phase: Equatable, Sendable {
-    /// Fading in or shown, and within its hold: nothing replaces it yet.
+    /// Fading in or shown, and within its hold, when enabled.
     case holding
     /// Shown, its hold over: the next line replaces it at once.
     case resting
@@ -56,13 +56,15 @@ struct LineSwapQueue<ID: Equatable>: Equatable {
 
   /// The swap after `event`.
   ///
-  /// - Parameter event: What happened.
+  /// - Parameters:
+  ///   - event: What happened.
+  ///   - holds: Whether lines keep a minimum reading time. Action labels must yield immediately.
   /// - Returns: The swap's next state; a change of ``phase`` to ``Phase/fadingOut`` starts a fade out, and one to
   ///   ``Phase/holding`` starts a fade in of ``shown`` and its hold.
-  func next(_ event: Event) -> LineSwapQueue {
+  func next(_ event: Event, holds: Bool = true) -> LineSwapQueue {
     switch (event, phase) {
     case (.arrived(let id), .holding):
-      LineSwapQueue(shown: shown, waiting: id == shown ? nil : id, phase: .holding)
+      LineSwapQueue(shown: shown, waiting: id == shown ? nil : id, phase: !holds && id != shown ? .fadingOut : .holding)
     case (.arrived(let id), .resting):
       id == shown ? self : LineSwapQueue(shown: shown, waiting: id, phase: .fadingOut)
     case (.arrived(let id), .fadingOut):

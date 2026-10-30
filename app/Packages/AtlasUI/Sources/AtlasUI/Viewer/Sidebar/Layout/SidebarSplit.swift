@@ -31,7 +31,7 @@ struct SidebarSplit<Card: View>: View {
   @State private var showsOverlay: Bool
   /// Each change calls off what an earlier one left to finish.
   @State private var generation = 0
-  @Environment(\.accessibilityReduceMotion) private var reduceMotion
+  @Environment(\.motionReduced) private var reduceMotion
 
   /// Creates the split.
   ///
@@ -83,7 +83,10 @@ struct SidebarSplit<Card: View>: View {
       if showsOverlay {
         SidebarOverlay(sidebar: sidebar, isFullScreen: isFullScreen, send: send)
           .disabled(!sidebar.overlay)
-          .transition(Motion.transition(.move(edge: .leading), reduceMotion: reduceMotion))
+          .transition(
+            Motion.transition(.move(edge: .leading), reduceMotion: reduceMotion)
+              .animation(reduceMotion ? Motion.reduced : Motion.slide)
+          )
       }
     }
     .overlay(alignment: .topLeading) {
@@ -134,7 +137,7 @@ struct SidebarSplit<Card: View>: View {
   ///   - current: The change's generation, which a newer change outdates.
   private func shiftAtOnce(to mode: ViewerSidebarMode, generation current: Int) {
     if mode == .hidden {
-      withAnimation(ViewerLayout.sidebarMotion(reduceMotion: true)) {
+      withAnimation(Motion.reduced) {
         showsContent = false
       } completion: {
         guard generation == current else { return }
@@ -143,7 +146,7 @@ struct SidebarSplit<Card: View>: View {
       return
     }
     settle(mode)
-    withAnimation(ViewerLayout.sidebarMotion(reduceMotion: true)) { showsContent = true }
+    withAnimation(Motion.reduced) { showsContent = true }
   }
 
   /// Draws `mode` at once, with no animation.

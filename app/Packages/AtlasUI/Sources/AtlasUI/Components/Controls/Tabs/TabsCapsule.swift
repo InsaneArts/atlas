@@ -19,9 +19,10 @@ struct TabsCapsule<Tab: Hashable & Sendable, Accessory: View>: View {
   @State private var space = UUID()
   @GestureState private var tracking = false
   @FocusState private var focused: Bool
-  @Environment(\.accessibilityReduceMotion) private var systemReduced
+  @Environment(\.motionReduced) private var systemReduced
   @Environment(\.isEnabled) private var enabled
   @Environment(\.hoverPaused) private var hoverPaused
+  @Environment(\.controlSize) private var controlSize
   #if DEBUG
     @Environment(\.tabsMotionPose) private var pose
     @Environment(\.tabsReducedMotion) private var labReduced
@@ -170,7 +171,7 @@ struct TabsCapsule<Tab: Hashable & Sendable, Accessory: View>: View {
       } else {
         Text(tab.title)
       }
-      if style == .segment, let count = tab.count {
+      if style == .segment, controlSize != .small, let count = tab.count {
         Text(verbatim: "\(count)")
           .font(Typography.digits(.caption, weight: .medium))
           .foregroundStyle(Color.textTertiary)
@@ -203,7 +204,8 @@ struct TabsCapsule<Tab: Hashable & Sendable, Accessory: View>: View {
 
   /// The font's horizontal breathing room, unchanged by selection.
   private var horizontalInset: CGFloat {
-    style == .segment || face == .symbol ? Spacing.sPlus : Spacing.mPlus
+    if style == .segment, controlSize == .small { return Spacing.xs }
+    return style == .segment || face == .symbol ? Spacing.sPlus : Spacing.mPlus
   }
 
   /// Where an accessory hangs outside the label's measured frame.

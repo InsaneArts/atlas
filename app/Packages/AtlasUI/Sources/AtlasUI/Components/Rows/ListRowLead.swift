@@ -6,7 +6,7 @@ import SwiftUI
 struct ListRowLead: View {
   /// What leads the row.
   let lead: ListRow.Lead
-  @Environment(\.accessibilityReduceMotion) private var reduceMotion
+  @Environment(\.motionReduced) private var reduceMotion
   @Environment(\.marksSwapAtOnce) private var swapsAtOnce
 
   /// The lead, or nothing.

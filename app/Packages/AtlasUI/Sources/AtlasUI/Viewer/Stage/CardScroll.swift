@@ -28,8 +28,9 @@ struct CardScroll<Content: View>: View {
       ScrollView {
         content
           .environment(\.listIsAtTop, isAtTop)
+          .padding(CardScrollRoom.contentInsets(clearance))
           .background {
-            // Read inside the content, where the list's scroll moves it.
+            // Measure the padded origin, so partial scrolling through the top band counts as scrolling.
             Color.clear
               .onGeometryChange(for: Bool.self) { proxy in
                 proxy.frame(in: .scrollView).minY >= -Spacing.hairline
@@ -37,7 +38,6 @@ struct CardScroll<Content: View>: View {
                 isAtTop = atTop
               }
           }
-          .padding(CardScrollRoom.contentInsets(clearance))
           .environment(\.cardScrollSelection, selection)
       }
       .scrollIndicators(paneSettled ? .automatic : .hidden)
@@ -69,13 +69,16 @@ struct CardScroll<Content: View>: View {
   ///   - row: The selected row's identity.
   ///   - scroll: The list's scroll view.
   private func show(_ row: String?, in scroll: ScrollViewProxy) {
-    guard let row else { return }
+    guard let row else {
+      selection.cancelPlacement()
+      return
+    }
     let stood = selection.place(row) { frame in
       guard
         let anchor = CardScrollRoom.revealAnchor(row: frame, viewport: selection.viewport, clearance: clearance)
       else { return }
       // Out of the layout pass that reported the row, as a scroll may lay the list out again.
-      Task { @MainActor in scroll.scrollTo(row, anchor: anchor) }
+      selection.queue(row) { scroll.scrollTo(row, anchor: anchor) }
     }
     if !stood {
       scroll.scrollTo(row, anchor: nil)

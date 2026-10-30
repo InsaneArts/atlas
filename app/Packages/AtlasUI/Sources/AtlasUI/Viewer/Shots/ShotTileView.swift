@@ -18,7 +18,7 @@ struct ShotTileView: View {
   /// Receives what the person does.
   let send: @MainActor (ViewerEvent) -> Void
   @Environment(\.shotDrag) private var drag
-  @Environment(\.accessibilityReduceMotion) private var reduceMotion
+  @Environment(\.motionReduced) private var reduceMotion
 
   @State private var isHovered = false
 

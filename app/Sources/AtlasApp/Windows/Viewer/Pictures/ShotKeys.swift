@@ -1,7 +1,7 @@
 import AtlasUI
 
-/// What a key means over the sidebar shown over the card, on the Screenshots tab, and on the Screen, as the window's
-/// key monitor reads it: Escape puts the sidebar over the card away. On the Screenshots tab, Space shows the selected
+/// What a key means over the sidebar shown over the card, on the Screenshots pane, and on the Screen, as the window's
+/// key monitor reads it: Escape puts the sidebar over the card away. On the Screenshots pane, Space shows the selected
 /// screenshot large or closes it, Return opens it, ← and → move along, ↑ and ↓ move a row, and Esc closes the large
 /// view, or with none large, clears the selection. Keys held with ⌘, ⌃ or ⌥ keep their own meaning, so ⌘C copies the
 /// selected one through the Edit menu.
@@ -21,7 +21,7 @@ enum ShotKeys {
   /// Esc's key code.
   static let escape: UInt16 = 53
 
-  /// The event a key sends on the Screenshots tab.
+  /// The event a key sends on the Screenshots pane.
   ///
   /// - Parameters:
   ///   - keyCode: The key.

@@ -1,4 +1,5 @@
 import AppKit
+import AsyncSupportTesting
 import AtlasUI
 import SwiftUI
 import Testing
@@ -9,7 +10,7 @@ import Testing
 @MainActor
 struct SidebarSearchFocusTests {
   @Test("opening the search beside the card puts the typing in its field")
-  func openingTheSearchFocusesItsField() throws {
+  func openingTheSearchFocusesItsField() async throws {
     let closed = PreviewStates.viewerSessions
     let open = PreviewStates.viewer(closed, applying: .openSearch)
     let window = NSWindow(
@@ -21,17 +22,23 @@ struct SidebarSearchFocusTests {
     window.isReleasedWhenClosed = false
     let hosting = NSHostingView(rootView: ViewerHostContent(state: closed))
     window.contentView = hosting
+    defer { window.contentView = nil }
     hosting.layoutSubtreeIfNeeded()
     // The field comes in the same change that asks for the focus.
     hosting.rootView = ViewerHostContent(state: open)
     hosting.layoutSubtreeIfNeeded()
-    RunLoop.main
-      .run(until: Date(timeIntervalSinceNow: Self.settling))
+    try await Self.render(hosting, until: { window.firstResponder is NSTextView })
     #expect(window.firstResponder is NSTextView, "the field editor of the search has the focus")
   }
 
-  @Test("a press anywhere outside the search takes the typing from it, and a press on its own capsule keeps it")
-  func aPressOutsideTheSearchTakesItsFocus() throws {
+  @Test(
+    "a press anywhere outside the search takes the typing from it, and a press on its own capsule keeps it",
+    .enabled(
+      if: ProcessInfo.processInfo.environment["ATLAS_NATIVE_WINDOW_TESTS"] == "1",
+      "requires native event-to-window routing in the hidden helper graphical test host"
+    )
+  )
+  func aPressOutsideTheSearchTakesItsFocus() async throws {
     let closed = PreviewStates.viewerSessions
     let open = PreviewStates.viewer(closed, applying: .openSearch)
     let focus = FieldFocus()
@@ -50,11 +57,20 @@ struct SidebarSearchFocusTests {
     }
     let hosting = NSHostingView(rootView: content(closed))
     window.contentView = hosting
+    defer {
+      focus.stop()
+      window.close()
+    }
+    window.makeKeyAndOrderFront(nil)
     hosting.layoutSubtreeIfNeeded()
     hosting.rootView = content(open)
     hosting.layoutSubtreeIfNeeded()
-    RunLoop.main
-      .run(until: Date(timeIntervalSinceNow: Self.settling))
+    try await Self.render(
+      hosting,
+      until: {
+        window.firstResponder is NSTextView && focus.fieldFrame.map { !$0.isNull && !$0.isEmpty } == true
+      }
+    )
     #expect(window.firstResponder is NSTextView, "the open search holds the typing")
     let field = try #require(focus.fieldFrame, "the focused field says where it stands")
     focus.watch(window)
@@ -62,16 +78,17 @@ struct SidebarSearchFocusTests {
     focus.pressed(try Self.press(at: CGPoint(x: field.minX + Self.margin, y: field.midY), in: window))
     #expect(window.firstResponder is NSTextView, "a press on the field keeps its typing")
     // On the card, far from the sidebar.
-    focus.pressed(try Self.press(at: CGPoint(x: field.maxX + Self.away, y: field.midY + Self.away), in: window))
-    RunLoop.main
-      .run(until: Date(timeIntervalSinceNow: Self.settling))
+    let outside = try Self.press(at: CGPoint(x: field.maxX + Self.away, y: field.midY + Self.away), in: window)
+    try #require(outside.window === window, "the press must belong to the hosted window")
+    focus.pressed(outside)
+    try await Self.render(hosting, until: { !(window.firstResponder is NSTextView) && sent.contains(.closeSearch) })
     #expect(!(window.firstResponder is NSTextView), "a press on the card takes the typing from the field")
     #expect(sent.contains(.closeSearch), "the empty search folds back to its circle")
     focus.stop()
   }
 
   @Test("dismissing a narrow sidebar overlay relinquishes its search focus without focusing a hidden field")
-  func dismissingTheOverlayRelinquishesSearchFocus() throws {
+  func dismissingTheOverlayRelinquishesSearchFocus() async throws {
     var state = PreviewStates.viewerSessions
     state.sidebar.mode = .hidden
     let window = NSWindow(
@@ -90,14 +107,12 @@ struct SidebarSearchFocusTests {
     state.sidebar.search.query = "Claude"
     hosting.rootView = ViewerHostContent(state: state)
     hosting.layoutSubtreeIfNeeded()
-    RunLoop.main
-      .run(until: Date(timeIntervalSinceNow: Self.settling))
+    try await Self.render(hosting, until: { window.firstResponder is NSTextView })
     try #require(window.firstResponder is NSTextView, "the visible overlay search holds the typing")
     state.sidebar.overlay = false
     hosting.rootView = ViewerHostContent(state: state)
     hosting.layoutSubtreeIfNeeded()
-    RunLoop.main
-      .run(until: Date(timeIntervalSinceNow: Self.settling))
+    try await Self.render(hosting, until: { !(window.firstResponder is NSTextView) })
     #expect(!(window.firstResponder is NSTextView), "a hidden search cannot keep the typing")
     #expect(state.sidebar.search.query == "Claude", "dismissing preserves the query without retaining an editor")
   }
@@ -131,6 +146,24 @@ struct SidebarSearchFocusTests {
   /// 200: how far past the field a press on the card lands.
   static let away: CGFloat = 200
 
-  /// 0.2 s: long enough for the field to appear and take the focus.
-  static let settling: TimeInterval = 0.2
+  /// Drives rendering until the expected focus change, using elapsed time only to fail a stalled test.
+  private static func render<Content: View>(
+    _ hosting: NSHostingView<Content>,
+    sourceLocation: SourceLocation = #_sourceLocation,
+    until done: () -> Bool
+  ) async throws {
+    let deadline = ContinuousClock.now
+      .advanced(by: Ceiling.work)
+    while !done(), ContinuousClock.now < deadline {
+      hosting.layoutSubtreeIfNeeded()
+      hosting._renderForTest(interval: .zero)
+      drainRunLoop()
+      await afterQueuedWork()
+    }
+    try #require(done(), "the expected focus and render change never arrived", sourceLocation: sourceLocation)
+  }
+
+  private static func drainRunLoop() {
+    CFRunLoopRunInMode(.defaultMode, .zero, true)
+  }
 }

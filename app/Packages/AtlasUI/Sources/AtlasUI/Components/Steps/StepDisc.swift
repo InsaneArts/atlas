@@ -9,7 +9,7 @@ struct StepDisc: View {
   let index: Int
   /// Where the step stands.
   let state: StepState
-  @Environment(\.accessibilityReduceMotion) private var reduceMotion
+  @Environment(\.motionReduced) private var reduceMotion
 
   /// The ring or fill, the number and the check, popping as the state changes.
   var body: some View {

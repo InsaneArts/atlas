@@ -11,7 +11,7 @@ struct PanelRecentRow: View {
   let entry: PanelRecentEntry
   /// Whether the live row's dot has cooled away; it does once per row, a second after the row arrives live.
   @State private var isCooled = false
-  @Environment(\.accessibilityReduceMotion) private var reduceMotion
+  @Environment(\.motionReduced) private var reduceMotion
   @Environment(\.animatesArrivals) private var animatesArrivals
 
   /// Its mark if it carries state, what was done, and how long ago.

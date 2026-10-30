@@ -15,13 +15,15 @@ struct ViewerShotsPane: View {
   let zoom: Namespace.ID
   /// Receives what the person does.
   let send: @MainActor (ViewerEvent) -> Void
-  @Environment(\.accessibilityReduceMotion) private var reduceMotion
+  @Environment(\.paneShows) private var paneShows
+  @Environment(\.motionReduced) private var reduceMotion
 
   /// The tiles, or why there are none.
   var body: some View {
     content
       .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
       .accessibilityElement(children: .contain)
+      .modifier(ScreenshotFocus(enabled: paneShows && state.large == nil))
       .accessibilityLabel("Screenshots")
       .accessibilityValue(state.meta)
   }
@@ -55,7 +57,7 @@ struct ViewerShotsPane: View {
       }
     }
     .scrollTargetLayout()
-    .animation(Motion.animation(Motion.state, reduceMotion: reduceMotion), value: state.heldColumns)
+    .animation(Motion.layout(Motion.state, reduceMotion: reduceMotion), value: state.heldColumns)
     .padding(.horizontal, ViewerLayout.swapInset)
     .padding(.bottom, ViewerLayout.swapInset)
     .onGeometryChange(for: Int.self) { proxy in

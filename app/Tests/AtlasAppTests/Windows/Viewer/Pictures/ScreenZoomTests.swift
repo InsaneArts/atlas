@@ -40,18 +40,13 @@ struct ScreenZoomTests {
     arguments: [ViewerPlace.activity, .screenshots]
   )
   func aSwitchTurnedBackKeepsOnePicture(list: ViewerPlace) throws {
-    let clock = ContinuousClock()
-    var colours: [PictureColour?] = []
-    // The two switches' frame must be drawn before the first switch's move has gone far, as a person turning straight
-    // back sees it; a busy Mac that draws it later tries again in a fresh window.
-    for _ in 0..<ViewerHost.firstFrameTries {
-      let host = ViewerHost(try Self.state(.screen))
-      let started = clock.now
-      host.show(try Self.state(list))
-      host.show(try Self.state(.screen))
-      colours = try host.colours(at: [Self.middle, Self.corner])
-      if clock.now - started <= ViewerHost.firstFrameWithin { break }
-    }
+    let previous = Motion.Pose.moment
+    Motion.Pose.hold(at: .zero)
+    defer { Motion.Pose.hold(at: previous) }
+    let host = ViewerHost(try Self.state(.screen))
+    host.show(try Self.state(list))
+    host.show(try Self.state(.screen))
+    let colours = try host.colours(at: [Self.middle, Self.corner])
     // The small screen had not left the stage's middle, so the picture coming back starts there, whole: the middle
     // shows one picture or the other, never the empty stage, and the corner holds no second small screen.
     #expect(colours[0] != nil, "the stage's middle was empty as the switch turned back")

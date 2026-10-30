@@ -16,7 +16,7 @@ struct ViewerSidebar: View {
   private let send: @MainActor (ViewerEvent) -> Void
   /// Whether the foot is drawn folded for a short window, which follows the state's on ``Motion/state``.
   @State private var isShort: Bool
-  @Environment(\.accessibilityReduceMotion) private var reduceMotion
+  @Environment(\.motionReduced) private var reduceMotion
 
   /// Creates the sidebar's content.
   ///
@@ -58,7 +58,7 @@ struct ViewerSidebar: View {
     .padding(.bottom, ViewerLayout.sidebarInset)
     .frame(maxHeight: .infinity, alignment: .top)
     .onChange(of: sidebar.isShort) { _, short in
-      withAnimation(Motion.animation(Motion.state, reduceMotion: reduceMotion, reduced: Motion.reduced)) {
+      withAnimation(Motion.layout(Motion.state, reduceMotion: reduceMotion)) {
         isShort = short
       }
     }
@@ -78,7 +78,7 @@ struct ViewerSidebar: View {
   @ViewBuilder private var foot: some View {
     if isShort {
       SidebarLibraryStrip(rows: sidebar.library, helper: sidebar.helper, send: send)
-        .transition(.opacity)
+        .transition(.opacity.animation(reduceMotion ? Motion.reduced : Motion.state))
     } else {
       VStack(alignment: .leading, spacing: ViewerLayout.sidebarRowGap) {
         SidebarLibrary(rows: sidebar.library, send: send)

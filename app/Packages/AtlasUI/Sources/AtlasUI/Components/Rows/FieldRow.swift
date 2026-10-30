@@ -27,7 +27,7 @@ struct FieldRow: View {
   /// the task captured holds it as it was when the flag arrived.
   @State private var otherFieldFocusedNow = false
   @Environment(\.drawsListSeparator) private var drawsSeparator
-  @Environment(\.accessibilityReduceMotion) private var reduceMotion
+  @Environment(\.motionReduced) private var reduceMotion
 
   /// The name, the field and the flag's mark, on the row's wash, inside its focus ring.
   var body: some View {

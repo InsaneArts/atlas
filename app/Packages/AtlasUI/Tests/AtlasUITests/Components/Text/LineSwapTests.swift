@@ -10,6 +10,21 @@ struct LineSwapTests {
   /// The queue of a swap of words.
   private typealias Queue = LineSwapQueue<String>
 
+  @Test("action labels interrupt their reading hold and discard an obsolete waiting action")
+  func actionLabelsNeverHoldObsoleteActions() {
+    let holding = Queue(shown: "Resume", waiting: nil, phase: .holding)
+    let leaving = holding.next(.arrived("Stop"), holds: false)
+    #expect(leaving.phase == .fadingOut)
+    let interrupted = leaving.next(.arrived("Resume"), holds: false)
+    #expect(interrupted.shown == "Resume")
+    #expect(interrupted.waiting == nil)
+    #expect(interrupted.next(.fadedOut, holds: false) == interrupted)
+    let replaced = interrupted.next(.arrived("Stop"), holds: false)
+      .next(.fadedOut, holds: false)
+    #expect(replaced.shown == "Stop")
+    #expect(replaced.waiting == nil)
+  }
+
   @Test("a new line waits for the old one to fade out before it fades in")
   func aNewLineWaitsForTheOldOneToFadeOut() {
     let leaving = Queue(shown: "Clicked Ring")

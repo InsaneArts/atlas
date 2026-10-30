@@ -17,7 +17,11 @@ struct ListSelectionFrame: ViewModifier {
       .onGeometryChange(for: CGRect?.self) { proxy in
         isSelected ? proxy.frame(in: .scrollView) : nil
       } action: { frame in
-        if let frame { selection?.report(id, at: frame) }
+        if let frame {
+          selection?.report(id, at: frame)
+        } else {
+          selection?.forget(id)
+        }
       }
   }
 }

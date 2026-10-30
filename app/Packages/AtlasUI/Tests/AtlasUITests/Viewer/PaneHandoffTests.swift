@@ -43,13 +43,14 @@ struct PaneHandoffTests {
     #expect(handoff.shown == .screenshots)
   }
 
-  @Test("reversing navigation still waits for departure and the Screen cancels a pending list")
+  @Test("reversing navigation cancels departure and the Screen cancels a pending list")
   func reversalAndScreenCancelPendingLists() {
     let handoff = PaneHandoff()
     handoff.request(.activity)
     handoff.request(.apps)
     handoff.request(.activity)
-    #expect(handoff.shown == nil)
+    #expect(handoff.shown == .activity)
+    #expect(handoff.departing == nil)
     handoff.departed(.activity)
     #expect(handoff.shown == .activity)
     handoff.request(.apps)

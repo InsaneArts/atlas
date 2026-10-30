@@ -8,6 +8,10 @@ struct ViewerHostContent: View {
   let state: ViewerState
   /// Whether a newly shown pane plays its arrival; off while the initial reference is laid out.
   var animatesArrivals = true
+  /// Whether this host exercises the reduced-motion policy.
+  var reduceMotion = false
+  /// Observes the layout under test without depending on accessibility services.
+  var frameReport: LayoutFrameReport?
 
   /// The window's content, its pictures painted flat.
   var body: some View {
@@ -15,6 +19,8 @@ struct ViewerHostContent: View {
       (PictureColour(rawValue: live.picture.id) ?? .stage).color
     }
     .environment(\.animatesArrivals, animatesArrivals)
+    .environment(\.motionReductionOverride, reduceMotion)
+    .environment(\.layoutFrameReport, frameReport)
     .frame(width: PreviewStates.viewerSize.width, height: PreviewStates.viewerSize.height)
   }
 }

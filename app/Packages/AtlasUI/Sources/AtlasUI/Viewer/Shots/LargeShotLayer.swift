@@ -11,7 +11,7 @@ struct LargeShotLayer: View {
   let zoom: Namespace.ID
   /// Receives what the person does.
   let send: @MainActor (ViewerEvent) -> Void
-  @Environment(\.accessibilityReduceMotion) private var reduceMotion
+  @Environment(\.motionReduced) private var reduceMotion
 
   /// The shade, the picture and its buttons, over the window.
   var body: some View {
@@ -64,6 +64,7 @@ struct LargeShotLayer: View {
           .transition(.opacity)
       }
     }
+    .modifier(ScreenshotFocus(enabled: shot != nil, takesFocus: true, target: .large))
     .animation(Motion.animation(Motion.zoom, reduceMotion: reduceMotion, reduced: Motion.reduced), value: shot == nil)
   }
 

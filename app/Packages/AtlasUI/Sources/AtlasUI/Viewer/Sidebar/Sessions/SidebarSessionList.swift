@@ -15,7 +15,10 @@ struct SidebarSessionList: View {
   let send: @MainActor (ViewerEvent) -> Void
   /// The row with the keyboard focus, if one has it.
   @FocusState private var focused: ViewerSessionChoice?
-  @Environment(\.accessibilityReduceMotion) private var reduceMotion
+  @Environment(\.motionReduced) private var reduceMotion
+  #if DEBUG
+    @Environment(\.initialSessionFocus) private var initialFocus
+  #endif
 
   /// All sessions over the sections' lines.
   var body: some View {
@@ -30,6 +33,11 @@ struct SidebarSessionList: View {
     }
     .animation(Self.layoutMotion(reduceMotion: reduceMotion), value: items.map(\.id))
     .onMoveCommand(perform: move)
+    .onAppear {
+      #if DEBUG
+        if let initialFocus { focused = initialFocus }
+      #endif
+    }
     .accessibilityElement(children: .contain)
     .accessibilityLabel(Text(verbatim: "Sessions"))
   }
@@ -96,7 +104,7 @@ struct SidebarSessionList: View {
   /// - Parameter reduceMotion: Whether the Reduce Motion setting is on.
   /// - Returns: The animation.
   nonisolated static func layoutMotion(reduceMotion: Bool) -> Animation? {
-    Motion.animation(Motion.state, reduceMotion: reduceMotion)
+    Motion.layout(Motion.state, reduceMotion: reduceMotion)
   }
 
   /// How a line comes and goes: fading in on ``Motion/arrive`` and out on ``Motion/leave``, an Ended row coming down

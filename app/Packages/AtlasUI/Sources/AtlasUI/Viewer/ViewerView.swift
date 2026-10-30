@@ -15,6 +15,9 @@ public struct ViewerView<Input: View, LivePicture: View>: View {
   private let input: Input
   /// Draws the newest picture.
   private let livePicture: (ViewerLivePicture) -> LivePicture
+  @FocusedValue(\.screenshotKeys) private var screenshotKeys
+  @FocusState private var screenshotFocus: ScreenshotFocusTarget?
+  @Environment(\.screenshotFocusReport) private var screenshotFocusReport
   /// The place the stage last settled on, which the next switch goes from.
   @State private var settledPlace: ViewerPlace
   /// Whether the last switch moved the picture between the stage and the corner, from ``ScreenZoom``.
@@ -38,7 +41,7 @@ public struct ViewerView<Input: View, LivePicture: View>: View {
   @Namespace private var zoom
   /// The namespace the helper's screen moves in between the stage and the corner.
   @Namespace private var screenZoom
-  @Environment(\.accessibilityReduceMotion) private var reduceMotion
+  @Environment(\.motionReduced) private var reduceMotion
 
   /// Creates the window's content.
   ///
@@ -72,6 +75,8 @@ public struct ViewerView<Input: View, LivePicture: View>: View {
           .padding(.vertical, ViewerLayout.cardInset)
           .padding(.trailing, ViewerLayout.cardInset)
       }
+      .disabled(largeShot != nil)
+      .accessibilityHidden(largeShot != nil)
       .overlay {
         LargeShotLayer(shot: largeShot, zoom: zoom, send: send)
           .allowsHitTesting(largeShot != nil)
@@ -80,6 +85,15 @@ public struct ViewerView<Input: View, LivePicture: View>: View {
         AlertLayer(state: state.alert) { send($0 == .confirm ? .alertConfirm : .alertCancel) }
       }
       .ignoresSafeArea(.container, edges: .top)
+    }
+    .onChange(of: screenshotKeys, initial: true) { _, ownsKeys in screenshotFocusReport?.report(ownsKeys == true) }
+    .environment(\.screenshotFocus, $screenshotFocus)
+    .onChange(of: largeShot != nil) { wasLarge, isLarge in
+      if isLarge {
+        screenshotFocus = .large
+      } else if wasLarge, state.pane.place == .screenshots {
+        screenshotFocus = .grid
+      }
     }
     .background(Color.groundRecessed)
     .foregroundStyle(Color.textPrimary)

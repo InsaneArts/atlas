@@ -45,7 +45,7 @@ enum ViewerLayout {
   static var shotFade: Animation { Motion.fade }
   /// 26: from the window's bottom to the large screenshot's bar.
   static let shotBarInset: CGFloat = 26
-  /// 0.36: how dark the picture goes outside a window shown from the Apps tab.
+  /// 0.36: how dark the picture goes outside a window shown from the Apps pane.
   static let spotlightDim = 0.36
   /// 14: how much the last picture blurs behind Connecting's words.
   static let lastFrameBlur: CGFloat = 14
@@ -79,8 +79,7 @@ enum ViewerLayout {
   ///   - reduceMotion: Whether the Reduce Motion setting is on.
   /// - Returns: The animation, or nil.
   static func miniLanding(velocity: Double, reduceMotion: Bool) -> Animation? {
-    guard !reduceMotion else { return nil }
-    return .interpolatingSpring(miniThrown, initialVelocity: velocity)
+    Motion.layout(.interpolatingSpring(miniThrown, initialVelocity: velocity), reduceMotion: reduceMotion)
   }
 
   /// Where a window outline lies in a view showing the picture letterboxed at its own shape, as a click there maps

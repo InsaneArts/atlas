@@ -5,7 +5,7 @@ import SwiftUI
 /// narrow card Stop and Resume turn into a circle round their symbol and Take Control into its hand, their titles fading
 /// out on ``Motion/swapOut`` before they narrow on ``Motion/state``, and back the other way as it widens; narrower
 /// still, the line keeps only its session's icon and its age. A change of mind mid-way turns back from where it is.
-/// Under Reduce Motion the circles change at once and only the words crossfade. Only these steps move: the window's own
+/// Under Reduce Motion the fit changes at once, including the words and age. Only these steps move: the window's own
 /// resize never animates anything here, and a press never does.
 struct ViewerFooter: View {
   /// What the footer shows.
@@ -18,7 +18,7 @@ struct ViewerFooter: View {
   @State private var fold: FooterFold
   /// Each change calls off the step an earlier one left to finish.
   @State private var generation = 0
-  @Environment(\.accessibilityReduceMotion) private var reduceMotion
+  @Environment(\.motionReduced) private var reduceMotion
 
   /// Creates the footer.
   ///
@@ -55,11 +55,7 @@ struct ViewerFooter: View {
     guard !reduceMotion else {
       var still = Transaction()
       still.disablesAnimations = true
-      withTransaction(still) { fold.isCircles = target.isCircles }
-      withAnimation(Motion.crossfadeReduced) {
-        fold.showsTitles = target.showsTitles
-        fold.showsWords = target.showsWords
-      }
+      withTransaction(still) { fold = target }
       return
     }
     if target.showsWords != fold.showsWords {

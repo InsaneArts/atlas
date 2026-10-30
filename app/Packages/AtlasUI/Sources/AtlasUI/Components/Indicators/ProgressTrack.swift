@@ -20,7 +20,7 @@ struct ProgressTrack: View {
   let count: Int
   /// What VoiceOver says for the track, such as "Step 2 of 6", from the owner's words.
   let label: String
-  @Environment(\.accessibilityReduceMotion) private var reduceMotion
+  @Environment(\.motionReduced) private var reduceMotion
 
   /// One segment per step, in a row.
   var body: some View {

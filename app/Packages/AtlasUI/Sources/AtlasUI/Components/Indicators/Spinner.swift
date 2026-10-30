@@ -9,7 +9,7 @@ struct Spinner: View {
   /// The faint ring the arc turns on: a fine edge (``Color/strokeStrong``) by default.
   var track = Color.strokeStrong
   @State private var turning = false
-  @Environment(\.accessibilityReduceMotion) private var reduceMotion
+  @Environment(\.motionReduced) private var reduceMotion
 
   /// A faint ring with the arc turning on it.
   var body: some View {

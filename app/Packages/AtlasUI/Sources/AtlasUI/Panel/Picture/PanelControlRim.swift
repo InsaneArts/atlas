@@ -5,7 +5,7 @@ import SwiftUI
 struct PanelControlRim: View {
   /// Whether the person holds control.
   let isShown: Bool
-  @Environment(\.accessibilityReduceMotion) private var reduceMotion
+  @Environment(\.motionReduced) private var reduceMotion
 
   /// The rim and its ring, shown or faded away.
   var body: some View {
