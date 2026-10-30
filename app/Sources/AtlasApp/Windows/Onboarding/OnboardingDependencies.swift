@@ -8,6 +8,8 @@ import AtlasUI
 struct OnboardingDependencies {
   /// The `atlas` command line every action runs.
   var commands: any CommandRunning
+  /// This process's console ownership, shared by all switch and lock offerings.
+  var console: SessionConsole = .shared
   /// Opens a URL, such as a Privacy & Security page.
   var openURL: @MainActor (URL) -> Void
   /// The app's login item, read for Open at Login's first value.

@@ -18,7 +18,7 @@ struct ProjectRow: View {
       size: .compact
     ) {
       Button("Forget…", action: forget)
-        .buttonStyle(.capsule(.glass, size: .mini))
+        .buttonStyle(.capsule(.secondary, size: .mini))
         .accessibilityLabel(project.forgetLabel)
     }
   }

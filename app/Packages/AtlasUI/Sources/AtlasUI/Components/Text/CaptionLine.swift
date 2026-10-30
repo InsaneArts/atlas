@@ -1,0 +1,35 @@
+import SwiftUI
+
+/// A caption's words on a solid chip, led by its session's icon while sessions show: one line for the captions over the
+/// main window's screen and the panel's picture alike, cut short at its end.
+struct CaptionLine: View {
+  /// The session's icon; nil for none.
+  let icon: RowIcon?
+  /// What was done, such as "Clicked Save in TextEdit".
+  let text: String
+
+  /// The icon, then the words.
+  var body: some View {
+    HStack(spacing: Spacing.xsPlus) {
+      if let icon {
+        SessionIcon(icon: icon, side: IconSize.xsPlus)
+      }
+      Text(text)
+        .truncationMode(.tail)
+    }
+  }
+}
+
+#if DEBUG
+  #Preview("Samples") {
+    VStack(alignment: .leading, spacing: Spacing.m) {
+      PictureChip(lead: .dot(.active)) {
+        CaptionLine(icon: SessionSamples.claudeIcon, text: SessionSamples.claudeDoing)
+      }
+      PictureChip(lead: .dot(.active), size: .small) {
+        CaptionLine(icon: nil, text: SessionSamples.claudeDoing)
+      }
+    }
+    .sampleSurface()
+  }
+#endif

@@ -425,12 +425,48 @@ Global options:
           Use another settings file
 ```
 
+## atlas activity
+
+```text
+List what this agent session did in the helper.
+
+Its recent actions, its screenshots, the copies open made that are still there, the environment plans it applied and not yet rolled back, whether an action of its own is unknown, and each task it named with ATLAS_TASK=NAME. Claude Code, Codex, opencode and Pi name their session themselves; elsewhere set ATLAS_SESSION=NAME. Without a session, or with --all, every session's. It only reads: it works while another agent or the person has control, or after a Stop.
+
+Usage: atlas activity [OPTIONS]
+
+Options:
+      --all
+          Every session's, not only this one's
+
+      --session <KEY>
+          Another session's, by the key --all lists
+
+      --limit <N>
+          How many recent actions to list: 10 unless given, at most 50
+          
+          [default: 10]
+
+  -h, --help
+          Print help (see a summary with '-h')
+
+Global options:
+      --json
+          Print JSON (the default when the output is not a terminal)
+
+      --config <FILE>
+          Use another settings file
+
+Examples:
+  atlas activity
+  atlas activity --all
+```
+
 ## atlas click
 
 ```text
 Click a point, or exactly one element of an app.
 
-Click at display point X Y (origin + screenshot pixels × pointsPerPixel), or on exactly one accessibility element of an app with --app and --name/--role.
+Click at display point X Y (origin + screenshot pixels × pointsPerPixel), or on exactly one accessibility element of an app with --app and --name/--role. With X Y, --app or --pid sends the click only if that app's window is the top one at the point, and --window only if that window is.
 
 Usage: atlas click [OPTIONS] [X] [Y]
 
@@ -447,6 +483,9 @@ Options:
 
       --pid <PID>
           Exact process ID, for apps with several processes
+
+      --window <N>
+          Only if window N (from atlas windows) is the top one at the point. Nothing is sent otherwise
 
       --name <NAME>
           Exact element title, label text, description or identifier
@@ -488,7 +527,7 @@ Examples:
 ```text
 Type text.
 
-The text is typed as given: a real newline or tab in it (in a shell, $'one\ntwo') or on standard input arrives as a line break or tab, while the two characters \n are typed as they are. Long text is typed in parts without breaking characters, and Atlas keeps control until the last part, so no other input lands in between.
+The text is typed as given: a real newline or tab in it (in a shell, $'one\ntwo') or on standard input arrives as a line break or tab, while the two characters \n are typed as they are. Long text is typed in parts without breaking characters, and Atlas keeps control until the last part, so no other input lands in between. With --app or --pid, text is typed only while that app has keyboard focus, and with --window or --field only while that window or field has it too, checked before every 16 characters; Atlas stops at the first check that fails.
 
 Usage: atlas type [OPTIONS] [TEXT]
 
@@ -499,6 +538,18 @@ Arguments:
 Options:
       --stdin
           Read the text from standard input instead
+
+      --app <APP>
+          Application name: the one process of that name with a window, or the app in front
+
+      --pid <PID>
+          Exact process ID, for apps with several processes
+
+      --window <N>
+          Only if window N (from atlas windows) has keyboard focus, with no sheet over it. Nothing is sent otherwise
+
+      --field <NAME>
+          Only if the focused field has this name, as atlas elements --name matches it. Nothing is sent otherwise
 
   -h, --help
           Print help (see a summary with '-h')
@@ -519,7 +570,7 @@ Examples:
 ```text
 Press keys, for example cmd+s or escape.
 
-Keys are pressed in order: `key cmd+s` or `key escape return`. A key is a letter, digit or punctuation mark, or one of return, tab, space, escape, backspace, forwarddelete, left, right, up, down, home, end, pageup, pagedown and f1 to f12; the plus key is written + on its own or at the end of a chord (cmd++).
+Keys are pressed in order: `key cmd+s` or `key escape return`. A key is a letter, digit or punctuation mark, or one of return, tab, space, escape, backspace, forwarddelete, left, right, up, down, home, end, pageup, pagedown and f1 to f12; the plus key is written + on its own or at the end of a chord (cmd++). With --app or --pid, each key is pressed only while that app has keyboard focus; --window and --field are checked before the first key, since a key may move them on purpose.
 
 Usage: atlas key [OPTIONS] <KEYS>...
 
@@ -528,6 +579,18 @@ Arguments:
           Keys or chords such as cmd+s, escape, return, shift+tab
 
 Options:
+      --app <APP>
+          Application name: the one process of that name with a window, or the app in front
+
+      --pid <PID>
+          Exact process ID, for apps with several processes
+
+      --window <N>
+          Only if window N (from atlas windows) has keyboard focus, with no sheet over it. Nothing is sent otherwise
+
+      --field <NAME>
+          Only if the focused field has this name, as atlas elements --name matches it. Nothing is sent otherwise
+
   -h, --help
           Print help (see a summary with '-h')
 
@@ -577,7 +640,7 @@ Examples:
 ```text
 Drag from one point to another.
 
-What is dragged (a window, a slider's knob, a selection) moves by exactly the distance between the points; the button itself is released up to one point past the end, in the direction of travel, never off the display. Drag-and-drop onto a target (selected text, files, list items) does not begin in the helper: macOS starts such a drag only from a real mouse.
+What is dragged (a window, a slider's knob, a selection) moves by exactly the distance between the points; the button itself is released up to one point past the end, in the direction of travel, never off the display. Drag-and-drop onto a target (selected text, files, list items) does not begin in the helper: macOS starts such a drag only from a real mouse. With --app or --pid, nothing is sent unless that app's window is the top one at the start point and at the end point; with --window, unless that window is the top one at the start point.
 
 Usage: atlas drag [OPTIONS] <FROM_X> <FROM_Y> <TO_X> <TO_Y>
 
@@ -601,6 +664,15 @@ Options:
           [default: left]
           [possible values: left, middle, right]
 
+      --app <APP>
+          Application name: the one process of that name with a window, or the app in front
+
+      --pid <PID>
+          Exact process ID, for apps with several processes
+
+      --window <N>
+          Only if window N (from atlas windows) is the top one at the start point. Nothing is sent otherwise
+
   -h, --help
           Print help (see a summary with '-h')
 
@@ -620,7 +692,7 @@ Examples:
 ```text
 Scroll at a point.
 
-Scroll at X Y by lines, as a mouse wheel's notches (about 10 points each, as the app has it); negative values scroll up or left.
+Scroll at X Y by lines, as a mouse wheel's notches (about 10 points each, as the app has it); negative values scroll up or left. With --app or --pid, nothing is sent unless that app's window is the top one at the point, and with --window unless that window is.
 
 Usage: atlas scroll [OPTIONS] <X> <Y>
 
@@ -642,6 +714,15 @@ Options:
           
           [default: 0]
 
+      --app <APP>
+          Application name: the one process of that name with a window, or the app in front
+
+      --pid <PID>
+          Exact process ID, for apps with several processes
+
+      --window <N>
+          Only if window N (from atlas windows) is the top one at the point. Nothing is sent otherwise
+
   -h, --help
           Print help (see a summary with '-h')
 
@@ -661,7 +742,7 @@ Examples:
 ```text
 Send several actions at once (a JSON array, or @path/to/actions.json).
 
-Each action is an object with a "type": move {x, y}; click {x, y, button?, count?, modifiers?}; drag {fromX, fromY, toX, toY, button?}; scroll {x, y, dx?, dy?}; type {text}; key {key}; wait {ms}. Up to 32 actions that finish within two seconds; coordinates are display points, a click is 1 to 5 clicks, a scroll at most 100 lines, text at most 256 characters, a wait at most 250 ms. Example: [{"type":"click","x":200,"y":120},{"type":"type","text":"hi"}]
+Each action is an object with a "type": move {x, y}; click {x, y, button?, count?, modifiers?}; drag {fromX, fromY, toX, toY, button?}; scroll {x, y, dx?, dy?}; type {text}; key {key}; wait {ms}. Up to 32 actions that finish within two seconds; coordinates are display points, a click is 1 to 5 clicks, a scroll at most 100 lines, text at most 256 characters, a wait at most 250 ms. With --app or --pid, each action is checked before it starts, as type, key, click, scroll and drag check it, and a move at its point. Example: [{"type":"click","x":200,"y":120},{"type":"type","text":"hi"}]
 
 Usage: atlas input [OPTIONS] <ACTIONS>
 
@@ -670,6 +751,12 @@ Arguments:
           A JSON array of actions, or @path/to/actions.json
 
 Options:
+      --app <APP>
+          Application name: the one process of that name with a window, or the app in front
+
+      --pid <PID>
+          Exact process ID, for apps with several processes
+
   -h, --help
           Print help (see a summary with '-h')
 
@@ -748,6 +835,41 @@ Examples:
   atlas close --app TextEdit
 ```
 
+## atlas cleanup
+
+```text
+See what this task left in the helper, and clean it up with --apply.
+
+Lists the copies into the helper this task applied, the apps it installed, the copies it opened and the apps running from them. With --apply it quits those apps, rolls the copies into the helper back newest first, moves the installs aside in the helper (held, and removed after 7 days), removes the copies, and reports what it kept and why. Run it again to finish what is left. Apps opened by name that still run are listed, not quit.
+
+Usage: atlas cleanup [OPTIONS]
+
+Options:
+      --apply
+          Do it; otherwise only show what would be done
+
+      --session <KEY>
+          An ended session's work, by the key atlas activity --all shows
+
+      --task <KEY>
+          Only one task, by the key atlas activity shows for it
+
+  -h, --help
+          Print help (see a summary with '-h')
+
+Global options:
+      --json
+          Print JSON (the default when the output is not a terminal)
+
+      --config <FILE>
+          Use another settings file
+
+Examples:
+  atlas cleanup
+  atlas cleanup --apply
+  atlas cleanup --session 3f9a1c07b2e4 --apply
+```
+
 ## atlas wait
 
 ```text
@@ -790,7 +912,7 @@ Examples:
 ```text
 Run a command in the helper and print its output.
 
-The command starts in the helper's home and finds programs where readiness looks for them: the helper's .local/bin and .cargo/bin, Homebrew, /usr/local/bin and the system folders. It is stopped after --timeout seconds (20 unless given, at most 600). Start anything longer in the background and read its log later. Atlas exits 1 when the command's exit code is not 0 or it was stopped, with the reply still ok.
+The command starts in the helper's home and finds programs where readiness looks for them: the helper's .local/bin and .cargo/bin, Homebrew, /usr/local/bin and the system folders. It is stopped after --timeout seconds (20 unless given, at most 600). Other agents may act while it runs; recovery, restart and updates answer busy until it ends. Atlas exits 1 when the command's exit code is not 0 or it was stopped, with the reply still ok. For a server or worker that must keep running, use atlas job start.
 
 Usage: atlas run [OPTIONS] -- <COMMAND>...
 
@@ -817,6 +939,189 @@ Global options:
 Examples:
   atlas run -- /bin/sh -c 'ls "$HOME/atlas-work"'
   atlas run --timeout 300 -- xcodebuild test-without-building -xctestrun Tests.xctestrun
+```
+
+## atlas job
+
+```text
+Keep a server or worker running in the helper, and stop it.
+
+A job starts in the helper's home like run, in a session and process group of its own, and keeps running after this command returns, for up to --timeout seconds. Atlas also ends it when the person stops agents and when the helper comes on screen. Stopping checks that it is still the same process, then ends its group and says what is left. A process the job starts that calls setsid leaves both its group and its session: Atlas neither stops it nor can always report it.
+
+Usage: atlas job [OPTIONS] <COMMAND>
+
+Commands:
+  start  Start a job and print its id
+  list   List this task's jobs; --all lists every job in the helper
+  log    Print the end of a job's output
+  stop   Stop a job: TERM, then KILL after --grace seconds
+  help   Print this message or the help of the given subcommand(s)
+
+Options:
+  -h, --help
+          Print help (see a summary with '-h')
+
+Global options:
+      --json
+          Print JSON (the default when the output is not a terminal)
+
+      --config <FILE>
+          Use another settings file
+
+Examples:
+  atlas job start --name web -- /usr/bin/python3 -m http.server 8000
+  atlas job list
+  atlas job log 7c2e91a04b3f
+  atlas job stop 7c2e91a04b3f
+```
+
+## atlas job start
+
+```text
+Start a job and print its id
+
+Usage: atlas job start [OPTIONS] -- <COMMAND>...
+
+Arguments:
+  <COMMAND>...
+          The program and its arguments, after `--`
+
+Options:
+      --name <NAME>
+          A short name to know it by; the program's name unless given
+
+      --timeout <SECONDS>
+          Seconds before Atlas stops it, 1 to 86400
+          
+          [default: 3600]
+
+  -h, --help
+          Print help
+
+Global options:
+      --json
+          Print JSON (the default when the output is not a terminal)
+
+      --config <FILE>
+          Use another settings file
+```
+
+## atlas job list
+
+```text
+List this task's jobs; --all lists every job in the helper
+
+Usage: atlas job list [OPTIONS]
+
+Options:
+      --all
+          
+
+  -h, --help
+          Print help
+
+Global options:
+      --json
+          Print JSON (the default when the output is not a terminal)
+
+      --config <FILE>
+          Use another settings file
+```
+
+## atlas job log
+
+```text
+Print the end of a job's output
+
+Usage: atlas job log [OPTIONS] <ID>
+
+Arguments:
+  <ID>
+          
+
+Options:
+      --bytes <BYTES>
+          Bytes from the end, at most 1048576
+          
+          [default: 16384]
+
+      --task <KEY>
+          Read a job of another task, after that task's session was lost
+
+  -h, --help
+          Print help
+
+Global options:
+      --json
+          Print JSON (the default when the output is not a terminal)
+
+      --config <FILE>
+          Use another settings file
+```
+
+## atlas job stop
+
+```text
+Stop a job: TERM, then KILL after --grace seconds
+
+Usage: atlas job stop [OPTIONS] <ID>
+
+Arguments:
+  <ID>
+          
+
+Options:
+      --grace <GRACE>
+          Seconds between TERM and KILL, 1 to 60
+          
+          [default: 5]
+
+      --task <KEY>
+          Stop a job of another task, after that task's session was lost
+
+  -h, --help
+          Print help
+
+Global options:
+      --json
+          Print JSON (the default when the output is not a terminal)
+
+      --config <FILE>
+          Use another settings file
+```
+
+## atlas collect
+
+```text
+Copy files a task made in the helper into a private folder here.
+
+Each FILE is a regular file owned by the helper, in its home (a path relative to it) or in /tmp, that has not changed for two seconds. The reply gives each copy's path, size and SHA-256. The file in the helper is left as it is.
+
+Usage: atlas collect [OPTIONS] <FILE>...
+
+Arguments:
+  <FILE>...
+          Files in the helper, at most 16
+
+Options:
+      --max-size <SIZE>
+          The largest file accepted, such as 200M (64M unless given, at most 1G)
+          
+          [default: 64M]
+
+  -h, --help
+          Print help (see a summary with '-h')
+
+Global options:
+      --json
+          Print JSON (the default when the output is not a terminal)
+
+      --config <FILE>
+          Use another settings file
+
+Examples:
+  atlas collect atlas-work/report.pdf
+  atlas collect --max-size 200M atlas-work/build.zip
 ```
 
 ## atlas readiness
@@ -862,6 +1167,7 @@ Commands:
   profile   Freeze selected files, exported variables and readiness requirements
   run       Run a command with the selected helper environment and helper tool paths
   apply     Copy a previewed plan into the helper (or finish one that stopped)
+  list      List copies into the helper and their state, newest first
   rollback  Show what undoing a copy would do, or undo it with --apply
   discover  Inspect selected tools, apps, variables and reference paths without launching them
   help      Print this message or the help of the given subcommand(s)
@@ -964,6 +1270,30 @@ Global options:
           Use another settings file
 ```
 
+## atlas environment list
+
+```text
+List copies into the helper and their state, newest first.
+
+Shows each plan's ID, state and the files it copies, never their contents, and which session made it. Plans rolled back completely are left out unless --all.
+
+Usage: atlas environment list [OPTIONS]
+
+Options:
+      --all
+          Include plans rolled back completely
+
+  -h, --help
+          Print help (see a summary with '-h')
+
+Global options:
+      --json
+          Print JSON (the default when the output is not a terminal)
+
+      --config <FILE>
+          Use another settings file
+```
+
 ## atlas environment rollback
 
 ```text
@@ -1019,6 +1349,35 @@ Global options:
 
       --config <FILE>
           Use another settings file
+```
+
+## atlas install-app
+
+```text
+Install an app into the helper's Applications folder for this task.
+
+Copies an .app from this Mac into ~/Applications in the helper, never over anything already there, registers it so atlas open --app NAME finds it, and records it, so that atlas cleanup --apply moves it aside in the helper once the task is done, unless it changed meanwhile. Settings and data the app writes in the helper stay.
+
+Usage: atlas install-app [OPTIONS] <PATH>
+
+Arguments:
+  <PATH>
+          The .app to install
+
+Options:
+  -h, --help
+          Print help (see a summary with '-h')
+
+Global options:
+      --json
+          Print JSON (the default when the output is not a terminal)
+
+      --config <FILE>
+          Use another settings file
+
+Examples:
+  atlas install-app ./build/Release/Probe.app
+  atlas open --app Probe
 ```
 
 ## atlas verify-native

@@ -1,9 +1,16 @@
 //! Protocol v1 requests the helper daemon accepts, validated before anything
 //! runs. Refusals keep their exact wording: clients and the live checks
 //! match on it.
+use crate::{error::Code, host_session::Key};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use std::time::Duration;
+
+mod job;
+mod read;
+
+pub use job::*;
+pub use read::ReadRefusal;
 
 /// Longest request line, in bytes.
 pub const MAX_REQUEST: usize = 1024 * 1024;
@@ -16,6 +23,26 @@ const MAX_DIMENSION: u64 = 8192;
 /// Farthest a region's top-left corner may lie from the display's, and its
 /// longest side, in display points.
 const MAX_POINTS: i32 = 16384;
+
+/// The longest a background job may run, and the shortest.
+pub const JOB_LIFETIME_MAX: Duration = Duration::from_secs(24 * 60 * 60);
+const JOB_LIFETIME_MIN: Duration = Duration::from_secs(1);
+/// The longest a stop waits between TERM and KILL, and the shortest.
+pub const JOB_GRACE_MAX: Duration = Duration::from_secs(60);
+const JOB_GRACE_MIN: Duration = Duration::from_secs(1);
+/// How long a stop waits between TERM and KILL unless told.
+pub const JOB_GRACE: Duration = Duration::from_secs(5);
+/// The most of a job's log one request reads.
+pub const JOB_LOG_MAX: usize = 1024 * 1024;
+/// The most characters a job's name keeps.
+pub const JOB_NAME_MAX: usize = 64;
+
+/// The largest part of a file one read returns.
+pub const READ_RANGE_MAX: u64 = 8 * 1024 * 1024;
+/// The largest file a read accepts.
+pub const READ_SIZE_MAX: u64 = 1 << 30;
+/// The longest path a read takes, in bytes.
+pub const READ_PATH_MAX: usize = 1024;
 
 /// A rectangle of the display in whole points: its top-left corner and size.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -68,6 +95,57 @@ pub enum Crop {
     Region(Region),
 }
 
+/// The daemon capability to refuse a request meant for another session of
+/// the helper, as its hello lists it.
+pub const SESSION_PIN: &str = "session-pin";
+
+/// The helper session a request was verified in: the daemon refuses it in
+/// any other, so a helper that logged in again is never read as the one
+/// that was checked.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct SessionPin {
+    pub security_session_id: u64,
+    pub display_id: u64,
+}
+
+/// The daemon capability to keep background jobs, as its hello lists it.
+pub const JOBS: &str = "jobs";
+
+/// The daemon capability to read files for the person's side to collect.
+pub const READ: &str = "read";
+
+/// What a file is, as `fstat` of its open descriptor says: the same path
+/// with any of these changed is another file, or one being written.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct FileIdentity {
+    pub dev: u64,
+    pub ino: u64,
+    pub size: u64,
+    /// Its modification and change times, in seconds and nanoseconds.
+    pub mtime: [i64; 2],
+    pub ctime: [i64; 2],
+}
+
+/// Part of a regular file in the helper, or its digest, for the person's
+/// side to collect.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ReadRequest {
+    /// As given: relative to the helper's home, or absolute.
+    pub path: String,
+    pub offset: u64,
+    /// At most [`READ_RANGE_MAX`]; 0 with `digest`.
+    pub length: u64,
+    /// What the first part found the file to be; none for the first part.
+    pub expect: Option<FileIdentity>,
+    /// Hash the whole file instead of returning a part.
+    pub digest: bool,
+    /// The largest file accepted.
+    pub max_size: u64,
+    pub pin: Option<SessionPin>,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Request {
     Hello,
@@ -77,26 +155,33 @@ pub enum Request {
         per_point: bool,
         crop: Option<Crop>,
     },
-    Apps,
+    Apps {
+        pin: Option<SessionPin>,
+    },
     Run {
         argv: Vec<String>,
         timeout: Duration,
+        pin: Option<SessionPin>,
     },
     Restart,
     /// Log this helper out; `force` ends its session without asking its apps.
     Logout {
         force: bool,
     },
+    /// Background jobs: start, stop, stop every one, show, read a log.
+    Job(JobRequest),
+    /// Part of a file in the helper, or its digest.
+    Read(ReadRequest),
 }
 
 /// A refusal in the shape every Atlas failure has, so a reader needs one
 /// parser. Nothing here is of unknown outcome: the request never ran.
-pub fn failure(code: &str, error: impl Into<String>) -> Value {
+pub fn failure(code: Code, error: impl Into<String>) -> Value {
     json!({"ok": false, "code": code, "error": error.into(), "uncertain": false})
 }
 
 fn bad(error: impl Into<String>) -> Value {
-    failure("bad-request", error)
+    failure(Code::BadRequest, error)
 }
 
 /// Parse one request line, or the reply that refuses it.
@@ -116,7 +201,9 @@ pub fn parse(line: &[u8]) -> Result<Request, Value> {
         .ok_or_else(|| bad("request is missing an \"op\" string"))?;
     match op {
         "hello" => Ok(Request::Hello),
-        "apps" => Ok(Request::Apps),
+        "apps" => Ok(Request::Apps {
+            pin: pin(&request)?,
+        }),
         "restart" => Ok(Request::Restart),
         "logout" => Ok(Request::Logout {
             force: match &request["force"] {
@@ -185,9 +272,225 @@ pub fn parse(line: &[u8]) -> Result<Request, Value> {
             Ok(Request::Run {
                 argv,
                 timeout: Duration::from_millis(timeout),
+                pin: pin(&request)?,
             })
         }
+        "job" => job(&request).map(Request::Job),
+        "read" => read(&request).map(Request::Read),
         other => Err(bad(format!("unknown op '{other}'"))),
+    }
+}
+
+/// A job start's program and its arguments, bounded as `run`'s are.
+fn job_argv(request: &Value) -> Result<Vec<String>, Value> {
+    let empty = || bad("job start requires a non-empty \"argv\" array");
+    let argv = request["argv"]
+        .as_array()
+        .filter(|argv| !argv.is_empty())
+        .ok_or_else(empty)?;
+    if argv.len() > MAX_ARGUMENTS {
+        return Err(bad("job start accepts at most 4096 arguments"));
+    }
+
+    let argv = argv
+        .iter()
+        .map(|argument| {
+            argument
+                .as_str()
+                .filter(|text| text.len() <= MAX_ARGUMENT_BYTES && !text.contains('\0'))
+                .map(str::to_owned)
+                .ok_or_else(|| bad("job start arguments must be strings without NUL"))
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+    if argv[0].is_empty() {
+        return Err(empty());
+    }
+    Ok(argv)
+}
+
+/// `request[field]` as milliseconds from `low` to `high`, or `default`
+/// when it is absent and there is one.
+fn millis(
+    request: &Value,
+    field: &str,
+    (low, high): (Duration, Duration),
+    default: Option<Duration>,
+) -> Result<Duration, Value> {
+    let (low, high) = (low.as_millis() as u64, high.as_millis() as u64);
+    match (&request[field], default) {
+        (Value::Null, Some(default)) => Ok(default),
+        (value, _) => value
+            .as_u64()
+            .filter(|n| (low..=high).contains(n))
+            .map(Duration::from_millis)
+            .ok_or_else(|| bad(format!("\"{field}\" must be {low}–{high}"))),
+    }
+}
+
+/// `request["id"]` as a job's ID.
+fn job_id(request: &Value) -> Result<JobId, Value> {
+    request["id"]
+        .as_str()
+        .and_then(JobId::parse)
+        .ok_or_else(|| bad("\"id\" must be a job's ID: 12 lowercase hex digits"))
+}
+
+/// `request[field]` as a session or task key, when it is given.
+fn key(request: &Value, field: &str) -> Result<Option<Key>, Value> {
+    match &request[field] {
+        Value::Null => Ok(None),
+        value => value
+            .as_str()
+            .and_then(Key::parse)
+            .map(Some)
+            .ok_or_else(|| bad(format!("\"{field}\" must be 12 lowercase hex digits"))),
+    }
+}
+
+/// Whether `name` may name a job: 1 to [`JOB_NAME_MAX`] characters, none
+/// of them a control character.
+pub fn job_name(name: &str) -> bool {
+    let count = name.chars().count();
+    (1..=JOB_NAME_MAX).contains(&count) && !name.chars().any(char::is_control)
+}
+
+/// A `job` request, by its `action`.
+fn job(request: &Value) -> Result<JobRequest, Value> {
+    let action = request["action"]
+        .as_str()
+        .ok_or_else(|| bad("job requires an \"action\" string"))?;
+    match action {
+        "start" => {
+            let name = match &request["name"] {
+                Value::Null => None,
+                value => Some(
+                    value
+                        .as_str()
+                        .filter(|name| job_name(name))
+                        .map(str::to_owned)
+                        .ok_or_else(|| {
+                            bad("\"name\" must be 1–64 characters, none of them a control character")
+                        })?,
+                ),
+            };
+            let uid = request["uid"]
+                .as_u64()
+                .and_then(|uid| u32::try_from(uid).ok())
+                .ok_or_else(|| bad("job start requires the helper's \"uid\""))?;
+            Ok(JobRequest::Start {
+                start: JobStart {
+                    argv: job_argv(request)?,
+                    lifetime: millis(
+                        request,
+                        "lifetimeMs",
+                        (JOB_LIFETIME_MIN, JOB_LIFETIME_MAX),
+                        None,
+                    )?,
+                    name,
+                    task: key(request, "task")?,
+                    session: key(request, "hostSession")?,
+                },
+                uid,
+                pin: pin(request)?,
+            })
+        }
+        "stop" => Ok(JobRequest::Stop {
+            id: job_id(request)?,
+            expect: request["expect"]
+                .as_object()
+                .filter(|expect| {
+                    expect.len() == 4
+                        && ["boot", "pid", "start", "pgid"]
+                            .iter()
+                            .all(|field| expect.contains_key(*field))
+                })
+                .and_then(|_| Expected::deserialize(&request["expect"]).ok())
+                .ok_or_else(|| {
+                    bad("\"expect\" must name the job's boot, pid, start and pgid, and nothing else")
+                })?,
+            grace: millis(
+                request,
+                "graceMs",
+                (JOB_GRACE_MIN, JOB_GRACE_MAX),
+                Some(JOB_GRACE),
+            )?,
+        }),
+        "stop-all" => Ok(JobRequest::StopAll {
+            reason: StopReason::deserialize(&request["reason"])
+                .map_err(|_| bad("\"reason\" must be person, on-console or stopped"))?,
+        }),
+        "show" => Ok(JobRequest::Show {
+            id: match &request["id"] {
+                Value::Null => None,
+                _ => Some(job_id(request)?),
+            },
+        }),
+        "log" => Ok(JobRequest::Log {
+            id: job_id(request)?,
+            bytes: request["bytes"]
+                .as_u64()
+                .and_then(|bytes| usize::try_from(bytes).ok())
+                .filter(|bytes| (1..=JOB_LOG_MAX).contains(bytes))
+                .ok_or_else(|| bad("\"bytes\" must be 1–1048576"))?,
+        }),
+        other => Err(bad(format!("unknown job action '{other}'"))),
+    }
+}
+
+/// A `read` request.
+fn read(request: &Value) -> Result<ReadRequest, Value> {
+    let path = request["path"]
+        .as_str()
+        .filter(|path| !path.is_empty() && path.len() <= READ_PATH_MAX && !path.contains('\0'))
+        .ok_or_else(|| bad("read requires a \"path\" of 1–1024 bytes without NUL"))?;
+    let number = |field: &str| match &request[field] {
+        Value::Null => Ok(0),
+        value => value
+            .as_u64()
+            .ok_or_else(|| bad(format!("\"{field}\" must be a whole number"))),
+    };
+    let offset = number("offset")?;
+    let length = number("length")?;
+    if length > READ_RANGE_MAX {
+        return Err(bad("\"length\" must be at most 8388608"));
+    }
+    let digest = match &request["digest"] {
+        Value::Null => false,
+        value => value
+            .as_bool()
+            .ok_or_else(|| bad("\"digest\" must be true or false"))?,
+    };
+    if digest && length != 0 {
+        return Err(bad("A digest reads the whole file: give \"length\" 0"));
+    }
+    let max_size = request["maxSize"]
+        .as_u64()
+        .filter(|size| (1..=READ_SIZE_MAX).contains(size))
+        .ok_or_else(|| bad("\"maxSize\" must be 1–1073741824"))?;
+    let expect = match &request["expect"] {
+        Value::Null => None,
+        value => Some(FileIdentity::deserialize(value).map_err(|_| {
+            bad("\"expect\" must be a file's dev, ino, size, mtime and ctime, and nothing else")
+        })?),
+    };
+    Ok(ReadRequest {
+        path: path.to_owned(),
+        offset,
+        length,
+        expect,
+        digest,
+        max_size,
+        pin: pin(request)?,
+    })
+}
+
+/// A request's `session`, the helper session it must be served in.
+fn pin(request: &Value) -> Result<Option<SessionPin>, Value> {
+    match &request["session"] {
+        Value::Null => Ok(None),
+        value => SessionPin::deserialize(value)
+            .map(Some)
+            .map_err(|_| bad("\"session\" must name a securitySessionId and a displayId")),
     }
 }
 
@@ -226,7 +529,7 @@ mod tests {
     #[test]
     fn requests_parse_into_operations() {
         assert_eq!(parse(br#"{"op":"hello"}"#), Ok(Request::Hello));
-        assert_eq!(parse(br#"{"op":"apps"}"#), Ok(Request::Apps));
+        assert_eq!(parse(br#"{"op":"apps"}"#), Ok(Request::Apps { pin: None }));
         assert_eq!(parse(br#"{"op":"restart"}"#), Ok(Request::Restart));
         assert_eq!(
             parse(br#"{"op":"logout"}"#),
@@ -260,7 +563,8 @@ mod tests {
             parse(br#"{"op":"run","argv":["/bin/echo","hi"],"timeoutMs":3000}"#),
             Ok(Request::Run {
                 argv: vec!["/bin/echo".into(), "hi".into()],
-                timeout: Duration::from_millis(3000)
+                timeout: Duration::from_millis(3000),
+                pin: None
             })
         );
 
@@ -269,6 +573,36 @@ mod tests {
         };
 
         assert_eq!(timeout, Duration::from_secs(30));
+    }
+
+    /// A run or an app listing may name the helper session it was verified
+    /// in; anything but its two numbers is refused.
+    #[test]
+    fn a_read_may_name_the_session_it_is_for() {
+        let pin = Some(SessionPin {
+            security_session_id: 42,
+            display_id: 7,
+        });
+        assert_eq!(
+            parse(br#"{"op":"apps","session":{"securitySessionId":42,"displayId":7}}"#),
+            Ok(Request::Apps { pin })
+        );
+        let Ok(Request::Run { pin: run, .. }) = parse(
+            br#"{"op":"run","argv":["true"],"session":{"securitySessionId":42,"displayId":7}}"#,
+        ) else {
+            panic!("a pinned run");
+        };
+        assert_eq!(run, pin);
+
+        for session in [
+            r#"{"securitySessionId":42}"#,
+            r#"{"securitySessionId":"42","displayId":7}"#,
+            r#"{"securitySessionId":42,"displayId":7,"uid":501}"#,
+            r#"42"#,
+        ] {
+            let line = format!(r#"{{"op":"apps","session":{session}}}"#);
+            assert_eq!(refused(&line)["code"], "bad-request", "{session}");
+        }
     }
 
     /// The wording clients match on.
@@ -443,5 +777,145 @@ mod tests {
 
         let huge = vec![b' '; MAX_REQUEST + 1];
         assert_eq!(parse(&huge).unwrap_err()["error"], "request exceeds 1 MiB");
+    }
+
+    const EXPECT: &str = r#"{"boot":"B","pid":4312,"start":[1,2],"pgid":4312}"#;
+
+    #[test]
+    fn job_requests_parse_within_their_bounds() {
+        let start = parse(
+            br#"{"op":"job","action":"start","argv":["/bin/sleep","9"],"lifetimeMs":3600000,"uid":502,"name":"web","task":"3f9a1c07b2e4","hostSession":"3f9a1c07b2e4"}"#,
+        )
+        .unwrap();
+        let Request::Job(JobRequest::Start { start, uid, .. }) = start else {
+            panic!("a start");
+        };
+        assert_eq!(start.argv, ["/bin/sleep", "9"]);
+        assert_eq!(start.lifetime, Duration::from_secs(3600));
+        assert_eq!(start.name.as_deref(), Some("web"));
+        assert_eq!(start.task.unwrap().as_str(), "3f9a1c07b2e4");
+        assert_eq!(uid, 502);
+
+        let stop =
+            format!(r#"{{"op":"job","action":"stop","id":"7c2e91a04b3f","expect":{EXPECT}}}"#);
+        let Ok(Request::Job(JobRequest::Stop { grace, expect, .. })) = parse(stop.as_bytes())
+        else {
+            panic!("a stop");
+        };
+        assert_eq!(grace, JOB_GRACE);
+        assert_eq!(expect.pgid, 4312);
+
+        assert_eq!(
+            parse(br#"{"op":"job","action":"stop-all","reason":"on-console"}"#),
+            Ok(Request::Job(JobRequest::StopAll {
+                reason: StopReason::OnConsole
+            }))
+        );
+        assert_eq!(
+            parse(br#"{"op":"job","action":"show"}"#),
+            Ok(Request::Job(JobRequest::Show { id: None }))
+        );
+        assert_eq!(
+            parse(br#"{"op":"job","action":"log","id":"7c2e91a04b3f","bytes":16384}"#),
+            Ok(Request::Job(JobRequest::Log {
+                id: JobId::parse("7c2e91a04b3f").unwrap(),
+                bytes: 16384
+            }))
+        );
+
+        let stop = |rest: &str| {
+            format!(r#"{{"op":"job","action":"stop","id":"7c2e91a04b3f","expect":{EXPECT}{rest}}}"#)
+        };
+        for line in [
+            r#"{"op":"job","action":"start","argv":["x"],"lifetimeMs":999,"uid":502}"#.to_owned(),
+            r#"{"op":"job","action":"start","argv":["x"],"lifetimeMs":86400001,"uid":502}"#.to_owned(),
+            r#"{"op":"job","action":"start","argv":["x"],"lifetimeMs":5000}"#.to_owned(),
+            r#"{"op":"job","action":"start","argv":[],"lifetimeMs":5000,"uid":502}"#.to_owned(),
+            r#"{"op":"job","action":"start","argv":["x"],"lifetimeMs":5000,"uid":502,"name":""}"#.to_owned(),
+            "{\"op\":\"job\",\"action\":\"start\",\"argv\":[\"x\"],\"lifetimeMs\":5000,\"uid\":502,\"name\":\"a\\nb\"}".to_owned(),
+            r#"{"op":"job","action":"start","argv":["x"],"lifetimeMs":5000,"uid":502,"task":"ABC"}"#.to_owned(),
+            stop(r#","graceMs":999"#),
+            stop(r#","graceMs":60001"#),
+            r#"{"op":"job","action":"log","id":"7c2e91a04b3f","bytes":0}"#.to_owned(),
+            r#"{"op":"job","action":"log","id":"7c2e91a04b3f","bytes":1048577}"#.to_owned(),
+            r#"{"op":"job","action":"stop-all","reason":"later"}"#.to_owned(),
+            r#"{"op":"job"}"#.to_owned(),
+        ] {
+            assert_eq!(refused(&line)["code"], "bad-request", "{line}");
+        }
+    }
+
+    #[test]
+    fn a_job_expectation_has_exactly_its_fields() {
+        for expect in [
+            r#"{"boot":"B","pid":4312,"start":[1,2]}"#,
+            r#"{"boot":"B","pid":4312,"start":[1,2],"pgid":4312,"uid":502}"#,
+            r#"{"boot":"B","pid":4312,"start":[1],"pgid":4312}"#,
+        ] {
+            let line =
+                format!(r#"{{"op":"job","action":"stop","id":"7c2e91a04b3f","expect":{expect}}}"#);
+            assert_eq!(refused(&line)["code"], "bad-request", "{expect}");
+        }
+    }
+
+    #[test]
+    fn job_ids_and_keys_are_exact() {
+        assert!(JobId::parse("7c2e91a04b3f").is_some());
+        for id in [
+            "7c2e91a04b3",
+            "7c2e91a04b3f0",
+            "7C2E91A04B3F",
+            "7c2e91a04b3g",
+        ] {
+            assert!(JobId::parse(id).is_none(), "{id}");
+            let line = format!(r#"{{"op":"job","action":"show","id":"{id}"}}"#);
+            assert_eq!(refused(&line)["code"], "bad-request", "{id}");
+        }
+        assert_eq!(JobId::new().as_str().len(), JobId::LEN);
+    }
+
+    #[test]
+    fn unknown_job_actions_are_bad_requests() {
+        let reply = refused(r#"{"op":"job","action":"stop-everything"}"#);
+        assert_eq!(reply["error"], "unknown job action 'stop-everything'");
+        assert_eq!(reply["uncertain"], false);
+    }
+
+    #[test]
+    fn read_requests_parse_within_their_bounds() {
+        let Ok(Request::Read(read)) = parse(
+            br#"{"op":"read","path":"atlas-work/a.bin","offset":8,"length":8388608,"maxSize":67108864}"#,
+        ) else {
+            panic!("a read");
+        };
+        assert_eq!(
+            (read.offset, read.length, read.max_size, read.digest),
+            (8, READ_RANGE_MAX, 64 << 20, false)
+        );
+        let Ok(Request::Read(digest)) = parse(
+            br#"{"op":"read","path":"a","digest":true,"maxSize":1,"expect":{"dev":1,"ino":2,"size":3,"mtime":[4,5],"ctime":[6,7]}}"#,
+        ) else {
+            panic!("a digest");
+        };
+        assert!(digest.digest);
+        assert_eq!(digest.expect.unwrap().size, 3);
+
+        let long = format!(
+            r#"{{"op":"read","path":"{}","maxSize":1}}"#,
+            "a".repeat(1025)
+        );
+        for line in [
+            r#"{"op":"read","maxSize":1}"#.to_owned(),
+            r#"{"op":"read","path":"","maxSize":1}"#.to_owned(),
+            long,
+            r#"{"op":"read","path":"a","length":8388609,"maxSize":1}"#.to_owned(),
+            r#"{"op":"read","path":"a","maxSize":0}"#.to_owned(),
+            r#"{"op":"read","path":"a","maxSize":1073741825}"#.to_owned(),
+            r#"{"op":"read","path":"a","digest":true,"length":5,"maxSize":1}"#.to_owned(),
+            r#"{"op":"read","path":"a","maxSize":1,"expect":{"dev":1}}"#.to_owned(),
+            "{\"op\":\"read\",\"path\":\"a\\u0000b\",\"maxSize\":1}".to_owned(),
+        ] {
+            assert_eq!(refused(&line)["code"], "bad-request", "{line}");
+        }
     }
 }

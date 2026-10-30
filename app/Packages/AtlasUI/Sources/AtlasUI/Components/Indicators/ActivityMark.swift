@@ -1,8 +1,8 @@
 import SwiftUI
 
 /// The mark that leads a line of what was done: a glowing blue dot for what runs now, a blue dot for the person's
-/// own, an orange warning sign for what did not work, and a quiet dot for the rest. VoiceOver reads the line, not the
-/// mark.
+/// own, an orange warning sign for what did not work, a quiet ring crossed by a dash for what was not sent, and a
+/// quiet dot for the rest. VoiceOver reads the line, not the mark.
 struct ActivityMark: View {
   /// Which mark it draws.
   let kind: ActivityMarkKind
@@ -24,11 +24,21 @@ struct ActivityMark: View {
       Image(systemName: "exclamationmark.triangle.fill")
         .font(Typography.font(.callout))
         .symbolRenderingMode(.palette)
-        .foregroundStyle(Color.ground, Color.attention)
+        .foregroundStyle(Color.onAttention, Color.attention)
     case .quiet:
       Circle()
         .fill(Color.strokePressed)
         .frame(width: IconSize.xxs, height: IconSize.xxs)
+    case .notSent:
+      Circle()
+        .strokeBorder(Color.textTertiary, lineWidth: Stroke.regular)
+        .overlay {
+          Capsule()
+            .fill(Color.textTertiary)
+            // 6: the dash across the not-sent ring, half its 12-point side.
+            .frame(width: IconSize.xxs, height: Stroke.regular)
+        }
+        .frame(width: IconSize.xs, height: IconSize.xs)
     }
   }
 }
@@ -40,6 +50,7 @@ struct ActivityMark: View {
       ActivityMark(kind: .person)
       ActivityMark(kind: .failed)
       ActivityMark(kind: .quiet)
+      ActivityMark(kind: .notSent)
     }
     .sampleSurface()
   }

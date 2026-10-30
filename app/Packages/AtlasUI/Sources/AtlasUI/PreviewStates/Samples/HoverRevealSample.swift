@@ -11,7 +11,7 @@
         Text(verbatim: "Opie Settings")
           .frame(maxWidth: .infinity, alignment: .leading)
         Button(String("Show on Screen")) {}
-          .buttonStyle(.capsule(.glass, size: .mini))
+          .buttonStyle(.capsule(.secondary, size: .mini))
           .revealsOnHover(isHovered)
       }
       .padding(.horizontal, Spacing.mPlus)

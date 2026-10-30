@@ -1,53 +1,45 @@
 import CoreGraphics
 
-/// The Screen tab: the helper's screen at its own shape, or why there is none, and what is laid over it.
+/// The Screen: the helper's screen at its own shape, or why there is none, a window outlined over it, and the commands
+/// its context menu offers.
 public struct ViewerScreenState: Equatable, Sendable {
   /// The latest picture of the helper's screen; nil shows ``empty``.
   public var picture: DesktopPicture?
-  /// How the picture is drawn: live, dimmed, paused or inside control's rim.
+  /// How the picture is drawn: live, dimmed, paused or inside control's edge.
   public var look: PictureLook
   /// Why there is no picture, in place of one; nil while a picture shows.
   public var empty: ViewerEmpty?
-  /// The chip at the top of the screen; nil shows none.
-  public var chip: ViewerScreenChip?
-  /// One line about the last thing that happened, under the chip; nil shows none.
-  public var notice: String?
-  /// The latest actions in the screen's corner, oldest first.
-  public var captions: [ActivityEntry]
   /// The helper's display in points while the screen is drawn at actual size, one view point a display point, in a
-  /// view that scrolls; nil fits the screen to the window.
+  /// view that scrolls; nil fits the screen to the card.
   public var actualSize: CGSize?
-  /// A window shown from the Apps tab, outlined over the picture; nil shows none.
+  /// A window shown from the Apps list, outlined over the picture; nil shows none.
   public var outline: ViewerWindowOutline?
+  /// What a right click on the picture offers, in sections; none while this window holds control, where the click is
+  /// the helper's.
+  public var menu: [ViewerMenuSection]
 
-  /// Creates the Screen tab's state.
+  /// Creates the Screen's state.
   ///
   /// - Parameters:
   ///   - picture: The latest picture of the helper's screen; nil shows `empty`.
   ///   - look: How the picture is drawn.
   ///   - empty: Why there is no picture, in place of one.
-  ///   - chip: The chip at the top of the screen.
-  ///   - notice: One line about the last thing that happened.
-  ///   - captions: The latest actions in the screen's corner, oldest first.
-  ///   - actualSize: The helper's display in points while drawn at actual size; nil fits it to the window.
-  ///   - outline: A window shown from the Apps tab; nil shows none.
+  ///   - actualSize: The helper's display in points while drawn at actual size; nil fits it to the card.
+  ///   - outline: A window shown from the Apps list; nil shows none.
+  ///   - menu: What a right click on the picture offers; nothing by default.
   public init(
     picture: DesktopPicture? = nil,
     look: PictureLook = .live,
     empty: ViewerEmpty? = nil,
-    chip: ViewerScreenChip? = nil,
-    notice: String? = nil,
-    captions: [ActivityEntry] = [],
     actualSize: CGSize? = nil,
-    outline: ViewerWindowOutline? = nil
+    outline: ViewerWindowOutline? = nil,
+    menu: [ViewerMenuSection] = []
   ) {
     self.picture = picture
     self.look = look
     self.empty = empty
-    self.chip = chip
-    self.notice = notice
-    self.captions = captions
     self.actualSize = actualSize
     self.outline = outline
+    self.menu = menu
   }
 }

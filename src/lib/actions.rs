@@ -1,8 +1,9 @@
-//! The input actions a batch may hold, and the bounds every batch is checked
-//! against before anything is sent: coordinates on the display, known keys
-//! and modifiers, and a total that finishes within two seconds.
+//! The input actions a batch may hold, the app a batch may be for, and the
+//! bounds every batch is checked against before anything is sent:
+//! coordinates on the display, known keys and modifiers, and a total that
+//! finishes within two seconds.
 use crate::{
-    error::{Error, Result},
+    error::{Code, Error, Result},
     session::Display,
 };
 use serde::{Deserialize, Serialize};
@@ -87,6 +88,144 @@ pub enum PointerPhase {
 
 fn one() -> u8 {
     1
+}
+
+/// The longest field name an expectation may carry, in characters: longer
+/// than any label `atlas elements` shows whole.
+const FIELD_MAX: usize = 256;
+
+/// The app an agent's batch is for: its process in the helper and, when
+/// named, the window and the field that should have keyboard focus. A
+/// batch that names one is sent only while each action would reach it.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct Expect {
+    pid: i32,
+    /// The window's number, as the window list gives it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    window: Option<u32>,
+    /// The field's name, as `atlas elements --name` matches it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    field: Option<String>,
+}
+
+impl Expect {
+    /// The expectation for process `pid`, refused unless it can be one.
+    pub fn new(pid: i64) -> Result<Self> {
+        i32::try_from(pid)
+            .ok()
+            .filter(|pid| *pid > 0)
+            .map(|pid| Self {
+                pid,
+                window: None,
+                field: None,
+            })
+            .ok_or_else(not_a_process)
+    }
+
+    /// The expectation that window `number` of the app has keyboard focus
+    /// (or, for a pointer action, is the one at the point), refused unless
+    /// it can be a window number.
+    pub fn in_window(self, number: i64) -> Result<Self> {
+        let window = u32::try_from(number)
+            .ok()
+            .filter(|number| *number > 0)
+            .ok_or_else(not_a_window)?;
+        Ok(Self {
+            window: Some(window),
+            ..self
+        })
+    }
+
+    /// The expectation that the focused field is named `name`, refused
+    /// unless it names something.
+    pub fn in_field(self, name: &str) -> Result<Self> {
+        let length = name.chars().count();
+        if name.trim().is_empty() || length > FIELD_MAX {
+            return Err(not_a_field());
+        }
+
+        Ok(Self {
+            field: Some(name.to_owned()),
+            ..self
+        })
+    }
+
+    /// A request's expectation: none when absent or null. Anything but
+    /// `{"pid": N}` naming a process, with at most a window number and a
+    /// field name, is refused, each member with its own error, so a member
+    /// this build does not know is never ignored.
+    pub fn from_request(value: &Value) -> Result<Option<Self>> {
+        if value.is_null() {
+            return Ok(None);
+        }
+
+        let members = value.as_object().ok_or_else(not_a_process)?;
+        if let Some(unknown) = members
+            .keys()
+            .find(|key| !["pid", "window", "field"].contains(&key.as_str()))
+        {
+            return Err(Error::new(
+                Code::Input,
+                format!("\"expect\" has a member this build does not check: {unknown}"),
+            ));
+        }
+
+        let pid = members
+            .get("pid")
+            .and_then(Value::as_i64)
+            .ok_or_else(not_a_process)?;
+        let mut expect = Self::new(pid)?;
+        if let Some(window) = members.get("window") {
+            expect = expect.in_window(window.as_i64().ok_or_else(not_a_window)?)?;
+        }
+        if let Some(field) = members.get("field") {
+            expect = expect.in_field(field.as_str().ok_or_else(not_a_field)?)?;
+        }
+
+        Ok(Some(expect))
+    }
+
+    /// The process the batch is for.
+    pub fn pid(&self) -> i64 {
+        self.pid.into()
+    }
+
+    /// The window that should have keyboard focus, if one is named.
+    pub fn window(&self) -> Option<i64> {
+        self.window.map(i64::from)
+    }
+
+    /// The name of the field that should have keyboard focus, if one is
+    /// named.
+    pub fn field(&self) -> Option<&str> {
+        self.field.as_deref()
+    }
+
+    /// The expectation of the app alone: for a key after the batch's
+    /// first, whose window or field an earlier key (tab, return, cmd+w)
+    /// may have moved on purpose.
+    pub fn app_only(&self) -> Self {
+        Self {
+            pid: self.pid,
+            window: None,
+            field: None,
+        }
+    }
+}
+
+fn not_a_process() -> Error {
+    Error::new(Code::Input, "\"expect\" must name a process ID")
+}
+
+fn not_a_window() -> Error {
+    Error::new(Code::Input, "\"window\" must be a window number")
+}
+
+fn not_a_field() -> Error {
+    Error::new(
+        Code::Input,
+        format!("\"field\" must be a name of 1 to {FIELD_MAX} characters"),
+    )
 }
 
 /// CoreGraphics modifier masks (`CGEventFlags`), the flags a chord sends.
@@ -287,7 +426,7 @@ pub fn validate(value: &Value, display: &Display) -> Result<()> {
 pub(crate) fn parse(value: &Value, display: &Display) -> Result<Vec<Action>> {
     let actions = Vec::<Action>::deserialize(value)?;
     if actions.is_empty() || actions.len() > 32 {
-        return Err(Error::new("input", "Send between 1 and 32 actions"));
+        return Err(Error::new(Code::Input, "Send between 1 and 32 actions"));
     }
 
     let point = |x: f64, y: f64| {
@@ -371,7 +510,7 @@ pub(crate) fn parse(value: &Value, display: &Display) -> Result<Vec<Action>> {
 
         if let Some(problem) = problem {
             return Err(Error::new(
-                "input",
+                Code::Input,
                 format!(
                     "Action {} was refused and nothing was sent: {problem}",
                     index + 1
@@ -383,7 +522,7 @@ pub(crate) fn parse(value: &Value, display: &Display) -> Result<Vec<Action>> {
 
         if cost > BATCH_MS {
             return Err(Error::new(
-                "input",
+                Code::Input,
                 "The batch would take longer than two seconds; send it in parts",
             ));
         }
@@ -395,6 +534,73 @@ pub(crate) fn parse(value: &Value, display: &Display) -> Result<Vec<Action>> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn an_expectation_must_be_a_process_id() {
+        use serde_json::json;
+
+        assert_eq!(Expect::from_request(&Value::Null).unwrap(), None);
+        assert_eq!(Expect::from_request(&json!({})["expect"]).unwrap(), None);
+        let five = Expect::from_request(&json!({"pid": 5})).unwrap().unwrap();
+        assert_eq!(five.pid(), 5);
+        assert_eq!(serde_json::to_value(&five).unwrap(), json!({"pid": 5}));
+
+        for refused in [
+            json!({"pid": 0}),
+            json!({"pid": -1}),
+            json!({"pid": "5"}),
+            json!({"pid": 2147483648_i64}),
+            json!({}),
+            json!({"pid": 5, "app": "TextEdit"}),
+            json!(5),
+        ] {
+            let error = Expect::from_request(&refused).unwrap_err();
+            assert_eq!(error.code, "input", "{refused}");
+        }
+
+        assert!(Expect::new(812).is_ok());
+        assert!(Expect::new(0).is_err());
+        assert!(Expect::new(1 << 31).is_err());
+    }
+
+    #[test]
+    fn an_expectation_may_name_a_window_number_and_a_field() {
+        use serde_json::json;
+
+        let named = json!({"pid": 5, "window": 4120, "field": "Email"});
+        let expect = Expect::from_request(&named).unwrap().unwrap();
+        assert_eq!(
+            (expect.pid(), expect.window(), expect.field()),
+            (5, Some(4120), Some("Email"))
+        );
+        assert_eq!(serde_json::to_value(&expect).unwrap(), named);
+        assert_eq!(
+            serde_json::to_value(expect.app_only()).unwrap(),
+            json!({"pid": 5})
+        );
+
+        for (refused, member) in [
+            (json!({"pid": 5, "window": 0}), "\"window\""),
+            (json!({"pid": 5, "window": -3}), "\"window\""),
+            (json!({"pid": 5, "window": "4120"}), "\"window\""),
+            (json!({"pid": 5, "window": 4294967296_i64}), "\"window\""),
+            (json!({"pid": 5, "field": ""}), "\"field\""),
+            (json!({"pid": 5, "field": "  "}), "\"field\""),
+            (
+                json!({"pid": 5, "field": "x".repeat(FIELD_MAX + 1)}),
+                "\"field\"",
+            ),
+            (json!({"pid": 5, "field": 7}), "\"field\""),
+            (json!({"window": 4120}), "process ID"),
+            (json!({"pid": 5, "app": "TextEdit"}), "app"),
+        ] {
+            let error = Expect::from_request(&refused).unwrap_err();
+            assert_eq!(error.code, "input", "{refused}");
+            assert!(error.error.contains(member), "{refused}: {}", error.error);
+        }
+        let longest = json!({"pid": 5, "field": "é".repeat(FIELD_MAX)});
+        assert!(Expect::from_request(&longest).is_ok());
+    }
 
     #[test]
     fn keys_are_named_or_refused() {
@@ -427,7 +633,7 @@ mod tests {
             )
         }
 
-        pub fn valid_key(value: &str) -> bool {
+        pub(super) fn valid_key(value: &str) -> bool {
             if value.is_empty() || value.len() > 80 {
                 return false;
             }
@@ -482,7 +688,7 @@ mod tests {
                 && parts.into_iter().all(modifier)
         }
 
-        pub fn modifier_flags(modifiers: &[String]) -> u64 {
+        pub(super) fn modifier_flags(modifiers: &[String]) -> u64 {
             modifiers.iter().fold(0, |flags, m| {
                 flags
                     | match m.as_str() {
@@ -576,7 +782,7 @@ mod tests {
         }
 
         /// What the engine sent for a key action.
-        pub fn engine(key: &str) -> Option<(u16, u64)> {
+        pub(super) fn engine(key: &str) -> Option<(u16, u64)> {
             let lower = key.to_lowercase();
             let mut parts: Vec<_> = lower.split('+').map(str::to_owned).collect();
             let mut key = parts.pop().unwrap_or_default();

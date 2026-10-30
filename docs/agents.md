@@ -57,6 +57,22 @@ The local integration runs Atlas on this Mac. A remote SSH session or Cloud Agen
 
 Use `atlas agents project` in a project to add Atlas's maintained section to `AGENTS.md`. Atlas does not generate `.cursorrules` or edit global Cursor rules.
 
+## Several agents and time limits
+
+More than one agent, on the same host or different ones, can use the helper at the same time. Atlas lets one input or other change happen at a time: such a command waits its turn, up to 30 seconds (`--wait SECONDS`, or `ATLAS_WAIT`), and waiting commands go in the order they began. Programs agents start with `atlas run` (up to 8) keep running beside them. Agents pass `--app NAME` to keyboard and pointer commands, so nothing is sent when another agent's app is in front, and close only what they opened.
+
+Atlas tells agents' sessions apart by themselves. Claude Code, Codex and Pi give each command their session id; opencode's comes from Atlas's plugin. Cursor commands carry no session yet. `ATLAS_SESSION=NAME` names the work of a command that has no host session, such as a script or a Cursor agent; a host session id the command inherits always wins over it, so within one host session use `ATLAS_TASK` to keep work apart. Within a session, `ATLAS_TASK=NAME` keeps one part of the work apart: Atlas records the copies, environment plans and apps that task made on its own, and `atlas activity` lists them per task. Subagents share their parent's session, so subagents working side by side put their own `ATLAS_TASK=NAME` on every command, cleanup included: a plain `atlas cleanup` covers the whole session. A plain `atlas cleanup` covers the whole session, every task included; keep the same `ATLAS_TASK` through cleanup, and check the preview's session, task and steps before `--apply`. Sessions and tasks grant no authority: they never decide what an agent may do, but they do select whose work a cleanup or listing covers.
+
+Each host also stops a shell command that runs too long. A stop in the middle of a change can leave its outcome unknown, which blocks every agent until the agent whose command it was, or you, runs `atlas restart`. So agents keep each shell call, every chained command and its wait included, under their host's limit with about 10 seconds to spare, keep checking a command the host handed back until it finishes, and never leave an Atlas command running when their turn ends:
+
+| Host        | Shell time limit                                                                                                                                 |
+| ----------- | ------------------------------------------------------------------------------------------------------------------------------------------------ |
+| Claude Code | At 2 minutes, unless the Bash call asks for more (up to 10), the command moves to the background and keeps running                               |
+| Codex       | At its tool timeout, about 10 seconds unless the call asks for longer, the command is handed back still running; it is killed when the turn ends |
+| opencode    | 2 minutes unless the agent passes a timeout; stopped, then killed 0.2 seconds later                                                              |
+| Pi          | None unless the agent passes one; killed at once at the limit or when you abort                                                                  |
+| Cursor      | Not known yet; agents keep each shell call under 2 minutes                                                                                       |
+
 ## Verify the connection
 
 First run `atlas doctor --json` and check for `ready: true`. Then run `atlas agents status` and check the host you connected. These are separate checks: a connected plugin does not make a logged-out helper ready.
@@ -104,8 +120,9 @@ and test apps without touching my desktop, windows, keyboard or mouse.
   `atlas screenshot --app NAME`, show me the screenshots, and
   `atlas close --app NAME` for each app you opened when you are done.
 - If the app needs my settings or files, copy only those into the helper
-  yourself with `atlas environment`, and roll the copy back when you are done.
-  Never ask me to copy anything.
+  yourself with `atlas environment`. When you are done, run `atlas cleanup`,
+  then `atlas cleanup --apply`, to roll the copies back. Never ask me to copy
+  anything.
 - Never test on my own desktop and never change privacy permissions. If an
   action's outcome is unknown, never repeat it: take a screenshot, run
   `atlas restart` only if that action was yours, look again, and tell me.

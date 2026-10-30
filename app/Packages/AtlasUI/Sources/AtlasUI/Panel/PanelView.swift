@@ -1,16 +1,16 @@
 import SwiftUI
 
-/// The menu bar panel: the helper's status as its heading, its screen, the newest actions and the actions on the
-/// agent. It draws its state and sends what the person does; it decides nothing. A state change moves every piece at
-/// once on ``PanelLayout/change``: the word, the line, the picture's look and the buttons ease together, so nothing
-/// ripples down the panel on every flip. It fills the popover that holds it, whose corners, glass and shadow are the
-/// system's; `panelCard()` draws its own where no popover does.
+/// The menu bar panel: the helper's status as its heading, its screen, the newest actions or, while two or more are
+/// live, the host sessions, and the actions on the agent. It draws its state and sends what the person does; it decides
+/// nothing. A state change moves every piece at once on ``PanelLayout/change``: the word, the line, the picture's look
+/// and the buttons ease together, so nothing ripples down the panel on every flip. It fills the popover that holds it,
+/// whose corners and shadow are the system's, on its own opaque ground, so nothing of the popover's material shows
+/// through; `panelCard()` draws the corners and shadow where no popover does.
 public struct PanelView: View {
   /// What the panel shows.
   private let state: PanelState
   /// Receives what the person does.
   private let send: @MainActor (PanelEvent) -> Void
-  @Environment(\.accessibilityReduceTransparency) private var reduceTransparency
 
   /// Creates the panel.
   ///
@@ -22,13 +22,15 @@ public struct PanelView: View {
     self.send = send
   }
 
-  /// The header, the picture, Recent when there is any, then the buttons.
+  /// The header, the picture, Sessions while there are any, else Recent when there is any, then the buttons.
   public var body: some View {
     VStack(alignment: .leading, spacing: PanelLayout.gap) {
       PanelHeader(status: state.status, notice: state.notice, isMoreOpen: state.isMoreOpen, send: send)
       PanelPicture(state: state.picture, send: send)
         .animation(PanelLayout.change, value: state.picture.look)
-      if !state.recent.isEmpty {
+      if !state.sessions.isEmpty {
+        PanelSessions(entries: state.sessions, more: state.moreSessions, send: send)
+      } else if !state.recent.isEmpty {
         PanelRecent(entries: state.recent, send: send)
       }
       PanelControlRow(controls: state.controls, send: send)
@@ -36,12 +38,8 @@ public struct PanelView: View {
     }
     .padding(PanelLayout.inset)
     .frame(width: PanelLayout.width)
-    .background(
-      PanelLayout.ground
-        .opacity(PanelLayout.groundOpacity(reduceTransparency: reduceTransparency))
-    )
+    .background(PanelLayout.ground)
     .foregroundStyle(Color.textPrimary)
-    .environment(\.colorScheme, .dark)
     // Only a change is spoken: a poll that reads the same announcement or notice again says nothing.
     .onChange(of: state.announcement) { _, text in if let text { announce(text) } }
     .onChange(of: state.notice) { _, notice in if let notice { announce(notice) } }
@@ -107,6 +105,24 @@ public struct PanelView: View {
 
   #Preview("Picture paused") {
     PanelView(state: PreviewStates.panelPaused) { _ in }
+      .panelCard()
+      .padding(Spacing.xxxl)
+  }
+
+  #Preview("Sessions") {
+    PanelView(state: PreviewStates.panelSessions) { _ in }
+      .panelCard()
+      .padding(Spacing.xxxl)
+  }
+
+  #Preview("Sessions waiting") {
+    PanelView(state: PreviewStates.panelSessionsWaiting) { _ in }
+      .panelCard()
+      .padding(Spacing.xxxl)
+  }
+
+  #Preview("Sessions need you") {
+    PanelView(state: PreviewStates.panelSessionsNeedsYou) { _ in }
       .panelCard()
       .padding(Spacing.xxxl)
   }

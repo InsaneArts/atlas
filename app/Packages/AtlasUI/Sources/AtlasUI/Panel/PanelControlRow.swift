@@ -1,7 +1,7 @@
 import SwiftUI
 
 /// The panel's buttons, the actions on the agent: Stop while an agent works, or Resume once the person stopped agents,
-/// in a glass slot that grows in and out as the main action makes room, then the white main action filling the row.
+/// in a secondary slot that grows in and out as the main action makes room, then the white main action filling the row.
 /// Each names its menu item and shortcut in its tooltip, as the main window's buttons do.
 struct PanelControlRow: View {
   /// The buttons' states.
@@ -12,46 +12,60 @@ struct PanelControlRow: View {
   /// Stop or Resume in its slot, then the main action filling the row.
   var body: some View {
     HStack(spacing: Spacing.s) {
-      Button {
-        send(agentEvent)
-      } label: {
-        // Laid out at Resume's width either way, so pressing Stop never changes the button's width.
-        ZStack {
-          Text(verbatim: "Resume")
-            .hidden()
-          Text(agentTitle)
-            .swapsText(on: agentTitle)
+      LineSwap(agentTitle) { shown, isDrawn, isReady in
+        Button {
+          if isReady && agentIsEnabled { send(agentEvent) }
+        } label: {
+          // Reserve Resume's width so changing the action never resizes either button.
+          ZStack {
+            Text(verbatim: "Resume")
+              .hidden()
+            Text(shown)
+              .opacity(isDrawn ? 1 : 0)
+          }
         }
+        .buttonStyle(.capsule(.secondary, size: .small))
+        .disabled(!agentIsEnabled || !isReady)
+        .help(controls.agentHelp)
+        .accessibilityLabel(shown)
+        .layoutFrame("panel agent action")
+        .actionSlot(controls.agent != nil)
       }
-      .buttonStyle(.capsule(.glass, size: .small))
-      .disabled(!agentIsEnabled)
-      .help(controls.agentHelp)
-      .actionSlot(controls.agent != nil)
-      Button(controls.main.title) { send(controls.main.event) }
+      LineSwap(controls.main.title) { shown, isDrawn, isReady in
+        Button {
+          if isReady && controls.main.isEnabled { send(controls.main.event) }
+        } label: {
+          Text(shown)
+            .opacity(isDrawn ? 1 : 0)
+        }
         .buttonStyle(.capsule(size: .small, fill: true))
-        .disabled(!controls.main.isEnabled)
+        .disabled(!controls.main.isEnabled || !isReady)
         .help(controls.main.help)
+        .accessibilityLabel(shown)
+        .layoutFrame("panel main action")
+      }
     }
     .animatesActionSlots(controls.agent != nil)
   }
 
-  /// The glass button's word: Resume once agents are stopped, else Stop.
+  /// The secondary button's word: Resume once agents are stopped, else Stop.
   private var agentTitle: String {
     isResume ? "Resume" : "Stop"
   }
 
-  /// What the glass button sends.
+  /// What the secondary button sends.
   private var agentEvent: PanelEvent {
     isResume ? .resumeAgent : .stopAgent
   }
 
-  /// Whether the glass button can be pressed: Stop always, Resume once nothing else is asked of the service.
+  /// Whether the secondary button can be pressed: Stop always, Resume once nothing else is asked of the service.
   private var agentIsEnabled: Bool {
+    guard controls.agent != nil else { return false }
     guard case .resume(let isEnabled) = controls.agent else { return true }
     return isEnabled
   }
 
-  /// Whether the glass button is Resume.
+  /// Whether the secondary button is Resume.
   private var isResume: Bool {
     guard case .resume = controls.agent else { return false }
     return true

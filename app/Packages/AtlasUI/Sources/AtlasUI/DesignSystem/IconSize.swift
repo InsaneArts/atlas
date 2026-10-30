@@ -22,6 +22,8 @@ enum IconSize {
   static let l: CGFloat = 30
   /// 34: an account's avatar in a choice row, and an app's icon.
   static let xl: CGFloat = 34
+  /// 44: an app's icon at the head of its card.
+  static let xlPlus: CGFloat = 44
   /// 64: a screen's leading mark, such as a done check, and an alert's icon.
   static let xxl: CGFloat = 64
 }

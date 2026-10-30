@@ -1,40 +1,33 @@
 import AppKit
 
-/// Keys this Mac would keep for itself (⌘⇥, ⌘Space…) and keys an app would keep (⌘W, ⌘Q, Escape), sent to the
-/// helper from a menu under the Keys button, which leaves the window in front and control where it is. An AppKit
-/// menu, so its key equivalents are only shown, never registered as this app's.
+/// Helper ▸ Send Key: keys this Mac would keep for itself (⌘⇥, ⌘Space…) and keys an app would keep (⌘W, ⌘Q, Escape),
+/// sent to the helper while the window in front holds control, which leaves the window in front and control where it
+/// is. Each item asks the window by its tag, its key's place in ``HelperKey/all``; the window enables it only while it
+/// holds control. While in control the keyboard is the helper's, so the menu is chosen with the mouse.
 enum KeysMenu {
-  /// 240: the menu's width, giving shortcuts room beside their labels.
-  static let width: CGFloat = 240
-
-  /// The menu of keys under its two headers, each item sending its key to `controller`.
+  /// The submenu of keys under its two headers.
   ///
-  /// - Parameter controller: The window's controller.
   /// - Returns: The menu.
-  static func menu(for controller: ViewerController) -> NSMenu {
-    let menu = NSMenu()
-    menu.appearance = Appearance.dark
-    menu.minimumWidth = width
+  static func menu() -> NSMenu {
+    let menu = NSMenu(title: ViewerWords.sendKeyItem)
     menu.addItem(.sectionHeader(title: ViewerWords.macKeys))
-    add(HelperKey.mac, to: menu, for: controller)
+    add(HelperKey.mac, from: .zero, to: menu)
     menu.addItem(.separator())
     menu.addItem(.sectionHeader(title: ViewerWords.appKeys))
-    add(HelperKey.app, to: menu, for: controller)
+    add(HelperKey.app, from: HelperKey.mac.count, to: menu)
     return menu
   }
 
-  /// Adds one item a key, each sending its key to `controller`.
+  /// Adds one item a key, each tagged with its key's place in ``HelperKey/all``.
   ///
   /// - Parameters:
   ///   - keys: The keys.
+  ///   - start: The first key's place in ``HelperKey/all``.
   ///   - menu: The menu.
-  ///   - controller: The window's controller.
-  private static func add(_ keys: [HelperKey], to menu: NSMenu, for controller: ViewerController) {
-    for key in keys {
-      let item = HandlerMenuItem(title: key.name) { [weak controller] in controller?.control.sendKey(key.sent) }
-      item.keyEquivalent = key.shown
-      item.keyEquivalentModifierMask = key.modifiers
-      menu.addItem(item)
+  private static func add(_ keys: [HelperKey], from start: Int, to menu: NSMenu) {
+    for (offset, key) in keys.enumerated() {
+      let item = menu.addItem(withTitle: key.title, action: #selector(ViewerMenuActions.sendKey(_:)), keyEquivalent: "")
+      item.tag = start + offset
     }
   }
 }

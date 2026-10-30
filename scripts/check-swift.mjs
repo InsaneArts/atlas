@@ -92,6 +92,15 @@ function runStep(base, { folder, command, args }) {
 
 if (process.argv[1] === fileURLToPath(import.meta.url)) {
   const base = process.env.CHECK_SWIFT_BASE ?? repository;
+  const sourceFolders = ['app/Sources', ...packageFolders('Sources', base)].filter((folder) =>
+    fs.existsSync(path.join(base, folder)),
+  );
+  const types = spawnSync(
+    process.execPath,
+    [path.join(repository, 'scripts/check-swift-types.mjs'), ...sourceFolders],
+    { encoding: 'utf8', env: { ...process.env, CHECK_SWIFT_BASE: base } },
+  );
+  if (types.status !== 0) console.error(types.stderr);
   const planned = steps(packages(base), base, process.env.CHECK_SWIFT_SWIFT ?? 'swift');
   const results = checkAll(planned, (step) => {
     console.log(`… ${step.folder}: ${step.name}`);
@@ -103,5 +112,5 @@ if (process.argv[1] === fileURLToPath(import.meta.url)) {
   }
   console.log('');
   for (const result of results) console.log(summaryLine(result));
-  process.exit(results.every((result) => result.ok) ? 0 : 1);
+  process.exit(types.status === 0 && results.every((result) => result.ok) ? 0 : 1);
 }

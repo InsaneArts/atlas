@@ -17,20 +17,20 @@ struct ControlRim: ViewModifier {
       // shows, to soften the outer edge; out of control there is none.
       .background {
         if isInControl {
-          RoundedRectangle(cornerRadius: radius)
+          RoundedRectangle(cornerRadius: radius, style: .continuous)
             .fill(
               Color.accent
-                .opacity(Layout.glow)
+                .opacity(ControlRimLayout.glow)
             )
             .shadow(
               color: Color.accent
-                .opacity(Layout.glow),
-              radius: Layout.glowRadius
+                .opacity(ControlRimLayout.glow),
+              radius: ControlRimLayout.glowRadius
             )
         }
       }
       .overlay(
-        RoundedRectangle(cornerRadius: radius)
+        RoundedRectangle(cornerRadius: radius, style: .continuous)
           .strokeBorder(edge, lineWidth: isInControl ? Stroke.emphasis : Stroke.hairline)
       )
   }
@@ -39,19 +39,8 @@ struct ControlRim: ViewModifier {
   private var edge: Color {
     guard isInControl else { return Color.separator }
     return Color.accent
-      .opacity(Layout.rim)
+      .opacity(ControlRimLayout.rim)
   }
-}
-
-/// The rim's own measures for its accent edge and glow.
-private enum Layout {
-  /// 0.9: the accent on the rim while in control.
-  static let rim = 0.9
-  /// 0.3: the accent glowing around the picture while in control.
-  static let glow = 0.3
-  /// 7: the glow's radius, half an equivalent 14-point CSS blur, as a shadow's radius spreads about twice as
-  /// far.
-  static let glowRadius: CGFloat = 7
 }
 
 #if DEBUG

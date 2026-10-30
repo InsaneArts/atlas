@@ -8,6 +8,12 @@ public enum PanelEvent: Equatable, Sendable {
   case openScreen
   /// All activity: the main window on Activity.
   case openActivity
+  /// One of Sessions' rows: the main window on Activity for that session.
+  ///
+  /// - Parameter key: The session's key.
+  case openSession(String)
+  /// The row under Sessions: the main window on Activity with every session to choose from.
+  case showAllSessions
   /// Stop: end an agent's input under way in the helper and refuse its next actions.
   case stopAgent
   /// Resume: let agents act in the helper again.

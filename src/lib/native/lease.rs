@@ -1,24 +1,22 @@
 //! Ownership is independent of the event engine, so cancellation never queues
 //! behind a drag, text insertion or wait. Posting holds this gate briefly.
-use crate::error::{Error, Holder, Result};
+use crate::error::{Code, Error, Holder, Result};
 use std::sync::{Arc, Mutex, MutexGuard};
-use std::time::{Duration, Instant};
-
-const TTL: Duration = Duration::from_secs(6);
+use std::time::Instant;
 
 /// Who asks for control: an agent, or the person through a viewer. A stop
 /// refuses agents only, so the person can still take over.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum Who {
+pub(super) enum Who {
     Agent,
     Person,
 }
 
 #[derive(Default)]
-pub struct Gate(Mutex<State>);
+pub(super) struct Gate(Mutex<State>);
 
 #[derive(Default)]
-pub struct State {
+pub(super) struct State {
     owner: Option<String>,
     previous: Option<String>,
     expires: Option<Instant>,
@@ -59,14 +57,14 @@ impl State {
                 self.cancelled = None;
                 // The person's stop says so, to the agent it cut off.
                 return Err(if stopped {
-                    Error::new("stopped", crate::error::STOPPED)
+                    Error::stopped()
                 } else {
-                    Error::new("cancelled", "Native control was stopped")
+                    Error::new(Code::Cancelled, "Native control was stopped")
                 });
             }
 
             return Err(Error::new(
-                "lease-lost",
+                Code::LeaseLost,
                 "Native control was released or expired",
             ));
         }
@@ -79,10 +77,10 @@ impl Gate {
     fn lock(&self) -> Result<MutexGuard<'_, State>> {
         self.0
             .lock()
-            .map_err(|_| Error::new("native", "Input ownership failed"))
+            .map_err(|_| Error::new(Code::Native, "Input ownership failed"))
     }
 
-    pub fn active(&self) -> Result<bool> {
+    pub(super) fn active(&self) -> Result<bool> {
         let mut state = self.lock()?;
         state.expire();
         Ok(state.owner.is_some())
@@ -90,7 +88,7 @@ impl Gate {
 
     /// Who holds control now, if anyone: the person through a viewer, or
     /// an agent. Read under one lock, so the two never disagree.
-    pub fn holder(&self) -> Result<Option<Holder>> {
+    pub(super) fn holder(&self) -> Result<Option<Holder>> {
         let mut state = self.lock()?;
         state.expire();
         Ok(match (state.owner.is_some(), state.person) {
@@ -100,24 +98,24 @@ impl Gate {
         })
     }
 
-    pub fn acquire(self: &Arc<Self>, owner: &str, who: Who) -> Result<Grant> {
+    pub(super) fn acquire(self: &Arc<Self>, owner: &str, who: Who) -> Result<Grant> {
         let mut state = self.lock()?;
         state.expire();
 
         if state.held && who == Who::Agent && !state.closed {
-            return Err(Error::new("stopped", crate::error::STOPPED));
+            return Err(Error::stopped());
         }
 
         // An agent finding the person in control is told to wait for them.
         if !state.closed && state.owner.is_some() && state.person && who == Who::Agent {
             return Err(
-                Error::new("busy", crate::error::PERSON_HAS_CONTROL).held_by(Holder::Person)
+                Error::new(Code::Busy, crate::error::PERSON_HAS_CONTROL).held_by(Holder::Person)
             );
         }
 
         if state.closed || state.owner.is_some() {
             let error = Error::new(
-                "busy",
+                Code::Busy,
                 "The native input service is unavailable or already controlled",
             );
             return Err(match (state.closed, state.person) {
@@ -127,16 +125,14 @@ impl Gate {
             });
         }
 
-        // Owners are `control::token()`s: two hexadecimal digits a byte.
-        if owner.len() != 2 * crate::control::TOKEN_BYTES
-            || !owner.bytes().all(|b| b.is_ascii_hexdigit())
-        {
-            return Err(Error::new("input", "Invalid native owner token"));
+        // Owners are `files::token()`s: two hexadecimal digits a byte.
+        if crate::files::Token::parse(owner).is_none() {
+            return Err(Error::new(Code::Input, "Invalid native owner token"));
         }
 
         state.owner = Some(owner.to_owned());
         state.previous = state.owner.clone();
-        state.expires = Some(Instant::now() + TTL);
+        state.expires = Some(Instant::now() + super::GRANT_TTL);
         state.person = who == Who::Person;
         state.cancelled = None;
 
@@ -148,7 +144,7 @@ impl Gate {
 
     /// The grant for an input request: the action under way, so it hears
     /// of a cancel or a stop that came since control was taken.
-    pub fn grant(self: &Arc<Self>, owner: &str) -> Result<Grant> {
+    pub(super) fn grant(self: &Arc<Self>, owner: &str) -> Result<Grant> {
         self.lock()?.require(owner, true)?;
         Ok(Grant {
             gate: self.clone(),
@@ -156,22 +152,22 @@ impl Gate {
         })
     }
 
-    pub fn renew(&self, owner: &str) -> Result<()> {
+    pub(super) fn renew(&self, owner: &str) -> Result<()> {
         let mut state = self.lock()?;
         state.require(owner, false)?;
-        state.expires = Some(Instant::now() + TTL);
+        state.expires = Some(Instant::now() + super::GRANT_TTL);
         Ok(())
     }
 
     /// End ownership on purpose: the person stopped, or the controller
     /// released it. What was under way then reads as cancelled.
-    pub fn cancel(&self, owner: Option<&str>) -> Result<()> {
+    pub(super) fn cancel(&self, owner: Option<&str>) -> Result<()> {
         let mut state = self.lock()?;
         if let Some(owner) = owner
             && state.previous.as_deref() != Some(owner)
         {
             return Err(Error::new(
-                "lease-lost",
+                Code::LeaseLost,
                 "This token cannot release another controller",
             ));
         }
@@ -186,7 +182,7 @@ impl Gate {
     /// Stop agents (`on`) or let them go on. Stopping ends an agent's
     /// control as a cancel does, so what it had under way reads as
     /// cancelled; the person's own control is left alone.
-    pub fn hold(&self, on: bool) -> Result<()> {
+    pub(super) fn hold(&self, on: bool) -> Result<()> {
         let mut state = self.lock()?;
         state.held = on;
 
@@ -201,20 +197,20 @@ impl Gate {
     }
 
     /// Whether the person has stopped agents.
-    pub fn held(&self) -> Result<bool> {
+    pub(super) fn held(&self) -> Result<bool> {
         Ok(self.lock()?.held)
     }
 
     /// End ownership for a cause that is nobody's doing (the session
     /// changed, an action failed). What was under way reads as lost.
-    pub fn revoke(&self) -> Result<()> {
+    pub(super) fn revoke(&self) -> Result<()> {
         let mut state = self.lock()?;
         state.owner = None;
         state.cancelled = None;
         Ok(())
     }
 
-    pub fn close(&self) -> Result<()> {
+    pub(super) fn close(&self) -> Result<()> {
         let mut state = self.lock()?;
         state.closed = true;
         state.owner = None;
@@ -223,13 +219,13 @@ impl Gate {
 }
 
 #[derive(Clone)]
-pub struct Grant {
+pub(super) struct Grant {
     gate: Arc<Gate>,
     owner: String,
 }
 
 impl Grant {
-    pub fn authorize(&self) -> Result<MutexGuard<'_, State>> {
+    pub(super) fn authorize(&self) -> Result<MutexGuard<'_, State>> {
         let mut state = self.gate.lock()?;
         state.require(&self.owner, true)?;
         Ok(state)
@@ -245,11 +241,11 @@ mod tests {
     }
 
     fn owner(digit: char) -> String {
-        digit.to_string().repeat(2 * crate::control::TOKEN_BYTES)
+        digit.to_string().repeat(2 * crate::files::TOKEN_BYTES)
     }
 
     fn code<T>(result: Result<T>) -> &'static str {
-        result.err().map_or("ok", |error| error.code)
+        result.err().map_or("ok", |error| error.code.as_str())
     }
 
     #[test]
@@ -281,7 +277,7 @@ mod tests {
         };
         assert_eq!(
             said(Who::Agent),
-            Some(("busy", crate::error::PERSON_HAS_CONTROL.to_owned()))
+            Some((Code::Busy, crate::error::PERSON_HAS_CONTROL.to_owned()))
         );
         let holder = |gate: &Arc<Gate>, who| gate.acquire(&owner('b'), who).err()?.holder;
         assert_eq!(holder(&gate, Who::Agent), Some(Holder::Person));
@@ -310,7 +306,7 @@ mod tests {
     #[test]
     fn owners_are_control_tokens() {
         let gate = gate();
-        assert_eq!(owner('a').len(), crate::control::token().len());
+        assert_eq!(owner('a').len(), crate::files::token().len());
 
         for bad in [
             String::new(),
@@ -322,10 +318,7 @@ mod tests {
         }
 
         assert!(!gate.active().unwrap());
-        assert_eq!(
-            code(gate.acquire(&crate::control::token(), Who::Agent)),
-            "ok"
-        );
+        assert_eq!(code(gate.acquire(&crate::files::token(), Who::Agent)), "ok");
     }
 
     #[test]

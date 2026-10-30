@@ -38,6 +38,7 @@ struct NotificationRecoveryTests {
   /// - Returns: The commands.
   private static func actions(_ service: ScriptedService, _ commands: ScriptedCommands, _ seen: Seen) -> HelperActions {
     HelperActions(
+      console: SessionConsole(read: { true }),
       commands: commands,
       service: service,
       barrier: ControlBarrier(service: service, clock: ManualClock())

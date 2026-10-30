@@ -15,7 +15,7 @@ use crate::{
     client::Client,
     config::Config,
     digest::file_sha256,
-    error::{Error, Result},
+    error::{Code, Error, Result},
     session::{require_hidden, validate_target_uid},
     transport::run_output,
 };
@@ -112,8 +112,8 @@ fn lookup(key: Lookup) -> Result<Option<Account>> {
 
 /// Resolve an account through directory services by short name.
 pub fn account_named(name: &str) -> Result<Option<Account>> {
-    let name =
-        CString::new(name).map_err(|_| Error::new("setup", "Account names cannot contain NUL"))?;
+    let name = CString::new(name)
+        .map_err(|_| Error::new(Code::Setup, "Account names cannot contain NUL"))?;
     lookup(Lookup::Name(name))
 }
 
@@ -124,19 +124,40 @@ pub fn account_with_uid(uid: u32) -> Result<Option<Account>> {
 
 /// The full name of account `name`, as people know it, if it has one.
 pub fn real_name(name: &str) -> Option<String> {
-    asked_real_name(name).flatten()
+    asked_real_name(name).titled()
 }
 
-/// What directory services say of account `name`'s full name: `None` when
-/// they did not answer in time, `Some(None)` when it has none.
-pub fn asked_real_name(name: &str) -> Option<Option<String>> {
-    let output = crate::bounded::output(
+/// What directory services say of an account's full name.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) enum Title {
+    /// They did not answer in time.
+    Unknown,
+    /// The account has none.
+    Untitled,
+    /// The account's full name.
+    Titled(String),
+}
+
+impl Title {
+    /// The full name, when the account has one.
+    pub(crate) fn titled(self) -> Option<String> {
+        match self {
+            Self::Titled(title) => Some(title),
+            Self::Unknown | Self::Untitled => None,
+        }
+    }
+}
+
+/// What directory services say of account `name`'s full name.
+pub(crate) fn asked_real_name(name: &str) -> Title {
+    let Ok(output) = crate::bounded::output(
         Command::new("/usr/bin/dscl").args([".", "-read", &format!("/Users/{name}"), "RealName"]),
         crate::bounded::LOOKUP,
-    )
-    .ok()?;
+    ) else {
+        return Title::Unknown;
+    };
 
-    Some(parse_real_name(&output.stdout))
+    parse_real_name(&output.stdout).map_or(Title::Untitled, Title::Titled)
 }
 
 /// The full name in `dscl -read`'s answer for RealName, if it has one.
@@ -234,7 +255,7 @@ fn run_as_helper(
 ) -> Result<(bool, Value)> {
     if expected.uid != helper.uid || expected.name != helper.name {
         return Err(Error::new(
-            "setup",
+            Code::Setup,
             "The helper is not the account Atlas chose",
         ));
     }
@@ -273,7 +294,7 @@ fn run_as_helper(
         .stderr(std::process::Stdio::piped());
     let output = crate::onboarding::as_root::tracked_output(&mut command).map_err(|refusal| {
         Error::new(
-            "setup",
+            Code::Setup,
             format!("The setup executor did not finish: {refusal:?}"),
         )
         .uncertain()
@@ -669,18 +690,18 @@ fn preview_account(helper: Option<&str>, config: Option<&Config>) -> Result<Acco
     match (helper, config) {
         (Some(name), _) => account_named(name)?.ok_or_else(|| {
             Error::new(
-                "setup",
+                Code::Setup,
                 format!("No account named {name} exists on this Mac"),
             )
         }),
         (None, Some(config)) => account_with_uid(config.helper_uid)?.ok_or_else(|| {
             Error::new(
-                "setup",
+                Code::Setup,
                 format!("Configured helper UID {} has no account", config.helper_uid),
             )
         }),
         (None, None) => Err(Error::new(
-            "usage",
+            Code::Usage,
             "No usable configuration; name the helper account with --helper NAME",
         )),
     }

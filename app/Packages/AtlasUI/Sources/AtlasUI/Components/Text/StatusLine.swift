@@ -29,7 +29,7 @@ struct StatusLine: View {
 
     /// The mark's inset from the top, so the 13-point mark centres on the first line.
     var markInset: CGFloat {
-      self == .regular ? Layout.markInset : Layout.smallMarkInset
+      self == .regular ? StatusLineLayout.markInset : StatusLineLayout.smallMarkInset
     }
   }
 
@@ -49,7 +49,7 @@ struct StatusLine: View {
 
   /// The mark, then the sentence.
   var body: some View {
-    HStack(alignment: .top, spacing: Layout.gap) {
+    HStack(alignment: .top, spacing: StatusLineLayout.gap) {
       mark
         .padding(.top, size.markInset)
       Text(text)
@@ -87,16 +87,6 @@ struct StatusLine: View {
     case .done: .textSuccess
     }
   }
-}
-
-/// The status line's own measures for its mark and text.
-private enum Layout {
-  /// 7: between the mark and the sentence.
-  static let gap: CGFloat = 7
-  /// 1.5: the mark's inset from the top, so a 13-point mark centres on the first 16-point line.
-  static let markInset: CGFloat = 1.5
-  /// 0.5: the same on a 14-point caption line.
-  static let smallMarkInset: CGFloat = 0.5
 }
 
 #if DEBUG

@@ -9,22 +9,29 @@ use clap::{
 use std::{io::IsTerminal, process::ExitCode};
 
 /// Each visible command in exactly one group, in reading order.
-pub const GROUPS: &[(&str, &[&str])] = &[
+pub(super) const GROUPS: &[(&str, &[&str])] = &[
     ("Get started", &["init", "doctor", "agents", "menubar"]),
     (
         "Look at the helper",
-        &["screenshot", "windows", "elements", "apps", "status"],
+        &[
+            "screenshot",
+            "windows",
+            "elements",
+            "apps",
+            "status",
+            "activity",
+        ],
     ),
     (
         "Act in the helper",
         &[
-            "click", "type", "key", "move", "drag", "scroll", "input", "open", "close", "wait",
-            "run",
+            "click", "type", "key", "move", "drag", "scroll", "input", "open", "close", "cleanup",
+            "wait", "run", "job", "collect",
         ],
     ),
     (
         "Prepare the helper",
-        &["readiness", "environment", "verify-native"],
+        &["readiness", "environment", "install-app", "verify-native"],
     ),
     (
         "Take over or recover",
@@ -55,6 +62,7 @@ const EXAMPLES: &[(&str, &[&str])] = &[
         ],
     ),
     ("windows", &["atlas windows --app TextEdit"]),
+    ("activity", &["atlas activity", "atlas activity --all"]),
     (
         "elements",
         &["atlas elements --app TextEdit --role AXButton"],
@@ -82,6 +90,21 @@ const EXAMPLES: &[(&str, &[&str])] = &[
     ),
     ("close", &["atlas close --app TextEdit"]),
     (
+        "install-app",
+        &[
+            "atlas install-app ./build/Release/Probe.app",
+            "atlas open --app Probe",
+        ],
+    ),
+    (
+        "cleanup",
+        &[
+            "atlas cleanup",
+            "atlas cleanup --apply",
+            "atlas cleanup --session 3f9a1c07b2e4 --apply",
+        ],
+    ),
+    (
         "wait",
         &[
             "atlas wait --app TextEdit",
@@ -93,6 +116,22 @@ const EXAMPLES: &[(&str, &[&str])] = &[
         &[
             "atlas run -- /bin/sh -c 'ls \"$HOME/atlas-work\"'",
             "atlas run --timeout 300 -- xcodebuild test-without-building -xctestrun Tests.xctestrun",
+        ],
+    ),
+    (
+        "job",
+        &[
+            "atlas job start --name web -- /usr/bin/python3 -m http.server 8000",
+            "atlas job list",
+            "atlas job log 7c2e91a04b3f",
+            "atlas job stop 7c2e91a04b3f",
+        ],
+    ),
+    (
+        "collect",
+        &[
+            "atlas collect atlas-work/report.pdf",
+            "atlas collect --max-size 200M atlas-work/build.zip",
         ],
     ),
     (
@@ -134,7 +173,7 @@ fn examples(name: &str) -> &'static [&'static str] {
 }
 
 /// The command line with the grouped help.
-pub fn command() -> clap::Command {
+pub(super) fn command() -> clap::Command {
     let mut root = Cli::command();
 
     for (name, examples) in EXAMPLES {
@@ -168,7 +207,7 @@ pub fn command() -> clap::Command {
 /// A command line that does not parse, said plainly with an example of
 /// what works, as JSON when a program is reading. Help and --version print
 /// as usual.
-pub fn usage(error: clap::Error) -> ExitCode {
+pub(super) fn usage(error: clap::Error) -> ExitCode {
     if matches!(
         error.kind(),
         ErrorKind::DisplayHelp
@@ -245,7 +284,7 @@ pub fn usage(error: clap::Error) -> ExitCode {
                     "ok": false,
                     "code": "usage",
                     "error": message,
-                    "next": ui::hints::next("usage", None),
+                    "next": ui::hints::next(atlas::error::Code::Usage, None),
                 })
             );
         }
@@ -521,6 +560,59 @@ mod tests {
                 );
             }
         }
+    }
+
+    /// Every key and pointer example the guide or the error reference shows
+    /// parses as this CLI takes it, so a named click is never shown with a
+    /// window check it cannot take. Placeholders become values, `[…]`
+    /// groups are left out and input from a file is dropped.
+    #[test]
+    fn every_input_example_the_guide_shows_parses() {
+        let shown = [atlas::agent::GUIDE, atlas::agent::ERRORS];
+        let mut parsed = 0;
+        for span in shown
+            .iter()
+            .flat_map(|text| text.split('`').skip(1).step_by(2))
+        {
+            let mut words: Vec<String> = Vec::new();
+            let mut optional = false;
+            for word in span
+                .split(" < ")
+                .next()
+                .unwrap_or_default()
+                .split_whitespace()
+            {
+                if word.starts_with('[') {
+                    optional = !word.ends_with(']');
+                    continue;
+                }
+                if optional {
+                    optional = !word.ends_with(']');
+                    continue;
+                }
+                words.push(match word.trim_matches('"') {
+                    "X" => "100".to_owned(),
+                    "Y" => "200".to_owned(),
+                    "N" => "1".to_owned(),
+                    other => other.to_owned(),
+                });
+            }
+            let input = matches!(
+                words.get(1).map(String::as_str),
+                Some("type" | "key" | "scroll" | "drag" | "click")
+            );
+            if words.first().map(String::as_str) != Some("atlas")
+                || !input
+                || words[2..].iter().all(|word| word.starts_with('-'))
+            {
+                continue;
+            }
+            if let Err(error) = command().try_get_matches_from(&words) {
+                panic!("`{span}` does not parse: {error}");
+            }
+            parsed += 1;
+        }
+        assert!(parsed >= 10, "{parsed}");
     }
 
     #[test]

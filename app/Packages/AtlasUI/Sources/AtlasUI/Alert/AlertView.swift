@@ -12,7 +12,7 @@ public struct AlertView: View {
   /// Whether the card has settled since the window opened.
   @State private var settled = false
   @Environment(\.animatesArrivals) private var animatesArrivals
-  @Environment(\.accessibilityReduceMotion) private var reduceMotion
+  @Environment(\.motionReduced) private var reduceMotion
 
   /// Creates the alert window's content.
   ///
@@ -24,14 +24,13 @@ public struct AlertView: View {
     self.send = send
   }
 
-  /// The alert, dark, with room around it for its shadow.
+  /// The alert, in the Mac's appearance, with room around it for its shadow.
   public var body: some View {
     AlertCard(state: state, send: send)
       .scaleEffect(AlertCardScale.arrival(settled: shown, reduceMotion: reduceMotion))
       .opacity(shown ? 1 : .zero)
       .padding(AlertLayout.shadowRoom)
       .foregroundStyle(Color.textPrimary)
-      .environment(\.colorScheme, .dark)
       .onAppear {
         withAnimation(Motion.animation(Motion.arrive, reduceMotion: reduceMotion, reduced: Motion.reduced)) {
           settled = true

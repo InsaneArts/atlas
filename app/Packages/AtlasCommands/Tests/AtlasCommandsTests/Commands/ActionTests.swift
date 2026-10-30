@@ -39,6 +39,7 @@ struct ActionTests {
       (.changeAgentParts(["claude", "claude-app"], remove: false), ["agents", "install", "--claude", "--app"]),
       (.changeAgentParts(["claude", "claude-app"], remove: true), ["agents", "remove", "--claude", "--app"]),
       (.forgetProject(path: "/Users/me/dev/Opie"), ["agents", "forget", "/Users/me/dev/Opie"]),
+      (.listWindows, ["windows", "--all"]),
       (.doctor, ["doctor", "--verbose"]),
       (.checkForUpdate, ["update", "--check"]),
       (.update, ["update"]),

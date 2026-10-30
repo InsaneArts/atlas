@@ -1,10 +1,8 @@
 import SwiftUI
 
-/// How the Screen comes and goes as the tab changes, and how Activity, Apps and Screenshots come in the first time
-/// they show; once shown, those three are kept and fade by ``KeptPaneShift`` instead. A tab's content swaps in place,
-/// as a segmented control's does: the new pane fades in over the old one at once, eased out, and the old one fades out
-/// a little quicker, eased in. Nothing slides, so the words in both stay where they are. Only opacity changes, so
-/// Reduce Motion keeps the same crossfade.
+/// The Screen's opacity transition and the fade tokens shared with retained lists. Activity, Apps and Screenshots
+/// use ``KeptPaneShift`` and ``PaneHandoff``: the outgoing list disappears before the latest destination arrives,
+/// so their words never overlap. List switches change opacity in place, also under Reduce Motion.
 ///
 /// While the picture moves between the stage and the corner (``ScreenZoom``, ``EnvironmentValues/screenZooms``), the
 /// Screen's pane arrives whole as it grows out of the corner, so its picture and the mini screen's stay one.
@@ -42,9 +40,9 @@ struct PaneShift: ViewModifier {
     )
   }
 
-  /// A new pane's fade in over the old one: at once, eased out over ``Motion/Duration/swapIn``.
+  /// A pane's fade in, eased out over ``Motion/Duration/swapIn``.
   static var arrival: Animation { Motion.swapIn }
 
-  /// An old pane's fade out as the new one comes: eased in over ``Motion/Duration/swapOut``.
+  /// An outgoing pane's fade out, eased in over ``Motion/Duration/swapOut``.
   static var departure: Animation { Motion.swapOut }
 }

@@ -69,4 +69,14 @@ struct ViewerClientTests {
       try ViewerClient.apps(appsUnreachable, response: reply(503))
     }
   }
+
+  @Test("an older service's 404 for the sessions list reads as not offered, and a 200 reads the list")
+  func sessionsNotOffered() throws {
+    let missing = Data(#"{"ok": false, "error": "Not found"}"#.utf8)
+    #expect(throws: ServiceError.notOffered) { try ViewerClient.sessions(missing, response: reply(404)) }
+    #expect(throws: ServiceError.self) { try ViewerClient.sessions(missing, response: reply(403)) }
+    let listed = Data(#"{"ok": true, "sessions": [{"key": "", "host": "none", "name": "Terminal"}]}"#.utf8)
+    #expect(try ViewerClient.sessions(listed, response: reply(200)).sessions.map(\.name) == ["Terminal"])
+    #expect(ServiceError.notOffered.isNotOffered && !ServiceError("No sessions").isNotOffered)
+  }
 }

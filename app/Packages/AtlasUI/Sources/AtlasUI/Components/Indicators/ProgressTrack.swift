@@ -20,7 +20,7 @@ struct ProgressTrack: View {
   let count: Int
   /// What VoiceOver says for the track, such as "Step 2 of 6", from the owner's words.
   let label: String
-  @Environment(\.accessibilityReduceMotion) private var reduceMotion
+  @Environment(\.motionReduced) private var reduceMotion
 
   /// One segment per step, in a row.
   var body: some View {
@@ -30,7 +30,7 @@ struct ProgressTrack: View {
         let segment = Self.segment(step, current: index)
         Capsule()
           .fill(Self.fill(segment))
-          .frame(width: Self.width(segment), height: Layout.height)
+          .frame(width: Self.width(segment), height: ProgressTrackLayout.height)
       }
     }
     .animation(Motion.animation(Motion.indicator, reduceMotion: reduceMotion, reduced: Motion.reduced), value: index)
@@ -54,7 +54,7 @@ struct ProgressTrack: View {
   /// - Parameter segment: How the segment stands.
   /// - Returns: 22 for the current step, 14 for the others.
   nonisolated static func width(_ segment: Segment) -> CGFloat {
-    segment == .current ? Layout.currentWidth : Layout.width
+    segment == .current ? ProgressTrackLayout.currentWidth : ProgressTrackLayout.width
   }
 
   /// A segment's fill.
@@ -68,16 +68,6 @@ struct ProgressTrack: View {
     case .upcoming: .fillTrack
     }
   }
-}
-
-/// The progress track's own measures for its step segments.
-private enum Layout {
-  /// 14: a segment's width.
-  static let width: CGFloat = 14
-  /// 22: the current segment's width.
-  static let currentWidth: CGFloat = 22
-  /// 4: a segment's height.
-  static let height: CGFloat = 4
 }
 
 #if DEBUG

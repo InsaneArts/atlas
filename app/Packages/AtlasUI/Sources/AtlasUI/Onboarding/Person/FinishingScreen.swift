@@ -7,7 +7,7 @@ import SwiftUI
 struct FinishingScreen: View {
   /// The checklist and how the check stands.
   let state: OnboardingFinishingScreenState
-  @Environment(\.accessibilityReduceMotion) private var reduceMotion
+  @Environment(\.motionReduced) private var reduceMotion
 
   /// The checklist, then why it failed, in the status line's kept place.
   var body: some View {

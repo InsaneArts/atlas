@@ -1,23 +1,23 @@
 import AppKit
 import AtlasUI
 
-/// The main menu's View, File, Edit and Helper items, the Dock menu's and the ⋯ menu's, as the window in front answers
-/// them. Each item is validated against the same state field its button draws (``ViewerPresenter``), never a rule of
-/// its own. While this window holds control, the screen's key monitor sees every key first, so these shortcuts reach
+/// The main menu's View, Session, File, Edit and Helper items and the Dock menu's, as the window in front answers them.
+/// Each item is validated against the same state its button, row or menu item draws (``ViewerPresenter``), never a rule
+/// of its own. While this window holds control, the screen's key monitor sees every key first, so these shortcuts reach
 /// the helper instead, all but Control-Shift-Escape.
 extension ViewerWindow: ViewerMenuActions, HelperMenuActions {
-  /// Shows the tab the item's tag names.
+  /// Shows the place the item's tag names.
   ///
   /// - Parameter sender: The menu item.
-  func selectTab(_ sender: Any?) {
-    guard let tab = ((sender as? NSMenuItem)?.tag).flatMap(ViewerTab.init(menuTag:)) else { return }
-    controller.send(.selectTab(tab))
+  func showPlace(_ sender: Any?) {
+    guard let place = ((sender as? NSMenuItem)?.tag).flatMap(ViewerPlace.init(menuTag:)) else { return }
+    controller.send(.show(place))
   }
 
-  /// Shows or hides Details.
+  /// Shows or hides the sidebar.
   ///
   /// - Parameter sender: The menu item.
-  func toggleDetails(_ sender: Any?) { controller.send(.toggleDetails) }
+  func toggleSidebar(_ sender: Any?) { controller.send(.toggleSidebar) }
 
   /// Pauses or resumes the picture, as the pause button does; not while this window holds control, where the button
   /// is gone.
@@ -33,40 +33,40 @@ extension ViewerWindow: ViewerMenuActions, HelperMenuActions {
   /// - Parameter sender: The menu item.
   func toggleActualSize(_ sender: Any?) { controller.toggleActualSize() }
 
-  /// Take Control or Give Back, as the white capsule says now.
+  /// Take Control or Give Back, as the main capsule says now.
   ///
   /// - Parameter sender: The menu item.
   func toggleControl(_ sender: Any?) {
     controller.toggleControl(present: present)
   }
 
-  /// Stop Agent or Resume Agent, as the top row offers it now.
+  /// Stop Agent or Resume Agent, as the footer offers it now.
   ///
   /// - Parameter sender: The menu item.
   func toggleAgent(_ sender: Any?) {
-    switch ViewerPresenter.actions(controller.snapshot).agent {
+    switch ViewerPresenter.controls(controller.snapshot).agent {
     case .stop: controller.send(.stopAgent)
     case .resume(let isEnabled) where isEnabled: controller.send(.resumeAgent)
     default: return
     }
   }
 
-  /// Copies what the window shows: the screenshot shown large or selected on the Screenshots tab, else the picture.
+  /// Copies what the window shows: the screenshot shown large or selected in the Screenshots list, else the picture.
   ///
   /// - Parameter sender: The menu item.
   @objc func copy(_ sender: Any?) {
-    if controller.moreMenu.actsOnShot {
+    if controller.pictureMenu.actsOnShot {
       controller.send(.copyShot)
     } else {
       controller.readingLoop.copyPicture()
     }
   }
 
-  /// Saves what the window shows: the screenshot shown large or selected on the Screenshots tab, else the picture.
+  /// Saves what the window shows: the screenshot shown large or selected in the Screenshots list, else the picture.
   ///
   /// - Parameter sender: The menu item.
   func savePicture(_ sender: Any?) {
-    if controller.moreMenu.actsOnShot {
+    if controller.pictureMenu.actsOnShot {
       controller.panesModel.saveShot()
     } else {
       controller.readingLoop.savePicture()
@@ -81,10 +81,53 @@ extension ViewerWindow: ViewerMenuActions, HelperMenuActions {
     controller.readingLoop.setRate(rate)
   }
 
-  /// Find…: the search field of the tab shown takes the focus.
+  /// Find…: the sidebar's search takes the focus, on the Screen and on every list.
   ///
   /// - Parameter sender: The menu item.
-  func findInTab(_ sender: Any?) { controller.panesModel.find() }
+  func findInTab(_ sender: Any?) { controller.find() }
+
+  /// Sends the key the item's tag names to the helper, while this window holds control.
+  ///
+  /// - Parameter sender: The menu item.
+  func sendKey(_ sender: Any?) {
+    guard let tag = (sender as? NSMenuItem)?.tag else { return }
+    controller.sendKey(at: tag)
+  }
+
+  /// Reads the helper's status now.
+  ///
+  /// - Parameter sender: The menu item.
+  func checkAgain(_ sender: Any?) { controller.send(.menu(.checkAgain)) }
+
+  /// Opens Settings on Helper.
+  ///
+  /// - Parameter sender: The menu item.
+  func openHelperSettings(_ sender: Any?) { controller.send(.menu(.openSettings)) }
+
+  /// Shows every session's work.
+  ///
+  /// - Parameter sender: The menu item.
+  func chooseAllSessions(_ sender: Any?) { controller.chooseAllSessions() }
+
+  /// Chooses the session over the one chosen.
+  ///
+  /// - Parameter sender: The menu item.
+  func choosePreviousSession(_ sender: Any?) { controller.chooseSession(by: -1) }
+
+  /// Chooses the session under the one chosen.
+  ///
+  /// - Parameter sender: The menu item.
+  func chooseNextSession(_ sender: Any?) { controller.chooseSession(by: 1) }
+
+  /// Lists every session that ended under Ended, or folds them again.
+  ///
+  /// - Parameter sender: The menu item.
+  func toggleEnded(_ sender: Any?) { controller.send(.toggleEnded) }
+
+  /// Asks before cleaning up the chosen session's work.
+  ///
+  /// - Parameter sender: The menu item.
+  func askCleanupChosen(_ sender: Any?) { controller.askCleanupChosen() }
 
   /// Asks before recovering the helper.
   ///
@@ -114,14 +157,14 @@ extension ViewerWindow: ViewerMenuActions, HelperMenuActions {
   override func validateMenuItem(_ item: NSMenuItem) -> Bool {
     let snapshot = controller.snapshot
     switch item.action {
-    case #selector(ViewerMenuActions.selectTab(_:)):
-      let tabs = ViewerPresenter.top(snapshot).tabs
-      item.state = item.tag == tabs.selected.menuTag ? .on : .off
-      return tabs.tabs.contains { $0.id.menuTag == item.tag }
-    case #selector(ViewerMenuActions.toggleDetails(_:)):
-      item.title =
-        ViewerPresenter.actions(snapshot).details.isOn ? ViewerWords.hideDetailsItem : ViewerWords.showDetailsItem
+    case #selector(ViewerMenuActions.showPlace(_:)):
+      item.state = item.tag == snapshot.session.place.menuTag ? .on : .off
+      return ViewerPlace(menuTag: item.tag) != nil
+    case #selector(ViewerMenuActions.toggleSidebar(_:)):
+      item.title = ViewerPresenter.sidebarShows(snapshot) ? ViewerWords.hideSidebarItem : ViewerWords.showSidebarItem
       return true
+    case #selector(ViewerMenuActions.sendKey(_:)):
+      return snapshot.holdingControl && HelperKey.key(at: item.tag) != nil
     case #selector(ViewerMenuActions.togglePicturePause(_:)):
       item.title = snapshot.session.paused ? Words.resumePictureItem : Words.pausePictureItem
       return ViewerPresenter.pause(snapshot) != nil
@@ -129,25 +172,69 @@ extension ViewerWindow: ViewerMenuActions, HelperMenuActions {
       item.state = item.tag == snapshot.rate.menuTag ? .on : .off
       return true
     case #selector(ViewerMenuActions.toggleActualSize(_:)):
-      let menu = ViewerPresenter.moreMenu(snapshot)
+      let menu = ViewerPresenter.pictureMenu(snapshot)
       item.state = menu.actualSize ? .on : .off
       return menu.hasPicture
     case #selector(ViewerMenuActions.toggleControl(_:)):
-      return validateControl(item, ViewerPresenter.actions(snapshot).control) && ViewerPresenter.alert(snapshot) == nil
+      return validateControl(item, ViewerPresenter.controls(snapshot).control) && ViewerPresenter.alert(snapshot) == nil
     case #selector(ViewerMenuActions.toggleAgent(_:)):
-      return validateAgent(item, ViewerPresenter.actions(snapshot).agent) && ViewerPresenter.alert(snapshot) == nil
+      return validateAgent(item, ViewerPresenter.controls(snapshot).agent) && ViewerPresenter.alert(snapshot) == nil
     case #selector(NSText.copy(_:)):
-      let menu = ViewerPresenter.moreMenu(snapshot)
+      let menu = ViewerPresenter.pictureMenu(snapshot)
       return menu.actsOnShot || menu.hasPicture
     case #selector(ViewerMenuActions.savePicture(_:)):
-      let menu = ViewerPresenter.moreMenu(snapshot)
+      let menu = ViewerPresenter.pictureMenu(snapshot)
       item.title = menu.actsOnShot ? ViewerWords.saveScreenshot : ViewerWords.savePicture
       return menu.actsOnShot || menu.hasPicture
     case #selector(ViewerMenuActions.findInTab(_:)):
-      return searchable(ViewerPresenter.pane(snapshot))
+      // Find opens the sidebar's search, which every place has.
+      return true
+    case #selector(ViewerMenuActions.checkAgain(_:)):
+      return !snapshot.session.checkingAgain
+    case #selector(ViewerMenuActions.openHelperSettings(_:)):
+      return true
     default:
-      return validateHelper(item, snapshot: snapshot) ?? super.validateMenuItem(item)
+      return validateSession(item, snapshot: snapshot) ?? validateHelper(item, snapshot: snapshot)
+        ?? super.validateMenuItem(item)
     }
+  }
+
+  /// The Session menu's items, from the sidebar the window draws: All Sessions while one session is chosen, Previous
+  /// and Next while there is a row to step to, Show Ended Sessions ticked while Ended is open, and Clean Up while the
+  /// chosen session's own menu offers it and no alert is up.
+  ///
+  /// - Parameters:
+  ///   - item: The item.
+  ///   - snapshot: What the window held when validation began.
+  /// - Returns: Whether it can be chosen, or nil for an item that is not one of them.
+  private func validateSession(_ item: NSMenuItem, snapshot: ViewerSnapshot) -> Bool? {
+    switch item.action {
+    case #selector(ViewerMenuActions.chooseAllSessions(_:)):
+      return snapshot.shownSessions != .all
+    case #selector(ViewerMenuActions.choosePreviousSession(_:)):
+      return steps(-1, snapshot)
+    case #selector(ViewerMenuActions.chooseNextSession(_:)):
+      return steps(1, snapshot)
+    case #selector(ViewerMenuActions.toggleEnded(_:)):
+      item.state = snapshot.session.endedShown ? .on : .off
+      return true
+    case #selector(ViewerMenuActions.askCleanupChosen(_:)):
+      let cleanup = ViewerPresenter.chosenCleanup(snapshot)
+      return cleanup?.isEnabled == true && ViewerPresenter.alert(snapshot) == nil
+    default:
+      return nil
+    }
+  }
+
+  /// Whether Previous Session or Next Session has a row to step to from the session shown, in the sidebar's order.
+  ///
+  /// - Parameters:
+  ///   - offset: How many rows down; negative goes up.
+  ///   - snapshot: What the window held when validation began.
+  /// - Returns: Whether it steps.
+  private func steps(_ offset: Int, _ snapshot: ViewerSnapshot) -> Bool {
+    let sessions = ViewerPresenter.sessions(snapshot)
+    return sessions.choice(offset, from: snapshot.shownSessions) != snapshot.shownSessions
   }
 
   /// The helper's commands, as the window offers them, with the helper's name in Switch and Log Out once it is known.
@@ -173,24 +260,12 @@ extension ViewerWindow: ViewerMenuActions, HelperMenuActions {
     }
   }
 
-  /// Whether the pane shown has a search field to find in.
-  ///
-  /// - Parameter pane: The pane shown.
-  /// - Returns: Whether Find can focus one.
-  private func searchable(_ pane: ViewerPane) -> Bool {
-    switch pane {
-    case .activity(let activity): activity.isSearchable
-    case .apps(let apps): apps.isSearchable
-    case .screen, .screenshots: false
-    }
-  }
-
-  /// Take Control or Give Back Control, as the white capsule reads; while it reads Recover…, or is not drawn, Take
+  /// Take Control or Give Back Control, as the main capsule reads; while it reads Recover…, or is not drawn, Take
   /// Control waits.
   ///
   /// - Parameters:
   ///   - item: The item.
-  ///   - control: The white capsule; nil while it is not drawn.
+  ///   - control: The main capsule; nil while it is not drawn.
   /// - Returns: Whether it can be chosen.
   private func validateControl(_ item: NSMenuItem, _ control: ViewerControlButton?) -> Bool {
     guard let control else {
@@ -202,11 +277,11 @@ extension ViewerWindow: ViewerMenuActions, HelperMenuActions {
     return toggles && control.isEnabled
   }
 
-  /// Stop Agent or Resume Agent, as the top row offers it.
+  /// Stop Agent or Resume Agent, as the footer offers it.
   ///
   /// - Parameters:
   ///   - item: The item.
-  ///   - agent: The top row's agent button.
+  ///   - agent: The footer's agent button.
   /// - Returns: Whether it can be chosen.
   private func validateAgent(_ item: NSMenuItem, _ agent: ViewerAgentButton?) -> Bool {
     switch agent {

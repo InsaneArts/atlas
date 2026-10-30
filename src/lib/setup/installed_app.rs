@@ -1,7 +1,7 @@
 //! Shared installed executable discovery and terminal command linking.
 use crate::{
     config,
-    error::{Error, Result},
+    error::{Code, Error, Result},
 };
 use serde_json::{Value, json};
 use std::{
@@ -10,7 +10,7 @@ use std::{
 };
 
 fn problem(message: impl Into<String>) -> Error {
-    Error::new("init", message)
+    Error::new(Code::Init, message)
 }
 
 /// The stable installed identity, including when a temporary worker calls us.
@@ -50,7 +50,7 @@ fn link_command_in(bin: &Path, executable: &Path) -> Result<Value> {
         )));
     }
 
-    let temporary = bin.join(format!(".atlas.{}", crate::control::token()));
+    let temporary = bin.join(format!(".atlas.{}", crate::files::token()));
     std::os::unix::fs::symlink(executable, &temporary)?;
     fs::rename(&temporary, &link)?;
 

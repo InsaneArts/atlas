@@ -19,6 +19,8 @@
       case symbolTile
       /// A status pill in each tone.
       case statusPill
+      /// A tag in each tone.
+      case tag
     }
 
     private let kind: Kind
@@ -70,6 +72,12 @@
           HStack(spacing: Spacing.xl) {
             HeroDisc(kind: .success)
             HeroDisc(kind: .problem)
+          }
+        case .tag:
+          HStack(spacing: Spacing.s) {
+            Tag(text: String("Already open"), tone: .quiet)
+            Tag(text: String("In front"), tone: .accent)
+            Tag(text: String("From a copy"), tone: .attention)
           }
         case .symbolTile:
           ForEach(SymbolTile.Size.allCases, id: \.self) { size in

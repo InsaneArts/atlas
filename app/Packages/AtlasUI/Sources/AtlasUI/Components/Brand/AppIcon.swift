@@ -16,6 +16,13 @@ public struct AppIcon: View {
     self.size = Self.canvas(tile: tile).width
   }
 
+  /// Creates the icon by its whole canvas, margin included, so it stands the size of other apps' icons beside it.
+  ///
+  /// - Parameter canvas: The square canvas's side, in points.
+  init(canvas: CGFloat) {
+    self.size = canvas
+  }
+
   /// The icon, or its placeholder.
   public var body: some View {
     if let icon {
@@ -26,7 +33,7 @@ public struct AppIcon: View {
         .frame(width: size, height: size)
         .accessibilityHidden(true)
     } else {
-      RoundedRectangle(cornerRadius: Radius.large)
+      RoundedRectangle(cornerRadius: Radius.large, style: .continuous)
         .fill(Color.fillControl)
         .frame(width: size, height: size)
         .accessibilityHidden(true)
@@ -39,16 +46,9 @@ public struct AppIcon: View {
   /// - Parameter tile: The visible tile's side, in points.
   /// - Returns: The canvas's size, square.
   nonisolated static func canvas(tile: CGFloat) -> CGSize {
-    let side = tile * Layout.canvasRatio
+    let side = tile * AppIconLayout.canvasRatio
     return CGSize(width: side, height: side)
   }
-}
-
-/// The icon file's own measures.
-private enum Layout {
-  /// 1024 / 824: the canvas against its visible tile, from `app/Resources/AppIcon.icns`, whose 1024-point canvas
-  /// holds an 824-point tile.
-  static let canvasRatio: CGFloat = 1024 / 824
 }
 
 #if DEBUG

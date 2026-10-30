@@ -67,14 +67,13 @@ struct PanelControllerTests {
     #expect(read.map { $0?.overview.state } == [.needsYou, nil])
   }
 
-  @Test("the picture opens the main window on Screen, All activity on Activity and Open Atlas on the tab it shows")
+  @Test("the picture opens the main window on Screen and Open Atlas on the tab it shows")
   func theOpenersOpenTheirTabs() {
-    var opened: [ViewerTab?] = []
+    var opened: [ViewerPlace?] = []
     let controller = PanelController.scripted(links: PanelLinks(openViewer: { opened.append($0) }))
     controller.send(.openScreen)
-    controller.send(.openActivity)
     controller.send(.openAtlas)
-    #expect(opened == [.screen, .activity, nil])
+    #expect(opened == [.screen, nil])
   }
 
   @Test("Recover… and Switch to the Helper… ask first and run nothing themselves")
@@ -104,6 +103,24 @@ struct PanelControllerTests {
     await controller.resumeAgent()
     #expect(service.log == ["stop", "resume"])
     #expect(controller.actions.agentRequests == 0)
+  }
+
+  @Test("a stop that ends everything keeps the line, and one that left jobs running says so in its place")
+  func aStopThatLeftJobsRunningSaysSo() async {
+    let service = ScriptedService()
+    let controller = PanelController.scripted(service)
+    await controller.stopAgent()
+    #expect(controller.state.notice == nil, "a complete Stop leaves the status line")
+    service.stopOutcome = StopOutcome(
+      warnings: [],
+      unknown: [StopOutcome.Job(id: "7c2e91a04b3f")],
+      unresolved: [StopOutcome.Job(id: "000000000000")]
+    )
+    await controller.stopAgent()
+    #expect(
+      controller.state.notice
+        == "Agents stopped, but 2 background jobs couldn't be stopped. They may still run in the helper."
+    )
   }
 
   @Test("a stop the service refuses says why in place of the line, until the panel opens again")

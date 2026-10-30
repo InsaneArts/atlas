@@ -14,10 +14,10 @@ use super::{
     helper_job, running_developer_id, signature,
 };
 use crate::{
-    client::{Client, timestamp},
+    client::{Client, Run, timestamp},
     config::{Config, home, save_private},
     control::Ownership,
-    error::{Error, Result},
+    error::{Code, Error, Result},
     session::{input_current, require_hidden},
     transport::run_output,
 };
@@ -83,7 +83,7 @@ enum Endpoint {
 }
 
 fn problem(message: impl Into<String>) -> Error {
-    Error::new("setup", message)
+    Error::new(Code::Setup, message)
 }
 
 fn log_path(uid: u32) -> Result<PathBuf> {
@@ -187,7 +187,7 @@ fn save_log(path: &Path, log: &Log) -> Result<()> {
 pub fn managed(config: &Config, layout: &Layout) -> Config {
     Config {
         socket_path: layout.socket(),
-        input_socket: layout.root().join(super::helper::INPUT).join("input.sock"),
+        input_socket: layout.input_socket(),
         ..config.clone()
     }
 }
@@ -427,7 +427,7 @@ impl Migration {
     /// it. A crash between the two leaves only a harmless log-only claim.
     /// The claim is held while the step runs.
     fn begin(&mut self) -> Result<crate::control::Pending> {
-        let generation = crate::control::token();
+        let generation = crate::files::token();
         self.log.pending.push(generation.clone());
         save_log(&self.path, &self.log)?;
         self.old.controller.quarantine_as(&generation)
@@ -460,7 +460,7 @@ impl Migration {
             .any(|generation| !self.log.pending.contains(&generation));
         if foreign {
             return Err(Error::new(
-                "uncertain",
+                Code::Uncertain,
                 "Another action's outcome is unknown. Observe the desktop, run atlas \
                  restart, then run setup again.",
             )
@@ -491,7 +491,7 @@ impl Migration {
 
         let outcome = match self
             .client(through)
-            .run_pending(argv, Duration::from_secs(20))
+            .run(argv, Run::pending().within(Duration::from_secs(20)))
             .await
         {
             Ok(reply) if reply["timedOut"] == true || !reply["signal"].is_null() => {
@@ -695,7 +695,7 @@ impl Migration {
         // Inspection is read-only and needs no pending marker.
         let reply = self
             .client(through)
-            .run_pending(argv, Duration::from_secs(20))
+            .run(argv, Run::pending().within(Duration::from_secs(20)))
             .await?;
 
         helper_result(&reply)
@@ -1132,7 +1132,10 @@ pub(crate) async fn managed_job(client: &Client) -> Result<Value> {
     };
 
     let reply = client
-        .run_pending(helper_argv(client, &request)?, Duration::from_secs(20))
+        .run(
+            helper_argv(client, &request)?,
+            Run::pending().within(Duration::from_secs(20)),
+        )
         .await?;
 
     Ok(helper_result(&reply)?["jobs"][LABEL].clone())
@@ -1200,13 +1203,13 @@ async fn plan(config_path: &Path) -> Result<Plan> {
 
     // Inspection is read-only, so it needs no pending marker.
     let reply = client
-        .run_pending(
+        .run(
             helper_argv_with(
                 &client,
                 &request,
                 setup_identity(config.helper_uid, Some(&config_path))?,
             )?,
-            Duration::from_secs(20),
+            Run::pending().within(Duration::from_secs(20)),
         )
         .await?;
     let jobs = helper_result(&reply)?["jobs"].clone();
@@ -1825,7 +1828,7 @@ mod tests {
 
     #[test]
     fn uncertain_outcomes_stay_pending_and_definitive_ones_settle() {
-        if !crate::transaction_test::isolated(
+        if !crate::test_support::isolated(
             "setup::migrate::tests::uncertain_outcomes_stay_pending_and_definitive_ones_settle",
         ) {
             return;
@@ -1862,7 +1865,7 @@ mod tests {
 
     #[test]
     fn only_pending_actions_this_setup_owns_let_it_continue() {
-        if !crate::transaction_test::isolated(
+        if !crate::test_support::isolated(
             "setup::migrate::tests::only_pending_actions_this_setup_owns_let_it_continue",
         ) {
             return;

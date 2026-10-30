@@ -5,7 +5,7 @@
 //! already has, follows a link, or writes preferences while the account runs
 //! anything (cfprefsd would hold the old ones).
 use super::helper::{File, Layout, escape, file, text_sha256};
-use crate::error::{Error, Result};
+use crate::error::{Code, Error, Result};
 use serde_json::{Value, json};
 use std::{
     fs,
@@ -70,7 +70,7 @@ const BUILD_STAMPED: &[&str] = &[
 ];
 
 fn problem(message: impl Into<String>) -> Error {
-    Error::new("setup", message)
+    Error::new(Code::Setup, message)
 }
 
 /// A plist document around `body`, a dictionary's entries.

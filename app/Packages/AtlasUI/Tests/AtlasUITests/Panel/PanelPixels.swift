@@ -2,7 +2,7 @@ import CoreGraphics
 import SwiftUI
 import Testing
 
-/// A panel piece drawn once at one pixel a point, for reading the colours it puts where.
+/// A panel piece drawn once, for reading the colours it puts where.
 @MainActor
 struct PanelPixels {
   /// The drawing's pixels, RGBA, eight bits each, top row first.
@@ -14,14 +14,17 @@ struct PanelPixels {
 
   /// Draws `view`, settled, as a render draws it.
   ///
-  /// - Parameter view: The view.
+  /// - Parameters:
+  ///   - view: The view.
+  ///   - colorScheme: The appearance, independent of the desktop's.
+  ///   - scale: The number of pixels per point.
   /// - Throws: When nothing was drawn.
-  init(_ view: some View) throws {
+  init(_ view: some View, colorScheme: ColorScheme = .dark, scale: CGFloat = 1) throws {
     let renderer = ImageRenderer(
       content: view.environment(\.animatesArrivals, false)
-        .environment(\.colorScheme, .dark)
+        .environment(\.colorScheme, colorScheme)
     )
-    renderer.scale = 1
+    renderer.scale = scale
     let image = try #require(renderer.cgImage, "nothing was drawn")
     width = image.width
     height = image.height
@@ -35,7 +38,7 @@ struct PanelPixels {
           bitsPerComponent: 8,
           bytesPerRow: image.width * 4,
           space: CGColorSpace(name: CGColorSpace.sRGB) ?? CGColorSpaceCreateDeviceRGB(),
-          bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue
+          bitmapInfo: CGBitmapInfo.byteOrder32Big.rawValue | CGImageAlphaInfo.premultipliedLast.rawValue
         )
       else { return false }
       context.draw(image, in: CGRect(x: 0, y: 0, width: image.width, height: image.height))
@@ -48,8 +51,8 @@ struct PanelPixels {
   /// The colour at a point, top left first, its channels from 0 to 1 and un-premultiplied.
   ///
   /// - Parameters:
-  ///   - x: Across, in points from the left.
-  ///   - y: Down, in points from the top.
+  ///   - x: Across, in pixels from the left.
+  ///   - y: Down, in pixels from the top.
   /// - Returns: Red, green, blue and alpha.
   func colour(x: Int, y: Int) -> (red: Double, green: Double, blue: Double, alpha: Double) {
     let index = (y * width + x) * 4

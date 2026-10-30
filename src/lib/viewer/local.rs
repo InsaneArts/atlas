@@ -1,6 +1,6 @@
 //! Discovery and bounded HTTP access to the local menu bar viewer.
 use super::{MENUBAR_RECORD, SERVICE, unanswered};
-use crate::error::{Error, Result};
+use crate::error::{Code, Error, Result};
 use serde_json::Value;
 use std::{path::Path, time::Duration};
 
@@ -8,7 +8,7 @@ use std::{path::Path, time::Duration};
 /// now as the very process the record names. A viewer from an older build
 /// does not say its process; the record's counts then, when that process
 /// runs Atlas. It blocks for up to a second: call it off the async runtime.
-pub fn running(record: &Path, port: u16) -> Option<Value> {
+pub(crate) fn running(record: &Path, port: u16) -> Option<Value> {
     std::fs::read(record)
         .ok()
         .and_then(|bytes| serde_json::from_slice::<Value>(&bytes).ok())
@@ -22,35 +22,50 @@ pub fn running(record: &Path, port: u16) -> Option<Value> {
             }
 
             match answering(url) {
-                Some(Some(pid)) => recorded == Some(pid),
-                Some(None) => recorded
+                Answer::Process(pid) => recorded == Some(pid),
+                Answer::Older => recorded
                     .and_then(|pid| i32::try_from(pid).ok())
                     .is_some_and(crate::menubar::is_atlas),
-                None => false,
+                Answer::Nobody => false,
             }
         })
 }
 
-/// Whether a viewer answers at `url` (its private address) right now, and
-/// then the process it says serves it: None from a viewer built before
-/// viewers said so.
-pub(super) fn answering(url: &str) -> Option<Option<u32>> {
-    let (status, body) = exchange(url, "GET", "", None, Duration::from_secs(1)).ok()?;
-    let reply: Value = serde_json::from_slice(&body).ok()?;
-    if status != 200 || reply["service"] != SERVICE {
-        return None;
-    }
+/// Who answers at a viewer's private address.
+#[derive(Debug, PartialEq, Eq)]
+pub(super) enum Answer {
+    /// No viewer answers there right now.
+    Nobody,
+    /// A viewer built before viewers said the process serving them.
+    Older,
+    /// A viewer served by this process.
+    Process(u32),
+}
 
-    Some(
-        reply["pid"]
-            .as_u64()
-            .and_then(|pid| u32::try_from(pid).ok()),
-    )
+/// Whether a viewer answers at `url` (its private address) right now, and
+/// then the process it says serves it.
+pub(super) fn answering(url: &str) -> Answer {
+    let reply = exchange(url, "GET", "", None, Duration::from_secs(1))
+        .ok()
+        .filter(|(status, _)| *status == 200)
+        .and_then(|(_, body)| serde_json::from_slice::<Value>(&body).ok())
+        .filter(|reply| reply["service"] == SERVICE);
+    let Some(reply) = reply else {
+        return Answer::Nobody;
+    };
+
+    match reply["pid"]
+        .as_u64()
+        .and_then(|pid| u32::try_from(pid).ok())
+    {
+        Some(pid) => Answer::Process(pid),
+        None => Answer::Older,
+    }
 }
 
 /// Whether the menu bar's viewer is recorded in `output` as serving `port`
 /// and its process still runs Atlas, answering or not.
-pub fn recorded(output: &Path, port: u16) -> bool {
+pub(crate) fn recorded(output: &Path, port: u16) -> bool {
     std::fs::read(output.join(MENUBAR_RECORD))
         .ok()
         .and_then(|bytes| serde_json::from_slice::<Value>(&bytes).ok())
@@ -67,14 +82,14 @@ pub fn recorded(output: &Path, port: u16) -> bool {
 /// The private address of the menu bar's viewer, when it runs and answers
 /// as the process its record names. It blocks for up to a second: call it
 /// off the async runtime.
-pub fn local(output: &Path, port: u16) -> Option<String> {
+pub(crate) fn local(output: &Path, port: u16) -> Option<String> {
     running(&output.join(MENUBAR_RECORD), port)
         .and_then(|running| running["url"].as_str().map(str::to_owned))
 }
 
 /// What the local viewer at `url` serves at `route`, read within `deadline`
 /// and at most `limit` bytes. Anything but a 200 is refused.
-pub fn fetch(url: &str, route: &str, deadline: Duration, limit: usize) -> Result<Vec<u8>> {
+pub(crate) fn fetch(url: &str, route: &str, deadline: Duration, limit: usize) -> Result<Vec<u8>> {
     match exchange_within(url, "GET", route, None, deadline, limit)? {
         (200, body) => Ok(body),
         _ => Err(unanswered()),
@@ -303,8 +318,8 @@ pub(crate) fn post_local(url: &str, route: &str, body: &Value) -> Result<Value> 
         // Atlas knows.
         let code = reply["code"]
             .as_str()
-            .and_then(crate::error::code)
-            .unwrap_or("menubar");
+            .and_then(crate::error::Code::parse)
+            .unwrap_or(Code::Menubar);
         let error = Error::new(
             code,
             reply["error"]

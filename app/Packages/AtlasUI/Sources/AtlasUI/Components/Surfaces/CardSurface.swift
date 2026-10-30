@@ -1,7 +1,7 @@
 import SwiftUI
 
-/// A card's ground and edge: neutral, tinted blue for the one chosen or current, or orange for what needs the
-/// person.
+/// A card's ground, and a tinted card's edge: neutral, read by its fill alone, tinted blue for the one chosen or
+/// current, or orange for what needs the person.
 struct CardSurface: ViewModifier {
   /// The card's tint.
   enum Tint: Sendable {
@@ -18,18 +18,18 @@ struct CardSurface: ViewModifier {
   /// The card's corners: `Radius.large` for a card on its own, `Radius.medium` for a group of rows in a column.
   let radius: CGFloat
 
-  /// Lays the card's ground under the content and its edge over it.
+  /// Lays the card's ground under the content and, on a tinted card, its edge over it.
   ///
   /// - Parameter content: The card's content.
   /// - Returns: The content on its card.
   func body(content: Content) -> some View {
     content
       .background(
-        RoundedRectangle(cornerRadius: radius)
+        RoundedRectangle(cornerRadius: radius, style: .continuous)
           .fill(fill)
       )
       .overlay(
-        RoundedRectangle(cornerRadius: radius)
+        RoundedRectangle(cornerRadius: radius, style: .continuous)
           .strokeBorder(edge, lineWidth: tint == .accent ? Stroke.regular : Stroke.hairline)
       )
   }
@@ -48,7 +48,7 @@ struct CardSurface: ViewModifier {
 
   private var edge: Color {
     switch tint {
-    case .neutral: .separator
+    case .neutral: .clear
     case .accent:
       Color.accent
         .opacity(Opacity.edgeTint)

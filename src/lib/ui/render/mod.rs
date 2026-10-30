@@ -2,11 +2,14 @@
 //! program gets, so the two never disagree; anything a view does not know
 //! falls back to a short generic summary, never to raw JSON.
 mod act;
+mod activity;
+mod cleanup;
+mod jobs;
 mod manage;
 mod observe;
 
 use super::{hints, style, text};
-use crate::error::Error;
+use crate::error::{Code, Error};
 use serde_json::Value;
 
 /// Which command produced a result, with what the result alone cannot say.
@@ -17,6 +20,7 @@ pub enum View {
     },
     LoginTiming,
     Status,
+    Activity,
     Config,
     Capture,
     Apps,
@@ -28,9 +32,23 @@ pub enum View {
     Type,
     Run,
     Environment,
+    /// The copies into the helper `environment list` found.
+    Plans,
     Discover,
     SetupPreview,
     Close,
+    /// A task's cleanup: its preview or a run.
+    Cleanup,
+    /// An app installed into the helper for a task.
+    InstallApp,
+    /// A background job started or stopped.
+    Job,
+    /// A task's background jobs.
+    Jobs,
+    /// The end of a job's output.
+    JobLog,
+    /// The copies a collection kept.
+    Collect,
     /// What was opened.
     Open(String),
     Wait {
@@ -47,6 +65,11 @@ pub enum View {
     Update,
     Uninstall,
     Login,
+    /// The menu bar asked to start: said only when it already ran, as one
+    /// that starts tells the person itself.
+    Menubar,
+    /// The viewer window opened.
+    Monitor,
     /// A flow that already told the person everything as it went.
     Quiet,
     Generic,
@@ -80,6 +103,7 @@ pub fn render(view: &View, value: &Value) -> Rendered {
         View::Doctor { verbose } => Rendered::out(observe::doctor(value, *verbose)),
         View::LoginTiming => Rendered::out(observe::login_timing(value)),
         View::Status => observe::status(value),
+        View::Activity => failed(value).unwrap_or_else(|| Rendered::out(activity::activity(value))),
         View::Config => Rendered::out(observe::config(value)),
         View::Capture => failed(value).unwrap_or_else(|| Rendered::out(observe::capture(value))),
         View::Apps => failed(value).unwrap_or_else(|| Rendered::out(observe::apps(value))),
@@ -120,11 +144,20 @@ pub fn render(view: &View, value: &Value) -> Rendered {
             failed(value).unwrap_or_else(|| Rendered::out(act::wait(value, *gone)))
         }
         View::Environment => act::environment(value),
+        View::Plans => failed(value).unwrap_or_else(|| Rendered::out(act::plans(value))),
         View::Discover => failed(value).unwrap_or_else(|| Rendered::out(act::discover(value))),
         View::SetupPreview => {
             failed(value).unwrap_or_else(|| Rendered::out(act::setup_preview(value)))
         }
         View::Close => failed(value).unwrap_or_else(|| Rendered::out(act::close(value))),
+        View::Cleanup => cleanup::cleanup(value),
+        View::Job => jobs::job(value),
+        View::Jobs => jobs::jobs(value),
+        View::JobLog => jobs::log(value),
+        View::Collect => jobs::collect(value),
+        View::InstallApp => {
+            failed(value).unwrap_or_else(|| Rendered::out(cleanup::install_app(value)))
+        }
         View::Restart => failed(value).unwrap_or_else(|| Rendered::out(act::restart(value))),
         View::Logout => failed(value).unwrap_or_else(|| Rendered::out(act::logout(value))),
         View::StartInput => failed(value).unwrap_or_else(|| Rendered::out(act::start_input(value))),
@@ -138,6 +171,8 @@ pub fn render(view: &View, value: &Value) -> Rendered {
         View::Update => manage::update(value),
         View::Uninstall => failed(value).unwrap_or_else(|| Rendered::out(manage::uninstall(value))),
         View::Login => failed(value).unwrap_or_else(|| Rendered::out(manage::login(value))),
+        View::Menubar => failed(value).unwrap_or_else(|| Rendered::out(manage::menubar(value))),
+        View::Monitor => failed(value).unwrap_or_else(|| Rendered::out(manage::monitor())),
         View::Quiet => failed(value).unwrap_or_default(),
         View::Generic => failed(value).unwrap_or_else(|| Rendered::out(generic(value))),
     }
@@ -154,19 +189,57 @@ fn failed(value: &Value) -> Option<Rendered> {
         .or_else(|| value["failure"]["error"].as_str())
         .unwrap_or("It did not finish. Run it again with --json to see why.");
 
-    let shown = card(message, value["code"].as_str(), value["uncertain"] == true);
+    let shown = advised_card(message, value);
+    let shown = with_sessions(shown, value);
     Some(Rendered::err(with_candidates(shown, &value["candidates"])))
 }
 
 /// An error as a person reads it.
 pub fn error(error: &Error) -> String {
-    if error.code == "cancelled" {
+    if error.code == Code::Cancelled {
         return format!("{} {}", style::unknown(), error.error);
     }
 
-    let shown = card(&error.error, Some(error.code), error.uncertain);
+    let shown = advised_card(&error.error, &serde_json::json!(error));
+    let shown = with_sessions(shown, &Value::Object(error.details.clone()));
     let candidates = error.details.get("candidates").unwrap_or(&Value::Null);
     with_candidates(shown, candidates)
+}
+
+/// A card followed by the agent session a refusal names, when it names
+/// one: who holds the helper, who last used the app in front, or whose an
+/// unknown action is.
+fn with_sessions(card: String, details: &Value) -> String {
+    let named = [
+        (
+            "Held by",
+            details["heldBy"]["name"].as_str().map(str::to_owned),
+        ),
+        (
+            "Last used by",
+            details["lastUsedBy"]["name"].as_str().map(str::to_owned),
+        ),
+        (
+            "Left by",
+            details["causedBy"].as_array().map(|names| {
+                let names: Vec<String> = names
+                    .iter()
+                    .filter_map(Value::as_str)
+                    .map(str::to_owned)
+                    .collect();
+                text::listed(&names)
+            }),
+        ),
+    ];
+
+    let mut lines = vec![card];
+    lines.extend(
+        named
+            .into_iter()
+            .filter_map(|(said, name)| Some((said, name.filter(|name| !name.is_empty())?)))
+            .map(|(said, name)| format!("  {said} {}.", text::printable(&name))),
+    );
+    lines.join("\n")
 }
 
 /// A card followed by the elements a refused name may have meant, one a
@@ -208,15 +281,7 @@ fn point(at: &Value) -> Option<(f64, f64)> {
 /// `✗ what went wrong` and, when the message does not already say, `→ what
 /// to do`. Messages can carry text from the helper, so each line is made
 /// safe to print.
-pub fn card(message: &str, code: Option<&str>, uncertain: bool) -> String {
-    let message = message
-        .trim()
-        .lines()
-        .map(text::printable)
-        .collect::<Vec<_>>()
-        .join("\n");
-    let mut lines = vec![format!("{} {message}", style::fail())];
-
+pub fn card(message: &str, code: Option<Code>, uncertain: bool) -> String {
     let fix = if uncertain {
         Some(hints::UNCERTAIN)
     } else if message.to_lowercase().contains("run atlas ") {
@@ -226,6 +291,31 @@ pub fn card(message: &str, code: Option<&str>, uncertain: bool) -> String {
         code.and_then(hints::fix)
     };
 
+    card_with(message, fix)
+}
+
+/// [`card`] for a failed `result`: a focus refusal says what to do as JSON
+/// output says it, by what was in the way and what was sent first.
+pub(super) fn advised_card(message: &str, result: &Value) -> String {
+    match hints::focus_advice(result) {
+        Some(advice) => card_with(message, Some(&advice)),
+        None => card(
+            message,
+            result["code"].as_str().and_then(Code::parse),
+            result["uncertain"] == true,
+        ),
+    }
+}
+
+/// `✗ message`, then `→ fix` when there is one.
+fn card_with(message: &str, fix: Option<&str>) -> String {
+    let message = message
+        .trim()
+        .lines()
+        .map(text::printable)
+        .collect::<Vec<_>>()
+        .join("\n");
+    let mut lines = vec![format!("{} {message}", style::fail())];
     if let Some(fix) = fix {
         lines.push(format!("  {} {fix}", style::dim("→")));
     }

@@ -28,7 +28,6 @@ enum PanelMoreMenu {
   /// - Returns: The menu.
   static func menu(_ value: PanelMoreMenuState, actions: Actions) -> NSMenu {
     let menu = NSMenu()
-    menu.appearance = Appearance.dark
     menu.minimumWidth = width
     if value.showsOpenAtlas {
       menu.addItem(item(PanelWords.openAtlasItem, key: PanelKeys.openAtlas, run: actions.openAtlas))

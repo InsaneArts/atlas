@@ -9,6 +9,31 @@ import Testing
 
 @Suite("HelperActions")
 struct HelperActionsTests {
+  @Test("a switch refuses when the graphical session leaves the console while control cleanup is pending")
+  func switchingRechecksAfterCleanup() async throws {
+    var onConsole = true
+    let console = SessionConsole(read: { onConsole })
+    let service = ScriptedService()
+    let commands = ScriptedCommands([:])
+    let barrier = ControlBarrier(service: service, clock: ManualClock())
+    let actions = HelperActions(console: console, commands: commands, service: service, barrier: barrier)
+    let gate = ReleaseSignal()
+    let cleanup = Task { await barrier.tracking { await gate.wait() } }
+    try await settle("cleanup never started") { barrier.isBusy }
+    let switching = Task { await actions.switchTo("helper") }
+    try await settle("the switch never waited for cleanup") { barrier.waiters == 1 }
+    onConsole = false
+    gate.open()
+    await cleanup.value
+    let refused = await switching.value
+    #expect(refused?.ok == false)
+    #expect(refused?.message == SessionConsole.refusal)
+    #expect(commands.ran.isEmpty)
+    #expect(!console.isOnConsole)
+    #expect(await actions.switchTo("helper")?.ok == false)
+    #expect(commands.ran.isEmpty)
+  }
+
   /// A status whose last action's outcome is unknown, so Recover restarts the helper.
   static let unknownOutcome: [String: Any] = [
     "ready": true, "canObserve": true, "overview": ["mode": "recovering", "state": "needsYou", "pending": 1],
@@ -21,7 +46,12 @@ struct HelperActionsTests {
   ///   - commands: The scripted command line.
   /// - Returns: The commands.
   private static func actions(_ service: ScriptedService, _ commands: ScriptedCommands) -> HelperActions {
-    HelperActions(commands: commands, service: service, barrier: ControlBarrier(service: service, clock: ManualClock()))
+    HelperActions(
+      console: SessionConsole(read: { true }),
+      commands: commands,
+      service: service,
+      barrier: ControlBarrier(service: service, clock: ManualClock())
+    )
   }
 
   @Test("Recover and Restart are one reservation, so a restart asked from another window while one runs never starts")

@@ -81,7 +81,7 @@ enum OnboardingSamples {
   ///   - choices: The person's choices.
   /// - Returns: The snapshot.
   static func snapshot(_ facts: OnboardingFacts, _ choices: OnboardingChoices = .init()) -> OnboardingSnapshot {
-    OnboardingSnapshot(facts: facts, choices: choices, loaded: true)
+    OnboardingSnapshot(facts: facts, choices: choices, loaded: true, isOnConsole: true)
   }
 
   /// Choices past the welcome, on the form when `creating`.

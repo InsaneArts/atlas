@@ -5,7 +5,7 @@ import SwiftUI
 struct ActionSlotRow: ViewModifier {
   /// Whether the slots' controls show, the value the row animates on.
   let isShown: Bool
-  @Environment(\.accessibilityReduceMotion) private var reduceMotion
+  @Environment(\.motionReduced) private var reduceMotion
 
   /// The row, animating its layout as the slots change.
   ///

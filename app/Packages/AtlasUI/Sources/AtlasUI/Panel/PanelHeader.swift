@@ -1,8 +1,8 @@
 import SwiftUI
 
 /// The panel's header, which leads with the status: its mark and word as the heading, in the word's colour, the line
-/// under them, and ⋯ at the trailing edge. A new word or line swaps in place of the old by opacity, the same under
-/// Reduce Motion. VoiceOver reads the status as one, then the line.
+/// under them, and ⋯ at the trailing edge. A new word, with its mark, or a new line swaps in place of the old with no
+/// overlap (``LineSwap``), the old fading out before the new fades in, the same under Reduce Motion. VoiceOver reads the status as one, then the line.
 struct PanelHeader: View {
   /// The helper's status, with its line.
   let status: StatusSummary
@@ -30,7 +30,7 @@ struct PanelHeader: View {
       } label: {
         Image(systemName: SymbolName.more.rawValue)
       }
-      .buttonStyle(.capsule(.glass, size: .mini, outline: .circle, isOn: isMoreOpen))
+      .buttonStyle(.capsule(.secondary, size: .mini, outline: .circle, isOn: isMoreOpen))
       .onGeometryChange(for: CGRect.self) {
         $0.frame(in: .global)
       } action: {
@@ -40,18 +40,19 @@ struct PanelHeader: View {
       .accessibilityLabel("More")
       .accessibilityHint("Opens a menu")
     }
-    .padding(.horizontal, Spacing.half)
+    .padding(.horizontal, PanelLayout.textInset)
   }
 
   /// The status's mark and word, the word in its tone's colour.
   private var heading: some View {
-    HStack(spacing: PanelLayout.wordGap) {
-      StatusDot(mark: status.mark, tone: status.tone, size: .large)
-      Text(status.label)
-        .textStyle(.heading)
-        .foregroundStyle(status.tone.wordColor)
-        .lineLimit(1)
-        .swapsText(on: status.label)
+    LineSwap(status, id: \.label) { status in
+      HStack(spacing: PanelLayout.wordGap) {
+        StatusDot(mark: status.mark, tone: status.tone, size: .large)
+        Text(status.label)
+          .textStyle(.heading)
+          .foregroundStyle(status.tone.wordColor)
+          .lineLimit(1)
+      }
     }
     .accessibilityElement(children: .combine)
     .accessibilityAddTraits(.updatesFrequently)
@@ -61,12 +62,13 @@ struct PanelHeader: View {
   /// empty.
   @ViewBuilder private var lineRow: some View {
     if !line.isEmpty {
-      Text(line)
-        .textStyle(.callout)
-        .foregroundStyle(notice == nil ? Color.textSecondary : Color.textAttention)
-        .lineLimit(1)
-        .truncationMode(.tail)
-        .swapsText(on: line)
+      LineSwap(line) { words in
+        Text(words)
+          .textStyle(.callout)
+          .foregroundStyle(notice == nil ? Color.textSecondary : Color.textAttention)
+          .lineLimit(1)
+          .truncationMode(.tail)
+      }
     }
   }
 

@@ -33,7 +33,7 @@ public struct OnboardingView<DragIcon: View>: View {
     self.send = send
   }
 
-  /// What the window shows now over its footer, on the dark ground.
+  /// What the window shows now over its footer, on the window's ground.
   public var body: some View {
     VStack(spacing: .zero) {
       ZStack {

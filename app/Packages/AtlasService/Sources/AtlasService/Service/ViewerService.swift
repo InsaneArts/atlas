@@ -43,11 +43,13 @@ public protocol ViewerService: Sendable {
   /// - Throws: ``ServiceError`` when the service refuses.
   func revoke() async throws
 
-  /// Stops agents in the helper, ending an agent's input under way, or lets them go on.
+  /// Stops agents in the helper, ending an agent's input under way and its background jobs, or lets them go on.
   ///
   /// - Parameter stopped: Whether agents stop.
+  /// - Returns: What the Stop came to: what the service warned of, and the background jobs it could not end.
   /// - Throws: ``ServiceError`` when the service refuses.
-  func setStopped(_ stopped: Bool) async throws
+  @discardableResult
+  func setStopped(_ stopped: Bool) async throws -> StopOutcome
 
   /// Sends input to the helper under a lease.
   ///
@@ -73,10 +75,10 @@ public protocol ViewerService: Sendable {
 
   /// Reads the apps open in the helper with their windows. Reading them records nothing and takes no control.
   ///
-  /// - Returns: The apps, front to back, every missing field at its safe default.
+  /// - Returns: The apps, front to back, and the sessions that opened them, every missing field at its safe default.
   /// - Throws: ``ServiceError`` when the service cannot be read or cannot reach the helper; a refusal never reads as
   ///   no apps.
-  func apps() async throws(ServiceError) -> [HelperApp]
+  func apps() async throws(ServiceError) -> HelperAppList
 
   /// Reads the screenshots agents took in the helper, and the folder they are kept in.
   ///
@@ -92,4 +94,26 @@ public protocol ViewerService: Sendable {
   /// - Returns: The picture's bytes.
   /// - Throws: ``ServiceError`` when the service cannot be read, or no screenshot has that name.
   func screenshot(name: String, full: Bool) async throws(ServiceError) -> Data
+
+  /// Reads the host sessions live or ended within the last seven days, and what each made. Reading them records
+  /// nothing.
+  ///
+  /// - Returns: The sessions, newest last seen first, every missing field at its safe default.
+  /// - Throws: ``ServiceError/notOffered`` from an older service that offers no list, which callers read as no list;
+  ///   else ``ServiceError`` when the service cannot be read or refuses.
+  func sessions() async throws(ServiceError) -> HostSessionList
+
+  /// Reads what cleaning up a host session's work would take, or cleans it up as the person: quits what runs from
+  /// its copies, rolls back its plans, moves what its tasks installed aside in the helper and removes the copies
+  /// Atlas made for it.
+  ///
+  /// - Parameters:
+  ///   - session: The session's key.
+  ///   - apply: Whether to clean up now, rather than only read what it would take, which changes nothing.
+  /// - Returns: The steps it takes, or took and how far each got, every missing field at its safe default; an apply
+  ///   that did not finish comes back too, with its steps, so what was kept or failed can be shown.
+  /// - Throws: ``ServiceError/notOffered`` from an older service that offers no cleanup; for an apply that got no
+  ///   reply, which may still run, ``ServiceError/isCleanupUnanswered``; else ``ServiceError`` when the service cannot
+  ///   be read or refuses, as while a viewer holds control.
+  func cleanup(session: String, apply: Bool) async throws(ServiceError) -> CleanupReply
 }

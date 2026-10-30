@@ -16,7 +16,8 @@ extension AppContainer {
         actions: actions,
         loginItem: loginItem,
         links: coordinator.panelLinks(),
-        clock: clock
+        clock: clock,
+        icons: appIcons
       )
     )
     menuBar = PanelPopover(

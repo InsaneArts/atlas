@@ -5,6 +5,7 @@ extension StatusReading.Reason {
   var word: String {
     switch self {
     case .yourControl: Words.yourControl
+    case .yourControlBesideCommand: Words.yourControlBesideCommand
     case .inUseElsewhere: Words.inUseElsewhereLine
     case .nothingHappening: Words.nothingHappening
     case .lastAction(let item): Words.idleLine(last: item.text, ago: item.when)

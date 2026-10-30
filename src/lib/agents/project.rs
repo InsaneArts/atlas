@@ -164,7 +164,7 @@ pub fn taught() -> Vec<Value> {
 fn has_section(path: &Path) -> bool {
     use std::io::Read;
 
-    let Some(file) = crate::helper_info::open_plain(path) else {
+    let Some(file) = crate::files::open_plain(path) else {
         return false;
     };
     let mut text = String::new();
@@ -309,7 +309,7 @@ fn replace_file(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
         target
             .file_name()
             .map_or("instructions".into(), |n| n.to_string_lossy()),
-        crate::control::token()
+        crate::files::token()
     ));
 
     let result = (|| {

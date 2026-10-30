@@ -3,10 +3,12 @@ import SwiftUI
 /// Why macOS asks for a password, and what Atlas does with the approval, shown before macOS's own dialog, whose words
 /// are generic: a quiet card under the form, its title and three lines.
 struct ApprovalNote: View {
+  /// Optically balances the lock's narrow shape against the title.
+  private static let symbolGap: CGFloat = 7
   /// Who may add an account, what Atlas does with the approval, and what it keeps.
   var body: some View {
     VStack(alignment: .leading, spacing: Spacing.xsPlus) {
-      HStack(spacing: Layout.symbolGap) {
+      HStack(spacing: Self.symbolGap) {
         Image(systemName: SymbolName.lock.rawValue)
           .font(Typography.font(size: StatusLine.markSide))
           .foregroundStyle(Color.textSecondary)
@@ -28,16 +30,10 @@ struct ApprovalNote: View {
     .padding(.horizontal, Spacing.mPlus)
     .padding(.vertical, Spacing.m)
     .background(
-      RoundedRectangle(cornerRadius: Radius.large)
+      RoundedRectangle(cornerRadius: Radius.large, style: .continuous)
         .filledOutline(Color.fillQuiet, border: Color.separator, lineWidth: Stroke.hairline)
     )
   }
-}
-
-/// The approval card's own measures.
-private enum Layout {
-  /// 7: between the lock and the title.
-  static let symbolGap: CGFloat = 7
 }
 
 #if DEBUG

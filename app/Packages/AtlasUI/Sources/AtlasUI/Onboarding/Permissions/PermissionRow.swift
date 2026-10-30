@@ -10,7 +10,7 @@ struct PermissionRow: View {
   let symbol: SymbolName
   /// What it lets agents do.
   let detail: String
-  @Environment(\.accessibilityReduceMotion) private var reduceMotion
+  @Environment(\.motionReduced) private var reduceMotion
 
   /// The tile, the name over its use, and where it stands, which lands in place as it changes, read as one line.
   var body: some View {

@@ -22,17 +22,18 @@
     /// - Parameter state: The picture, and whether it is paused.
     /// - Returns: The mini screen at the main window's size.
     private func sample(_ state: MiniScreenState) -> some View {
-      MiniScreen(state: state) {
+      let size = ViewerLayout.pipSize(bodyWidth: .infinity, aspect: state.picture.aspectRatio)
+      return MiniScreen(state: state, corner: ViewerLayout.pipRadius) {
       } picture: {
         StillPicture(
           ViewerLivePicture(
             picture: state.picture,
             saturation: PictureTreatment.saturation(for: state.look),
-            corner: Radius.medium
+            corner: ViewerLayout.pipRadius
           )
         )
       }
-      .frame(width: ViewerLayout.miniLargest.width, height: ViewerLayout.miniLargest.height)
+      .frame(width: size.width, height: size.height)
     }
   }
 #endif

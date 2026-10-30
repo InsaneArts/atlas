@@ -5,6 +5,9 @@ struct Lede: View {
   /// The sentences.
   let text: String
 
+  /// 450: the widest a lede runs, so it reads as a paragraph under its title.
+  private static let width: CGFloat = 450
+
   /// The paragraph, centred in grey under a title.
   var body: some View {
     Text(text)
@@ -12,15 +15,9 @@ struct Lede: View {
       .lineSpacing(Spacing.xs)
       .foregroundStyle(Color.textSecondary)
       .multilineTextAlignment(.center)
-      .frame(maxWidth: Layout.width)
+      .frame(maxWidth: Self.width)
       .fixedSize(horizontal: false, vertical: true)
   }
-}
-
-/// The lede's measure.
-private enum Layout {
-  /// 450: the widest a lede runs, so it reads as a paragraph under its title.
-  static let width: CGFloat = 450
 }
 
 #if DEBUG

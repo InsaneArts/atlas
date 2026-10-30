@@ -11,8 +11,9 @@
 //! in). Otherwise the helper is read directly.
 use crate::{
     client::{Client, png_dimensions},
-    control::{Durability, write_private_with},
-    error::{Error, Result},
+    error::{Code, Error, Result},
+    files::{Durability, write_private_with},
+    host_session::{HostSession, Key},
     overview::READ_DEADLINE,
 };
 use serde_json::{Value, json};
@@ -78,7 +79,10 @@ pub async fn watch(client: Client, port: u16, frames: Option<PathBuf>, once: boo
         stdout: std::io::stdout(),
         written: Instant::now(),
     };
-    let mut watch = Watch::new(frames);
+    // The host session this watch runs for, if any: only its own host id
+    // is passed on, for the pane that shows "this session".
+    let own = HostSession::from_env().map(|session| session.key().clone());
+    let mut watch = Watch::new(frames).for_session(own);
 
     let stop = stopped();
     tokio::pin!(stop);
@@ -147,6 +151,9 @@ struct Watch {
     /// a reader never takes a new screen for one it has.
     kept: Option<[u8; 32]>,
     last_id: u64,
+    /// The host session the watch runs for: other sessions' host ids are
+    /// never passed on.
+    own: Option<Key>,
 }
 
 impl Watch {
@@ -159,7 +166,14 @@ impl Watch {
             framed_at: None,
             kept: None,
             last_id: 0,
+            own: None,
         }
+    }
+
+    /// This watch, passing on only `own` session's host id.
+    fn for_session(mut self, own: Option<Key>) -> Self {
+        self.own = own;
+        self
     }
 
     /// One look: the status when it is due, then the screen, then a blank
@@ -173,7 +187,8 @@ impl Watch {
 
             // A viewer that runs but did not answer leaves the last status
             // standing, rather than a guess at who holds control.
-            if let Some((status, source)) = read(client, output, port).await {
+            if let Some((mut status, source)) = read(client, output, port).await {
+                self.add_own_session(client, &mut status).await;
                 if status["overview"]["state"] == "notReady" {
                     self.forget_frame();
                 }
@@ -196,6 +211,32 @@ impl Watch {
         lines.written.elapsed() < HEARTBEAT || lines.blank()
     }
 
+    /// `status` with the session this watch runs for as `ownSession` in its
+    /// overview, found among every live session when the status's own list
+    /// is too short to hold it; null when it is none of them.
+    async fn add_own_session(&self, client: &Client, status: &mut Value) {
+        let Some(own) = &self.own else {
+            return;
+        };
+        let mine = |session: &&Value| session["key"].as_str() == Some(own.as_str());
+        let listed = status["overview"]["hostSessions"]
+            .as_array()
+            .and_then(|sessions| sessions.iter().find(mine))
+            .cloned();
+        let found = match listed {
+            Some(entry) => Some(entry),
+            None => {
+                let facts = crate::overview::SessionFacts::of(status, crate::client::timestamp());
+                crate::overview::live_host_sessions(client, facts)
+                    .await
+                    .iter()
+                    .find(mine)
+                    .cloned()
+            }
+        };
+        status["overview"]["ownSession"] = found.unwrap_or(Value::Null);
+    }
+
     /// Whether to read the status now: soon after the log changed, and
     /// every so often regardless.
     fn read_due(&self, mark: Mark, now: Instant) -> bool {
@@ -214,11 +255,13 @@ impl Watch {
         }
 
         self.said = signature;
+        let mut overview = status["overview"].clone();
+        keep_own_host_id(&mut overview, self.own.as_ref());
         Some(json!({
             "type": "status",
             "source": source,
             "ready": status["ready"] == true,
-            "overview": status["overview"],
+            "overview": overview,
         }))
     }
 
@@ -382,6 +425,22 @@ fn replace(folder: &Path, name: &str, bytes: &[u8]) -> Result<()> {
     fs::rename(&partial, folder.join(name)).map_err(|error| Error::writing(folder, error))
 }
 
+/// `overview` without the host id of any session but `own`: every other
+/// session is named, never identified to its host.
+fn keep_own_host_id(overview: &mut Value, own: Option<&Key>) {
+    let sessions = overview["hostSessions"]
+        .as_array_mut()
+        .into_iter()
+        .flatten();
+    for session in sessions.filter_map(Value::as_object_mut) {
+        let mine =
+            own.is_some_and(|own| session.get("key").and_then(Value::as_str) == Some(own.as_str()));
+        if !mine {
+            session.remove("hostSession");
+        }
+    }
+}
+
 /// What a status says, without the ages that change every second; with
 /// the log's mark, so a repeat of the same action still counts.
 fn signature(status: &Value, mark: Mark) -> Value {
@@ -391,6 +450,14 @@ fn signature(status: &Value, mark: Mark) -> Value {
             row.remove("ageSeconds");
         }
     }
+    // A wait that counts up, or a latest action growing older, is not news;
+    // a session that starts or stops waiting still is.
+    if let Some(sessions) = overview["hostSessions"].as_array_mut() {
+        sessions.iter_mut().for_each(without_ticking_ages);
+    }
+    if let Some(own) = overview.get_mut("ownSession") {
+        without_ticking_ages(own);
+    }
 
     json!({
         "ready": status["ready"],
@@ -399,8 +466,19 @@ fn signature(status: &Value, mark: Mark) -> Value {
     })
 }
 
+/// `session` without the ages that count up while nothing else changes.
+fn without_ticking_ages(session: &mut Value) {
+    let Some(session) = session.as_object_mut() else {
+        return;
+    };
+    session.remove("waitingSeconds");
+    if let Some(latest) = session.get_mut("latest").and_then(Value::as_object_mut) {
+        latest.remove("ageSeconds");
+    }
+}
+
 fn log_mark(output: &Path) -> Mark {
-    let metadata = fs::metadata(output.join("metadata.jsonl")).ok()?;
+    let metadata = fs::metadata(output.join(crate::activity_log::FILE)).ok()?;
     Some((metadata.len(), metadata.modified().ok()?))
 }
 
@@ -421,7 +499,7 @@ fn private_folder(folder: &Path) -> Result<()> {
         || metadata.mode() & 0o077 != 0
     {
         return Err(Error::new(
-            "usage",
+            Code::Usage,
             format!(
                 "{} must be a private (0700) folder you own",
                 folder.display()
@@ -450,6 +528,107 @@ mod tests {
 
     fn mark(length: u64) -> Mark {
         Some((length, SystemTime::UNIX_EPOCH))
+    }
+
+    #[test]
+    fn a_watch_passes_on_only_its_own_sessions_host_id() {
+        use crate::host_session::Host;
+        let (own, other) = (Key::of(Host::Claude, "own"), Key::of(Host::Codex, "other"));
+        let status = json!({"ready": true, "overview": {"state": "idle", "hostSessions": [
+            {"key": own, "name": "Claude Code · left", "hostSession": "own"},
+            {"key": other, "name": "Codex · right", "hostSession": "other"},
+        ]}});
+
+        let line = Watch::new(None)
+            .for_session(Some(own))
+            .news(&status, "helper", None)
+            .unwrap();
+        let sessions = line["overview"]["hostSessions"].as_array().unwrap();
+        assert_eq!(sessions[0]["hostSession"], "own");
+        assert!(sessions[1].get("hostSession").is_none());
+        assert_eq!(sessions[1]["name"], "Codex · right");
+
+        let line = Watch::new(None).news(&status, "helper", None).unwrap();
+        let sessions = line["overview"]["hostSessions"].as_array().unwrap();
+        assert!(
+            sessions
+                .iter()
+                .all(|session| session.get("hostSession").is_none()),
+            "without a session, none"
+        );
+    }
+
+    #[test]
+    fn a_watch_says_whose_it_is_and_a_ticking_age_says_nothing_new() {
+        use crate::host_session::Host;
+        let own = Key::of(Host::Claude, "own");
+        let status = |state: &str, waited: u64, age: u64| {
+            json!({"ready": true, "overview": {"state": "working", "sessionsShown": true,
+            "hostSessions": [
+                {"key": own, "name": "Claude Code · left", "hostSession": "own",
+                    "state": "acting", "latest": {"says": "clicked", "ageSeconds": age}},
+                {"key": Key::of(Host::Codex, "other"), "name": "Codex · right",
+                    "hostSession": "other", "state": state, "waitingFor": "helper",
+                    "waitingSeconds": waited},
+            ]}})
+        };
+        let mut watch = Watch::new(None).for_session(Some(own.clone()));
+
+        let first = watch
+            .news(&status("waiting", 1, 0), "helper", None)
+            .unwrap();
+        let sessions = first["overview"]["hostSessions"].as_array().unwrap();
+        assert_eq!(sessions[0]["hostSession"], "own", "its own session is told");
+        assert!(sessions[1].get("hostSession").is_none());
+        assert_eq!(sessions[1]["waitingSeconds"], 1);
+
+        assert!(
+            watch
+                .news(&status("waiting", 9, 7), "helper", None)
+                .is_none(),
+            "only ages changed"
+        );
+        assert!(
+            watch.news(&status("idle", 9, 7), "helper", None).is_some(),
+            "a state change is news"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_watch_keeps_its_own_session_beside_the_listed_ones() {
+        use crate::host_session::{Host, HostSession, store};
+
+        let directory = tempfile::tempdir().unwrap();
+        let client = crate::test_support::client(directory.path());
+        let own = HostSession::new(Host::Claude, "own").unwrap();
+        store::note(
+            &client,
+            &own,
+            store::Kind::Other,
+            Some(&crate::doing::Doing::new("click")),
+            &Ok(json!({"ok": true})),
+        )
+        .unwrap();
+        let watch = Watch::new(None).for_session(Some(own.key().clone()));
+
+        let mut listed = json!({"overview": {"hostSessions": [
+            {"key": own.key(), "name": "Claude Code · left", "state": "acting"},
+        ]}});
+        watch.add_own_session(&client, &mut listed).await;
+        assert_eq!(listed["overview"]["ownSession"]["state"], "acting");
+
+        let mut cut = json!({"overview": {"hostSessions": []}});
+        watch.add_own_session(&client, &mut cut).await;
+        assert_eq!(
+            cut["overview"]["ownSession"]["key"],
+            own.key().as_str(),
+            "found among every live session when the list left it out"
+        );
+        assert_eq!(cut["overview"]["ownSession"]["state"], "idle");
+
+        let mut none = json!({"overview": {}});
+        Watch::new(None).add_own_session(&client, &mut none).await;
+        assert!(none["overview"].get("ownSession").is_none());
     }
 
     #[test]
@@ -554,12 +733,7 @@ mod tests {
         use tokio::sync::Mutex;
 
         let dir = tempfile::tempdir().unwrap();
-        let config = crate::config::Config::parse(
-            b"helper_uid = 60001\nsocket_path = \"helper.sock\"\noutput_dir = \"out\"\nidentity_probe = \"probe\"\ninput_socket = \"input.sock\"\n",
-            &dir.path().join("atlas.toml"),
-        ).unwrap();
-        let mut client = Client::new(config).unwrap();
-        client.controller = crate::control::Controller::at(60001, &dir.path().join("state"));
+        let client = crate::test_support::client_in(dir.path());
         let output = client.output_dir().unwrap();
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let port = listener.local_addr().unwrap().port();
@@ -685,9 +859,9 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         assert_eq!(log_mark(dir.path()), None);
 
-        fs::write(dir.path().join("metadata.jsonl"), "{}\n").unwrap();
+        fs::write(dir.path().join(crate::activity_log::FILE), "{}\n").unwrap();
         let first = log_mark(dir.path());
-        fs::write(dir.path().join("metadata.jsonl"), "{}\n{}\n").unwrap();
+        fs::write(dir.path().join(crate::activity_log::FILE), "{}\n{}\n").unwrap();
         assert_ne!(log_mark(dir.path()), first);
     }
 

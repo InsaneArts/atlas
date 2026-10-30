@@ -1,4 +1,5 @@
 import AtlasStatus
+import AtlasUI
 
 /// The main window's rules that both its presenter and its controller follow: the button drawn and the controller's
 /// guard are one rule, and so are the alert shown and the alert Not Now sets aside.
@@ -51,6 +52,14 @@ extension ViewerSnapshot {
     return .setAside
   }
 
+  /// Whose work the window shows: the session chosen while the status or the sessions' list still names it, or before
+  /// either was read; every session's once it is gone from both.
+  var shownSessions: ViewerSessionChoice {
+    guard case .one(let key) = session.chosenSession else { return .all }
+    let named = reading.statusReading.session(key) != nil || panes.sessions.record(key) != nil
+    return named || !reading.hasStatus ? .one(key) : .all
+  }
+
   /// The mode as this window shows it (``ViewerPresenter/mode(reading:holdingControl:)``).
   var mode: Mode { ViewerPresenter.mode(reading: reading, holdingControl: holdingControl) }
 
@@ -61,7 +70,7 @@ extension ViewerSnapshot {
     return HelperMenuState(
       canRecover: offeredRecovery != nil && !session.recovering && !running.contains(.recovery),
       canRestart: overview.mode.answers && !running.contains(.recovery),
-      canSwitch: !running.contains(.switchToHelper),
+      canSwitch: isOnConsole && !running.contains(.switchToHelper),
       canLogOut: overview.mode.allowsLogOut && !running.contains(.logOut)
     )
   }

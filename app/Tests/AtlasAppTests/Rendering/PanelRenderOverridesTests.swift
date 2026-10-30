@@ -31,4 +31,20 @@ struct PanelRenderOverridesTests {
       .applied(to: PanelSnapshot())
     #expect(PanelPresenter.state(shown).status.label == label)
   }
+
+  @Test(
+    "each sessions render lists its sessions, one session included, in Recent's place",
+    arguments: zip(PanelRender.sessions, [1, 2, 3, 3, 3])
+  )
+  func eachSessionsRenderListsItsSessions(sessions: String, rows: Int) {
+    let mode = sessions == "needsYou" ? "recovering" : "agent"
+    let shown = PanelRenderOverrides(
+      environment: ["ATLAS_RENDER_MODE": mode, "ATLAS_RENDER_PREVIEW": "1", "ATLAS_RENDER_SESSIONS": sessions]
+    )
+    .applied(to: PanelSnapshot())
+    let panel = PanelPresenter.state(shown)
+    #expect(panel.sessions.count == rows)
+    #expect(panel.recent.isEmpty)
+    #expect((panel.moreSessions != nil) == (sessions == "more"))
+  }
 }

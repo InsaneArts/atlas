@@ -10,6 +10,9 @@ public struct ActivityEntry: Equatable, Sendable, Identifiable {
   public var mark: ActivityMarkKind
   /// Whether it is the newest action in its list, which a caption marks with a breathing dot.
   public var isNewest: Bool
+  /// The icon of the host session that did it, which a caption draws before its words while sessions show; nil for
+  /// none.
+  public var icon: RowIcon?
 
   /// Creates an action as a caption or a row shows it.
   ///
@@ -19,11 +22,20 @@ public struct ActivityEntry: Equatable, Sendable, Identifiable {
   ///   - when: How long ago, in words; empty when unknown.
   ///   - mark: The mark that leads it.
   ///   - isNewest: Whether it is the newest action in its list.
-  public init(id: String, line: String, when: String, mark: ActivityMarkKind = .quiet, isNewest: Bool) {
+  ///   - icon: The icon of the host session that did it; none by default.
+  public init(
+    id: String,
+    line: String,
+    when: String,
+    mark: ActivityMarkKind = .quiet,
+    isNewest: Bool,
+    icon: RowIcon? = nil
+  ) {
     self.id = id
     self.line = line
     self.when = when
     self.mark = mark
     self.isNewest = isNewest
+    self.icon = icon
   }
 }

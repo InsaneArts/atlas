@@ -9,7 +9,7 @@ struct StepDisc: View {
   let index: Int
   /// Where the step stands.
   let state: StepState
-  @Environment(\.accessibilityReduceMotion) private var reduceMotion
+  @Environment(\.motionReduced) private var reduceMotion
 
   /// The ring or fill, the number and the check, popping as the state changes.
   var body: some View {
@@ -25,7 +25,7 @@ struct StepDisc: View {
       CheckStroke()
         .trim(from: 0, to: isDone ? 1 : 0)
         .stroke(Color.onSuccess, style: StrokeStyle(lineWidth: Stroke.thick, lineCap: .round, lineJoin: .round))
-        .frame(width: Layout.check, height: Layout.check)
+        .frame(width: StepDiscLayout.check, height: StepDiscLayout.check)
         .animation(Motion.animation(Motion.draw, reduceMotion: reduceMotion), value: isDone)
     }
     .frame(width: Self.side, height: Self.side)
@@ -70,7 +70,7 @@ struct StepDisc: View {
   /// The number's scale: whole, shrinking away as the step finishes; under Reduce Motion it only fades.
   private var numberScale: CGFloat {
     guard isDone, !reduceMotion else { return 1 }
-    return Layout.numberScale
+    return StepDiscLayout.numberScale
   }
 
   /// The disc's fill: green once done, the accent while current, none while it waits.
@@ -84,7 +84,7 @@ struct StepDisc: View {
 
   /// The faint ring a waiting step's number sits in; none on a filled disc.
   private var ring: Color {
-    state == .waiting ? .strokeSelected : .clear
+    state == .waiting ? .strokeStrong : .clear
   }
 
   /// The number's colour: white on the accent, tertiary in the faint ring.
@@ -97,8 +97,8 @@ struct StepDisc: View {
   private var popFrom: CGFloat {
     guard !reduceMotion else { return 1 }
     switch state {
-    case .done: return Layout.finishScale
-    case .current: return Layout.lightScale
+    case .done: return StepDiscLayout.finishScale
+    case .current: return StepDiscLayout.lightScale
     case .waiting: return 1
     }
   }
@@ -108,18 +108,6 @@ struct StepDisc: View {
     guard state == .current, !reduceMotion else { return .zero }
     return Motion.Duration.step.seconds
   }
-}
-
-/// The step disc's own measures.
-private enum Layout {
-  /// 11: the drawn check's frame.
-  static let check: CGFloat = 11
-  /// 0.5: the size the number shrinks to as it leaves.
-  static let numberScale: CGFloat = 0.5
-  /// 0.8: the size a finishing step's disc pops from.
-  static let finishScale: CGFloat = 0.8
-  /// 0.9: the size a step lighting up pops from.
-  static let lightScale: CGFloat = 0.9
 }
 
 #if DEBUG

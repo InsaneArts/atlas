@@ -3,7 +3,11 @@
 //! took, and the pictures made from them. `atlas mcp`'s view and the menu
 //! bar's viewer service both read through here, so each shows the same
 //! things under the same rules.
-use crate::error::{Error, Result};
+use crate::{
+    error::{Code, Error, Result},
+    files::open_plain,
+    name::name_type,
+};
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 use std::{
@@ -14,34 +18,34 @@ use tokio::sync::Mutex;
 
 /// The widest frame sent, and its JPEG quality; a smaller second try when
 /// the first is too large for a tool result.
-pub const FRAME: (u32, f64) = (1024, 0.6);
-pub const FRAME_SMALL: (u32, f64) = (768, 0.45);
+pub(crate) const FRAME: (u32, f64) = (1024, 0.6);
+pub(crate) const FRAME_SMALL: (u32, f64) = (768, 0.45);
 /// The most base64 characters a frame may take: well under the ~150,000
 /// characters an agent app hydrates into a view.
-pub const FRAME_BUDGET: usize = 120_000;
+pub(crate) const FRAME_BUDGET: usize = 120_000;
 /// The largest screen or screenshot read, in bytes: a 5K display's PNG
 /// takes well under it.
-pub const FRAME_LIMIT: usize = 16 << 20;
+pub(crate) const FRAME_LIMIT: usize = 16 << 20;
 /// A screenshot's thumbnail: its widest side and JPEG quality.
-pub const THUMB: (u32, f64) = (480, 0.6);
+pub(crate) const THUMB: (u32, f64) = (480, 0.6);
 /// App icons' size in pixels, the most sent in one answer, and the most
 /// kept made.
 const ICON: usize = 64;
-pub const ICONS: usize = 12;
-pub const ICON_CACHE: usize = 64;
+pub(crate) const ICONS: usize = 12;
+pub(crate) const ICON_CACHE: usize = 64;
 /// The bytes of a PNG that say its size: the signature and the IHDR chunk.
 const PNG_HEAD: u64 = 33;
 
 /// App icons made, as base64 PNGs, by bundle path; None when an app has
 /// none to read.
 #[derive(Default)]
-pub struct Icons(Mutex<HashMap<PathBuf, Option<String>>>);
+pub(crate) struct Icons(Mutex<HashMap<PathBuf, Option<String>>>);
 
 impl Icons {
     /// An app's icon as a base64 PNG, made once. Only apps installed where
     /// apps are (not files any app could have put in a shared folder) are
     /// read on the person's side.
-    pub async fn get(&self, bundle: PathBuf) -> Option<String> {
+    pub(crate) async fn get(&self, bundle: PathBuf) -> Option<String> {
         if !installed(&bundle) {
             return None;
         }
@@ -67,7 +71,7 @@ impl Icons {
 
 /// A PNG screen as the frame the view shows: a JPEG within the budget, as
 /// base64, with its size and an id that changes with its content.
-pub fn frame(png: &[u8]) -> Result<Value> {
+pub(crate) fn frame(png: &[u8]) -> Result<Value> {
     let mut encoded = jpeg(png, FRAME)?;
     if base64_length(encoded.0.len()) > FRAME_BUDGET {
         encoded = jpeg(png, FRAME_SMALL)?;
@@ -75,14 +79,13 @@ pub fn frame(png: &[u8]) -> Result<Value> {
 
     let (bytes, width, height) = encoded;
     if base64_length(bytes.len()) > FRAME_BUDGET {
-        return Err(Error::new("capture", "The screen is too detailed to send"));
+        return Err(Error::new(
+            Code::Capture,
+            "The screen is too detailed to send",
+        ));
     }
 
-    let digest = Sha256::digest(&bytes);
-    let id = digest[..8]
-        .iter()
-        .map(|byte| format!("{byte:02x}"))
-        .collect::<String>();
+    let id = crate::name::hex(&Sha256::digest(&bytes)[..8]);
 
     use base64::{Engine, engine::general_purpose::STANDARD};
     Ok(json!({
@@ -95,7 +98,7 @@ pub fn frame(png: &[u8]) -> Result<Value> {
 }
 
 /// A screenshot's thumbnail: a small JPEG, as base64, with its size.
-pub fn thumbnail(png: &[u8]) -> Result<Value> {
+pub(crate) fn thumbnail(png: &[u8]) -> Result<Value> {
     let (bytes, width, height) = jpeg(png, THUMB)?;
     use base64::{Engine, engine::general_purpose::STANDARD};
     Ok(json!({
@@ -106,14 +109,16 @@ pub fn thumbnail(png: &[u8]) -> Result<Value> {
     }))
 }
 
-/// The regular apps in `apps`, each with its windows from `windows` (front
-/// to back): apps with a window first, in the order of their front one.
-/// A window carries its number, title and bounds in desktop points.
-pub fn open_apps(apps: &Value, windows: &Value) -> Result<Vec<Value>> {
+/// The regular apps in `apps`, each with its bundle identifier, when it was
+/// launched and its windows from `windows` (front to back): apps with a
+/// window first, in the order of their front one. A window carries its
+/// number, title, bounds in desktop points and its place among every
+/// app's windows, front to back.
+pub(crate) fn open_apps(apps: &Value, windows: &Value) -> Result<Vec<Value>> {
     // Reserve the added field names and null defaults per entry before
     // copying anything. Each source entry can contribute to the output once.
     let count = apps.as_array().map_or(0, Vec::len) + windows.as_array().map_or(0, Vec::len);
-    let too_large = || Error::new("apps", "The app list is too large to read");
+    let too_large = || Error::new(Code::Apps, "The app list is too large to read");
     let overhead = count
         .checked_mul(128)
         .filter(|bytes| *bytes <= FRAME_LIMIT)
@@ -128,9 +133,9 @@ pub fn open_apps(apps: &Value, windows: &Value) -> Result<Vec<Value>> {
             app["pid"]
                 .as_u64()
                 .filter(|pid| *pid > 0)
-                .ok_or_else(|| Error::new("apps", "The app list has an invalid process ID"))?,
+                .ok_or_else(|| Error::new(Code::Apps, "The app list has an invalid process ID"))?,
         ) {
-            return Err(Error::new("apps", "The app list repeats a process ID"));
+            return Err(Error::new(Code::Apps, "The app list repeats a process ID"));
         }
     }
     let windows = windows.as_array().map(Vec::as_slice).unwrap_or_default();
@@ -151,27 +156,25 @@ pub fn open_apps(apps: &Value, windows: &Value) -> Result<Vec<Value>> {
                 .and_then(|pid| grouped.remove(&pid))
                 .unwrap_or_default();
             let front = own.first().map_or(usize::MAX, |(at, _)| *at);
-            // The app the executable is in: the innermost, for a helper app
-            // inside another.
-            let bundle = app["executable"].as_str().and_then(|path| {
-                path.rfind(".app/Contents/MacOS/")
-                    .map(|end| &path[..end + 4])
-            });
+            let bundle = app["executable"].as_str().and_then(bundle_of);
             let listed = json!({
                 "name": app["name"],
                 "pid": app["pid"],
                 "active": app["active"] == true,
                 "hidden": app["hidden"] == true,
                 "bundle": bundle,
+                "bundleId": app["bundleId"].as_str().and_then(crate::doing::bundle_id),
+                "launchedAt": app["launchedAt"].as_u64(),
                 "windows": own
                     .iter()
-                    .map(|(_, window)| json!({
+                    .map(|(at, window)| json!({
                         "id": window["number"],
                         "title": window["title"],
                         "x": window["bounds"]["x"],
                         "y": window["bounds"]["y"],
                         "width": window["bounds"]["width"],
                         "height": window["bounds"]["height"],
+                        "order": at,
                     }))
                     .collect::<Vec<_>>(),
             });
@@ -185,6 +188,13 @@ pub fn open_apps(apps: &Value, windows: &Value) -> Result<Vec<Value>> {
 
     listed.sort_by(|a, b| (a.0, &a.1).cmp(&(b.0, &b.1)));
     Ok(listed.into_iter().map(|(_, _, app)| app).collect())
+}
+
+/// The app bundle the executable at `path` is in: the innermost, for a
+/// helper app inside another.
+pub(crate) fn bundle_of(path: &str) -> Option<&str> {
+    path.rfind(".app/Contents/MacOS/")
+        .map(|end| &path[..end + 4])
 }
 
 /// Count serialized source bytes without allocating another copy of them.
@@ -206,7 +216,7 @@ impl std::io::Write for ListBudget {
 
 /// When a screenshot named `name` was taken, in nanoseconds since 1970:
 /// only names an agent's capture writes have one.
-pub fn capture_time(name: &str) -> Option<u128> {
+pub(crate) fn capture_time(name: &str) -> Option<u128> {
     let digits = name.strip_suffix("-capture.png")?;
     if digits.is_empty() || !digits.bytes().all(|byte| byte.is_ascii_digit()) {
         return None;
@@ -214,10 +224,25 @@ pub fn capture_time(name: &str) -> Option<u128> {
     digits.parse().ok()
 }
 
+name_type! {
+    /// The file name of a screenshot an agent's capture wrote: Atlas's own
+    /// timestamp name, never a path or a person's file.
+    #[derive(PartialOrd, Ord)]
+    pub struct Capture;
+    refused(name) = format!("{name} is not a capture's name");
+}
+
+impl Capture {
+    /// `name` as a capture's, when [`capture_time`] reads it.
+    pub fn parse(name: &str) -> Option<Self> {
+        capture_time(name).map(|_| Self(name.to_owned()))
+    }
+}
+
 /// The agents' screenshots in `output`, newest first, at most `limit`:
 /// each one's name and when it was taken, in nanoseconds since 1970. Only
 /// plain files a capture names count; links and other files never do.
-pub fn captures(output: &Path, limit: usize) -> Vec<(u128, String)> {
+pub(crate) fn captures(output: &Path, limit: usize) -> Vec<(u128, String)> {
     let Ok(entries) = std::fs::read_dir(output) else {
         return Vec::new();
     };
@@ -238,10 +263,10 @@ pub fn captures(output: &Path, limit: usize) -> Vec<(u128, String)> {
 /// The screenshot `name` in `output`, whole. Only a name a capture writes,
 /// and only a plain file the agent's capture wrote: never through a link,
 /// and no more of it than a screenshot takes.
-pub fn read_capture(output: &Path, name: &str) -> Result<Vec<u8>> {
+pub(crate) fn read_capture(output: &Path, name: &str) -> Result<Vec<u8>> {
     use std::io::Read;
 
-    let unknown = || Error::new("bad-request", "No screenshot has that name");
+    let unknown = || Error::new(Code::BadRequest, "No screenshot has that name");
     if capture_time(name).is_none() {
         return Err(unknown());
     }
@@ -250,7 +275,10 @@ pub fn read_capture(output: &Path, name: &str) -> Result<Vec<u8>> {
     let mut png = Vec::new();
     file.take(FRAME_LIMIT as u64 + 1).read_to_end(&mut png)?;
     if png.len() > FRAME_LIMIT {
-        return Err(Error::new("capture", "The screenshot is too large to read"));
+        return Err(Error::new(
+            Code::Capture,
+            "The screenshot is too large to read",
+        ));
     }
 
     Ok(png)
@@ -258,7 +286,7 @@ pub fn read_capture(output: &Path, name: &str) -> Result<Vec<u8>> {
 
 /// The size in pixels of the screenshot `name` in `output`, read from its
 /// PNG header under [`read_capture`]'s rules.
-pub fn capture_size(output: &Path, name: &str) -> Option<(u32, u32)> {
+pub(crate) fn capture_size(output: &Path, name: &str) -> Option<(u32, u32)> {
     use std::io::Read;
 
     capture_time(name)?;
@@ -268,23 +296,9 @@ pub fn capture_size(output: &Path, name: &str) -> Option<(u32, u32)> {
     crate::client::png_dimensions(&head).ok()
 }
 
-/// `path` opened to read, when it is a plain file and not a link. It never
-/// waits: a pipe in a screenshot's or the log's place does not hold the
-/// reader up.
-pub fn open_plain(path: &Path) -> Option<std::fs::File> {
-    use std::os::unix::fs::OpenOptionsExt;
-
-    let file = std::fs::OpenOptions::new()
-        .read(true)
-        .custom_flags(nix::libc::O_NOFOLLOW | nix::libc::O_NONBLOCK)
-        .open(path)
-        .ok()?;
-    file.metadata().ok()?.is_file().then_some(file)
-}
-
 /// Whether `bundle` is an app installed where apps go: the system's and
 /// the person's Applications folders, nowhere any app could write.
-pub fn installed(bundle: &Path) -> bool {
+pub(crate) fn installed(bundle: &Path) -> bool {
     let home = std::env::var_os("HOME").map(|home| PathBuf::from(home).join("Applications"));
     let roots = [
         Some(PathBuf::from("/Applications")),
@@ -315,20 +329,20 @@ fn icon(_bundle: &Path) -> Option<String> {
 }
 
 /// How many base64 characters `bytes` bytes take.
-pub fn base64_length(bytes: usize) -> usize {
+pub(crate) fn base64_length(bytes: usize) -> usize {
     bytes.div_ceil(3) * 4
 }
 
 /// `png` as a JPEG at most `limit` pixels on its longest side, at
 /// `quality`, with its size.
 #[cfg(target_os = "macos")]
-pub fn jpeg(png: &[u8], (limit, quality): (u32, f64)) -> Result<(Vec<u8>, u32, u32)> {
+pub(crate) fn jpeg(png: &[u8], (limit, quality): (u32, f64)) -> Result<(Vec<u8>, u32, u32)> {
     crate::native::capture::jpeg(png, limit, quality)
 }
 
 #[cfg(not(target_os = "macos"))]
 pub fn jpeg(_png: &[u8], _: (u32, f64)) -> Result<(Vec<u8>, u32, u32)> {
-    Err(Error::new("platform", "Atlas runs on macOS only"))
+    Err(Error::new(Code::Platform, "Atlas runs on macOS only"))
 }
 
 #[cfg(test)]
@@ -378,7 +392,7 @@ mod tests {
         assert_eq!(listed[0]["bundle"], "/Applications/Opie.app");
         assert_eq!(
             listed[0]["windows"][1],
-            json!({"id": 13, "title": "Ring", "x": 700.0, "y": 80.0, "width": 520.0, "height": 860.0})
+            json!({"id": 13, "title": "Ring", "x": 700.0, "y": 80.0, "width": 520.0, "height": 860.0, "order": 2})
         );
         assert_eq!(
             listed[2]["windows"],
@@ -420,7 +434,7 @@ mod tests {
             "../1-capture.png",
             "1-capture.png.partial",
             "a1-capture.png",
-            "metadata.jsonl",
+            crate::activity_log::FILE,
         ] {
             assert_eq!(capture_time(name), None, "{name}");
         }
@@ -430,7 +444,7 @@ mod tests {
         let named = |at: u128| format!("{}-capture.png", at * second);
         std::fs::write(dir.path().join(named(10)), b"x").unwrap();
         std::fs::write(dir.path().join(named(40)), b"x").unwrap();
-        std::fs::write(dir.path().join("metadata.jsonl"), b"x").unwrap();
+        std::fs::write(dir.path().join(crate::activity_log::FILE), b"x").unwrap();
         std::os::unix::fs::symlink("/etc/hosts", dir.path().join(named(50))).unwrap();
 
         let shots = captures(dir.path(), 30);

@@ -41,4 +41,28 @@ struct ModeAgentButtonTests {
     #expect(try Self.button("controlling", "control", holdingControl: true) == nil, "no agent acts in control")
     #expect(try Self.button("stopped", "stopped") == .resume(isEnabled: true), "Resume takes its place")
   }
+
+  @Test("Stop stays while a background job runs after an agent's last step has aged")
+  func stopStaysWhileABackgroundJobRuns() throws {
+    let aged = [["operation": "job", "ok": true, "actor": "agent", "ageSeconds": 900]]
+    let fields: [String: Any] = ["mode": "observing", "state": "idle", "activity": aged, "jobs": ["running": 1]]
+    let overview = try status(["overview": fields]).overview
+    let mode = Mode.seen(by: overview, holdingControl: false)
+    #expect(mode.agentButton(overview, holdingControl: false, isBusy: false) == .stop)
+    #expect(mode.agentButton(overview, holdingControl: true, isBusy: false) == .stop, "control ends no job")
+  }
+
+  @Test("while the person holds control, Stop shows only for a background job that may still run")
+  func holdingControlKeepsStopOnlyForJobs() throws {
+    func button(_ jobs: [String: Any]) throws -> ViewerAgentButton? {
+      let fields: [String: Any] = ["mode": "controlling", "state": "control", "jobs": jobs]
+      let overview = try status(["overview": fields]).overview
+      let mode = Mode.seen(by: overview, holdingControl: true)
+      return mode.agentButton(overview, holdingControl: true, isBusy: false)
+    }
+    #expect(try button([:]) == nil, "no agent acts and no job runs")
+    #expect(try button(["running": 1]) == .stop)
+    #expect(try button(["launching": 1]) == .stop)
+    #expect(try button(["unresolved": 1]) == .stop, "a job Atlas cannot read may still run")
+  }
 }

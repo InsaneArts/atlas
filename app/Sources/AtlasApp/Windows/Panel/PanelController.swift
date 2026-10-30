@@ -2,6 +2,7 @@ import AtlasCommands
 import AtlasService
 import AtlasStatus
 import AtlasUI
+import Foundation
 import Observation
 
 /// The menu bar panel's one observed object: it holds the latest status, the helper's screen and what the panel is
@@ -38,11 +39,17 @@ final class PanelController {
   var listedHelper: String?
   /// Where Open at Login stands, as last read: at launch, each time the panel opens, and after it is set here.
   var opensAtLogin: OpenAtLogin.State
+  /// The icons found for Recent's apps, by their key's text (``AppIconKey/text``).
+  var icons: [String: IconImage] = [:]
 
   /// The viewer service it reads and asks.
   @ObservationIgnored let service: any ViewerService
   /// The `atlas` command line its actions run.
   @ObservationIgnored let commands: any CommandRunning
+  /// Where Recent's apps' icons are found.
+  @ObservationIgnored let appIcons: AppIcons
+  /// This panel's pending icon deliveries, with at most one waiter for each key.
+  @ObservationIgnored var iconRequests: [String: Task<Void, Never>] = [:]
   /// The helper's own commands, shared with every window.
   @ObservationIgnored let actions: HelperActions
   /// The app's login item.
@@ -51,6 +58,8 @@ final class PanelController {
   @ObservationIgnored let links: PanelLinks
   /// The clock the pauses between readings run on; a cancelled pause ends at once.
   @ObservationIgnored let clock: any Clock<Duration>
+  /// The time now, which the snapshot carries.
+  @ObservationIgnored let wallClock: @MainActor () -> Date
   /// The readings under way.
   @ObservationIgnored var polling: [Task<Void, Never>] = []
   /// Whether the panel is open, so the picture is read.
@@ -79,6 +88,8 @@ final class PanelController {
     loginItem = dependencies.loginItem
     links = dependencies.links
     clock = dependencies.clock
+    wallClock = dependencies.wallClock
+    appIcons = dependencies.icons
     opensAtLogin = dependencies.loginItem.state
   }
 
@@ -93,8 +104,11 @@ final class PanelController {
       session: session,
       holdingControl: links.holdingControl(),
       running: actions.running,
+      isOnConsole: actions.console.isOnConsole,
       agentRequests: actions.agentRequests,
-      opensAtLogin: opensAtLogin
+      opensAtLogin: opensAtLogin,
+      date: wallClock(),
+      icons: icons
     )
   }
 
@@ -132,7 +146,9 @@ final class PanelController {
     switch event {
     case .openAtlas: links.openViewer(nil)
     case .openScreen: links.openViewer(.screen)
-    case .openActivity: links.openViewer(.activity)
+    case .openActivity: links.openSessions(.all)
+    case .openSession(let key): links.openSessions(.one(key))
+    case .showAllSessions: links.openSessions(nil)
     case .stopAgent: Task { await stopAgent() }
     case .resumeAgent: Task { await resumeAgent() }
     case .giveBack: giveBack()

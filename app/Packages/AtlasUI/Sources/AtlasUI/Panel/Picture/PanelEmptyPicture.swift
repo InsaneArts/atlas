@@ -12,7 +12,7 @@ struct PanelEmptyPicture: View {
   @State private var isShown = false
   /// Whether the breath is at its high point; it swings there and back for as long as it lasts.
   @State private var isInhaled = false
-  @Environment(\.accessibilityReduceMotion) private var reduceMotion
+  @Environment(\.motionReduced) private var reduceMotion
   @Environment(\.animatesArrivals) private var animatesArrivals
 
   /// Atlas's mark over the line saying why there is no screen.
@@ -33,7 +33,7 @@ struct PanelEmptyPicture: View {
     .padding(.horizontal, PanelLayout.emptyInset)
     .frame(maxWidth: .infinity, maxHeight: .infinity)
     .background {
-      RoundedRectangle(cornerRadius: Radius.medium)
+      RoundedRectangle(cornerRadius: PanelLayout.pictureCorner, style: .continuous)
         .filledOutline(Color.fillPlaceholder, border: Color.separator)
     }
     .accessibilityElement(children: .combine)

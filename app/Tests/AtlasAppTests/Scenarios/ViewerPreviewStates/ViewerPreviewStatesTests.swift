@@ -11,6 +11,9 @@
   /// facts.
   @Suite("PreviewStates+Viewer")
   struct ViewerPreviewStatesTests {
+    /// The environment a window starts with, before each sample supplies its fixed presentation inputs.
+    var initialSnapshot = ViewerSnapshot.presenterSample
+
     /// An agent's latest actions, in the sample log, newest first.
     static let working: [[String: Any]] = [
       ["operation": "input", "says": "turning Show Center off in Opie", "ok": true, "ageSeconds": 2],
@@ -32,6 +35,7 @@
     ///   - checks: Its checks; every one passing by default.
     ///   - dialogs: How its Save and Open dialogs check stands; passed by default.
     ///   - reason: The helper's reason, as the overview gives it; nil for none.
+    ///   - overviewFields: More of the overview's fields, such as its host sessions; none by default.
     /// - Returns: The decoded status.
     /// - Throws: A decoding error, which a fixed reply never gives.
     func reported(
@@ -42,7 +46,8 @@
         ["name": "Helper running", "ok": true], ["name": "Input service ready", "ok": true],
       ],
       dialogs: [String: Any] = ["state": "passed", "ageSeconds": 600],
-      reason: String? = "The helper's reason"
+      reason: String? = "The helper's reason",
+      overviewFields: [String: Any] = [:]
     ) throws -> ViewerStatus {
       var overview: [String: Any] = [
         "mode": mode,
@@ -54,6 +59,7 @@
         "activity": activity,
       ]
       overview["reason"] = reason
+      overview.merge(overviewFields) { _, more in more }
       let reply: [String: Any] = [
         "ready": true,
         "canObserve": true,
@@ -79,7 +85,8 @@
       unavailable: String? = nil,
       _ change: (inout ViewerSnapshot) -> Void = { _ in }
     ) -> ViewerState {
-      var snapshot = ViewerSnapshot()
+      var snapshot = initialSnapshot
+      snapshot.isOnConsole = true
       snapshot.reading.status = status
       snapshot.reading.hasStatus = true
       snapshot.reading.ready = true
@@ -103,22 +110,22 @@
     /// - Throws: A decoding error, which a fixed reply never gives.
     func presented() throws -> [String: ViewerState] {
       try screenSamples()
-        .merging(try activitySamples()) { _, tab in tab }
-        .merging(try appsSamples()) { _, tab in tab }
-        .merging(try shotsSamples()) { _, tab in tab }
+        .merging(try activitySamples()) { _, place in place }
+        .merging(try appsSamples()) { _, place in place }
+        .merging(try shotsSamples()) { _, place in place }
+        .merging(try sessionsSamples()) { _, place in place }
     }
 
-    /// Shows `tab` at `date`, on a German clock in UTC.
+    /// Shows `place` at `date`, on a German clock in UTC.
     ///
     /// - Parameters:
-    ///   - tab: The tab.
+    ///   - place: The place.
     ///   - date: The time now.
     ///   - snapshot: The facts to change.
-    static func onTab(_ tab: ViewerTab, at date: Date, _ snapshot: inout ViewerSnapshot) {
-      snapshot.session.tab = tab
+    static func onPlace(_ place: ViewerPlace, at date: Date, _ snapshot: inout ViewerSnapshot) {
+      snapshot.session.place = place
+      onClock(&snapshot)
       snapshot.date = date
-      snapshot.timeZone = TimeZone(secondsFromGMT: 0) ?? .current
-      snapshot.locale = Locale(identifier: "de_DE")
     }
 
     @Test("each main window sample is what the window shows for the same facts")

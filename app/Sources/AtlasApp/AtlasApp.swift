@@ -30,14 +30,18 @@ enum AtlasApp {
     case .onboarding:
       OnboardingAlone.run(commands: configuration.commands, loginItem: loginItem, clock: clock)
     #if DEBUG
-      case .renderOnboarding(let folder):
-        drawPreviews { OnboardingRender.draw(to: folder) && DockedRender.draw(to: folder) }
-      case .renderViewer(let folder):
-        drawPreviews {
-          ViewerRender.draw(to: folder) && ComponentRender.draw(to: folder + "/components")
+      case .renderOnboarding(let folder, let dark):
+        drawPreviews(dark: dark) { appearance in
+          OnboardingRender.draw(to: folder, appearance: appearance)
+            && DockedRender.draw(to: folder, appearance: appearance)
         }
-      case .renderSettings(let folder):
-        drawPreviews { SettingsRender.draw(to: folder) }
+      case .renderViewer(let folder, let dark):
+        drawPreviews(dark: dark) { appearance in
+          ViewerRender.draw(to: folder, appearance: appearance)
+            && ComponentRender.draw(to: folder + "/components", appearance: appearance)
+        }
+      case .renderSettings(let folder, let dark):
+        drawPreviews(dark: dark) { appearance in SettingsRender.draw(to: folder, appearance: appearance) }
     #else
       case .renderOnboarding:
         needsDebugBuild("--render-onboarding")
@@ -61,7 +65,7 @@ enum AtlasApp {
   ///   - loginItem: The app's login item.
   ///   - clock: The one live clock.
   ///   - render: Where `--render` draws the panel, or nil for the live app.
-  ///   - dark: Whether that drawing's menu bar strip is dark.
+  ///   - dark: Whether that drawing is in the dark appearance.
   static func app(
     configuration: AppConfiguration,
     loginItem: OpenAtLogin,
@@ -93,14 +97,17 @@ enum AtlasApp {
   }
 
   #if DEBUG
-    /// `--render-onboarding DIR`, `--render-viewer DIR` or `--render-settings DIR`: draw every screen from the preview states, which only a
-    /// debug build carries, then exit.
+    /// `--render-onboarding DIR`, `--render-viewer DIR` or `--render-settings DIR`: draw every screen from the preview
+    /// states, which only a debug build carries, in light, or with `--dark` in dark, then exit.
     ///
-    /// - Parameter draw: Draws the screens to their folder, returning whether every one was drawn.
+    /// - Parameters:
+    ///   - dark: Whether the screens are drawn in the dark appearance.
+    ///   - draw: Draws the screens to their folder in the appearance it is given, returning whether every one was
+    ///     drawn.
     /// - Returns: Never; the process exits.
-    static func drawPreviews(_ draw: () -> Bool) -> Never {
+    static func drawPreviews(dark: Bool, _ draw: (NSAppearance?) -> Bool) -> Never {
       DockIcon.settle(windowOpen: false)
-      exit(draw() ? 0 : 4)
+      exit(draw(dark ? Appearance.dark : Appearance.light) ? 0 : 4)
     }
   #else
     /// A render flag that draws the preview states, which a release build does not carry: say how to draw them,
@@ -131,7 +138,7 @@ enum AtlasApp {
   ///   - service: The viewer service to read.
   ///   - overrides: How the drawing differs from the live panel.
   ///   - path: Where the PNGs go.
-  ///   - dark: Whether the menu bar strip is drawn dark.
+  ///   - dark: Whether the panel and its menu bar strip are drawn dark.
   /// - Returns: Never; the process exits.
   static func drawPanel(service: ViewerClient, overrides: PanelRenderOverrides, to path: String, dark: Bool) -> Never {
     let app = NSApplication.shared

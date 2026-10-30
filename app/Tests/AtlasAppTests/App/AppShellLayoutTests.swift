@@ -1,7 +1,7 @@
 import Foundation
 import Testing
 
-/// The app target's shape, read from its sources: the shell's rules a compiler cannot check.
+/// The app shell and its supporting UI and service source layout: rules a compiler cannot check.
 @Suite("App shell layout")
 struct AppShellLayoutTests {
   /// `app/Sources/AtlasApp`, found from this file.
@@ -57,13 +57,33 @@ struct AppShellLayoutTests {
     return String(line)
   }
 
-  @Test("no folder in App or Shared holds more than ten files")
-  func appAndSharedFoldersStaySmall() throws {
-    let folders = Dictionary(grouping: try Self.code().keys) { ($0 as NSString).deletingLastPathComponent }
-    let crowded = folders.filter { folder, files in
-      (folder.hasPrefix("App") || folder.hasPrefix("Shared")) && files.count > 10
+  @Test("the shell, presenter, sidebar and Activity source folders hold at most ten Swift files")
+  func sourceFoldersStaySmall() throws {
+    let app = Self.sources
+      .deletingLastPathComponent()
+      .deletingLastPathComponent()
+    let roots = [
+      Self.sources.appendingPathComponent("App"),
+      Self.sources.appendingPathComponent("Shared"),
+      Self.sources.appendingPathComponent("Windows/Viewer/Presenting"),
+      app.appendingPathComponent("Packages/AtlasUI/Sources/AtlasUI/Viewer/Sidebar"),
+      app.appendingPathComponent("Packages/AtlasService/Sources/AtlasService/Activity"),
+    ]
+    var crowded: [String] = []
+    for root in roots {
+      let walk = FileManager.default
+        .enumerator(at: root, includingPropertiesForKeys: nil)
+      let files = (walk?.allObjects ?? [])
+        .compactMap { $0 as? URL }
+        .filter { $0.pathExtension == "swift" }
+      let folders = Dictionary(grouping: files) {
+        $0.deletingLastPathComponent()
+          .path
+      }
+      crowded += folders.filter { $0.value.count > 10 }
+        .map(\.key)
     }
-    #expect(crowded.isEmpty, "\(crowded.keys.sorted())")
+    #expect(crowded.isEmpty, "\(crowded.sorted())")
   }
 
   @Test("only the window shell makes a hosting view, and only Appearance names the dark appearance")
@@ -73,6 +93,20 @@ struct AppShellLayoutTests {
     let dark = code.filter { $0.value.contains(".darkAqua") }
     #expect(hosts.keys.sorted() == ["Shared/Windows/WindowShell.swift"])
     #expect(dark.keys.sorted() == ["Shared/Windows/Appearance.swift"])
+  }
+
+  @Test("no window, popover or menu sets its own appearance, so each follows the Mac's; only the renders name one")
+  func nothingOnScreenForcesAnAppearance() throws {
+    let appearance = try Regex(#"\.appearance\s*=(?!=)"#)
+    let forcing = try Self.code()
+      .filter { path, text in !path.hasPrefix("Rendering/") && text.contains(appearance) }
+    #expect(forcing.isEmpty, "\(forcing.keys.sorted())")
+    let named = try Self.code()
+      .filter { path, text in
+        !path.hasPrefix("Rendering/") && path != "AtlasApp.swift" && path != "Shared/Windows/Appearance.swift"
+          && (text.contains("Appearance.dark") || text.contains("Appearance.light"))
+      }
+    #expect(named.isEmpty, "\(named.keys.sorted())")
   }
 
   @Test("no window is built, and no controller made, outside App")

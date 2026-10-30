@@ -186,6 +186,13 @@ struct StatusReadingTests {
     #expect(held.reason(holdingControl: true) == .yourControl)
   }
 
+  @Test("this viewer's control while an agent's command runs reads as control beside that command")
+  func reasonBesideACommand() throws {
+    let held = StatusReading(try status(["overview": ["mode": "controlling", "commands": 1]]))
+    #expect(held.reason(holdingControl: true) == .yourControlBesideCommand)
+    #expect(held.reason(holdingControl: false) == .inUseElsewhere)
+  }
+
   @Test("an idle helper's reason is the newest agent action, else that nothing is happening")
   func idleReason() throws {
     let acted = StatusReading(

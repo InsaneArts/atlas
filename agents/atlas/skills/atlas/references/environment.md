@@ -11,21 +11,25 @@ never ask the person to do it:
    `.local/bin`, where `atlas run -- TOOL ARGS` finds them). Copy only what
    the app needs, never credentials, keychains or tokens.
 2. Quit the app in the helper first (`atlas close --app NAME`), so it does not
-   overwrite the files while they arrive.
-3. `atlas environment MANIFEST` previews without changing anything. Read each
-   file's `operation`: `conflict` means the helper already has a file Atlas
-   did not put there, so stop and tell the person rather than working around
-   it. A target inside, around or differing only in case from a file copied
-   earlier is refused: roll that copy back first. Keep the `planId`.
+   overwrite the files while they arrive, but only when you alone use it. If
+   another agent has windows in it, stop and tell the person instead.
+3. `atlas environment MANIFEST` previews without changing anything, even while
+   someone else is acting in the helper. Read each file's `operation`:
+   `conflict` means the helper already has a file Atlas did not put there, so
+   stop and tell the person rather than working around it. A target inside,
+   around or differing only in case from a file copied earlier is refused:
+   roll that copy back first. Keep the `planId`.
 4. `atlas environment apply PLAN_ID` copies exactly what was previewed, as a
-   one-time snapshot. Keep every `planId` you apply. If it stops partway
+   one-time snapshot. Keep every `planId` you apply; `atlas activity` lists
+   them again if you lose them. If it stops partway
    (`resumeRequired`, with `pendingTargets`), run the same apply again to
    finish, or roll it back. With `rollbackRequired`, a file changed in the
    helper meanwhile, so only rolling back finishes.
 
 `atlas environment discover`, `profile` and `environment run` inspect or
 freeze a selected set of tools and variables (see `atlas environment --help`);
-a test seldom needs them.
+a test seldom needs them. Discovery only reads, so it works while someone else
+is acting in the helper.
 
 Nothing is ever copied back to the person's account.
 
@@ -42,3 +46,21 @@ undone, and each file's `operation` still names what the copy did (`create`
 is undone by removing the file, the others by putting the earlier file back).
 Folders the copy made go too, unless something else now uses them
 (`retainedDirectories`).
+
+If you lost a `planId`, `atlas environment list` shows each copy into the
+helper, newest first, with its `state` and the files it copies, never their
+contents; `thisTask` marks those this task made, and `session` names the
+session that made one. `applying` and `rollingBack` stopped partway: finish
+them with `atlas environment apply PLAN_ID` or
+`atlas environment rollback PLAN_ID --apply`. `--all` also lists those rolled
+back completely (counted in `hidden` otherwise). `unreadable` and `more`
+count records it could not read or did not look at: when either is above 0,
+an empty list does not mean nothing was copied. To keep one part of a long
+session's copies apart, run that part's commands with `ATLAS_TASK=NAME`.
+
+`atlas cleanup` shows everything this session left, every task included;
+check that it names your session, task and only steps you expect, then
+`--apply` rolls its copies back newest first, with the rest. Only a cleanup
+run with `ATLAS_TASK=NAME` covers that task alone, so a subagent beside
+sibling subagents puts the same `ATLAS_TASK` on every command, cleanup
+included.

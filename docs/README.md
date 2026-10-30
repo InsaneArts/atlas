@@ -4,7 +4,7 @@ Choose a guide for the task you want to do. For a product overview, see the [Atl
 
 ## New to Atlas
 
-Start with [Getting started](getting-started.md) to understand the requirements, install Atlas when public downloads are available, and set up the helper account. Then use [Agent connections](agents.md) to connect your agent and check that it can reach Atlas.
+Start with [Getting started](getting-started.md) to understand the requirements, install Atlas and set up the helper account. Then use [Agent connections](agents.md) to connect your agent and check that it can reach Atlas.
 
 ## Using Atlas
 

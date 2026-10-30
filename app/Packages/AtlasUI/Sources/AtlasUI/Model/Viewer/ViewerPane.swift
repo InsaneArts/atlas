@@ -1,4 +1,4 @@
-/// What the main window shows under its top row: the helper's screen, or another tab's pane.
+/// What the main window's card shows between its header and footer: the helper's screen, or a list's pane.
 public enum ViewerPane: Equatable, Sendable {
   /// The Screen tab, drawn from ``ViewerState/screen``.
   case screen

@@ -1,0 +1,50 @@
+{
+  "activity": [
+    {
+      "actor": "agent",
+      "ageSeconds": 10,
+      "app": "Opie",
+      "bundleId": null,
+      "capture": "1-capture.png",
+      "count": 1,
+      "id": "405a9bc9382e3946",
+      "keys": null,
+      "label": "Save",
+      "logicalId": "c1",
+      "nothingSent": false,
+      "ok": false,
+      "operation": "input",
+      "partial": true,
+      "reason": "Another window was in front",
+      "says": "didn't click Save in Opie",
+      "session": "0123456789ab",
+      "started": false,
+      "startedAt": 90000,
+      "uncertain": false,
+      "verb": "click"
+    },
+    {
+      "actor": "agent",
+      "ageSeconds": 99,
+      "app": null,
+      "bundleId": null,
+      "capture": null,
+      "count": null,
+      "id": "18919a007a04e825",
+      "keys": null,
+      "label": null,
+      "logicalId": "18919a007a04e825",
+      "nothingSent": false,
+      "ok": false,
+      "operation": "run",
+      "partial": false,
+      "reason": null,
+      "says": "couldn't run a command",
+      "session": null,
+      "started": false,
+      "startedAt": 0,
+      "uncertain": false,
+      "verb": null
+    }
+  ]
+}

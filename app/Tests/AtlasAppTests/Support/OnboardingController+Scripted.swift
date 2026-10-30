@@ -14,6 +14,7 @@ extension OnboardingController {
   ///   - installs: The agent installs it shares with another window; its own over `commands` when nil.
   ///   - clock: The clock its waits run on; by default one nobody advances.
   ///   - mark: Where its login timing's markers go; nowhere by default, never this Mac's log.
+  ///   - console: The scripted session reading; on-console by default, independent of the test machine.
   /// - Returns: The controller, which reads no icon or picture from this Mac and reveals what it shows in the Finder
   ///   into `opened`.
   static func scripted(
@@ -22,11 +23,13 @@ extension OnboardingController {
     loginItem: ScriptedLoginItem = ScriptedLoginItem(),
     installs: AgentInstalls? = nil,
     clock: ManualClock = ManualClock(),
-    mark: @escaping @MainActor (String) -> Void = { _ in }
+    mark: @escaping @MainActor (String) -> Void = { _ in },
+    console: SessionConsole = SessionConsole(read: { true })
   ) -> OnboardingController {
     OnboardingController(
       dependencies: OnboardingDependencies(
         commands: commands,
+        console: console,
         openURL: { opened.urls.append($0) },
         loginItem: loginItem.seam,
         installs: installs ?? AgentInstalls(commands: commands),

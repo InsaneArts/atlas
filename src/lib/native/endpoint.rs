@@ -1,6 +1,6 @@
 //! The Unix socket a helper-side service listens on, and reading one bounded
 //! request line from it. Shared by the helper daemon and the input service.
-use crate::error::{Error, Result};
+use crate::error::{Code, Error, Result};
 use fs2::FileExt;
 use std::{
     fs::{self, File, OpenOptions},
@@ -45,7 +45,7 @@ pub(crate) enum Directory {
 
 fn refuse(role: &str, rule: &str) -> Error {
     Error::new(
-        "identity",
+        Code::Identity,
         format!("The {role} socket directory must belong to the helper and {rule}"),
     )
 }
@@ -53,7 +53,7 @@ fn refuse(role: &str, rule: &str) -> Error {
 /// Give the controller search access to `directory`, as setup does.
 fn grant_search(directory: &Path, controller: u32) -> Result<()> {
     let name = crate::setup::account_with_uid(controller)?
-        .ok_or_else(|| Error::new("identity", "The controller account does not exist"))?
+        .ok_or_else(|| Error::new(Code::Identity, "The controller account does not exist"))?
         .name;
     let granted = std::process::Command::new("/bin/chmod")
         .args(["+a", &format!("user:{name} allow search")])
@@ -61,7 +61,7 @@ fn grant_search(directory: &Path, controller: u32) -> Result<()> {
         .status()?;
     if !granted.success() {
         return Err(Error::new(
-            "identity",
+            Code::Identity,
             "The controller could not be given access to the socket directory",
         ));
     }
@@ -121,7 +121,7 @@ pub(crate) async fn bind(
 ) -> Result<(UnixListener, Endpoint)> {
     let parent = socket
         .parent()
-        .ok_or_else(|| Error::new("config", "Socket needs a parent directory"))?;
+        .ok_or_else(|| Error::new(Code::Config, "Socket needs a parent directory"))?;
     prepare(parent, uid, role, policy)?;
 
     let lock = OpenOptions::new()
@@ -135,7 +135,7 @@ pub(crate) async fn bind(
 
     FileExt::try_lock_exclusive(&lock).map_err(|_| {
         Error::new(
-            "busy",
+            Code::Busy,
             format!("Another {role} already owns this directory"),
         )
     })?;
@@ -143,7 +143,7 @@ pub(crate) async fn bind(
     if let Ok(metadata) = fs::symlink_metadata(socket) {
         if metadata.uid() != uid || !metadata.file_type().is_socket() {
             return Err(Error::new(
-                "identity",
+                Code::Identity,
                 format!("The existing {role} endpoint is not a helper-owned socket"),
             ));
         }
@@ -159,7 +159,7 @@ pub(crate) async fn bind(
             }
             _ => {
                 return Err(Error::new(
-                    "busy",
+                    Code::Busy,
                     format!(
                         "The existing {role} endpoint is reachable or cannot be verified stale"
                     ),
@@ -210,7 +210,7 @@ pub(crate) async fn read_line<R: AsyncRead + Unpin>(
         loop {
             let n = stream.read(&mut buffer).await?;
             if n == 0 {
-                return Err(Error::new("protocol", "Incomplete request"));
+                return Err(Error::new(Code::Protocol, "Incomplete request"));
             }
 
             let scanned = body.len();
@@ -222,7 +222,7 @@ pub(crate) async fn read_line<R: AsyncRead + Unpin>(
                 .map(|offset| scanned + offset);
             if end.unwrap_or(body.len()) > limit {
                 return Err(Error::new(
-                    "protocol",
+                    Code::Protocol,
                     format!("Request exceeds {} KiB", limit / 1024),
                 ));
             }
@@ -234,7 +234,7 @@ pub(crate) async fn read_line<R: AsyncRead + Unpin>(
         }
     })
     .await
-    .map_err(|_| Error::new("transport", "Request timed out"))?
+    .map_err(|_| Error::new(Code::Transport, "Request timed out"))?
 }
 
 #[cfg(test)]
@@ -285,6 +285,13 @@ mod tests {
     /// socket is refused and left alone.
     #[tokio::test]
     async fn a_stale_socket_is_replaced_and_a_non_socket_refused() {
+        // A spawn on another test thread can keep the stale listener open
+        // in its child until exec, so the socket would look served.
+        if !crate::test_support::isolated(
+            "native::endpoint::tests::a_stale_socket_is_replaced_and_a_non_socket_refused",
+        ) {
+            return;
+        }
         let dir = tempfile::tempdir().unwrap();
         let socket = dir.path().join("run/s.sock");
         let uid = nix::unistd::getuid().as_raw();

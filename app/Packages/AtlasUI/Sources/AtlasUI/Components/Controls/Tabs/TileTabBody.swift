@@ -13,12 +13,12 @@ struct TileTabBody: View {
   var body: some View {
     configuration.label
       .foregroundStyle(isSelected || isHovered ? Color.textPrimary : Color.textSecondary)
-      .frame(width: Layout.tile.width, height: Layout.tile.height)
+      .frame(width: TileTabBodyLayout.tile.width, height: TileTabBodyLayout.tile.height)
       .background(
-        RoundedRectangle(cornerRadius: Radius.medium)
+        RoundedRectangle(cornerRadius: Radius.medium, style: .continuous)
           .fill(fill)
       )
-      .contentShape(RoundedRectangle(cornerRadius: Radius.medium))
+      .contentShape(RoundedRectangle(cornerRadius: Radius.medium, style: .continuous))
       .opacity(enabled ? 1 : Opacity.disabled)
       .onHover { isHovered = $0 }
       .animation(Motion.hover(isHovered), value: isHovered)
@@ -30,12 +30,6 @@ struct TileTabBody: View {
     if isSelected { return .fillControlOn }
     return isHovered ? .fillRowHover : .clear
   }
-}
-
-/// A tile's own measures.
-private enum Layout {
-  /// 74 by 50: a tile.
-  static let tile = CGSize(width: 74, height: 50)
 }
 
 #if DEBUG

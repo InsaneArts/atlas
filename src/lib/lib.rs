@@ -1,13 +1,16 @@
-pub mod acl;
+pub(crate) mod acl;
 pub mod actions;
+pub mod activity_log;
 pub mod agent;
 pub mod agents;
-mod app_selection;
-pub mod approval;
+pub mod app_selection;
+pub(crate) mod approval;
 mod bounded;
 pub mod capability;
 pub mod claude_app;
+pub mod cleanup;
 pub mod client;
+pub mod collect;
 pub mod config;
 pub mod control;
 pub mod daemon;
@@ -15,20 +18,35 @@ pub mod digest;
 pub mod doing;
 pub mod environment;
 pub mod error;
-pub mod handoff;
-pub mod helper_info;
+pub mod files;
+#[allow(unsafe_code, reason = "FFI: libc's renameatx_np has no safe binding")]
+mod fs_move;
+pub(crate) mod handoff;
+pub(crate) mod helper_info;
+pub mod host_session;
 pub mod init;
+pub mod install_app;
+pub mod interrupt;
+pub mod jobs;
 mod last_capture;
 pub mod login_log;
 pub mod mcp;
 pub mod menubar;
+mod name;
 pub mod native;
 pub mod onboarding;
-pub mod overview;
+pub(crate) mod overview;
+pub mod process;
 pub mod readiness;
+mod record_folder;
+mod select;
 pub mod session;
+mod session_view;
 pub mod setup;
+mod single_flight;
 pub mod switch;
+pub mod task;
+mod time;
 pub mod transport;
 pub mod ui;
 pub mod uninstall;
@@ -37,7 +55,7 @@ pub mod viewer;
 pub mod watch;
 
 #[cfg(test)]
-mod transaction_test;
+mod test_support;
 
 /// This build's version, as released.
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");

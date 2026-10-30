@@ -9,11 +9,12 @@
 //! observed. Doctor reports a pass only while that generation is unchanged,
 //! the observation is fresh, and both Save and Open passed.
 use crate::{
-    client::{Client, timestamp},
+    client::{Client, Run, timestamp},
     config::home,
-    control::{Ownership, write_private},
-    error::{Error, Result},
-    native::windows::{Bounds, Window, frontmost_pid, unobstructed, visible_point},
+    control::Ownership,
+    error::{Code, Error, Result},
+    files::write_private,
+    native::windows::{Bounds, Screen, Shown, Window, frontmost_pid, unobstructed, visible_point},
     session::{Display, Epoch, require_hidden},
     transport::run_output,
 };
@@ -104,7 +105,7 @@ impl Record {
 }
 
 fn problem(message: impl Into<String>) -> Error {
-    Error::new("native", message)
+    Error::new(Code::Native, message)
 }
 
 fn record_path(uid: u32) -> Result<PathBuf> {
@@ -121,8 +122,7 @@ fn now() -> u64 {
 }
 
 /// Seconds since the epoch at which this machine booted.
-// FFI: sysctl kern.boottime has no safe binding.
-#[allow(unsafe_code)]
+#[allow(unsafe_code, reason = "FFI: sysctl kern.boottime has no safe binding")]
 fn boot_time() -> Option<u64> {
     let mut boot = libc::timeval {
         tv_sec: 0,
@@ -451,12 +451,12 @@ impl Canary<'_> {
     }
 
     async fn run(&self, argv: Vec<String>) -> Result<Value> {
-        self.client.run_owned(self.ownership, argv).await
+        self.client.run(argv, Run::owned(self.ownership)).await
     }
 
     async fn keys(&self, actions: Value) -> Result<()> {
         self.client
-            .input_owned(self.ownership, &actions, &self.epoch)
+            .input_owned(self.ownership, &actions, &self.epoch, None)
             .await
             .map(|_| ())
     }
@@ -489,15 +489,16 @@ impl Canary<'_> {
         .await
     }
 
-    /// The helper's on-screen windows, front to back.
-    async fn windows(&self) -> Result<Vec<Window>> {
+    /// The helper's on-screen windows, front to back, and where its Dock
+    /// takes clicks.
+    async fn windows(&self) -> Result<Shown> {
         // Only reads: a failed listing leaves nothing pending.
         let probe = self.client.config.identity_probe.to_string_lossy();
         let reply = self
             .client
             .inspect_owned(
                 self.ownership,
-                vec![probe.into_owned(), "windows-info".into()],
+                vec![probe.into_owned(), "windows-info".into(), "--dock".into()],
             )
             .await?;
 
@@ -505,13 +506,10 @@ impl Canary<'_> {
             .ok_or_else(|| problem("The helper window list is unavailable"))
     }
 
-    fn display(&self) -> Bounds {
-        Bounds {
-            x: 0.0,
-            y: 0.0,
-            width: self.epoch.display.width,
-            height: self.epoch.display.height,
-        }
+    /// The helper's display, with its Dock as `shown` says.
+    fn screen(&self, shown: &Shown) -> Screen {
+        let display = Bounds::display(self.epoch.display.width, self.epoch.display.height);
+        Screen::new(display, shown.dock.clone())
     }
 
     /// The fixture's ordinary window in a fresh window list.
@@ -532,14 +530,14 @@ impl Canary<'_> {
         let deadline = Instant::now() + Duration::from_secs(6);
 
         loop {
-            let windows = self.windows().await?;
-            if frontmost_pid(&windows) == Some(pid) {
+            let shown = self.windows().await?;
+            if frontmost_pid(&shown.windows) == Some(pid) {
                 return Ok(());
             }
 
             let point = self
-                .fixture_window(&windows)
-                .and_then(|window| visible_point(&windows, window, &self.display()));
+                .fixture_window(&shown.windows)
+                .and_then(|window| visible_point(&shown.windows, window, &self.screen(&shown)));
             if let Some((x, y)) = point {
                 self.keys(json!([{ "type": "click", "x": x, "y": y }]))
                     .await?;
@@ -676,9 +674,10 @@ impl Canary<'_> {
         let y = self.epoch.display.height - state["windowY"].as_f64().unwrap_or_default() - 520.0;
 
         // Never click or type unless the text field's point is the fixture's.
-        let windows = self.windows().await?;
-        let target = self.fixture_window(&windows);
-        if !target.is_some_and(|window| unobstructed(&windows, window, x, y, &self.display())) {
+        let shown = self.windows().await?;
+        let screen = self.screen(&shown);
+        let target = self.fixture_window(&shown.windows);
+        if !target.is_some_and(|window| unobstructed(&shown.windows, window, x, y, &screen)) {
             return Err(problem("The fixture text field is not uncovered"));
         }
 
@@ -688,7 +687,7 @@ impl Canary<'_> {
                 .await?;
         }
 
-        if frontmost_pid(&self.windows().await?) != Some(i64::from(self.fixture.pid)) {
+        if frontmost_pid(&self.windows().await?.windows) != Some(i64::from(self.fixture.pid)) {
             return Err(problem("The fixture lost focus before typing"));
         }
 
@@ -865,8 +864,7 @@ async fn launch(client: &Client, ownership: &Ownership, program: &Path) -> Resul
     );
 
     let reply = client
-        .run_owned(
-            ownership,
+        .run(
             vec![
                 "/bin/sh".into(),
                 "-c".into(),
@@ -874,6 +872,7 @@ async fn launch(client: &Client, ownership: &Ownership, program: &Path) -> Resul
                 "sh".into(),
                 program.to_string_lossy().into_owned(),
             ],
+            Run::owned(ownership),
         )
         .await?;
 
@@ -896,7 +895,7 @@ pub async fn verify(client: &Client, fixture: &Path) -> Result<Value> {
     // A development check: its test app is built from a checkout, never shipped.
     if !fixture.is_file() {
         return Err(Error::new(
-            "native",
+            Code::Native,
             format!(
                 "verify-native is a development check: it needs Atlas's test app at {}, built \
                  from tests/live/DesktopFixture.swift in a checkout.",
@@ -914,7 +913,7 @@ pub async fn verify(client: &Client, fixture: &Path) -> Result<Value> {
         .map(|session| session.epoch)
         .ok_or_else(|| {
             Error::new(
-                "permission",
+                Code::Permission,
                 "verify-native needs a hidden helper with ready input; see atlas doctor",
             )
         })?;

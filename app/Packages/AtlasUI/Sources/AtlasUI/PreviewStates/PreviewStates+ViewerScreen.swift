@@ -2,74 +2,67 @@
   import CoreGraphics
 
   extension PreviewStates {
-    /// An agent's three latest actions, oldest first, as captions show them.
-    static let workingCaptions = [
-      ActivityEntry(
-        id: "2",
-        line: "Clicked Ring in Opie",
-        when: "9 s ago",
-        isNewest: false
-      ),
-      ActivityEntry(id: "1", line: "Scrolled in Opie", when: "5 s ago", isNewest: false),
-      ActivityEntry(
-        id: "0",
-        line: "Turning Show Center off in Opie",
-        when: "just now",
-        isNewest: true
-      ),
-    ]
-
-    /// An agent acts in the helper while the person watches.
+    /// An agent acts in the helper while the person watches: the footer says what it is doing now.
     @MainActor public static let viewerWorking = ViewerState(
-      top: viewerTop(
-        // The newest caption on the picture says what the agent is doing, so the line beside the word is quiet.
-        StatusSummary(label: "Working", tone: .active, mark: .pulsing, line: ""),
-        viewerActions(agent: .stop, control: viewerTakeControl(isEnabled: true))
+      header: ViewerHeaderState(who: "Working", tone: .active),
+      screen: ViewerScreenState(picture: SampleDesktop.picture, menu: viewerScreenMenu()),
+      footer: ViewerFooterState(
+        latest: ViewerLatestLine(id: "0", words: "Turning Show Center off in Opie", age: "just now"),
+        controls: viewerControls(agent: .stop, control: viewerTakeControl(isEnabled: true))
       ),
-      screen: ViewerScreenState(picture: SampleDesktop.picture, captions: workingCaptions)
+      sidebar: viewerSidebar(helper: viewerHelperReady(logsOut: false))
     )
 
     /// Nothing acts in the helper; control is there to take.
     @MainActor public static let viewerIdle = ViewerState(
-      top: viewerTop(
-        StatusSummary(label: "Idle", tone: .quiet, mark: .dot, line: "Last: turned Show Center off · 2 min ago"),
-        viewerActions(control: viewerTakeControl(isEnabled: true))
+      header: ViewerHeaderState(who: "Idle"),
+      screen: ViewerScreenState(picture: SampleDesktop.picture, menu: viewerScreenMenu()),
+      footer: ViewerFooterState(
+        latest: viewerStateLine("Idle", "Last: turned Show Center off · 2 min ago"),
+        controls: viewerControls(control: viewerTakeControl(isEnabled: true))
       ),
-      screen: ViewerScreenState(picture: SampleDesktop.picture)
+      sidebar: viewerSidebar(helper: viewerHelperReady(logsOut: true))
     )
 
     /// The person stopped agents: Resume stands where Stop was.
     @MainActor public static let viewerStopped = ViewerState(
-      top: viewerTop(
-        StatusSummary(label: "Stopped", tone: .attention, mark: .square, line: "Resume when you're ready"),
-        viewerActions(agent: .resume(isEnabled: true), control: viewerTakeControl(isEnabled: true))
+      header: ViewerHeaderState(who: "Stopped", tone: .attention),
+      screen: ViewerScreenState(picture: SampleDesktop.picture, menu: viewerScreenMenu()),
+      footer: ViewerFooterState(
+        latest: viewerStateLine("Stopped", "Resume when you're ready"),
+        controls: viewerControls(agent: .resume(isEnabled: true), control: viewerTakeControl(isEnabled: true))
       ),
-      screen: ViewerScreenState(picture: SampleDesktop.picture)
+      sidebar: viewerSidebar(helper: viewerHelperReady(logsOut: true))
     )
 
     /// Another window holds control, so Take Control waits.
     @MainActor public static let viewerInUseElsewhere = ViewerState(
-      top: viewerTop(
-        StatusSummary(label: "In use elsewhere", tone: .quiet, mark: .dot, line: "Another Atlas viewer has control"),
-        viewerActions(control: viewerTakeControl(isEnabled: false))
+      header: ViewerHeaderState(who: "In use elsewhere"),
+      screen: ViewerScreenState(picture: SampleDesktop.picture, menu: viewerScreenMenu()),
+      footer: ViewerFooterState(
+        latest: viewerStateLine("In use elsewhere", "Another Atlas viewer has control"),
+        controls: viewerControls(control: viewerTakeControl(isEnabled: false))
       ),
-      screen: ViewerScreenState(picture: SampleDesktop.picture)
+      sidebar: viewerSidebar(helper: viewerHelperReady(logsOut: true))
     )
 
-    /// The picture is paused; work in the helper goes on. The status keeps the agent's own line, and the screen's
-    /// chip says the picture is paused.
+    /// The picture is paused; work in the helper goes on. The header says so, and the footer keeps the helper's own
+    /// line.
     @MainActor public static let viewerPaused = ViewerState(
-      top: viewerTop(
-        StatusSummary(label: "Idle", tone: .quiet, mark: .dot, line: "Last: turned Show Center off · 2 min ago"),
-        viewerActions(control: viewerTakeControl(isEnabled: true), paused: true)
+      header: ViewerHeaderState(who: "Paused", what: "picture from 10:31"),
+      screen: ViewerScreenState(picture: SampleDesktop.picture, look: .paused, menu: viewerScreenMenu(paused: true)),
+      footer: ViewerFooterState(
+        latest: viewerStateLine("Idle", "Last: turned Show Center off · 2 min ago"),
+        controls: viewerControls(control: viewerTakeControl(isEnabled: true), paused: true)
       ),
-      screen: ViewerScreenState(picture: SampleDesktop.picture, look: .paused, chip: .paused)
+      sidebar: viewerSidebar(helper: viewerHelperReady(logsOut: true, picture: "Paused"))
     )
 
     /// The paused picture at actual size, one view point a display point: it fades as the fitted one does.
     @MainActor public static let viewerActualSizePaused: ViewerState = {
       var state = viewerPaused
       state.screen.actualSize = CGSize(width: 1440, height: 900)
+      state.screen.menu = viewerScreenMenu(paused: true, actualSize: true)
       return state
     }()
   }

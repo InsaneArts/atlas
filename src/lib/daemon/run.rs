@@ -9,7 +9,7 @@
 //! A client that goes away, or a daemon that stops, ends the command. Any
 //! failure once the command has started is uncertain: it may have done some
 //! of its work.
-use crate::daemon::protocol::failure;
+use crate::{daemon::protocol::failure, error::Code};
 use base64::{Engine, engine::general_purpose::STANDARD};
 use nix::{
     sys::signal::{Signal, killpg},
@@ -73,7 +73,7 @@ const LANG: &str = "en_US.UTF-8";
 /// The PATH a command searches: the helper's, the same places readiness and
 /// `environment run` look in (`.local/bin` and Homebrew among them), or the
 /// daemon's own without a home.
-fn search_path(home: Option<&Path>) -> String {
+pub(super) fn search_path(home: Option<&Path>) -> String {
     home.and_then(|home| std::env::join_paths(crate::environment::helper_search_path(home)).ok())
         .and_then(|path| path.into_string().ok())
         .unwrap_or_else(|| PATH.to_owned())
@@ -90,7 +90,7 @@ fn locate(program: &str, home: Option<&Path>) -> PathBuf {
 
 /// The executable for `program`: where [`locate`] puts it when it contains a
 /// slash, else the first match on `PATH`.
-fn resolve(program: &str, path: Option<&str>, home: Option<&Path>) -> Option<PathBuf> {
+pub(super) fn resolve(program: &str, path: Option<&str>, home: Option<&Path>) -> Option<PathBuf> {
     let executable = |candidate: &Path| {
         std::fs::metadata(candidate)
             .is_ok_and(|metadata| metadata.is_file() && metadata.permissions().mode() & 0o111 != 0)
@@ -106,6 +106,38 @@ fn resolve(program: &str, path: Option<&str>, home: Option<&Path>) -> Option<Pat
         .filter(|directory| !directory.is_empty())
         .map(|directory| Path::new(directory).join(program))
         .find(|candidate| executable(candidate))
+}
+
+/// The refusal of a `name` that [`resolve`] found no program for, saying
+/// why: not on PATH, a folder, not executable, or not there.
+pub(super) fn unresolved(name: &str, home: Option<&Path>) -> Value {
+    let located = locate(name, home);
+    let reason = if !name.contains('/') {
+        "command not found on PATH"
+    } else if located.is_dir() {
+        "is a folder, not a program"
+    } else if located.exists() {
+        "is not executable (chmod +x it)"
+    } else {
+        "no such program"
+    };
+
+    failure(Code::SpawnFailed, format!("{name}: {reason}"))
+}
+
+/// The helper's home, where a command starts, when it is a folder.
+pub(super) fn home() -> Option<PathBuf> {
+    std::env::var_os("HOME")
+        .map(PathBuf::from)
+        .filter(|home| home.is_dir())
+}
+
+/// The locale a command gets: the daemon's own, or UTF-8 English when it
+/// has none.
+pub(super) fn locale() -> Option<&'static str> {
+    std::env::var_os("LANG")
+        .is_none_or(|lang| lang.is_empty())
+        .then_some(LANG)
 }
 
 /// The conventional name of a macOS signal number, as "SIGTERM".
@@ -128,7 +160,7 @@ fn ended(
         "exitCode": status.code(),
         "signal": status.signal().map(signal_name),
         "timedOut": timed_out,
-        "durationMs": u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX),
+        "durationMs": crate::time::ms(started.elapsed()),
     });
 
     if truncated {
@@ -145,7 +177,7 @@ fn ended(
 }
 
 /// A failure after the command started: it may have done some of its work.
-fn interrupted(code: &str, error: impl Into<String>) -> Value {
+fn interrupted(code: Code, error: impl Into<String>) -> Value {
     let mut reply = failure(code, error);
     reply["uncertain"] = json!(true);
     reply
@@ -314,11 +346,7 @@ pub async fn run(
     cancel: impl Future<Output = Cancel>,
 ) -> Value {
     // The command runs in the helper's home, as a shell there would.
-    let home = std::env::var_os("HOME")
-        .map(PathBuf::from)
-        .filter(|home| home.is_dir());
-
-    run_at(argv, home, timeout, events, cancel).await
+    run_at(argv, home(), timeout, events, cancel).await
 }
 
 /// [`run`] with `home` as the helper's home.
@@ -331,28 +359,17 @@ async fn run_at(
 ) -> Value {
     // The protocol never passes an empty argv; refuse one rather than panic.
     let Some(name) = argv.first() else {
-        return failure("spawn-failed", "No command to run");
+        return failure(Code::SpawnFailed, "No command to run");
     };
 
     let path = search_path(home.as_deref());
     let Some(program) = resolve(name, Some(&path), home.as_deref()) else {
-        let located = locate(name, home.as_deref());
-        let reason = if !name.contains('/') {
-            "command not found on PATH"
-        } else if located.is_dir() {
-            "is a folder, not a program"
-        } else if located.exists() {
-            "is not executable (chmod +x it)"
-        } else {
-            "no such program"
-        };
-
-        return failure("spawn-failed", format!("{name}: {reason}"));
+        return unresolved(name, home.as_deref());
     };
 
     let (reader, writer) = match std::io::pipe() {
         Ok(pair) => pair,
-        Err(error) => return failure("spawn-failed", error.to_string()),
+        Err(error) => return failure(Code::SpawnFailed, error.to_string()),
     };
 
     let spawned = (|| {
@@ -368,8 +385,8 @@ async fn run_at(
             .process_group(0)
             .kill_on_drop(false);
 
-        if std::env::var_os("LANG").is_none_or(|lang| lang.is_empty()) {
-            command.env("LANG", LANG);
+        if let Some(lang) = locale() {
+            command.env("LANG", lang);
         }
 
         if let Some(home) = &home {
@@ -380,14 +397,14 @@ async fn run_at(
     })();
     let mut child = match spawned {
         Ok(child) => child,
-        Err(error) => return failure("spawn-failed", format!("{}: {error}", argv[0])),
+        Err(error) => return failure(Code::SpawnFailed, format!("{}: {error}", argv[0])),
     };
 
     let started = Instant::now();
 
     let Some(group) = child.id().and_then(|pid| i32::try_from(pid).ok()) else {
         return interrupted(
-            "spawn-failed",
+            Code::SpawnFailed,
             "The command exited before it could be observed",
         );
     };
@@ -401,7 +418,7 @@ async fn run_at(
         Err(error) => {
             signal_group(group, Signal::SIGKILL);
             let _ = child.wait().await;
-            return interrupted("spawn-failed", error.to_string());
+            return interrupted(Code::SpawnFailed, error.to_string());
         }
     };
 
@@ -490,11 +507,11 @@ async fn run_at(
 
     match cancelled {
         Some(Cancel::Stopping) => {
-            return interrupted("restart", "The helper stopped while the command ran");
+            return interrupted(Code::Restart, "The helper stopped while the command ran");
         }
         Some(Cancel::OnConsole) => {
             return interrupted(
-                "on-console",
+                Code::OnConsole,
                 "The helper came on screen, so the command was stopped",
             );
         }
@@ -502,12 +519,15 @@ async fn run_at(
     }
 
     if abandoned || output.finish(&events).await.is_err() {
-        return interrupted("transport", "The client went away");
+        return interrupted(Code::Transport, "The client went away");
     }
 
     match status {
         Some(Ok(status)) => ended(status, timed_out, started, output.truncated, unfinished),
-        _ => interrupted("wait-failed", "The command's exit status could not be read"),
+        _ => interrupted(
+            Code::WaitFailed,
+            "The command's exit status could not be read",
+        ),
     }
 }
 
@@ -744,7 +764,7 @@ mod tests {
         let reply = run(&argv, Duration::from_secs(60), sender, cancel).await;
         assert_eq!(
             reply,
-            interrupted("restart", "The helper stopped while the command ran")
+            interrupted(Code::Restart, "The helper stopped while the command ran")
         );
         assert_eq!(reply["uncertain"], true);
     }
@@ -817,13 +837,13 @@ mod tests {
         assert!(events.is_empty());
         assert_eq!(
             reply,
-            failure("spawn-failed", "/nonexistent/binary: no such program")
+            failure(Code::SpawnFailed, "/nonexistent/binary: no such program")
         );
 
         let (_, folder) = execute(&["/tmp"], 3000).await;
         assert_eq!(
             folder,
-            failure("spawn-failed", "/tmp: is a folder, not a program")
+            failure(Code::SpawnFailed, "/tmp: is a folder, not a program")
         );
 
         let plain = tempfile::NamedTempFile::new().unwrap();
@@ -832,7 +852,7 @@ mod tests {
         assert_eq!(
             not_executable,
             failure(
-                "spawn-failed",
+                Code::SpawnFailed,
                 format!("{plain_path}: is not executable (chmod +x it)")
             )
         );
@@ -842,7 +862,7 @@ mod tests {
 
         let (events, reply) = execute(&[], 3000).await;
         assert!(events.is_empty());
-        assert_eq!(reply, failure("spawn-failed", "No command to run"));
+        assert_eq!(reply, failure(Code::SpawnFailed, "No command to run"));
 
         let (events, reply) =
             execute(&["/bin/sh", "-c", "head -c 17000000 /dev/zero"], 20000).await;
@@ -905,19 +925,22 @@ mod tests {
         let (_, folder) = execute(&["./bin"]).await;
         assert_eq!(
             folder,
-            failure("spawn-failed", "./bin: is a folder, not a program")
+            failure(Code::SpawnFailed, "./bin: is a folder, not a program")
         );
 
         let (_, plain) = execute(&["./notes"]).await;
         assert_eq!(
             plain,
-            failure("spawn-failed", "./notes: is not executable (chmod +x it)")
+            failure(
+                Code::SpawnFailed,
+                "./notes: is not executable (chmod +x it)"
+            )
         );
 
         let (_, missing) = execute(&["./missing"]).await;
         assert_eq!(
             missing,
-            failure("spawn-failed", "./missing: no such program")
+            failure(Code::SpawnFailed, "./missing: no such program")
         );
     }
 

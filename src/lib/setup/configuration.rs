@@ -1,14 +1,14 @@
 //! Shared configuration construction and persistence for setup workflows.
 use crate::{
     config::{self, Config},
-    error::{Error, Result},
+    error::{Code, Error, Result},
     setup::{self, helper::Layout},
     ui::text,
 };
 use std::{fs, io::Write, os::unix::fs::DirBuilderExt, path::Path};
 
 fn problem(message: impl Into<String>) -> Error {
-    Error::new("init", message)
+    Error::new(Code::Init, message)
 }
 
 /// The configuration for `helper` in the managed private layout.
@@ -23,7 +23,7 @@ pub(crate) fn proposed(helper: &setup::Account) -> Result<Config> {
         helper_uid: helper.uid,
         socket_path: layout.socket(),
         identity_probe: "/Users/Shared/Atlas/atlas".into(),
-        input_socket: layout.root().join(setup::helper::INPUT).join("input.sock"),
+        input_socket: layout.input_socket(),
         output_dir: config::home()?.join("Library/Application Support/Atlas/runs"),
     })
 }

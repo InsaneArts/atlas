@@ -3,6 +3,8 @@ import SwiftUI
 /// A link's look for a button among a row's words, such as Open or Show on screen: link-blue small text, dimmed while
 /// pressed, at once under Reduce Motion. A style, not a view, so the control stays a `Button` with its own label, help and disabled state.
 struct TextLinkStyle: ButtonStyle {
+  /// A pressed link dims like a link in a Mac app.
+  private static let pressedOpacity = 0.6
   /// How large the link's words are.
   enum Size: Sendable {
     /// 12, regular: among a row's words.
@@ -14,7 +16,7 @@ struct TextLinkStyle: ButtonStyle {
   /// How large the link's words are.
   var size = Size.regular
   @Environment(\.isEnabled) private var enabled
-  @Environment(\.accessibilityReduceMotion) private var reduceMotion
+  @Environment(\.motionReduced) private var reduceMotion
 
   /// Draws the label as a link.
   ///
@@ -26,7 +28,7 @@ struct TextLinkStyle: ButtonStyle {
       .foregroundStyle(Color.textLink)
       .lineLimit(1)
       .contentShape(Rectangle())
-      .opacity(configuration.isPressed ? Layout.pressed : 1)
+      .opacity(configuration.isPressed ? Self.pressedOpacity : 1)
       .opacity(enabled ? 1 : Opacity.disabled)
       .animation(Motion.animation(Motion.press, reduceMotion: reduceMotion), value: configuration.isPressed)
   }
@@ -38,12 +40,6 @@ struct TextLinkStyle: ButtonStyle {
     case .small: Typography.font(.caption, weight: .medium)
     }
   }
-}
-
-/// The link's own measures.
-private enum Layout {
-  /// 0.6: how far a link fades while pressed, as a link in a Mac app dims under the pointer.
-  static let pressed = 0.6
 }
 
 #if DEBUG

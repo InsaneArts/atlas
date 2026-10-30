@@ -3,9 +3,9 @@ import SwiftUI
 /// The panel's picture: the helper's screen resting on the ground, which opens the main window on
 /// Screen when clicked and shows the expand symbol under the pointer to say so. Its look tells its state: the blue rim
 /// of control, greyed and darkened under an orange badge while the helper needs the person, greyed and darkened
-/// alone while paused. The newest action floats over its corner on glass while an agent works, orange when it failed,
-/// and the pause button sits in the other corner, pausing the picture only. With no screen to show, the empty stage
-/// says why.
+/// alone while paused. The newest action floats over its corner on a solid chip while an agent works, orange when it
+/// failed, and the solid pause circle sits in the other corner, pausing the picture only. With no screen to show, the
+/// empty stage says why.
 struct PanelPicture: View {
   /// What the frame shows, and how.
   let state: PanelPictureState
@@ -13,9 +13,9 @@ struct PanelPicture: View {
   let send: @MainActor (PanelEvent) -> Void
   /// Whether the pointer is over the screen, which shows the expand symbol.
   @State private var isHovered = false
-  @Environment(\.accessibilityReduceMotion) private var reduceMotion
+  @Environment(\.motionReduced) private var reduceMotion
 
-  /// The helper's screen, or the empty stage, at the panel's picture size.
+  /// The helper's screen, or the empty stage, in a frame of the screen's shape.
   var body: some View {
     ZStack {
       if state.showsScreen {
@@ -24,10 +24,16 @@ struct PanelPicture: View {
         PanelEmptyPicture(message: state.emptyMessage ?? "", breathes: state.breathes)
       }
     }
-    .frame(width: PanelLayout.picture.width, height: PanelLayout.picture.height)
+    .frame(width: size.width, height: size.height)
   }
 
-  /// The screen with what sits on it: the rim, the badge, the expand symbol, the caption and the pause button.
+  /// The frame: the screen's own shape while it shows, so no black shows at its sides, and 16:10 otherwise.
+  private var size: CGSize {
+    PanelLayout.pictureSize(aspect: state.showsScreen ? state.picture?.aspectRatio : nil)
+  }
+
+  /// The screen with what sits on it: the rim, the badge, the expand symbol, the caption and the pause button, dark in
+  /// either appearance, as the helper's screen is framed in black.
   private var screen: some View {
     Button {
       send(.openScreen)
@@ -43,6 +49,7 @@ struct PanelPicture: View {
     .overlay(alignment: .topTrailing) { expand }
     .overlay(alignment: .bottomLeading) { caption }
     .overlay(alignment: .bottomTrailing) { pauseButton }
+    .environment(\.colorScheme, .dark)
     .onHover { isHovered = $0 }
   }
 
@@ -63,27 +70,26 @@ struct PanelPicture: View {
   private var expand: some View {
     Image(systemName: SymbolName.expand.rawValue)
       .font(Typography.font(size: PanelLayout.cornerSymbol, weight: .semibold))
-      .foregroundStyle(Color.textPrimary)
+      .foregroundStyle(Color.textOverPicture)
       .frame(width: PanelLayout.pauseButton, height: PanelLayout.pauseButton)
-      .glass(.regular, in: Circle())
-      .overlay(
+      .background {
         Circle()
-          .strokeBorder(Color.strokeStrong, lineWidth: Stroke.hairline)
-      )
+          .fill(Color.fillOverPicture)
+      }
+      .overlay { edge }
       .revealsOnHover(isHovered)
       .padding(PanelLayout.captionInset)
       .allowsHitTesting(false)
       .accessibilityHidden(true)
   }
 
-  /// The newest action on glass while an agent works, on the panel's smaller chip, a new one replacing the last by a
-  /// fade of 0.2 seconds.
+  /// The newest action while an agent works, on the panel's smaller solid chip, led by its session's icon while
+  /// sessions show, a new one replacing the last by a fade of 0.2 seconds.
   private var caption: some View {
     ZStack(alignment: .bottomLeading) {
       if let caption = state.caption {
-        GlassChip(lead: Self.lead(caption), time: caption.time.isEmpty ? nil : caption.time, size: .small) {
-          Text(caption.text)
-            .truncationMode(.tail)
+        PictureChip(lead: Self.lead(caption), time: caption.time.isEmpty ? nil : caption.time, size: .small) {
+          CaptionLine(icon: caption.icon, text: caption.text)
         }
         .frame(maxWidth: PanelLayout.captionWidth, alignment: .leading)
         .padding(PanelLayout.captionInset)
@@ -95,29 +101,38 @@ struct PanelPicture: View {
     .allowsHitTesting(false)
   }
 
-  /// The pause button: pause turns into play by a symbol replace once the picture is paused. It pauses the
-  /// picture only; work in the helper goes on.
+  /// The pause button, a solid dark circle with a fine edge so it reads over any picture: pause turns into play at once
+  /// once the picture is paused, each drawn centred in the circle's square, with no replace effect, which leaves the new
+  /// symbol in the old one's box, off the circle's centre. It pauses the picture only; work in the helper goes on.
   private var pauseButton: some View {
     Button {
       send(.togglePause)
     } label: {
       Image(systemName: (state.pause.isPaused ? SymbolName.play : SymbolName.pause).rawValue)
-        .contentTransition(.symbolEffect(.replace))
-        .animation(Motion.animation(Motion.state, reduceMotion: reduceMotion), value: state.pause.isPaused)
+        .contentTransition(.identity)
     }
-    .buttonStyle(.capsule(.glass, size: .mini, outline: .circle, backing: .glass))
+    .buttonStyle(.capsule(.overPicture, size: .mini, outline: .circle))
+    .overlay { edge }
     .help(state.pause.help)
     .accessibilityLabel(state.pause.label)
     .padding(PanelLayout.captionInset)
   }
 
-  /// What leads the caption: an orange dot when its action failed, as the viewer's captions mark a failure, else the
-  /// steady blue dot of work under way; the header's dot is the one that breathes.
+  /// The fine edge round a circle over the picture, as round the chips, so it reads over a dark screen too.
+  private var edge: some View {
+    Circle()
+      .strokeBorder(Color.strokeStrong, lineWidth: Stroke.hairline)
+      .allowsHitTesting(false)
+  }
+
+  /// What leads the caption: an orange dot when its action failed, as the viewer's captions mark a failure; else the
+  /// steady blue dot of work under way, unless its session's icon leads it; the header's dot is the one that breathes.
   ///
   /// - Parameter caption: The newest action.
   /// - Returns: The chip's lead.
-  nonisolated static func lead<Content: View>(_ caption: PanelCaption) -> GlassChip<Content>.Lead {
-    caption.isFailed ? .dot(.attention) : .dot(.active)
+  nonisolated static func lead<Content: View>(_ caption: PanelCaption) -> PictureChip<Content>.Lead {
+    if caption.isFailed { return .dot(.attention) }
+    return caption.icon == nil ? .dot(.active) : .none
   }
 }
 

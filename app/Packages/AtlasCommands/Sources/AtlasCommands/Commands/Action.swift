@@ -48,6 +48,8 @@ public enum Action: Sendable, Equatable {
   case connectClaudeApp
   /// Take the Atlas section out of the project in this folder, and off the list of projects taught.
   case forgetProject(path: String)
+  /// Read every on-screen helper window, including menus and accessory applications.
+  case listWindows
   /// Diagnose the helper, with its full status.
   case doctor
   /// Ask whether a newer Atlas is published, changing nothing.
@@ -98,6 +100,7 @@ public enum Action: Sendable, Equatable {
     case .connectClaudeApp: ["agents", "install", "--app"]
     // The person confirmed in Settings.
     case .forgetProject(let path): ["agents", "forget", path]
+    case .listWindows: ["windows", "--all"]
     case .doctor: ["doctor", "--verbose"]
     // Only asks: the check downloads nothing and installs nothing.
     case .checkForUpdate: ["update", "--check"]

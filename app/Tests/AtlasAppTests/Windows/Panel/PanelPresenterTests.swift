@@ -18,7 +18,8 @@ struct PanelPresenterTests {
     return PanelSnapshot(
       status: try status(["overview": ["mode": row.mode, "state": row.state]]),
       connecting: name == "Connecting",
-      holdingControl: row.holding
+      holdingControl: row.holding,
+      isOnConsole: true
     )
   }
 
@@ -73,7 +74,7 @@ struct PanelPresenterTests {
     #expect(!PanelPresenter.state(loggedOut).controls.main.isEnabled)
   }
 
-  @Test("stopped offers Resume in glass before Open Atlas, the pair working offers with Stop")
+  @Test("stopped offers Resume as the secondary button before Open Atlas, the pair working offers with Stop")
   func stoppedPairsResumeWithOpenAtlas() throws {
     let stopped = PanelPresenter.state(try Self.snapshot("Stopped")).controls
     #expect(stopped.agent == .resume(isEnabled: true))
@@ -168,6 +169,21 @@ struct PanelPresenterTests {
     #expect(PanelPresenter.state(stopping).controls.agent == .stop, "a Stop under way leaves Stop in place")
   }
 
+  @Test("an idle helper whose background job still runs keeps Stop in the bottom row")
+  func stopStaysWhileABackgroundJobRuns() throws {
+    let aged = [["operation": "job", "ok": true, "actor": "agent", "ageSeconds": 900]]
+    let fields: [String: Any] = ["mode": "observing", "state": "idle", "activity": aged, "jobs": ["running": 1]]
+    let snapshot = PanelSnapshot(status: try status(["overview": fields]), connecting: false, holdingControl: false)
+    #expect(PanelPresenter.state(snapshot).controls.agent == .stop)
+  }
+
+  @Test("while the main window holds control, a background job that may still run keeps Stop in the bottom row")
+  func stopStaysUnderControlWhileABackgroundJobRuns() throws {
+    let fields: [String: Any] = ["mode": "controlling", "state": "control", "jobs": ["unresolved": 1]]
+    let snapshot = PanelSnapshot(status: try status(["overview": fields]), connecting: false, holdingControl: true)
+    #expect(PanelPresenter.state(snapshot).controls.agent == .stop)
+  }
+
   @Test("connecting says the helper is starting the first time, and reconnecting once answers came and stopped")
   func connectingSaysWhichKind() throws {
     var snapshot = try Self.snapshot("Connecting")
@@ -228,6 +244,29 @@ struct PanelPresenterTests {
     }
     #expect(main(try blocked(true)) == .askRecover, "input Recover starts again")
     #expect(main(try blocked(false)) == .openSettings, "a block Recover can't fix")
+  }
+
+  @Test("while an agent's command runs, Needs you offers Open Atlas and says recovery waits, never Recover…")
+  func recoveryWaitsForARunningCommand() throws {
+    let snapshot = PanelSnapshot(
+      status: try status([
+        "overview": ["mode": "recovering", "state": "needsYou", "pending": 1, "commands": 1, "recoveryHelps": true]
+      ])
+    )
+    let panel = PanelPresenter.state(snapshot)
+    #expect(panel.controls.main.event == .openAtlas)
+    #expect(panel.status.line == Words.unfinishedBesideCommandLine)
+  }
+
+  @Test("holding control while an agent's command runs says the command still runs, never that the agent waits")
+  func controlBesideARunningCommand() throws {
+    let snapshot = PanelSnapshot(
+      status: try status(["overview": ["mode": "controlling", "state": "control", "commands": 1]]),
+      holdingControl: true
+    )
+    let panel = PanelPresenter.state(snapshot)
+    #expect(panel.status.label == "You have control")
+    #expect(panel.status.line == Words.controlBesideCommandLine)
   }
 
   @Test("the ⋯ menu offers Open Atlas only while the main button is something else")

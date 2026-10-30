@@ -35,7 +35,7 @@ struct ListRowTrailing: View {
         .labelsHidden()
     case .button(let title):
       Button(title) { action?() }
-        .buttonStyle(.capsule(.glass, size: .mini))
+        .buttonStyle(.capsule(.secondary, size: .mini))
     case .radio(let isOn):
       RadioMark(isOn: isOn)
     case .progress:

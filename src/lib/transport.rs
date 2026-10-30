@@ -1,7 +1,7 @@
 //! One request to a helper-side socket and its reply: a JSON line in, event
 //! lines and a final reply out, within one deadline, from a peer the kernel
 //! says is the helper account.
-use crate::error::{Error, Result};
+use crate::error::{Code, Error, Result};
 use base64::{Engine, engine::general_purpose::STANDARD};
 use serde_json::{Value, json};
 use std::{path::PathBuf, time::Duration};
@@ -44,11 +44,11 @@ impl Transport {
         let deadline = started + self.timeout;
         let stream = timeout_at(deadline, UnixStream::connect(&self.path))
             .await
-            .map_err(|_| Error::new("transport", "Connection timed out"))?
+            .map_err(|_| Error::new(Code::Transport, "Connection timed out"))?
             .map_err(refused)?;
         if stream.peer_cred()?.uid() != self.peer_uid {
             return Err(Error::new(
-                "identity",
+                Code::Identity,
                 format!(
                     "{} is not served by the configured helper account",
                     self.path.display()
@@ -79,7 +79,7 @@ impl Transport {
 fn refused(error: std::io::Error) -> Error {
     if error.raw_os_error() == Some(libc::EPERM) {
         return Error::new(
-            "blocked",
+            Code::Blocked,
             "This shell may not connect to the helper (operation not permitted). An agent's \
              sandbox blocks local sockets: run atlas outside the sandbox. The helper itself \
              may be fine.",
@@ -93,7 +93,7 @@ impl Pending {
     pub async fn dispatch(mut self, request: &Value) -> Result<Self> {
         let mut payload = serde_json::to_vec(request)?;
         if payload.len() > MAX_REQUEST {
-            return Err(Error::new("protocol", "Request exceeds 1 MiB"));
+            return Err(Error::new(Code::Protocol, "Request exceeds 1 MiB"));
         }
 
         // The newline goes last, in the same write: JSON escapes any newline
@@ -115,7 +115,7 @@ impl Pending {
         Err(self
             .waiting_refusal()
             .await
-            .unwrap_or_else(|| Error::new("transport", failed)))
+            .unwrap_or_else(|| Error::new(Code::Transport, failed)))
     }
 
     /// A definite refusal the peer sent before it hung up, if one is waiting.
@@ -131,15 +131,48 @@ impl Pending {
         timeout_at(deadline, self.receive())
             .await
             .map_err(|_| {
-                Error::new("transport", "Helper exceeded the request deadline").uncertain()
+                Error::new(Code::Transport, "Helper exceeded the request deadline").uncertain()
+            })?
+            .map_err(Error::uncertain)
+    }
+
+    /// The final reply, each event line before it handed to `each` as it
+    /// arrives rather than kept, so a long reply is never held whole. A
+    /// failure of `each` ends the reply there.
+    pub async fn finish_each(
+        mut self,
+        each: &mut (dyn FnMut(Value) -> Result<()> + Send),
+    ) -> Result<Value> {
+        let deadline = self.deadline;
+        timeout_at(deadline, self.receive_each(each))
+            .await
+            .map_err(|_| {
+                Error::new(Code::Transport, "Helper exceeded the request deadline").uncertain()
             })?
             .map_err(Error::uncertain)
     }
 
     async fn receive(&mut self) -> Result<Value> {
+        let mut events = Vec::new();
+        let mut reply = self
+            .receive_each(&mut |event| {
+                events.push(event);
+                Ok(())
+            })
+            .await?;
+        if !events.is_empty() {
+            reply["events"] = json!(events);
+        }
+        Ok(reply)
+    }
+
+    async fn receive_each(
+        &mut self,
+        each: &mut (dyn FnMut(Value) -> Result<()> + Send),
+    ) -> Result<Value> {
         let mut pending = Vec::new();
         let mut total = 0;
-        let mut events = Vec::new();
+        let mut events = 0;
         // Keep the receive storage out of every enclosing async future. A stack
         // array multiplies through the HTTP/session futures in debug builds.
         let mut buffer = vec![0; 65536];
@@ -148,14 +181,14 @@ impl Pending {
             let count = self.stream.read(&mut buffer).await?;
             if count == 0 {
                 return Err(Error::new(
-                    "protocol",
+                    Code::Protocol,
                     "Connection ended without a final reply",
                 ));
             }
 
             total += count;
             if total > MAX_REPLY {
-                return Err(Error::new("protocol", "Reply exceeds 64 MiB"));
+                return Err(Error::new(Code::Protocol, "Reply exceeds 64 MiB"));
             }
 
             // Scan incoming bytes once; large PNG lines never rescan the prefix.
@@ -169,14 +202,10 @@ impl Pending {
 
                 let object = row
                     .as_object_mut()
-                    .ok_or_else(|| Error::new("protocol", "Reply must be a JSON object"))?;
+                    .ok_or_else(|| Error::new(Code::Protocol, "Reply must be a JSON object"))?;
                 if let Some(ok) = object.get("ok") {
                     if !ok.is_boolean() {
-                        return Err(Error::new("protocol", "Invalid success flag"));
-                    }
-
-                    if !events.is_empty() {
-                        object.insert("events".into(), json!(events));
+                        return Err(Error::new(Code::Protocol, "Invalid success flag"));
                     }
 
                     object.insert(
@@ -188,15 +217,16 @@ impl Pending {
                 }
 
                 if object.get("event").and_then(Value::as_str).is_none()
-                    || events.len() >= MAX_REPLY_EVENTS
+                    || events >= MAX_REPLY_EVENTS
                 {
                     return Err(Error::new(
-                        "protocol",
+                        Code::Protocol,
                         "Malformed or excessive helper events",
                     ));
                 }
 
-                events.push(row);
+                events += 1;
+                each(row)?;
             }
 
             pending.extend_from_slice(&buffer[offset..count]);
@@ -220,8 +250,8 @@ pub(crate) fn refusal(reply: &Value) -> Error {
     let error = Error::new(
         reply["code"]
             .as_str()
-            .and_then(crate::error::code)
-            .unwrap_or("daemon"),
+            .and_then(crate::error::Code::parse)
+            .unwrap_or(Code::Daemon),
         reply["error"]
             .as_str()
             .unwrap_or("The helper refused the request"),
@@ -244,28 +274,49 @@ pub enum OutputError {
 /// that must decode past `limit` is refused unread; a decoded total over
 /// `limit` (by at most a padding remainder) is refused after decoding.
 pub fn run_output(reply: &Value, limit: usize) -> std::result::Result<Vec<u8>, OutputError> {
+    event_bytes(reply, "output", limit)
+}
+
+/// Concatenate the base64 data of a reply's events named `name`, exactly
+/// as the helper sent them, within `limit` as [`run_output`] keeps it.
+fn event_bytes(
+    reply: &Value,
+    name: &str,
+    limit: usize,
+) -> std::result::Result<Vec<u8>, OutputError> {
     let mut output = Vec::new();
 
     for event in reply["events"].as_array().into_iter().flatten() {
-        if event["event"] != "output" {
+        if event["event"] != name {
             continue;
         }
-
-        let encoded = event["data"].as_str().ok_or(OutputError::Malformed)?;
-        if output.len() + (encoded.len() / 4 * 3).saturating_sub(2) > limit {
-            return Err(OutputError::Oversized);
-        }
-
-        STANDARD
-            .decode_vec(encoded, &mut output)
-            .map_err(|_| OutputError::Malformed)?;
-
-        if output.len() > limit {
-            return Err(OutputError::Oversized);
-        }
+        append_event(event, &mut output, limit)?;
     }
 
     Ok(output)
+}
+
+/// Append the base64 `data` of one `event` to `output`, refusing it unread
+/// when it must decode past `limit` in all, and after decoding when it
+/// did. Binary data is never decoded as text.
+pub fn append_event(
+    event: &Value,
+    output: &mut Vec<u8>,
+    limit: usize,
+) -> std::result::Result<(), OutputError> {
+    let encoded = event["data"].as_str().ok_or(OutputError::Malformed)?;
+    if output.len() + (encoded.len() / 4 * 3).saturating_sub(2) > limit {
+        return Err(OutputError::Oversized);
+    }
+
+    STANDARD
+        .decode_vec(encoded, output)
+        .map_err(|_| OutputError::Malformed)?;
+
+    if output.len() > limit {
+        return Err(OutputError::Oversized);
+    }
+    Ok(())
 }
 
 /// The most output `with_output` keeps as text.
@@ -335,6 +386,7 @@ pub fn with_output(mut reply: Value) -> Value {
 #[cfg(test)]
 mod tests {
     use super::{OUTPUT_LIMIT, OutputError, Transport, accepted, refused, run_output, with_output};
+    use crate::error::Code;
     use base64::{Engine, engine::general_purpose::STANDARD};
     use serde_json::json;
 
@@ -383,7 +435,7 @@ mod tests {
 
         assert_eq!(
             (refused.code, refused.error.as_str()),
-            ("protocol", "Request exceeds 1 MiB")
+            (Code::Protocol, "Request exceeds 1 MiB")
         );
         assert!(!refused.uncertain, "nothing was sent");
     }
@@ -397,7 +449,7 @@ mod tests {
             while let Ok((stream, _)) = listener.accept().await {
                 crate::native::endpoint::turn_away(
                     stream,
-                    &crate::daemon::protocol::failure("busy", "Too many requests"),
+                    &crate::daemon::protocol::failure(Code::Busy, "Too many requests"),
                 );
             }
         });
@@ -413,7 +465,7 @@ mod tests {
 
         assert_eq!(
             (refused.code, refused.error.as_str()),
-            ("busy", "Too many requests")
+            (Code::Busy, "Too many requests")
         );
         assert!(!refused.uncertain, "nothing ran");
     }
@@ -482,12 +534,12 @@ mod tests {
         let refused = super::refusal(
             &json!({"ok": false, "code": "bad-request", "error": "no", "uncertain": false}),
         );
-        assert_eq!((refused.code, refused.uncertain), ("bad-request", false));
+        assert_eq!((refused.code, refused.uncertain), (Code::BadRequest, false));
 
         let unknown = super::refusal(
             &json!({"ok": false, "code": "something-new", "error": "?", "uncertain": true}),
         );
-        assert_eq!((unknown.code, unknown.uncertain), ("daemon", true));
+        assert_eq!((unknown.code, unknown.uncertain), (Code::Daemon, true));
     }
 
     #[test]
@@ -613,5 +665,71 @@ mod tests {
         assert_eq!(long["outputTruncated"], true, "the cut is said");
         assert_eq!(long["pid"], 9);
         assert!(long.get("events").is_none());
+    }
+
+    #[test]
+    fn binary_event_data_is_returned_exactly() {
+        let bytes: Vec<u8> = (0..=255).chain([0, 0xff, 0xfe, 0xc0]).collect();
+        let half = bytes.len() / 2;
+        let reply = json!({"ok": true, "events": [
+            {"event": "data", "data": STANDARD.encode(&bytes[..half])},
+            {"event": "output", "data": STANDARD.encode(b"not this")},
+            {"event": "data", "data": STANDARD.encode(&bytes[half..])},
+        ]});
+        assert_eq!(super::event_bytes(&reply, "data", 1024).unwrap(), bytes);
+        assert_eq!(
+            super::event_bytes(&reply, "data", 10),
+            Err(OutputError::Oversized)
+        );
+        assert_eq!(run_output(&reply, 1024).unwrap(), b"not this");
+    }
+
+    /// Each event is handed on as it arrives and never kept, so a long
+    /// reply is never held whole; the final reply carries none of them.
+    #[tokio::test]
+    async fn events_are_handed_on_as_they_arrive() {
+        use tokio::io::AsyncWriteExt;
+
+        let (_dir, listener, transport) = listening();
+        tokio::spawn(async move {
+            let (mut stream, _) = listener.accept().await.unwrap();
+            let mut line = Vec::new();
+            loop {
+                let mut byte = [0_u8; 1];
+                tokio::io::AsyncReadExt::read_exact(&mut stream, &mut byte)
+                    .await
+                    .unwrap();
+                if byte[0] == b'\n' {
+                    break;
+                }
+                line.push(byte[0]);
+            }
+            for n in 0..3 {
+                let event = json!({"event": "data", "data": STANDARD.encode([n])});
+                stream
+                    .write_all(format!("{event}\n").as_bytes())
+                    .await
+                    .unwrap();
+            }
+            stream.write_all(b"{\"ok\":true}\n").await.unwrap();
+        });
+
+        let mut seen = Vec::new();
+        let reply = transport
+            .connect()
+            .await
+            .unwrap()
+            .dispatch(&json!({"op": "read"}))
+            .await
+            .unwrap()
+            .finish_each(&mut |event| {
+                super::append_event(&event, &mut seen, 16).unwrap();
+                Ok(())
+            })
+            .await
+            .unwrap();
+        assert_eq!(seen, [0, 1, 2]);
+        assert_eq!(reply["ok"], true);
+        assert!(reply.get("events").is_none());
     }
 }

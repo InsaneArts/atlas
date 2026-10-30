@@ -5,6 +5,8 @@ extension StatusReading {
   public enum Reason: Equatable, Sendable {
     /// This viewer holds control.
     case yourControl
+    /// This viewer holds control while a command an agent started still runs.
+    case yourControlBesideCommand
     /// Another viewer holds control.
     case inUseElsewhere
     /// Idle, and no agent has acted yet.

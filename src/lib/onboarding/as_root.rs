@@ -1075,7 +1075,7 @@ mod tests {
 
     #[test]
     fn a_callers_death_does_not_release_a_paused_executors_claims() {
-        if !crate::transaction_test::isolated(
+        if !crate::test_support::isolated(
             "onboarding::as_root::tests::a_callers_death_does_not_release_a_paused_executors_claims",
         ) {
             return;
@@ -1083,18 +1083,16 @@ mod tests {
         use std::{process::Stdio, time::Duration};
         for mode in ["approval", "command"] {
             let dir = tempfile::tempdir().unwrap();
-            let mut caller = Command::new(std::env::current_exe().unwrap())
-                .args([
-                    "--exact",
-                    "onboarding::as_root::tests::a_privileged_executor_test_caller",
-                    "--nocapture",
-                ])
-                .env("ATLAS_EXECUTOR_TEST_DIRECTORY", dir.path())
-                .env("ATLAS_EXECUTOR_TEST_MODE", mode)
-                .stdout(Stdio::null())
-                .stderr(Stdio::null())
-                .spawn()
-                .unwrap();
+            let mut caller = crate::test_support::rerun(
+                "onboarding::as_root::tests::a_privileged_executor_test_caller",
+            )
+            .arg("--nocapture")
+            .env("ATLAS_EXECUTOR_TEST_DIRECTORY", dir.path())
+            .env("ATLAS_EXECUTOR_TEST_MODE", mode)
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .spawn()
+            .unwrap();
             let controller = crate::control::Controller::at(7001, &dir.path().join("state"));
             for _ in 0..500 {
                 if dir.path().join("paused").exists() {
@@ -1203,7 +1201,7 @@ mod tests {
 
     #[test]
     fn a_timed_out_executor_holds_control_and_claims_until_it_exits() {
-        if !crate::transaction_test::isolated(
+        if !crate::test_support::isolated(
             "onboarding::as_root::tests::a_timed_out_executor_holds_control_and_claims_until_it_exits",
         ) {
             return;

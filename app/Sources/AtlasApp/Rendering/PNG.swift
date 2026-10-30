@@ -39,7 +39,7 @@ enum PNG {
 
   /// The hosting view every render draws through: the shell's bare hosting view with the render switches set. A view
   /// is drawn once, before any animation runs, so arrivals are turned off and each view that plays one is drawn
-  /// settled; and AppKit draws nothing under the system glass, so glass is drawn as its material.
+  /// settled.
   ///
   /// - Parameter view: The SwiftUI view.
   /// - Returns: Its hosting view, ready to size and draw.
@@ -47,21 +47,21 @@ enum PNG {
     WindowShell.hostingView(
       view
         .environment(\.animatesArrivals, false)
-        .environment(\.drawsGlassEffect, false)
     )
   }
 
-  /// Draws `view` at `size`, in Atlas's dark appearance, to the PNG at `file`, through ``host(_:)``.
+  /// Draws `view` at `size`, in `appearance`, to the PNG at `file`, through ``host(_:)``.
   ///
   /// - Parameters:
   ///   - view: The SwiftUI view.
   ///   - size: Its window's size.
   ///   - file: Where the PNG goes.
+  ///   - appearance: The appearance to draw it in, light or dark.
   /// - Returns: Whether the PNG was written.
-  static func write(_ view: some View, size: NSSize, to file: URL) -> Bool {
+  static func write(_ view: some View, size: NSSize, to file: URL, appearance: NSAppearance?) -> Bool {
     let host = host(view)
     host.frame = NSRect(origin: .zero, size: size)
-    guard let appearance = Appearance.dark, let data = data(of: host, appearance: appearance) else {
+    guard let appearance, let data = data(of: host, appearance: appearance) else {
       return false
     }
     // The render reports a failed write as false; why it failed is not its concern.

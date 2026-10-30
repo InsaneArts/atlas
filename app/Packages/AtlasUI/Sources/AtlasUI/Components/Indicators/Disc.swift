@@ -92,7 +92,7 @@ struct Disc: View {
     case .mark: IconSize.sPlus
     case .regular: IconSize.m
     case .avatar: IconSize.xl
-    case .pairing: Layout.pairingSide
+    case .pairing: DiscLayout.pairingSide
     }
   }
 
@@ -101,7 +101,7 @@ struct Disc: View {
     case .accent: .accent
     case .accentSoft:
       Color.accent
-        .opacity(Layout.accentSoft)
+        .opacity(DiscLayout.accentSoft)
     case .neutral: .fillControl
     case .avatar: .fillAvatar
     case .success: .success
@@ -116,18 +116,10 @@ struct Disc: View {
     case .accentSoft: .accent
     case .neutral, .avatar: .textPrimary
     case .success: .onSuccess
-    case .attention: .ground
+    case .attention: .onAttention
     case .waiting: .textSecondary
     }
   }
-}
-
-/// The disc's own measures.
-private enum Layout {
-  /// 0.2: the soft accent under the person's own initial, stronger than a tint so it reads at disc size.
-  static let accentSoft = 0.2
-  /// 48: a pairing disc's side.
-  static let pairingSide: CGFloat = 48
 }
 
 #if DEBUG

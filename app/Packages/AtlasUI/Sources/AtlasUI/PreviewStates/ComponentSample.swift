@@ -3,8 +3,6 @@
   public enum ComponentSample: String, CaseIterable, Sendable {
     /// Every capsule button look, the alert's included.
     case capsuleButtons = "capsule-buttons"
-    /// The frosted captions over a picture.
-    case captionStack = "caption-stack"
     /// The status dot's marks.
     case statusDots = "status-dots"
     /// A chip floating over a picture.
@@ -17,8 +15,6 @@
     case pictureFrame = "picture-frame"
     /// The live corner picture.
     case miniScreen = "mini-screen"
-    /// A pane's title, count and tools.
-    case paneHeader = "pane-header"
     /// The search field.
     case searchField = "search-field"
     /// A group's label.
@@ -27,6 +23,23 @@
     case popupButton = "popup-button"
     /// The app icon at every supported tile size.
     case appIconTiles = "app-icon-tiles"
+    /// Apps' icons and the tiles drawn for apps without one, side by side at a row's and a card's size.
+    case appGlyph = "app-glyph"
+    /// The drawn tile in every tint, at a card's, a row's and a chip's size.
+    case monogramTints = "monogram-tints"
+    /// A tag in each tone.
+    case tagTones = "tag-tones"
+    /// What leads an action: an app, an app's tile, Atlas, the person and commands, at a moment's and a Recent row's
+    /// size.
+    case activityGlyphs = "activity-glyphs"
+    /// Soft keycaps alone and in chords.
+    case keycapsSoft = "keycaps-soft"
+    /// The Apps sample's cards in a grid, the front one raised, with their pictures, maps and tags.
+    case appCards = "app-cards"
+    /// Activity's steps of every kind and mark.
+    case activitySteps = "activity-steps"
+    /// Activity's moments, open, folded and held.
+    case activityMoments = "activity-moments"
     /// The account picture in its circle at each size.
     case accountPictureSizes = "account-picture-sizes"
     /// Choose's accounts in a grouped list, the new one picked.
@@ -46,8 +59,8 @@
     /// The heroes, success and problem.
     case heroDiscKinds = "hero-disc-kinds"
     /// The chips on the picture.
-    case glassChipKinds = "glass-chip-kinds"
-    /// The round glass buttons, by the capsule style.
+    case pictureChipKinds = "picture-chip-kinds"
+    /// The round buttons, by the capsule style.
     case capsuleButtonCircles = "capsule-button-circles"
     /// The viewer's actions, Keys and Stop in their slots.
     case actionSlotActions = "action-slot-actions"
@@ -57,11 +70,13 @@
     case symbolNames = "symbol-names"
     /// The tabs in a track by word and by symbol, and as symbols over words.
     case tabs
-    /// An inspector's facts and checks.
-    case facts
     /// Settings' sections: a name, rows of each kind, small print and the status lines under a group.
     case groupedSection = "grouped-section"
     /// The status pill in each tone.
     case statusPill = "status-pill"
+    /// The latest-action line, as each of three steps draws it.
+    case lineSwapLines = "line-swap-lines"
+    /// A session icon's badge, acting, waiting, needing the person and none.
+    case stateBadgeStates = "state-badge-states"
   }
 #endif

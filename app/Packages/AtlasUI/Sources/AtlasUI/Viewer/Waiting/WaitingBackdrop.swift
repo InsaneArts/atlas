@@ -32,21 +32,21 @@ struct WaitingBackdrop: View {
       .accessibilityHidden(true)
   }
 
-  /// The picture shrunk to ``Layout/sampleWidth`` pixels across at its own shape, which drawn back up to the stage's
+  /// The picture shrunk to ``WaitingBackdropLayout/sampleWidth`` pixels across at its own shape, which drawn back up to the stage's
   /// size reads as blurred.
   ///
   /// - Parameter image: The picture's pixels.
   /// - Returns: The shrunk picture; nil when it cannot be drawn.
   nonisolated static func softened(_ image: CGImage) -> CGImage? {
     guard image.width > 0, image.height > 0, let space = CGColorSpace(name: CGColorSpace.sRGB) else { return nil }
-    let width = Layout.sampleWidth
+    let width = WaitingBackdropLayout.sampleWidth
     let height = max(1, Int((Double(image.height) * Double(width) / Double(image.width)).rounded()))
     guard
       let context = CGContext(
         data: nil,
         width: width,
         height: height,
-        bitsPerComponent: Layout.bitsPerComponent,
+        bitsPerComponent: WaitingBackdropLayout.bitsPerComponent,
         bytesPerRow: 0,
         space: space,
         bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue
@@ -56,15 +56,6 @@ struct WaitingBackdrop: View {
     context.draw(image, in: CGRect(x: 0, y: 0, width: width, height: height))
     return context.makeImage()
   }
-}
-
-/// The backdrop's own measures.
-private enum Layout {
-  /// 48: how many pixels across the shrunk picture keeps, about one for every 30 points of a wide stage, so
-  /// drawn back up it blurs about as much as a 14-point blur.
-  static let sampleWidth = 48
-  /// 8: bits for each colour of a shrunk pixel.
-  static let bitsPerComponent = 8
 }
 
 #if DEBUG

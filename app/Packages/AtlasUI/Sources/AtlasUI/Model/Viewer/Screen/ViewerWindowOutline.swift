@@ -8,8 +8,8 @@ public struct ViewerWindowOutline: Equatable, Sendable {
   public var title: String
   /// The window's size in points, such as "520 × 860".
   public var size: String
-  /// The app's icon; nil draws none.
-  public var icon: IconImage?
+  /// The app's icon, or the tile drawn from its name; nil draws none.
+  public var icon: AppIconFace?
 
   /// Creates an outline.
   ///
@@ -18,7 +18,7 @@ public struct ViewerWindowOutline: Equatable, Sendable {
   ///   - title: The app and the window.
   ///   - size: The window's size in points.
   ///   - icon: The app's icon.
-  public init(frame: CGRect, title: String, size: String, icon: IconImage? = nil) {
+  public init(frame: CGRect, title: String, size: String, icon: AppIconFace? = nil) {
     self.frame = frame
     self.title = title
     self.size = size

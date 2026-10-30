@@ -99,7 +99,7 @@
     ///   - started: Whether the person pressed Get Started.
     /// - Returns: The snapshot.
     func loaded(_ facts: OnboardingFacts, started: Bool = false) -> OnboardingSnapshot {
-      var snapshot = OnboardingSnapshot(facts: facts, loaded: true)
+      var snapshot = OnboardingSnapshot(facts: facts, loaded: true, isOnConsole: true)
       snapshot.choices.started = started
       // The samples name the permissions as macOS 26 does.
       snapshot.macOS = OperatingSystemVersion(majorVersion: 26, minorVersion: 0, patchVersion: 0)

@@ -5,7 +5,7 @@
 //! password. `atlas doctor --login-timing` reads them back beside macOS's
 //! own milestones for the same login: loginwindow's, and those of the
 //! UserAccountUpdater macOS runs at a login to bring the account up to date.
-use crate::error::{Error, Result};
+use crate::error::{Code, Error, Result};
 use serde_json::{Value, json};
 use std::{collections::BTreeSet, process::Command, sync::OnceLock};
 
@@ -58,7 +58,7 @@ pub fn timing() -> Result<Value> {
         .output()?;
     if !output.status.success() {
         return Err(Error::new(
-            "io",
+            Code::Io,
             format!(
                 "macOS could not read its log: {}",
                 String::from_utf8_lossy(&output.stderr).trim()

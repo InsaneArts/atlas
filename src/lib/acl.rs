@@ -27,7 +27,7 @@ const ACL_WRITE_SECURITY: u64 = 1 << 12;
 const ACL_CHANGE_OWNER: u64 = 1 << 13;
 
 /// Data, append, delete, attribute, ACL and ownership writes.
-pub const WRITE_RIGHTS: u64 = ACL_WRITE_DATA
+pub(crate) const WRITE_RIGHTS: u64 = ACL_WRITE_DATA
     | ACL_DELETE
     | ACL_APPEND_DATA
     | ACL_DELETE_CHILD
@@ -50,12 +50,12 @@ unsafe extern "C" {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct Entry {
+pub(crate) struct Entry {
     pub allow: bool,
     pub mask: u64,
 }
 
-pub struct Acl(*mut c_void);
+pub(crate) struct Acl(*mut c_void);
 
 impl Drop for Acl {
     fn drop(&mut self) {
@@ -66,7 +66,7 @@ impl Drop for Acl {
 
 impl Acl {
     /// The extended ACL of `path` (following a final symlink), or None.
-    pub fn of_path(path: &Path) -> io::Result<Option<Self>> {
+    pub(crate) fn of_path(path: &Path) -> io::Result<Option<Self>> {
         let path = CString::new(path.as_os_str().as_bytes())
             .map_err(|_| io::Error::new(io::ErrorKind::InvalidInput, "Path contains NUL"))?;
         // SAFETY: NUL-terminated path and the documented extended ACL type.
@@ -74,7 +74,7 @@ impl Acl {
     }
 
     /// The extended ACL of an open file, or None.
-    pub fn of_file(file: &File) -> io::Result<Option<Self>> {
+    pub(crate) fn of_file(file: &File) -> io::Result<Option<Self>> {
         // SAFETY: the descriptor stays open for the duration of the call.
         Self::wrap(unsafe { acl_get_fd(file.as_raw_fd()) })
     }
@@ -93,14 +93,14 @@ impl Acl {
         }
     }
 
-    pub fn is_valid(&self) -> bool {
+    pub(crate) fn is_valid(&self) -> bool {
         // SAFETY: live ACL handle.
         unsafe { acl_valid(self.0) == 0 }
     }
 
     /// Every entry. Only the end of the list (EINVAL from the next entry)
     /// ends it; any other failure is an error, never a shorter list.
-    pub fn entries(&self) -> io::Result<Vec<Entry>> {
+    pub(crate) fn entries(&self) -> io::Result<Vec<Entry>> {
         let mut entries = Vec::new();
         let mut index = ACL_FIRST_ENTRY;
         let mut entry = std::ptr::null_mut();
@@ -137,7 +137,7 @@ impl Acl {
     }
 
     /// Text form, one `user:UUID:name:id:allow|deny:rights` line per entry.
-    pub fn text(&self) -> io::Result<String> {
+    pub(crate) fn text(&self) -> io::Result<String> {
         // SAFETY: live ACL handle; the returned string is freed with acl_free.
         let text = unsafe { acl_to_text(self.0, std::ptr::null_mut()) };
         if text.is_null() {
@@ -157,7 +157,7 @@ impl Acl {
 }
 
 /// Whether `path` carries any extended ACL entry; an invalid ACL is an error.
-pub fn present(path: &Path) -> io::Result<bool> {
+pub(crate) fn present(path: &Path) -> io::Result<bool> {
     match Acl::of_path(path)? {
         None => Ok(false),
         Some(acl) if acl.is_valid() => Ok(!acl.entries()?.is_empty()),
@@ -167,7 +167,7 @@ pub fn present(path: &Path) -> io::Result<bool> {
 
 /// Whether any extended ACL entry on `path` allows a write; deny entries are
 /// harmless. An invalid ACL is an error.
-pub fn allows_write(path: &Path) -> io::Result<bool> {
+pub(crate) fn allows_write(path: &Path) -> io::Result<bool> {
     match Acl::of_path(path)? {
         None => Ok(false),
         Some(acl) if acl.is_valid() => Ok(acl
@@ -183,7 +183,7 @@ fn invalid() -> io::Error {
 }
 
 /// Replace an open file's extended ACL with an empty one.
-pub fn clear(file: &File) -> io::Result<()> {
+pub(crate) fn clear(file: &File) -> io::Result<()> {
     // SAFETY: acl_init returns an owned handle, freed by Acl's Drop.
     let empty = Acl::wrap(unsafe { acl_init(0) })?
         .ok_or_else(|| io::Error::other("Could not allocate an ACL"))?;

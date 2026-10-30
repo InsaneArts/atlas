@@ -4,7 +4,8 @@ import SwiftUI
 /// curves for changes that should settle without bounce. Under Reduce Motion an animation becomes ``reduced``
 /// through ``animation(_:reduceMotion:reduced:)``, a moving transition becomes a fade through
 /// ``transition(_:reduceMotion:)``, and a loop stops through ``loops(reduceMotion:)``: colour and opacity
-/// changes of at most 0.2 seconds are kept, and movement, scale, blur and loops are dropped.
+/// changes of at most 0.2 seconds are kept, and movement, scale, blur and loops are dropped. Every animation runs
+/// through ``paced(_:)``, so a debug build can play them all slower.
 public enum Motion {
   /// One step of the duration scale, shortest first. Its initializer is private, so only the scale's steps exist; an
   /// AppKit animation reads ``seconds``. Steps that play different roles may share a length.
@@ -59,8 +60,11 @@ public enum Motion {
     /// 0.2: the fade every transition takes under Reduce Motion, the maximum duration retained for reduced
     /// motion.
     static let reduced = Duration(seconds: 0.2)
-    /// 0.2: the menu bar badge's colour and shape crossfading from one state to the next.
+    /// 0.2: a badge's colour and shape crossfading from one state to the next, the menu bar's and a session's.
     public static let crossfade = Duration(seconds: 0.2)
+    /// 0.2: how long a list's rows take to make room before what comes into it fades in, by when a spring with no
+    /// bounce has gone nine tenths of the way.
+    static let makeRoom = Duration(seconds: 0.2)
     /// 0.25: the menu bar orbit's dim fading in or out.
     public static let dim = Duration(seconds: 0.25)
     /// 0.25: a window's height easing to fit its pane on ``Motion/resizeCurve``, its top edge fixed;
@@ -83,6 +87,9 @@ public enum Motion {
     /// 0.6: the least time work shows once it shows, such as a check: shorter reads as a flicker, and 0.6 seconds
     /// reads as "it checked". A controller waits it on its injected clock.
     public static let leastWork = Duration(seconds: 0.6)
+    /// 0.6: the least time a line of words stays once it starts to show before the next replaces it, such as the
+    /// latest action under the helper's screen, so a burst of changes reads as a few calm lines, not a flicker.
+    static let lineHold = Duration(seconds: 0.6)
     /// 0.7: how long a done alert stays, its check and Recovered showing, before it closes.
     public static let doneHold = Duration(seconds: 0.7)
     /// 0.8: one breath of a status dot.
@@ -111,9 +118,7 @@ public enum Motion {
     static let pop = Spring(duration: 0.35, bounce: 0.15)
     /// A success tile settling into place: 0.5 seconds, bounce 0.2.
     static let settle = Spring(duration: 0.5, bounce: 0.2)
-    /// A tab's thumb gliding to the tab chosen: 0.25 seconds, no bounce.
-    static let tab = Spring(duration: 0.25, bounce: 0)
-    /// A side column sliding in: 0.35 seconds, no bounce (``Motion/slide``).
+    /// A side column sliding in or out: 0.35 seconds, no bounce (``Motion/slide``).
     static let slide = Spring(duration: 0.35, bounce: 0)
     /// A window or a pane changing height: 0.25 seconds, no bounce.
     static let resize = Spring(duration: 0.25, bounce: 0)
@@ -136,46 +141,46 @@ public enum Motion {
   public static let resizeCurve = (x1: Float(0.25), y1: Float(0.1), x2: Float(0.25), y2: Float(1))
 
   /// A text link's press: ease out over ``Duration/press``.
-  static var press: Animation { .easeOut(duration: Duration.press.seconds) }
+  static var press: Animation { paced(.easeOut(duration: Duration.press.seconds)) }
 
   /// A button's pressed fill easing back once it is let go: ease out over ``Duration/pressRelease``.
-  static var pressRelease: Animation { .easeOut(duration: Duration.pressRelease.seconds) }
+  static var pressRelease: Animation { paced(.easeOut(duration: Duration.pressRelease.seconds)) }
 
   /// Something coming back to rest with no bounce: ``Springs/release``.
-  static var release: Animation { .spring(Springs.release) }
+  static var release: Animation { paced(.spring(Springs.release)) }
 
   /// A tint, a rim, a colour or a row moving to its new state: ``Springs/state``.
-  static var state: Animation { .spring(Springs.state) }
+  static var state: Animation { paced(.spring(Springs.state)) }
 
   /// A chip, a row, a slot or a toast appearing: ``Springs/arrive``.
-  static var arrive: Animation { .spring(Springs.arrive) }
+  static var arrive: Animation { paced(.spring(Springs.arrive)) }
 
   /// The same leaving: ease in over ``Duration/leave``.
-  static var leave: Animation { .easeIn(duration: Duration.leave.seconds) }
+  static var leave: Animation { paced(.easeIn(duration: Duration.leave.seconds)) }
 
   /// A check, a badge or a symbol popping in: ``Springs/pop``.
-  static var pop: Animation { .spring(Springs.pop) }
+  static var pop: Animation { paced(.spring(Springs.pop)) }
 
   /// A success tile settling from 92% into place: ``Springs/settle``.
-  static var settle: Animation { .spring(Springs.settle) }
+  static var settle: Animation { paced(.spring(Springs.settle)) }
 
   /// A step's number shrinking away as the step finishes: ease out over ``Duration/step``. It scales, so
   /// under Reduce Motion a view passes it through ``animation(_:reduceMotion:reduced:)``.
-  static var stepOut: Animation { .easeOut(duration: Duration.step.seconds) }
+  static var stepOut: Animation { paced(.easeOut(duration: Duration.step.seconds)) }
 
-  /// A step lighting up as the one before it finishes: ``state``, after ``Duration/step``.
+  /// A step lighting up as the one before it finishes: ``Springs/state``, after ``Duration/step``.
   static var stepLight: Animation {
-    state.delay(Duration.step.seconds)
+    paced(
+      .spring(Springs.state)
+        .delay(Duration.step.seconds)
+    )
   }
 
-  /// A tab's thumb gliding to the tab chosen: ``Springs/tab``.
-  static var tab: Animation { .spring(Springs.tab) }
-
   /// A window or a pane changing height: ``Springs/resize``.
-  static var resize: Animation { .spring(Springs.resize) }
+  static var resize: Animation { paced(.spring(Springs.resize)) }
 
   /// A screenshot zooming, or the screen turning into the small screen: ``Springs/zoom``.
-  static var zoom: Animation { .spring(Springs.zoom) }
+  static var zoom: Animation { paced(.spring(Springs.zoom)) }
 
   /// A hover fill or reveal: ease out over ``Duration/hoverIn`` as the pointer arrives and over ``Duration/hoverOut``
   /// as it leaves. Only colour and opacity change on hover, so Reduce Motion keeps it.
@@ -183,103 +188,148 @@ public enum Motion {
   /// - Parameter isHovered: Whether the pointer is over the view now.
   /// - Returns: The animation for the change to `isHovered`.
   static func hover(_ isHovered: Bool) -> Animation {
-    .easeOut(duration: (isHovered ? Duration.hoverIn : Duration.hoverOut).seconds)
+    paced(.easeOut(duration: (isHovered ? Duration.hoverIn : Duration.hoverOut).seconds))
   }
 
   /// A check drawing itself: ease out over ``Duration/draw``, after ``Duration/drawDelay``, so its disc lands first.
   /// It moves along a stroke, so under Reduce Motion the check appears whole instead.
   static var draw: Animation {
-    .easeOut(duration: Duration.draw.seconds)
-      .delay(Duration.drawDelay.seconds)
+    paced(
+      .easeOut(duration: Duration.draw.seconds)
+        .delay(Duration.drawDelay.seconds)
+    )
   }
 
   /// Something waiting to show, such as a spinner: a fade over ``Duration/fade`` after
   /// ``Duration/appearDelay``, so a quick answer never flashes it. Only opacity changes, so Reduce Motion
   /// keeps it.
   static var appear: Animation {
-    .easeOut(duration: Duration.fade.seconds)
-      .delay(Duration.appearDelay.seconds)
+    paced(
+      .easeOut(duration: Duration.fade.seconds)
+        .delay(Duration.appearDelay.seconds)
+    )
   }
 
   /// A working note showing: a fade over ``Duration/fade`` after ``Duration/noteDelay``, so work that ends sooner
   /// never flashes it. Only opacity changes, so Reduce Motion keeps it.
   static var noteAppear: Animation {
-    .easeOut(duration: Duration.fade.seconds)
-      .delay(Duration.noteDelay.seconds)
+    paced(
+      .easeOut(duration: Duration.fade.seconds)
+        .delay(Duration.noteDelay.seconds)
+    )
   }
 
   /// An alert or a caption leaving: ease in over ``Duration/dismiss``. An alert shrinks as it fades, so under
   /// Reduce Motion it becomes ``reduced``.
-  static var dismiss: Animation { .easeIn(duration: Duration.dismiss.seconds) }
+  static var dismiss: Animation { paced(.easeIn(duration: Duration.dismiss.seconds)) }
 
   /// A pane leaving as another takes its place, such as the small screen's: ease in over
   /// ``Duration/crossfadeOut``.
-  static var crossfadeOut: Animation { .easeIn(duration: Duration.crossfadeOut.seconds) }
+  static var crossfadeOut: Animation { paced(.easeIn(duration: Duration.crossfadeOut.seconds)) }
+
+  /// A list's rows moving to their new places, once the rows leaving it have faded on ``swapOut``: ``Springs/state``,
+  /// after ``Duration/swapOut``, so a row moving never passes over one still fading.
+  static var listMove: Animation {
+    paced(
+      .spring(Springs.state)
+        .delay(Duration.swapOut.seconds)
+    )
+  }
+
+  /// A row coming into a list once the rows moving have made room for it (``listMove``): ease out over
+  /// ``Duration/swapIn``, after ``Duration/swapOut`` and ``Duration/makeRoom``, so it never fades in under a row still
+  /// moving.
+  static var listIn: Animation {
+    paced(
+      .easeOut(duration: Duration.swapIn.seconds)
+        .delay(Duration.swapOut.seconds + Duration.makeRoom.seconds)
+    )
+  }
+
+  /// Words fading in where others have just faded out on ``swapOut``: ease out over ``Duration/swapIn``, after
+  /// ``Duration/swapOut``, so the two are never drawn together. Only opacity changes, so Reduce Motion keeps it.
+  static var swapInAfterOut: Animation {
+    paced(
+      .easeOut(duration: Duration.swapIn.seconds)
+        .delay(Duration.swapOut.seconds)
+    )
+  }
 
   /// A tab's pane arriving over the last: ease out over ``Duration/swapIn``, at once.
-  static var swapIn: Animation { .easeOut(duration: Duration.swapIn.seconds) }
+  static var swapIn: Animation { paced(.easeOut(duration: Duration.swapIn.seconds)) }
 
   /// A tab's pane leaving as another arrives: ease in over ``Duration/swapOut``.
-  static var swapOut: Animation { .easeIn(duration: Duration.swapOut.seconds) }
+  static var swapOut: Animation { paced(.easeIn(duration: Duration.swapOut.seconds)) }
 
   /// A setup page arriving over the last: ease out over ``Duration/pageIn``, at once.
-  static var pageIn: Animation { .easeOut(duration: Duration.pageIn.seconds) }
+  static var pageIn: Animation { paced(.easeOut(duration: Duration.pageIn.seconds)) }
 
   /// A setup page leaving as the next arrives: ease in over ``Duration/pageOut``.
-  static var pageOut: Animation { .easeIn(duration: Duration.pageOut.seconds) }
+  static var pageOut: Animation { paced(.easeIn(duration: Duration.pageOut.seconds)) }
 
   /// A choice's mark filling or emptying, such as a radio's: ease out over ``Duration/hoverIn``. Only colour and
   /// opacity change, so Reduce Motion keeps it.
-  static var markFill: Animation { .easeOut(duration: Duration.hoverIn.seconds) }
+  static var markFill: Animation { paced(.easeOut(duration: Duration.hoverIn.seconds)) }
 
   /// Changing words swapping in place: ease out over ``Duration/textSwap``. Only opacity changes, so
   /// Reduce Motion keeps it.
-  static var textSwap: Animation { .easeOut(duration: Duration.textSwap.seconds) }
+  static var textSwap: Animation { paced(.easeOut(duration: Duration.textSwap.seconds)) }
 
   /// A pane's crossfade under Reduce Motion, both ways: ease out over ``Duration/crossfadeReduced``.
-  static var crossfadeReduced: Animation { .easeOut(duration: Duration.crossfadeReduced.seconds) }
+  static var crossfadeReduced: Animation { paced(.easeOut(duration: Duration.crossfadeReduced.seconds)) }
 
   /// A fade: ease out over ``Duration/fade``.
-  static var fade: Animation { .easeOut(duration: Duration.fade.seconds) }
+  static var fade: Animation { paced(.easeOut(duration: Duration.fade.seconds)) }
+
+  /// A badge's colours crossfading from one state to the next: ease out over ``Duration/crossfade``. Only colour
+  /// changes, so Reduce Motion keeps it.
+  static var crossfade: Animation { paced(.easeOut(duration: Duration.crossfade.seconds)) }
 
   /// A dot breathing in and out for as long as it shows.
   static var pulse: Animation {
-    .easeInOut(duration: Duration.pulse.seconds)
-      .repeatForever(autoreverses: true)
+    paced(
+      .easeInOut(duration: Duration.pulse.seconds)
+        .repeatForever(autoreverses: true)
+    )
   }
 
   /// A mark breathing in and out for as long as it shows, one breath in and out over ``Duration/breathe``,
   /// each way half of it. A loop, so only where ``loops(reduceMotion:)`` allows.
   static var breathe: Animation {
-    .easeInOut(duration: Duration.breathe.seconds / 2)
-      .repeatForever(autoreverses: true)
+    paced(
+      .easeInOut(duration: Duration.breathe.seconds / 2)
+        .repeatForever(autoreverses: true)
+    )
   }
 
   /// A ring tracing round a mark for as long as it shows, one linear turn over ``Duration/trace``. A loop, so
   /// only where ``loops(reduceMotion:)`` allows.
   static var trace: Animation {
-    .linear(duration: Duration.trace.seconds)
-      .repeatForever(autoreverses: false)
+    paced(
+      .linear(duration: Duration.trace.seconds)
+        .repeatForever(autoreverses: false)
+    )
   }
 
   /// The spinner turning for as long as it shows.
   static var spin: Animation {
-    .linear(duration: Duration.spin.seconds)
-      .repeatForever(autoreverses: false)
+    paced(
+      .linear(duration: Duration.spin.seconds)
+        .repeatForever(autoreverses: false)
+    )
   }
 
-  /// A side column sliding in, such as the viewer's Details: ``Springs/slide``, a spring with no bounce that
-  /// turns back from where it is when asked to reverse mid-way. The same curve as the response-0.35,
-  /// damping-1 spring it replaced.
-  static var slide: Animation { .spring(Springs.slide) }
+  /// The sidebar hiding and showing again: ``Springs/slide``, a spring with no bounce that turns back from where it is
+  /// when asked to reverse mid-way. The same curve as the response-0.35, damping-1 spring it replaced.
+  static var slide: Animation { paced(.spring(Springs.slide)) }
 
   /// A position indicator moving, such as the page dots: ``Springs/indicator``, with no bounce.
-  static var indicator: Animation { .spring(Springs.indicator) }
+  static var indicator: Animation { paced(.spring(Springs.indicator)) }
 
   /// The shared fade for transitions under Reduce Motion: ease out over ``Duration/reduced``, with no
   /// movement. Callers can choose a fallback through ``animation(_:reduceMotion:)`` or
   /// ``animation(_:reduceMotion:reduced:)``.
-  static var reduced: Animation { .easeOut(duration: Duration.reduced.seconds) }
+  static var reduced: Animation { paced(.easeOut(duration: Duration.reduced.seconds)) }
 
   /// An animation, or none under Reduce Motion, so the change happens at once.
   ///
@@ -288,7 +338,7 @@ public enum Motion {
   ///   - reduceMotion: Whether the Reduce Motion setting is on.
   /// - Returns: `base`, or `nil` under Reduce Motion.
   static func animation(_ base: Animation, reduceMotion: Bool) -> Animation? {
-    reduceMotion ? nil : base
+    layout(base, reduceMotion: reduceMotion)
   }
 
   /// An animation, or a gentler one under Reduce Motion, such as ``reduced`` in place of a spring.

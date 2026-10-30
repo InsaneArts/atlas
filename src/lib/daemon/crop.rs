@@ -2,7 +2,7 @@
 //! with a small margin, or a region cut to the display.
 use crate::{
     daemon::protocol::Region,
-    native::windows::{Bounds, MENU_BAR_LAYER, Window},
+    native::windows::{Bounds, Dock, MENU_BAR_LAYER, Window},
 };
 
 /// Points of the display shown around an app's windows, so their edges and
@@ -59,9 +59,10 @@ pub fn clamp(region: Region, display: &Region) -> Option<Region> {
 }
 
 /// The crop showing every on-screen window of `pid`, and the windows of
-/// others in front of them inside it; None when it has no window on screen.
-/// `windows` is front to back, in display points.
-pub fn app(windows: &[Window], pid: i64, display: &Region) -> Option<AppCrop> {
+/// others in front of them inside it, the parts of the Dock that take
+/// clicks among them; None when it has no window on screen. `windows` is
+/// front to back, in display points.
+pub fn app(windows: &[Window], pid: i64, display: &Region, dock: &Dock) -> Option<AppCrop> {
     let screen = bounds(display);
     let strips: Vec<&Bounds> = windows
         .iter()
@@ -115,25 +116,33 @@ pub fn app(windows: &[Window], pid: i64, display: &Region) -> Option<AppCrop> {
         height: (bottom - top) as i32,
     };
     let area = bounds(&region);
-    let overlay = |window: &Window| {
-        window.bounds.covers(&screen)
-            && matches!(
-                window.owner.as_deref(),
-                Some("Dock" | "Notification Center")
-            )
+    let overlay = |window: &Window| window.passes_through(&screen);
+    let in_front = || {
+        windows[..back]
+            .iter()
+            .filter(|window| window.pid != pid && window.alpha > 0.0)
     };
-    let overlapping = windows[..back]
-        .iter()
+    let mut overlapping: Vec<Window> = in_front()
         .filter(|window| {
-            window.pid != pid
-                && window.alpha > 0.0
-                && window.layer != MENU_BAR_LAYER
+            window.layer != MENU_BAR_LAYER
                 && !in_menu_bar(window)
                 && !overlay(window)
                 && window.bounds.intersects(&area)
         })
         .cloned()
         .collect();
+    // The Dock's full-display window lets clicks through but for where it
+    // takes them: those parts of it are in front of the app.
+    for window in in_front().filter(|window| overlay(window) && window.is_dock()) {
+        for part in dock.areas(&window.bounds) {
+            if part.intersects(&area) {
+                overlapping.push(Window {
+                    bounds: part,
+                    ..window.clone()
+                });
+            }
+        }
+    }
 
     Some(AppCrop {
         region,
@@ -152,6 +161,50 @@ mod tests {
         width: 1000,
         height: 800,
     };
+
+    /// A Dock showing no icons, which takes no clicks.
+    const NO_DOCK: Dock = Dock::Icons(Vec::new());
+
+    /// The parts of the Dock that take clicks are in front of an app's
+    /// windows under them; one that could not be read is in front all over.
+    #[test]
+    fn the_dock_is_overlapping_where_it_takes_clicks() {
+        let mut dock = window(3, 20, 0.0, 0.0, 1000.0, 800.0);
+        dock.owner = Some("Dock".into());
+        let windows = [dock, window(7, 0, 100.0, 600.0, 400.0, 180.0)];
+        let icons = |x| {
+            Dock::Icons(vec![Bounds {
+                x,
+                y: 740.0,
+                width: 300.0,
+                height: 60.0,
+            }])
+        };
+
+        let over = app(&windows, 7, &DISPLAY, &icons(200.0)).unwrap();
+        let parts: Vec<_> = over
+            .overlapping
+            .iter()
+            .map(|window| &window.bounds)
+            .collect();
+        assert_eq!(over.overlapping.len(), 1);
+        assert_eq!(over.overlapping[0].owner.as_deref(), Some("Dock"));
+        assert!(parts[0].covers(&Bounds {
+            x: 200.0,
+            y: 740.0,
+            width: 300.0,
+            height: 60.0
+        }));
+
+        let aside = app(&windows, 7, &DISPLAY, &icons(650.0)).unwrap();
+        assert!(aside.overlapping.is_empty(), "{:?}", aside.overlapping);
+
+        for unknown in [Dock::Other, Dock::Unread] {
+            let all = app(&windows, 7, &DISPLAY, &unknown).unwrap();
+            assert_eq!(all.overlapping.len(), 1, "{unknown:?}");
+            assert_eq!(all.overlapping[0].bounds, windows[0].bounds);
+        }
+    }
 
     fn window(pid: i64, layer: i64, x: f64, y: f64, width: f64, height: f64) -> Window {
         Window {
@@ -193,7 +246,7 @@ mod tests {
             window(7, 0, 300.0, 200.0, 400.0, 300.0),
             window(8, 0, 0.0, 0.0, 1000.0, 800.0),
         ];
-        let crop = app(&windows, 7, &DISPLAY).unwrap();
+        let crop = app(&windows, 7, &DISPLAY, &NO_DOCK).unwrap();
 
         assert_eq!(crop.region, region(92, 92, 616, 416));
         assert_eq!(crop.name.as_deref(), Some("App 7"));
@@ -207,7 +260,7 @@ mod tests {
                 window(7, layer, x, y, 100.0, 100.0),
                 window(7, 0, 200.0, 200.0, 200.0, 200.0),
             ];
-            let crop = app(&windows, 7, &DISPLAY).unwrap();
+            let crop = app(&windows, 7, &DISPLAY, &NO_DOCK).unwrap();
             let shown = bounds(&crop.region);
 
             assert!(shown.covers(&windows[0].bounds), "layer {layer}");
@@ -219,7 +272,7 @@ mod tests {
             window(7, 101, 210.0, 24.0, 180.0, 400.0),
             window(7, 0, 200.0, 200.0, 200.0, 100.0),
         ];
-        let crop = app(&windows, 7, &DISPLAY).unwrap();
+        let crop = app(&windows, 7, &DISPLAY, &NO_DOCK).unwrap();
         assert_eq!(
             crop.region,
             region(192, 16, 216, 416),
@@ -230,7 +283,7 @@ mod tests {
     #[test]
     fn a_crop_never_leaves_the_display() {
         let windows = [window(7, 0, -200.0, 700.0, 500.0, 300.0)];
-        let crop = app(&windows, 7, &DISPLAY).unwrap();
+        let crop = app(&windows, 7, &DISPLAY, &NO_DOCK).unwrap();
 
         assert_eq!(crop.region, region(0, 692, 308, 108));
     }
@@ -238,7 +291,7 @@ mod tests {
     #[test]
     fn fractional_bounds_widen_to_whole_points() {
         let windows = [window(7, 0, 100.5, 100.25, 200.25, 100.5)];
-        let crop = app(&windows, 7, &DISPLAY).unwrap();
+        let crop = app(&windows, 7, &DISPLAY, &NO_DOCK).unwrap();
 
         assert_eq!(crop.region, region(92, 92, 217, 117));
     }
@@ -250,10 +303,14 @@ mod tests {
             menu_bar(),
             window(7, 0, 100.0, 100.0, 200.0, 200.0),
         ];
-        let crop = app(&windows, 7, &DISPLAY).unwrap();
+        let crop = app(&windows, 7, &DISPLAY, &NO_DOCK).unwrap();
 
         assert_eq!(crop.region, region(92, 92, 216, 216));
-        assert_eq!(app(&windows[..2], 7, &DISPLAY), None, "only a status item");
+        assert_eq!(
+            app(&windows[..2], 7, &DISPLAY, &NO_DOCK),
+            None,
+            "only a status item"
+        );
     }
 
     #[test]
@@ -266,7 +323,7 @@ mod tests {
             window(7, 0, 500.0, 500.0, 0.5, 40.0),
             window(7, 0, 100.0, 100.0, 200.0, 200.0),
         ];
-        let crop = app(&windows, 7, &DISPLAY).unwrap();
+        let crop = app(&windows, 7, &DISPLAY, &NO_DOCK).unwrap();
 
         assert_eq!(crop.region, region(92, 92, 216, 216));
     }
@@ -276,9 +333,9 @@ mod tests {
         let off = window(7, 0, 1200.0, 900.0, 300.0, 300.0);
         let others = window(8, 0, 100.0, 100.0, 300.0, 300.0);
 
-        assert_eq!(app(&[], 7, &DISPLAY), None);
-        assert_eq!(app(&[off, others.clone()], 7, &DISPLAY), None);
-        assert_eq!(app(&[menu_bar(), others], 7, &DISPLAY), None);
+        assert_eq!(app(&[], 7, &DISPLAY, &NO_DOCK), None);
+        assert_eq!(app(&[off, others.clone()], 7, &DISPLAY, &NO_DOCK), None);
+        assert_eq!(app(&[menu_bar(), others], 7, &DISPLAY, &NO_DOCK), None);
     }
 
     #[test]
@@ -307,7 +364,7 @@ mod tests {
             window(7, 0, 950.0, 30.0, 50.0, 50.0),
             window(8, 0, 150.0, 150.0, 100.0, 100.0),
         ];
-        let crop = app(&windows, 7, &DISPLAY).unwrap();
+        let crop = app(&windows, 7, &DISPLAY, &NO_DOCK).unwrap();
         let owners: Vec<_> = crop
             .overlapping
             .iter()

@@ -46,7 +46,7 @@ struct Headline: View {
     HeightBudget(height: Self.budget(hasTail: tail != nil)) {
       ViewThatFits(in: .vertical) {
         pair(.title, lines: nil)
-        pair(.title3, lines: Layout.steppedLines)
+        pair(.title3, lines: HeadlineLayout.steppedLines)
           // Its own height, past the budget, for a name that takes all three lines.
           .fixedSize(horizontal: false, vertical: true)
       }
@@ -97,21 +97,9 @@ struct Headline: View {
   /// - Parameter hasTail: Whether the title has a tail.
   /// - Returns: The height in points.
   nonisolated static func budget(hasTail: Bool) -> CGFloat {
-    let lines = Layout.titleLines + (hasTail ? 1 : 0)
-    return (CGFloat(lines) + Layout.spareLine) * Layout.titleLineHeight
+    let lines = HeadlineLayout.titleLines + (hasTail ? 1 : 0)
+    return (CGFloat(lines) + HeadlineLayout.spareLine) * HeadlineLayout.titleLineHeight
   }
-}
-
-/// The title sizes tried in order to fit the available width.
-private enum Layout {
-  /// 2: the most lines a statement takes at 24 points.
-  static let titleLines = 2
-  /// 3: the most lines each of statement and tail takes at 20 points, cut in the middle past them.
-  static let steppedLines = 3
-  /// 0.5: the part of a line the budget spares.
-  static let spareLine: CGFloat = 0.5
-  /// 29: one line at 24 points (``TextStyle/title``'s line height).
-  static let titleLineHeight = TextStyle.title.lineHeight ?? TextStyle.title.pointSize
 }
 
 #if DEBUG

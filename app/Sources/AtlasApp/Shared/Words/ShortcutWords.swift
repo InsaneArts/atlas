@@ -12,21 +12,17 @@ enum ShortcutWords {
   static let pausePicture = help(Words.pausePictureItem, "⇧⌘P")
   /// Resume Picture (⇧⌘P).
   static let resumePicture = help(Words.resumePictureItem, "⇧⌘P")
-  /// Show Details (⌥⌘I).
-  static let showDetails = help(ViewerWords.showDetailsItem, "⌥⌘I")
-  /// Hide Details (⌥⌘I).
-  static let hideDetails = help(ViewerWords.hideDetailsItem, "⌥⌘I")
   /// Take Control (⌃⇧⎋).
   static let takeControl = help(ViewerWords.takeControl, KeyMap.releaseSymbols)
   /// Give Back Control (⌃⇧⎋).
   static let giveBack = help(ViewerWords.giveBackItem, KeyMap.releaseSymbols)
 
-  /// A tab's tooltip: its word and its View menu shortcut.
+  /// A place's tooltip: its word and its View menu shortcut.
   ///
-  /// - Parameter tab: The tab.
+  /// - Parameter place: The place.
   /// - Returns: "Screen (⌘1)".
-  static func tab(_ tab: ViewerTab) -> String {
-    help(ViewerWords.tab(tab), "⌘\(tab.menuTag + 1)")
+  static func place(_ place: ViewerPlace) -> String {
+    help(ViewerWords.place(place), "⌘\(place.menuTag + 1)")
   }
 
   /// A menu item's title with its shortcut after it.

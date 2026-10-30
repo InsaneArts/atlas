@@ -31,7 +31,7 @@ public struct StillPicture: View {
         ViewerLivePicture(
           picture: picture,
           saturation: PictureTreatment.saturation(for: .paused),
-          corner: Radius.large
+          corner: ViewerLayout.screenRadius
         )
       )
       .frame(width: SampleWidth.column * 2)

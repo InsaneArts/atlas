@@ -18,7 +18,7 @@ struct StepRow: View {
   /// Whether a step follows, which the rail runs down to.
   var continues = false
   @Environment(\.drawsListSeparator) private var drawsSeparator
-  @Environment(\.accessibilityReduceMotion) private var reduceMotion
+  @Environment(\.motionReduced) private var reduceMotion
 
   /// The disc and the words, on the current step's wash, with the rail through the disc's column.
   var body: some View {
@@ -32,19 +32,20 @@ struct StepRow: View {
           .textStyle(.callout)
           .foregroundStyle(Color.textSecondary)
       }
-      .lineLimit(Layout.lines)
+      .lineLimit(StepRowLayout.lines)
       .truncationMode(.middle)
       .frame(maxWidth: .infinity, alignment: .leading)
     }
     .padding(.horizontal, Spacing.mPlus)
     .padding(.vertical, Spacing.sPlus)
-    .frame(minHeight: Layout.height)
+    .frame(minHeight: StepRowLayout.height)
     .background(state == .current ? Color.accentWash : .clear)
     .overlay(alignment: .leading) { rail }
     .overlay(alignment: .top) {
       if drawsSeparator {
         SeparatorLine()
-          .padding(.leading, Layout.separatorInset)
+          .padding(.leading, StepRowLayout.separatorInset)
+          .padding(.trailing, Spacing.mPlus)
       }
     }
     .animation(Self.animation(for: state, reduceMotion: reduceMotion), value: state)
@@ -66,7 +67,7 @@ struct StepRow: View {
         .fill(continues ? Self.railColor(state) : .clear)
     }
     .frame(width: Stroke.emphasis)
-    .padding(.leading, Layout.railInset)
+    .padding(.leading, StepRowLayout.railInset)
     .accessibilityHidden(true)
   }
 
@@ -90,19 +91,6 @@ struct StepRow: View {
     let moving = state == .current ? Motion.stepLight : Motion.state
     return Motion.animation(moving, reduceMotion: reduceMotion, reduced: Motion.reduced)
   }
-}
-
-/// The step row's own measures.
-private enum Layout {
-  /// 48: a setup list's row.
-  static let height: CGFloat = 48
-  /// 2: the most lines its title or detail takes, a long name cut in its middle.
-  static let lines = 2
-  /// 50: where the separator above a step starts, past the disc.
-  static let separatorInset: CGFloat = 50
-  /// 24.25: the rail's leading edge, so its 1.5 points centre on the disc: the row's 14 inset plus half the disc,
-  /// less half the rail.
-  static let railInset = Spacing.mPlus + StepDisc.side / 2 - Stroke.emphasis / 2
 }
 
 #if DEBUG

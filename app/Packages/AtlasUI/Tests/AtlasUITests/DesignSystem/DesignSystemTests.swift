@@ -4,7 +4,9 @@ import Testing
 
 @testable import AtlasUI
 
+// On the main actor: a colour that follows the appearance resolves through AppKit, which answers on the main thread.
 @Suite("Design system")
+@MainActor
 struct DesignSystemTests {
   /// The spacing scale, smallest first.
   private static let spacing: [CGFloat] = [
@@ -152,7 +154,11 @@ struct DesignSystemTests {
   @Test("every shadow is drawn in one of the shadow colours")
   func shadowsUseTheShadowColours() {
     for level in Elevation.allCases {
-      #expect([Color.dropShadowSoft, Color.dropShadow, Color.dropShadowStrong].contains(level.color), "\(level)")
+      #expect(
+        [Color.dropShadowSelection, Color.dropShadowSoft, Color.dropShadow, Color.dropShadowStrong]
+          .contains(level.color),
+        "\(level)"
+      )
     }
   }
 
@@ -161,32 +167,32 @@ struct DesignSystemTests {
     let shadows = Elevation.allCases
       .map(\.radius)
     let steps =
-      [Radius.extraSmall, Radius.small, Radius.medium, Radius.large, Radius.extraLarge]
+      [Radius.extraSmall, Radius.small, Radius.medium, Radius.large, Radius.extraLarge, Radius.window]
       + [IconSize.xxs, IconSize.xs, IconSize.xsPlus, IconSize.s, IconSize.sPlus, IconSize.m]
-      + [IconSize.mPlus, IconSize.l, IconSize.xl, IconSize.xxl]
+      + [IconSize.mPlus, IconSize.l, IconSize.xl, IconSize.xlPlus, IconSize.xxl]
       + shadows
     for step in steps {
       #expect(step.truncatingRemainder(dividingBy: 2) == 0, "\(step)")
     }
   }
 
-  @Test("every colour wash is its base colour at the documented opacity")
+  @Test("every colour wash is its base colour at the documented opacity, in the dark")
   func washesAreTheirBaseAtTheirOpacity() {
     let washes: [(name: String, wash: Color, base: Color, opacity: Float)] = [
       ("accentWash", .accentWash, .accent, 0.09),
-      ("accentTint", .accentTint, .accent, 0.07),
       ("accentRing", .accentRing, .accent, 0.2),
       ("attentionWash", .attentionWash, .attention, 0.09),
       ("attentionFill", .attentionFill, .attention, 0.16),
       ("accentFill", .accentFill, .accent, 0.16),
       ("fillGroup", .fillGroup, .white, 0.05),
       ("fillRowHover", .fillRowHover, .white, 0.035),
+      ("fillTile", .fillTile, .white, 0.045),
+      ("fillTileRaised", .fillTileRaised, .white, 0.1),
       ("fillControlHover", .fillControlHover, .white, 0.12),
-      ("fillGlass", .fillGlass, .ground, 0.66),
       ("strokeHighlight", .strokeHighlight, .white, 0.12),
       ("dropShadowSoft", .dropShadowSoft, .black, 0.4),
     ]
-    let environment = EnvironmentValues()
+    let environment = EnvironmentValues.dark
     for (name, wash, base, opacity) in washes {
       let washed = wash.resolve(in: environment)
       let solid = base.resolve(in: environment)
@@ -195,6 +201,19 @@ struct DesignSystemTests {
       #expect(abs(washed.green - solid.green) < 0.001, "\(name)")
       #expect(abs(washed.blue - solid.blue) < 0.001, "\(name)")
     }
+  }
+
+  @Test("a nested corner is the outer corner less its inset, and never below square")
+  func nestedCornerIsTheOuterLessTheInset() {
+    #expect(Radius.nested(in: Radius.window, inset: Spacing.s) == Radius.small)
+    #expect(Radius.nested(in: Radius.extraLarge, inset: Spacing.m) == Spacing.mPlus)
+    #expect(Radius.nested(in: Radius.small, inset: Spacing.l) == .zero)
+  }
+
+  @Test("a selection's shadow shows under Light and none under Dark")
+  func selectionShadowIsLightOnly() {
+    #expect(Elevation.selection.color.resolve(in: .dark).opacity == 0)
+    #expect(Elevation.selection.color.resolve(in: .light).opacity > 0)
   }
 
   @Test("a style's line height is never less than its point size")
@@ -209,17 +228,20 @@ struct DesignSystemTests {
     }
   }
 
-  @Test("every new solid colour and glass tint is its documented value")
+  @Test("every new solid colour is its documented value, in the dark")
   func newColoursHaveTheirValues() {
     let colours: [(name: String, colour: Color, rgb: [Float], opacity: Float)] = [
       ("fillPrimaryHover", .fillPrimaryHover, [0xFF, 0xFF, 0xFF], 1),
       ("fillPrimaryPressed", .fillPrimaryPressed, [0xE3, 0xE3, 0xE8], 1),
-      ("fillGlassThick", .fillGlassThick, [38, 38, 42], 0.94),
+      ("fillModal", .fillModal, [38, 38, 42], 1),
+      ("fillFloating", .fillFloating, [40, 40, 44], 1),
+      ("fillOverPicture", .fillOverPicture, [20, 20, 22], 1),
       ("accentHover", .accentHover, [0x1A, 0x8C, 0xFF], 1),
       ("onAttention", .onAttention, [0x1C, 0x12, 0x03], 1),
-      ("fillPinned", .fillPinned, [28, 28, 31], 0.9),
+      ("fillSelection", .fillSelection, [0xFF, 0xFF, 0xFF], 0.12),
+      ("strokeSelected", .strokeSelected, [0xFF, 0xFF, 0xFF], 0.06),
     ]
-    let environment = EnvironmentValues()
+    let environment = EnvironmentValues.dark
     for (name, colour, rgb, opacity) in colours {
       let resolved = colour.resolve(in: environment)
       let channels = [resolved.red, resolved.green, resolved.blue]

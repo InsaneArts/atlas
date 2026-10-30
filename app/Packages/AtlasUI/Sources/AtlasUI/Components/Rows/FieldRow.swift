@@ -27,7 +27,7 @@ struct FieldRow: View {
   /// the task captured holds it as it was when the flag arrived.
   @State private var otherFieldFocusedNow = false
   @Environment(\.drawsListSeparator) private var drawsSeparator
-  @Environment(\.accessibilityReduceMotion) private var reduceMotion
+  @Environment(\.motionReduced) private var reduceMotion
 
   /// The name, the field and the flag's mark, on the row's wash, inside its focus ring.
   var body: some View {
@@ -35,7 +35,7 @@ struct FieldRow: View {
       Text(label)
         .textStyle(.body)
         .foregroundStyle(isFlagged ? Color.textAttention : Color.textSecondary)
-        .frame(width: Layout.labelWidth, alignment: .leading)
+        .frame(width: FieldRowLayout.labelWidth, alignment: .leading)
       field
         .textFieldStyle(.plain)
         .textStyle(.body)
@@ -53,7 +53,7 @@ struct FieldRow: View {
     .overlay(alignment: .top) {
       if drawsSeparator {
         SeparatorLine()
-          .padding(.leading, Spacing.mPlus)
+          .padding(.horizontal, Spacing.mPlus)
       }
     }
     .animation(Motion.animation(Motion.state, reduceMotion: reduceMotion, reduced: Motion.reduced), value: isFlagged)
@@ -96,11 +96,11 @@ struct FieldRow: View {
 
   /// The fine accent edge and its soft halo, inset inside the row, showing while the field has the focus.
   private var focusRing: some View {
-    RoundedRectangle(cornerRadius: Radius.small)
+    RoundedRectangle(cornerRadius: Radius.small, style: .continuous)
       .strokeBorder(Color.strokeFocus, lineWidth: Stroke.regular)
       .background(
-        RoundedRectangle(cornerRadius: Radius.small)
-          .stroke(Color.accentRing, lineWidth: Layout.haloWidth)
+        RoundedRectangle(cornerRadius: Radius.small, style: .continuous)
+          .stroke(Color.accentRing, lineWidth: FieldRowLayout.haloWidth)
       )
       .padding(Spacing.xs)
       .opacity(isFocused ? 1 : 0)
@@ -117,14 +117,6 @@ struct FieldRow: View {
   nonisolated static func takesFocus(isFlagged: Bool, isOtherFieldFocused: Bool) -> Bool {
     isFlagged && !isOtherFieldFocused
   }
-}
-
-/// The field row's own measures for its label and focus ring.
-private enum Layout {
-  /// 112: the labels' column, wide enough for "Account name" so the fields line up.
-  static let labelWidth: CGFloat = 112
-  /// 3: the focus ring's soft halo, half of it outside the fine edge.
-  static let haloWidth: CGFloat = 3
 }
 
 #if DEBUG

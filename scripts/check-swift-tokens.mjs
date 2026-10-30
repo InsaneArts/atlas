@@ -9,8 +9,8 @@
 // black or white at an opacity, which is a colour token's job.
 //
 // The design system lives in DesignSystem/; everything else names it. A literal belongs
-// in a named `static let` constant, such as one in a component's private
-// `Layout` enum. One check is Atlas's own: a literal passed through
+// in a named `static let` constant on its owning type or a layout type in
+// its own file, respecting the one-type-per-file rule. One check is Atlas's own: a literal passed through
 // `Typography.font(size:)`, the door for a glyph sized from its frame, which
 // takes a frame-derived size and never a number. Exempt by path: the design
 // system, PreviewStates/Samples/ and Rendering/ (sample and render sizes),

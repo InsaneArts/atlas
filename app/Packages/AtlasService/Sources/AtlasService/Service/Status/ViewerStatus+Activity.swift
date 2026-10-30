@@ -16,6 +16,21 @@ extension ViewerStatus {
     public var ageSeconds: Double?
     /// What it did in the service's words, such as "clicked Save in TextEdit", from builds that say so.
     public var says: String?
+    /// The key of the host session it came from; nil for the person's own and for commands no host named, never empty.
+    public var session: String?
+    /// Whether it was refused before anything was sent, as when another app was in front: nothing to recover, and
+    /// not a problem.
+    public var nothingSent: Bool
+    /// The name of the app it acted in, from builds that say so.
+    public var app: String?
+    /// The bundle identifier of the app it acted in, from builds that say so.
+    public var bundleId: String?
+
+    /// How it went: worked, failed, or not sent, as an Activity row reads it.
+    public var outcome: ActivityLog.Outcome { ActivityLog.Outcome(started: false, ok: ok, nothingSent: nothingSent) }
+
+    /// The key of the host session an agent's operation came from: Terminal's empty key for one no host named.
+    public var sessionKey: String { session ?? "" }
 
     /// Creates an operation.
     ///
@@ -27,6 +42,10 @@ extension ViewerStatus {
     ///   - actor: "viewer" for the person, else an agent.
     ///   - ageSeconds: How long ago it ran, in seconds.
     ///   - says: What it did in the service's words.
+    ///   - session: The key of the host session it came from.
+    ///   - nothingSent: Whether it was refused before anything was sent.
+    ///   - app: The name of the app it acted in.
+    ///   - bundleId: The bundle identifier of the app it acted in.
     public init(
       id: String? = nil,
       operation: String,
@@ -34,7 +53,11 @@ extension ViewerStatus {
       actionCount: Int? = nil,
       actor: String = "agent",
       ageSeconds: Double? = nil,
-      says: String? = nil
+      says: String? = nil,
+      session: String? = nil,
+      nothingSent: Bool = false,
+      app: String? = nil,
+      bundleId: String? = nil
     ) {
       self.id = id
       self.operation = operation
@@ -43,10 +66,17 @@ extension ViewerStatus {
       self.actor = actor
       self.ageSeconds = ageSeconds
       self.says = says
+      self.session = session
+      self.nothingSent = nothingSent
+      self.app = app
+      self.bundleId = bundleId
     }
 
-    /// The fields of one `activity` row.
-    enum CodingKeys: String, CodingKey { case id, operation, ok, actionCount, actor, ageSeconds, says }
+    /// The fields of one `activity` row this app reads.
+    enum CodingKeys: String, CodingKey {
+      /// Each field by the name the service writes.
+      case id, operation, ok, actionCount, actor, ageSeconds, says, session, nothingSent, app, bundleId
+    }
 
     /// Decodes an operation; one that names nothing reads as an agent's failed "action".
     ///
@@ -65,6 +95,14 @@ extension ViewerStatus {
         .flatMap { $0.isFinite ? $0 : nil }
       let said = (try? container.decodeIfPresent(String.self, forKey: .says)) ?? nil
       says = said?.isEmpty == false ? said : nil
+      // An empty key is Terminal's, as a missing one is, so both read as none.
+      session = (try? container.decodeIfPresent(String.self, forKey: .session))
+        .flatMap { $0?.isEmpty == false ? $0 : nil }
+      nothingSent = container.lenientFlag(.nothingSent)
+      app = (try? container.decodeIfPresent(String.self, forKey: .app))
+        .flatMap { $0?.isEmpty == false ? $0 : nil }
+      bundleId = (try? container.decodeIfPresent(String.self, forKey: .bundleId))
+        .flatMap { $0?.isEmpty == false ? $0 : nil }
     }
   }
 }

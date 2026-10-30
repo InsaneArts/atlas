@@ -12,11 +12,20 @@ public struct PanelState: Equatable, Sendable {
   public var picture: PanelPictureState
   /// The newest actions, newest first, at most three; empty hides Recent.
   public var recent: [PanelRecentEntry]
+  /// The live host sessions, at most ``mostSessions``, while any is live; when there are any, they take Recent's
+  /// place, whatever `recent` holds.
+  public var sessions: [PanelSessionEntry]
+  /// The row under the sessions that opens every one, such as "+2 more", while there are more than the rows show;
+  /// nil for none.
+  public var moreSessions: String?
   /// The row of buttons at the foot: Stop while an agent works, and the main action.
   public var controls: PanelControls
   /// What VoiceOver should say about the helper now: a state that asks something of the person, once it has held;
   /// nil for nothing.
   public var announcement: String?
+
+  /// The most session rows the panel lists; the rest go under one row that opens them all.
+  public static let mostSessions = PanelLayout.mostSessions
 
   /// Creates the panel's state.
   ///
@@ -26,6 +35,8 @@ public struct PanelState: Equatable, Sendable {
   ///   - isMoreOpen: Whether the ⋯ menu is open.
   ///   - picture: The helper's screen and how it looks, or why there is none.
   ///   - recent: The newest actions, newest first, at most three; empty hides Recent.
+  ///   - sessions: The live host sessions, at most ``mostSessions``; none by default, which shows Recent.
+  ///   - moreSessions: The row that opens every session; none by default.
   ///   - controls: The row of buttons at the foot.
   ///   - announcement: What VoiceOver should say about the helper now; nil by default.
   public init(
@@ -34,6 +45,8 @@ public struct PanelState: Equatable, Sendable {
     isMoreOpen: Bool = false,
     picture: PanelPictureState,
     recent: [PanelRecentEntry],
+    sessions: [PanelSessionEntry] = [],
+    moreSessions: String? = nil,
     controls: PanelControls,
     announcement: String? = nil
   ) {
@@ -42,6 +55,8 @@ public struct PanelState: Equatable, Sendable {
     self.isMoreOpen = isMoreOpen
     self.picture = picture
     self.recent = recent
+    self.sessions = sessions
+    self.moreSessions = moreSessions
     self.controls = controls
     self.announcement = announcement
   }

@@ -8,4 +8,6 @@ public enum ActivityMarkKind: Equatable, Sendable {
   case failed
   /// An agent's, or a screenshot: a quiet dot, 6.
   case quiet
+  /// Refused before anything was sent, as when another app was in front: a quiet ring crossed by a short dash, 12.
+  case notSent
 }

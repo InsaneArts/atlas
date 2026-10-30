@@ -28,6 +28,8 @@ public final class ScriptedService: ViewerService {
   public var held: [String: CheckedContinuation<Void, Never>] = [:]
   /// Requests that fail every time.
   public var fail: Set<String> = []
+  /// What every Stop or Resume answers.
+  public var stopOutcome = StopOutcome()
   /// How many acquisitions from now on are refused as busy, as while an agent's action runs.
   public var busyAcquires = 0
   /// How many acquisitions from now on are granted, but their reply is lost on the way back, as a timeout loses it.
@@ -53,6 +55,8 @@ public final class ScriptedService: ViewerService {
   public var activityLog = ActivityLog()
   /// The apps open in the helper, front to back.
   public var openApps: [HelperApp] = []
+  /// The host sessions the apps' origins name, by key.
+  public var appSessions: [String: HostSessionSummary] = [:]
   /// The screenshots agents took, newest first.
   public var shots: [Screenshot] = []
   /// The folder the screenshots are kept in; nil names none.
@@ -69,8 +73,22 @@ public final class ScriptedService: ViewerService {
   public var shot = Data()
   /// Activity requests made.
   public var activityCalls = 0
+  /// The host sessions `sessions.json` lists.
+  public var sessionList = HostSessionList()
+  /// Whether the service offers `sessions.json`; an older one answers ``ServiceError/notOffered``.
+  public var offersSessions = true
+  /// Session list requests made.
+  public var sessionsCalls = 0
+  /// What a cleanup preview answers.
+  public var cleanupPreview = CleanupReply(ok: true, preview: true)
+  /// What a cleanup apply answers.
+  public var cleanupApplied = CleanupReply(ok: true, state: .complete)
+  /// Whether a cleanup apply gets no reply, as one that runs past the client's wait does.
+  public var cleanupUnanswered = false
+  /// The cleanup requests made, in order: "preview KEY" or "apply KEY".
+  public var cleanups: [String] = []
   /// Apps requests made.
-  var appsCalls = 0
+  public var appsCalls = 0
 
   /// A service that answers every request at once, ready and observing.
   public init() {}
@@ -228,11 +246,14 @@ public final class ScriptedService: ViewerService {
   /// Records stopping or resuming agents, unless held or failed.
   ///
   /// - Parameter stopped: Whether agents stop.
+  /// - Returns: ``stopOutcome``.
   /// - Throws: A ``ServiceError`` when the route fails.
   @MainActor
-  public func setStopped(_ stopped: Bool) async throws {
+  @discardableResult
+  public func setStopped(_ stopped: Bool) async throws -> StopOutcome {
     log.append(stopped ? "stop" : "resume")
     try await pause("hold")
+    return stopOutcome
   }
 
   /// Records the input, a batch a request, unless held or failed.
@@ -271,13 +292,13 @@ public final class ScriptedService: ViewerService {
 
   /// Answers `openApps`, unless held or failed.
   ///
-  /// - Returns: The apps open in the helper.
+  /// - Returns: The apps open in the helper, and the sessions that opened them.
   /// - Throws: A ``ServiceError`` when the route fails.
   @MainActor
-  public func apps() async throws(ServiceError) -> [HelperApp] {
+  public func apps() async throws(ServiceError) -> HelperAppList {
     appsCalls += 1
     try await pause("apps")
-    return openApps
+    return HelperAppList(apps: openApps, sessions: appSessions)
   }
 
   /// Answers `shots` and `shotsFolder`, unless held or failed.
@@ -307,5 +328,35 @@ public final class ScriptedService: ViewerService {
     }
     try await pause("screenshot")
     return answer
+  }
+
+  /// Answers `sessionList`, or ``ServiceError/notOffered`` unless `offersSessions`, unless held or failed.
+  ///
+  /// - Returns: The host sessions.
+  /// - Throws: A ``ServiceError`` when the route fails or is not offered.
+  @MainActor
+  public func sessions() async throws(ServiceError) -> HostSessionList {
+    sessionsCalls += 1
+    try await pause("sessions")
+    guard offersSessions else { throw .notOffered }
+    return sessionList
+  }
+
+  /// Answers `cleanupPreview` or `cleanupApplied`, unless held or failed: a preview's route is `cleanup.json`, an
+  /// apply's `cleanup`.
+  ///
+  /// - Parameters:
+  ///   - session: The session's key.
+  ///   - apply: Whether it cleans up, rather than reads what it would take.
+  /// - Returns: The scripted reply.
+  /// - Throws: A ``ServiceError`` when the route fails, or one that got no reply while `cleanupUnanswered`.
+  @MainActor
+  public func cleanup(session: String, apply: Bool) async throws(ServiceError) -> CleanupReply {
+    cleanups.append("\(apply ? "apply" : "preview") \(session)")
+    try await pause(apply ? "cleanup" : "cleanup.json")
+    if apply, cleanupUnanswered {
+      throw ServiceError("cleanup got no reply", code: ViewerClient.unansweredCleanupCode)
+    }
+    return apply ? cleanupApplied : cleanupPreview
   }
 }

@@ -8,6 +8,8 @@ import Testing
 struct MiniCornerTests {
   /// A stage 1,416 by 836, as the main window's at 1,440 by 900.
   static let stage = CGSize(width: 1416, height: 836)
+  /// The small screen in a stage that wide.
+  static let mini = CGSize(width: 200, height: 125)
 
   @Test("the small screen settles in the corner nearest where it is let go")
   func theSmallScreenSettlesInTheNearestCorner() {
@@ -21,19 +23,25 @@ struct MiniCornerTests {
     #expect(MiniCorner.nearest(to: CGPoint(x: -50, y: -50), in: Self.stage) == .topLeading)
     // Dragged from the bottom right a little way, it goes back; across the middle, to the corner it was dragged to.
     let home = MiniCorner.bottomTrailing
-    #expect(home.settling(after: CGSize(width: -200, height: -100), in: Self.stage) == .bottomTrailing)
-    #expect(home.settling(after: CGSize(width: -900, height: 0), in: Self.stage) == .bottomLeading)
-    #expect(home.settling(after: CGSize(width: -900, height: -500), in: Self.stage) == .topLeading)
-    #expect(MiniCorner.topLeading.settling(after: CGSize(width: 900, height: 0), in: Self.stage) == .topTrailing)
+    #expect(home.settling(after: CGSize(width: -200, height: -100), in: Self.stage, mini: Self.mini) == .bottomTrailing)
+    #expect(home.settling(after: CGSize(width: -900, height: 0), in: Self.stage, mini: Self.mini) == .bottomLeading)
+    #expect(home.settling(after: CGSize(width: -900, height: -500), in: Self.stage, mini: Self.mini) == .topLeading)
+    #expect(
+      MiniCorner.topLeading.settling(after: CGSize(width: 900, height: 0), in: Self.stage, mini: Self.mini)
+        == .topTrailing
+    )
   }
 
-  @Test("the small screen sits 26 points from the two edges of its corner")
+  @Test("the small screen sits 12 points from the two edges of its corner")
   func theSmallScreenSitsInItsCorner() {
-    // 248 by 155, so its centre is 26 + 124 across and 26 + 77.5 down from its corner's edges.
-    #expect(MiniCorner.bottomTrailing.centre(in: Self.stage) == CGPoint(x: 1416 - 150, y: 836 - 103.5))
-    #expect(MiniCorner.topLeading.centre(in: Self.stage) == CGPoint(x: 150, y: 103.5))
+    // 200 by 125, so its centre is 12 + 100 across and 12 + 62.5 down from its corner's edges.
+    #expect(MiniCorner.bottomTrailing.centre(in: Self.stage, mini: Self.mini) == CGPoint(x: 1416 - 112, y: 836 - 74.5))
+    #expect(MiniCorner.topLeading.centre(in: Self.stage, mini: Self.mini) == CGPoint(x: 112, y: 74.5))
     for corner in MiniCorner.allCases {
-      #expect(MiniCorner.nearest(to: corner.centre(in: Self.stage), in: Self.stage) == corner, "\(corner)")
+      #expect(
+        MiniCorner.nearest(to: corner.centre(in: Self.stage, mini: Self.mini), in: Self.stage) == corner,
+        "\(corner)"
+      )
     }
   }
 
@@ -41,25 +49,40 @@ struct MiniCornerTests {
   func aThrownSmallScreenLandsWhereItWasThrown() {
     let home = MiniCorner.bottomTrailing
     // The pointer stopped a little way left, but the throw carries it across the middle: it lands bottom left.
-    #expect(home.settling(after: CGSize(width: -200, height: 0), in: Self.stage) == .bottomTrailing)
-    #expect(home.settling(after: CGSize(width: -900, height: 0), in: Self.stage) == .bottomLeading)
+    #expect(home.settling(after: CGSize(width: -200, height: 0), in: Self.stage, mini: Self.mini) == .bottomTrailing)
+    #expect(home.settling(after: CGSize(width: -900, height: 0), in: Self.stage, mini: Self.mini) == .bottomLeading)
     // Thrown toward the corner it lands in, it keeps its speed as a share of the way left each second.
     let way =
       MiniCorner.bottomLeading
-      .centre(in: Self.stage).x - home.centre(in: Self.stage).x + 200
+      .centre(in: Self.stage, mini: Self.mini).x - home.centre(in: Self.stage, mini: Self.mini).x + 200
     let velocity = home.landingVelocity(
       to: .bottomLeading,
       after: CGSize(width: -200, height: 0),
       velocity: CGSize(width: -2000, height: 0),
-      in: Self.stage
+      in: Self.stage,
+      mini: Self.mini
     )
     #expect(abs(velocity - 2000 / Double(-way)) < 1e-9)
     // Thrown away from it, or already there, it sets off from rest.
     #expect(
-      home.landingVelocity(to: .bottomLeading, after: .zero, velocity: CGSize(width: 900, height: 0), in: Self.stage)
+      home.landingVelocity(
+        to: .bottomLeading,
+        after: .zero,
+        velocity: CGSize(width: 900, height: 0),
+        in: Self.stage,
+        mini: Self.mini
+      )
         == 0
     )
-    #expect(home.landingVelocity(to: home, after: .zero, velocity: CGSize(width: 900, height: 0), in: Self.stage) == 0)
+    #expect(
+      home.landingVelocity(
+        to: home,
+        after: .zero,
+        velocity: CGSize(width: 900, height: 0),
+        in: Self.stage,
+        mini: Self.mini
+      ) == 0
+    )
     // It lands on a spring with a little bounce, the one bounce in the window; under Reduce Motion at once.
     #expect(abs(ViewerLayout.miniThrown.bounce - 0.1) < 1e-6)
     #expect(abs(ViewerLayout.miniThrown.duration - 0.4) < 1e-6)

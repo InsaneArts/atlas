@@ -35,20 +35,18 @@ struct ScreenZoomTests {
     #expect(coming == [nil, .corner])
   }
 
-  @Test("a switch to Activity turned straight back keeps one picture on the stage, never a gap")
-  func aSwitchTurnedBackKeepsOnePicture() throws {
-    let clock = ContinuousClock()
-    var colours: [PictureColour?] = []
-    // The two switches' frame must be drawn before the first switch's move has gone far, as a person turning straight
-    // back sees it; a busy Mac that draws it later tries again in a fresh window.
-    for _ in 0..<ViewerHost.firstFrameTries {
-      let host = ViewerHost(try Self.state(.screen))
-      let started = clock.now
-      host.show(try Self.state(.activity))
-      host.show(try Self.state(.screen))
-      colours = try host.colours(at: [Self.middle, Self.corner])
-      if clock.now - started <= ViewerHost.firstFrameWithin { break }
-    }
+  @Test(
+    "a switch to a list turned straight back keeps one picture on the stage, never a gap",
+    arguments: [ViewerPlace.activity, .screenshots]
+  )
+  func aSwitchTurnedBackKeepsOnePicture(list: ViewerPlace) throws {
+    let previous = Motion.Pose.moment
+    Motion.Pose.hold(at: .zero)
+    defer { Motion.Pose.hold(at: previous) }
+    let host = ViewerHost(try Self.state(.screen))
+    host.show(try Self.state(list))
+    host.show(try Self.state(.screen))
+    let colours = try host.colours(at: [Self.middle, Self.corner])
     // The small screen had not left the stage's middle, so the picture coming back starts there, whole: the middle
     // shows one picture or the other, never the empty stage, and the corner holds no second small screen.
     #expect(colours[0] != nil, "the stage's middle was empty as the switch turned back")
@@ -57,21 +55,26 @@ struct ScreenZoomTests {
 
   /// A point in the middle of the stage, clear of the corner.
   static let middle = CGPoint(x: PreviewStates.viewerSize.width / 3, y: PreviewStates.viewerSize.height / 2)
-  /// The middle of the small screen in its corner: 26 from the stage's right and bottom edges, 248 by 155 in a window
-  /// this wide.
-  static let corner = CGPoint(x: PreviewStates.viewerSize.width - 150, y: PreviewStates.viewerSize.height - 103)
+  /// A point inside the small screen in its corner of the card's body, above the footer: 200 across, 12 in from the
+  /// card's edge, which is 8 in from the window's, and its foot 12 over the footer's 46.
+  static let corner = CGPoint(x: PreviewStates.viewerSize.width - 120, y: PreviewStates.viewerSize.height - 120)
 
-  /// The window on the Screen or on Activity with the small screen in its corner. The stage and the corner read one
-  /// picture in the window; here each has its own, so the slot can paint them apart.
+  /// The window on the Screen, or on Activity or Screenshots with the small screen in its corner. The stage and the
+  /// corner read one picture in the window; here each has its own, so the slot can paint them apart.
   ///
-  /// - Parameter tab: The Screen, or Activity.
+  /// - Parameter place: The Screen, Activity or Screenshots.
   /// - Returns: What the window shows.
   /// - Throws: When a picture cannot be made.
-  static func state(_ tab: ViewerTab) throws -> ViewerState {
-    var state = tab == .screen ? PreviewStates.viewerWorking : PreviewStates.viewerActivity
+  static func state(_ place: ViewerPlace) throws -> ViewerState {
+    var state =
+      switch place {
+      case .screen: PreviewStates.viewerWorking
+      case .screenshots: PreviewStates.viewerShots
+      case .activity, .apps: PreviewStates.viewerActivity
+      }
     state.screen.picture = try LayerPictureTests.picture(PictureColour.stage.rawValue)
     state.mini =
-      tab.keepsScreenInCorner
+      place.keepsScreenInCorner
       ? MiniScreenState(picture: try LayerPictureTests.picture(PictureColour.corner.rawValue)) : nil
     return state
   }

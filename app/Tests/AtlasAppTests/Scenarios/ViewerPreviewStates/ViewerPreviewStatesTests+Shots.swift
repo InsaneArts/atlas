@@ -29,7 +29,7 @@
           )
         },
         "Screenshots, none yet": shown(shotStatus) { snapshot in
-          Self.onTab(.screenshots, at: Self.shotsNow, &snapshot)
+          Self.onPlace(.screenshots, at: Self.shotsNow, &snapshot)
           snapshot.panes.shots.shots = []
         },
       ]
@@ -54,20 +54,20 @@
     ///
     /// - Parameter snapshot: The facts to change.
     static func onShots(_ snapshot: inout ViewerSnapshot) {
-      onTab(.screenshots, at: shotsNow, &snapshot)
+      onPlace(.screenshots, at: shotsNow, &snapshot)
       snapshot.panes.shots.shots = shots
       snapshot.panes.shots.folder = URL(fileURLWithPath: "/Users/me/runs", isDirectory: true)
       snapshot.panes.shots.selected = PreviewStates.shotNames[1]
       keepThumbnails(&snapshot)
     }
 
-    /// Every capture's thumbnail read: the sample desktop, known by the capture's name.
+    /// Every capture's thumbnail read: the sample desktop at the captures' shape, known by the capture's name.
     ///
     /// - Parameter snapshot: The facts to change.
     static func keepThumbnails(_ snapshot: inout ViewerSnapshot) {
-      guard let sample = SampleDesktop.picture else { return }
       for name in PreviewStates.shotNames {
-        snapshot.panes.thumbnails.keep(DesktopPicture(id: name, image: sample.image), for: name)
+        guard let picture = PreviewStates.shotPicture(name) else { continue }
+        snapshot.panes.thumbnails.keep(picture, for: name)
       }
     }
   }

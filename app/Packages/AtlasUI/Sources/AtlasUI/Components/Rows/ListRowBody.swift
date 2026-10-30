@@ -138,7 +138,7 @@ struct ListRowBody<Detail: View, Trailing: View>: View {
         HStack(spacing: Spacing.s) {
           titleText
           if let tag {
-            AccentTag(text: tag)
+            Tag(text: tag, tone: .accent)
           }
         }
         detail
@@ -158,6 +158,7 @@ struct ListRowBody<Detail: View, Trailing: View>: View {
       if drawsSeparator {
         SeparatorLine()
           .padding(.leading, ListRow.separatorInset(lead, size: size))
+          .padding(.trailing, size.inset)
       }
     }
     .contentShape(Rectangle())

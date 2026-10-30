@@ -21,6 +21,16 @@ pub(crate) const LOOKUP: Duration = Duration::from_secs(3);
 /// network directory. Nothing polls it.
 pub(crate) const LISTING: Duration = Duration::from_secs(30);
 
+/// How long a system tool may take over one file or folder it does not
+/// copy: reading an Info.plist or a folder's access list, or changing one
+/// folder's access.
+pub(crate) const FILE: Duration = Duration::from_secs(10);
+
+/// How long copying an app or a file for the helper may take: long enough
+/// for the largest app, short enough that a copy stuck on a disk that
+/// stopped answering ends.
+pub(crate) const COPY: Duration = Duration::from_secs(10 * 60);
+
 /// How often a running command is checked on.
 const POLL: Duration = Duration::from_millis(5);
 

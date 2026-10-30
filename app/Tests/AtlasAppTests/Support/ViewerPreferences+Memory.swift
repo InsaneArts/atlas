@@ -7,29 +7,33 @@ extension ViewerPreferences {
   ///
   /// - Parameters:
   ///   - rate: The saved picture rate, in seconds; 0 for none.
-  ///   - details: Whether Details was left showing.
   ///   - corner: The small screen's saved corner, by its name; nil for none.
+  ///   - sidebarHidden: Whether the person left the sidebar hidden.
   /// - Returns: The preferences.
-  static func memory(rate: Double = 0, details: Bool = false, corner: String? = nil) -> ViewerPreferences {
+  static func memory(
+    rate: Double = 0,
+    corner: String? = nil,
+    sidebarHidden: Bool = false
+  ) -> ViewerPreferences {
     final class Store {
       var rate: Double
-      var details: Bool
       var corner: String?
+      var sidebarHidden: Bool
 
-      init(rate: Double, details: Bool, corner: String?) {
+      init(rate: Double, corner: String?, sidebarHidden: Bool) {
         self.rate = rate
-        self.details = details
         self.corner = corner
+        self.sidebarHidden = sidebarHidden
       }
     }
-    let store = Store(rate: rate, details: details, corner: corner)
+    let store = Store(rate: rate, corner: corner, sidebarHidden: sidebarHidden)
     return ViewerPreferences(
       loadRate: { store.rate },
       saveRate: { store.rate = $0 },
-      loadDetails: { store.details },
-      saveDetails: { store.details = $0 },
       loadCorner: { store.corner },
-      saveCorner: { store.corner = $0 }
+      saveCorner: { store.corner = $0 },
+      loadSidebarHidden: { store.sidebarHidden },
+      saveSidebarHidden: { store.sidebarHidden = $0 }
     )
   }
 }

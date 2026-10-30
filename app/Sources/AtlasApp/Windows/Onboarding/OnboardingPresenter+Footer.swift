@@ -59,7 +59,7 @@ extension OnboardingPresenter {
       case .permissions:
         turn(snapshot)
           .map { allow($0, snapshot: snapshot, isEnabled: idle) }
-      case .helperDone: main(.switchBack, .switchBack, isEnabled: idle)
+      case .helperDone: main(.switchBack, .switchBack, isEnabled: idle && snapshot.isOnConsole)
       case .blocked where snapshot.facts.appProblem != nil: main(.showInFinder, .showInFinder, isEnabled: true)
       case .blocked: main(.checkAgain, .checkAgain, isEnabled: true)
       default: nil
@@ -136,7 +136,7 @@ extension OnboardingPresenter {
     let locks = !helper.signedIn || !helper.onConsole
     return OnboardingFooterState(
       back: helper.forgettable ? chooseAnother : nil,
-      next: locks ? main(.lockAndSwitch, .lockAndSwitch, isEnabled: idle) : nil,
+      next: locks ? main(.lockAndSwitch, .lockAndSwitch, isEnabled: idle && snapshot.isOnConsole) : nil,
       track: step.track
     )
   }

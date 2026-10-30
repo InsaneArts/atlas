@@ -2,9 +2,9 @@ import AtlasService
 import AtlasUI
 import Foundation
 
-/// What the Screenshots tab last read, the screenshot selected, the one shown large and how many stand in a row.
+/// What the Screenshots pane last read, the screenshot selected, the one shown large and how many stand in a row.
 struct ViewerShotsFacts {
-  /// The screenshots, newest first; nil before the first reading. The Activity tab reads them too, for its
+  /// The screenshots, newest first; nil before the first reading. The Activity pane reads them too, for its
   /// screenshot lines.
   var shots: [Screenshot]?
   /// The folder the service says they are kept in; nil while unknown, which leaves Show in Finder waiting.

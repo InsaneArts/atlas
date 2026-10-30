@@ -12,6 +12,8 @@ struct OnboardingSnapshot {
   var choices = OnboardingChoices()
   /// Whether the facts have been read once.
   var loaded = false
+  /// Whether this graphical session is currently on this Mac's console.
+  var isOnConsole = false
   /// The command running now, in words.
   var working: String?
   /// What went wrong last, in one line.

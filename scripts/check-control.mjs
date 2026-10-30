@@ -163,9 +163,14 @@ try {
     ['run', '--', '/usr/bin/true'],
     ['restart'],
   ]) {
+    const started = Date.now();
     const result = cli(args);
+    const took = Date.now() - started;
     assert.equal(result.status, 1, result.stdout + result.stderr);
-    assert.equal(JSON.parse(result.stderr).code, 'busy');
+    const refused = JSON.parse(result.stderr);
+    assert.equal(refused.code, 'busy');
+    assert.equal(refused.holder, 'person');
+    assert.ok(took < 2000, `${args[0]} waited ${took} ms for the person`);
   }
   results.checks.cooperativeOwnership = {
     passed: true,

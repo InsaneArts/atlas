@@ -1,6 +1,6 @@
 # Helper files and environment
 
-The helper has its own home, tools and application state. Atlas can copy an explicit set of files into that home and later undo the copy. It takes a one-way snapshot; it does not mirror your account or keep files synchronized.
+The helper has its own home, tools and application state. Atlas can copy an explicit set of files into that home and later undo the copy. It takes a one-way snapshot; it does not mirror your account or keep files synchronized. To bring a result back, use `atlas collect`: it copies chosen files out and never changes what a snapshot owns.
 
 Use small, task-specific selections. Do not select credentials, browser profiles, account databases or files an app is currently writing. Sign in to an app separately in the helper when the task needs it.
 
@@ -20,7 +20,7 @@ For discovery without launching the selected tools or apps, use:
 atlas environment discover --tool git --app Preview
 ```
 
-Discovery can also check a selected variable name with `--env NAME`, or the helper's existing access to a path with `--reference PATH`. It does not change permissions or print selected variable values.
+Discovery can also check a selected variable name with `--env NAME`, or the helper's existing access to a path with `--reference PATH`. It does not change permissions or print selected variable values. Discovery and previews only read, so they work while another agent or the person is acting in the helper.
 
 ## Copy a harmless fixture
 
@@ -83,6 +83,16 @@ atlas environment rollback PLAN_ID --apply --json
 ```
 
 A completed result has `rolledBack: true` and `resumeRequired: false`. For the unchanged fixture, the helper copy is removed; your source file remains. Rollback also discards copies Atlas retained for that transaction. Nonempty or changed directories can remain, as reported in `retainedDirectories`.
+
+If you lost the plan ID, list every copy into the helper Atlas knows of:
+
+```sh
+atlas environment list --json
+```
+
+Each plan has its `planId`, its `state` (`previewed`, `applying`, `applied`, `rollingBack`, `rolledBack`, `running` while a command uses it, or `unknown` when a request's outcome is not known), when it last changed and the target and operation of each file. File contents, digests and sources are never listed. `session` names the agent session that made it, when its record says so, and `thisTask` says whether the session's current task did. Plans rolled back completely are left out unless you pass `--all`, and counted in `hidden`. `unreadable` counts records that could not be read and `more` those not looked at or not shown; while either is above 0, an empty list does not prove nothing was copied. Listing only reads: it takes no control and records nothing.
+
+`atlas cleanup --apply` rolls back every copy the current task applied, newest first, along with the rest of what it left; `atlas cleanup` alone shows what it would do.
 
 ## Conflicts and interrupted work
 

@@ -37,4 +37,22 @@ struct AgentGlyphTests {
     #expect(path.contains(CGPoint(x: 150, y: 200), eoFill: true))
     #expect(!path.contains(CGPoint(x: 256, y: 200), eoFill: true))
   }
+
+  @Test("the terminal prompt's chevron and underscore share one baseline and stay centred in the card")
+  func terminalPrompt() throws {
+    let paths = AgentMarkKind.terminal.paths
+    let chevron = try #require(paths.first.map(AgentGlyph.parse))
+    let underscore = try #require(paths.last.map(AgentGlyph.parse))
+    #expect(chevron.boundingRect.maxY == underscore.boundingRect.maxY)
+    #expect(chevron.boundingRect.maxX < underscore.boundingRect.minX)
+    #expect(chevron.contains(CGPoint(x: 232, y: 256), eoFill: true))
+    #expect(!chevron.contains(CGPoint(x: 150, y: 256), eoFill: true))
+    var combined = CGRect.null
+    for data in paths {
+      let glyph = AgentGlyph(data: data, layers: paths)
+      combined = combined.union(glyph.path(in: CGRect(x: 0, y: 0, width: 26, height: 26)).boundingRect)
+    }
+    #expect(abs(combined.midX - 13) < 0.001)
+    #expect(abs(combined.midY - 13) < 0.001)
+  }
 }

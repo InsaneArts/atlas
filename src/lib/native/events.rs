@@ -9,7 +9,7 @@ use crate::{
         DRAG_STEPS, FUNCTION, OPTION, PointerPhase, SCROLL_SETTLE, SHIFT, TYPE_GAP, modifier_flags,
         parse_key,
     },
-    error::{Error, Result},
+    error::{Code, Error, Result},
     native::{accessibility_trusted, session_info},
     session::InputEpoch,
 };
@@ -37,7 +37,7 @@ const TAP: CGEventTapLocation = CGEventTapLocation::SessionEventTap;
 const POST_ACCESS_TTL: Duration = Duration::from_millis(250);
 
 fn created(event: Option<CFRetained<CGEvent>>) -> Result<CFRetained<CGEvent>> {
-    event.ok_or_else(|| Error::new("native", "Could not create a native event"))
+    event.ok_or_else(|| Error::new(Code::Native, "Could not create a native event"))
 }
 
 /// The modifier keys a finished gesture releases, each with its flag:
@@ -73,15 +73,18 @@ fn release_each(held: &mut u64, mut post: impl FnMut(u16, u64) -> Result<()>) ->
 /// itself.
 struct Source(CFRetained<CGEventSource>);
 
+#[allow(
+    unsafe_code,
+    reason = "FFI: CGEventSource is not marked Send by its binding"
+)]
 // SAFETY: a CGEventSource is a CoreFoundation object: its retain and release
 // are thread-safe, and creating events from it is not tied to the thread that
 // made it (CoreGraphics posting needs no main thread). The engine holds the
 // only reference and is used only under the service's mutex, so the source
 // is never used from two threads at once.
-#[allow(unsafe_code)]
 unsafe impl Send for Source {}
 
-pub struct Engine {
+pub(super) struct Engine {
     pub epoch: InputEpoch,
     pub grant: Option<Grant>,
     journal: Option<Journal>,
@@ -103,10 +106,10 @@ pub struct Engine {
 }
 
 impl Engine {
-    pub fn new(uid: u32) -> Result<Self> {
+    pub(super) fn new(uid: u32) -> Result<Self> {
         let source = CGEventSource::new(CGEventSourceStateID::Private)
             .map(Source)
-            .ok_or_else(|| Error::new("native", "Could not create the event source"))?;
+            .ok_or_else(|| Error::new(Code::Native, "Could not create the event source"))?;
         let mut engine = Self {
             epoch: InputEpoch::from_proof(&session_info()?, std::process::id())?,
             grant: None,
@@ -126,7 +129,7 @@ impl Engine {
 
         if engine.epoch.uid != uid {
             return Err(Error::new(
-                "identity",
+                Code::Identity,
                 "Input service UID differs from its configuration",
             ));
         }
@@ -136,22 +139,22 @@ impl Engine {
     }
 
     /// Whether this process may use Accessibility.
-    pub fn trusted() -> bool {
+    pub(super) fn trusted() -> bool {
         accessibility_trusted()
     }
 
-    pub fn check(&mut self) -> Result<()> {
+    pub(super) fn check(&mut self) -> Result<()> {
         let current = InputEpoch::from_proof(&session_info()?, std::process::id())?;
         if current != self.epoch {
             return Err(Error::new(
-                "identity",
+                Code::Identity,
                 "Native input requires the configured hidden graphical session",
             ));
         }
 
         if !Self::trusted() {
             return Err(Error::new(
-                "permission",
+                Code::Permission,
                 "The input process does not have Accessibility permission",
             ));
         }
@@ -165,7 +168,7 @@ impl Engine {
             if !objc2_core_graphics::CGPreflightPostEventAccess() {
                 self.post_access = None;
                 return Err(Error::new(
-                    "permission",
+                    Code::Permission,
                     "The input process may not post events (Accessibility)",
                 ));
             }
@@ -176,7 +179,7 @@ impl Engine {
         Ok(())
     }
 
-    pub fn recover(&mut self, path: PathBuf) -> Result<()> {
+    pub(super) fn recover(&mut self, path: PathBuf) -> Result<()> {
         if let Some(held) = journal::load(&path, &self.epoch)? {
             self.held = held.button;
             self.held_keys = held.keys;
@@ -195,11 +198,14 @@ impl Engine {
         self.release()
     }
 
-    pub fn rebind(&mut self, current: InputEpoch) -> Result<()> {
+    pub(super) fn rebind(&mut self, current: InputEpoch) -> Result<()> {
         if current.uid != self.epoch.uid
             || current.security_session_id != self.epoch.security_session_id
         {
-            return Err(Error::new("identity", "Input recovery cannot cross logins"));
+            return Err(Error::new(
+                Code::Identity,
+                "Input recovery cannot cross logins",
+            ));
         }
 
         self.epoch = current;
@@ -293,7 +299,7 @@ impl Engine {
         self.post(event, flags, point)
     }
 
-    pub fn release(&mut self) -> Result<()> {
+    pub(super) fn release(&mut self) -> Result<()> {
         self.grant = None;
 
         if !self.held_input() {
@@ -319,7 +325,7 @@ impl Engine {
         self.commit()
     }
 
-    pub fn held_input(&self) -> bool {
+    pub(super) fn held_input(&self) -> bool {
         self.held.is_some() || !self.held_keys.is_empty() || self.flags != 0
     }
 
@@ -336,7 +342,10 @@ impl Engine {
         match phase {
             PointerPhase::Down => {
                 if self.held.is_some() {
-                    return Err(Error::new("input", "Release the held mouse button first"));
+                    return Err(Error::new(
+                        Code::Input,
+                        "Release the held mouse button first",
+                    ));
                 }
 
                 self.mouse(CGEventType::MouseMoved, point, button, count, flags)?;
@@ -395,10 +404,10 @@ impl Engine {
             PointerPhase::Up => {
                 let held = self
                     .held
-                    .ok_or_else(|| Error::new("input", "No mouse button is held"))?;
+                    .ok_or_else(|| Error::new(Code::Input, "No mouse button is held"))?;
                 if held != button {
                     return Err(Error::new(
-                        "input",
+                        Code::Input,
                         "Mouse button does not match the active gesture",
                     ));
                 }
@@ -414,7 +423,7 @@ impl Engine {
         self.commit()
     }
 
-    #[allow(unsafe_code)] // FFI: key text is passed as a UTF-16 pointer.
+    #[allow(unsafe_code, reason = "FFI: key text is passed as a UTF-16 pointer")]
     fn key_event(&mut self, code: u16, down: bool, flags: u64, text: Option<&[u16]>) -> Result<()> {
         let event = created(CGEvent::new_keyboard_event(
             Some(&self.source.0),
@@ -481,7 +490,7 @@ impl Engine {
         }
     }
 
-    pub async fn perform(&mut self, action: Action) -> Result<()> {
+    pub(super) async fn perform(&mut self, action: Action) -> Result<()> {
         self.check()?;
 
         match action {
@@ -619,7 +628,7 @@ impl Engine {
             }
             Action::Key { key } => {
                 let (code, flags) =
-                    parse_key(&key).ok_or_else(|| Error::new("input", "Unsupported key"))?;
+                    parse_key(&key).ok_or_else(|| Error::new(Code::Input, "Unsupported key"))?;
                 self.key(code, flags, None)?;
             }
             Action::Wait { ms } => self.delay(Duration::from_millis(ms.into())).await?,
@@ -701,7 +710,7 @@ mod tests {
 
         let failed = release_each(&mut held, |code, rest| {
             if code == 56 {
-                return Err(Error::new("native", "Could not post"));
+                return Err(Error::new(Code::Native, "Could not post"));
             }
 
             posted.push((code, rest));

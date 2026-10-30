@@ -4,7 +4,7 @@
 //! with SwiftPM. It renders the local viewer's status and frame and
 //! runs `atlas` commands; it reaches nothing else. The capability URL
 //! travels on its stdin, never in argv, and closing stdin makes it quit.
-use crate::error::{Error, Result};
+use crate::error::{Code, Error, Result};
 use std::{
     fs,
     path::{Path, PathBuf},
@@ -99,8 +99,8 @@ pub async fn launch(config: &Path, port: u16, output: &Path) -> Result<(bool, se
             let already = status.success() && reply["alreadyRunning"] == true;
             let code = reply["code"]
                 .as_str()
-                .and_then(crate::error::code)
-                .unwrap_or("menubar");
+                .and_then(crate::error::Code::parse)
+                .unwrap_or(Code::Menubar);
 
             // Another menu bar holds the port (the one that just stopped said
             // so, or the login item took it a moment before its record
@@ -141,7 +141,7 @@ pub async fn launch(config: &Path, port: u16, output: &Path) -> Result<(bool, se
             let _ = child.kill();
             let _ = child.wait();
             return Err(Error::new(
-                "menubar",
+                Code::Menubar,
                 format!(
                     "The menu bar did not start in time; see {}",
                     log_path.display()
@@ -173,7 +173,7 @@ async fn starting(path: &Path) -> Result<fs::File> {
     }
 
     Err(Error::new(
-        "busy",
+        Code::Busy,
         "Another menu bar start is still running",
     ))
 }
@@ -266,7 +266,7 @@ fn development() -> Result<PathBuf> {
     let package = Path::new(env!("CARGO_MANIFEST_DIR")).join("app");
     if !package.join("Package.swift").is_file() {
         return Err(Error::new(
-            "menubar",
+            Code::Menubar,
             format!(
                 "Run the menu bar from Atlas.app; install it with: {}",
                 crate::update::INSTALL_COMMAND
@@ -283,7 +283,7 @@ fn development() -> Result<PathBuf> {
             .output()
             .map_err(|_| {
                 Error::new(
-                    "menubar",
+                    Code::Menubar,
                     "Building the menu bar needs the Xcode Command Line Tools; run xcode-select --install",
                 )
             })
@@ -292,7 +292,7 @@ fn development() -> Result<PathBuf> {
     let built = swift(&["build", "-c", "release", "--product", APP_EXECUTABLE])?;
     if !built.status.success() {
         return Err(Error::new(
-            "menubar",
+            Code::Menubar,
             format!(
                 "The menu bar did not build: {}",
                 crate::ui::text::first_line(&built.stderr, 300)
@@ -320,7 +320,7 @@ pub fn executable() -> Result<PathBuf> {
         // signed, never a file merely placed there.
         if !crate::setup::app_signed(&app) {
             return Err(Error::new(
-                "menubar",
+                Code::Menubar,
                 "The app inside Atlas.app is not signed by Atlas",
             ));
         }
@@ -346,7 +346,10 @@ impl Login {
             "on" => Ok(Self::On),
             "off" => Ok(Self::Off),
             "status" => Ok(Self::Status),
-            _ => Err(Error::new("usage", "Open at Login takes on, off or status")),
+            _ => Err(Error::new(
+                Code::Usage,
+                "Open at Login takes on, off or status",
+            )),
         }
     }
 
@@ -373,7 +376,7 @@ pub fn set_login(login: Login) -> Result<serde_json::Value> {
         .stdin(Stdio::null())
         .output()?;
     let reply: serde_json::Value = serde_json::from_slice(&output.stdout)
-        .map_err(|_| Error::new("menubar", "The menu bar did not report its login item"))?;
+        .map_err(|_| Error::new(Code::Menubar, "The menu bar did not report its login item"))?;
 
     // Turning it on or off is the person's choice, and init keeps it.
     if login != Login::Status && reply["ok"] == true {
@@ -449,7 +452,7 @@ async fn spawn(program: &Program, url: &str, args: &[&str]) -> Result<(Child, Ch
     let mut stdin = child
         .stdin
         .take()
-        .ok_or_else(|| Error::new("menubar", "The menu bar has no input"))?;
+        .ok_or_else(|| Error::new(Code::Menubar, "The menu bar has no input"))?;
     stdin.write_all(format!("{url}\n").as_bytes()).await?;
     stdin.flush().await?;
 
@@ -532,14 +535,14 @@ fn render_args(path: &str, dark: bool) -> Vec<&str> {
 pub async fn render(program: &Program, url: &str, path: &Path, dark: bool) -> Result<()> {
     let target = path
         .to_str()
-        .ok_or_else(|| Error::new("usage", "The render path must be UTF-8"))?;
+        .ok_or_else(|| Error::new(Code::Usage, "The render path must be UTF-8"))?;
     let (mut child, _stdin) = spawn(program, url, &render_args(target, dark)).await?;
     let status = tokio::time::timeout(Duration::from_secs(30), child.wait())
         .await
-        .map_err(|_| Error::new("menubar", "The menu bar did not finish rendering"))??;
+        .map_err(|_| Error::new(Code::Menubar, "The menu bar did not finish rendering"))??;
     if !status.success() {
         return Err(Error::new(
-            "menubar",
+            Code::Menubar,
             format!("The menu bar could not render ({status})"),
         ));
     }

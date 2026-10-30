@@ -79,7 +79,7 @@ struct DesktopCanvasViewTests {
     )
     #expect(canvas.intercept(commandTwo) == nil, "the main menu never sees it")
     try await settle("⌘2 never reached the helper") { service.actions == [[.key("cmd+2")]] }
-    #expect(viewer.state.top.tabs.selected == .screen)
+    #expect(viewer.state.pane.place == .screen)
     canvas.stopIntercepting()
     viewer.close()
   }
@@ -126,7 +126,7 @@ struct DesktopCanvasViewTests {
     viewer.close()
   }
 
-  @Test("while in control, ⌘Q stays with this Mac, and the Keys menu's Quit app sends it to the helper")
+  @Test("while in control, ⌘Q stays with this Mac, and Send Key's Quit App sends it to the helper")
   func commandQStaysHereInControl() async throws {
     let service = ScriptedService()
     let viewer = try await ViewerController.watching(service)
@@ -157,9 +157,9 @@ struct DesktopCanvasViewTests {
       )
     )
     #expect(canvas.intercept(commandQ) === commandQ, "this Mac's menu gets it")
-    let quit = try #require(KeysMenu.menu(for: viewer).items.first { $0.title == "Quit App" } as? HandlerMenuItem)
-    quit.fire()
-    // Input leaves in order, so the Keys menu's ⌘Q arriving alone means the intercepted one sent nothing.
+    let quit = try #require(HelperKey.all.firstIndex { $0.name == "Quit App" })
+    viewer.sendKey(at: quit)
+    // Input leaves in order, so Send Key's ⌘Q arriving alone means the intercepted one sent nothing.
     try await settle("Quit app never reached the helper") { !service.actions.isEmpty }
     #expect(service.actions == [[.key("cmd+q")]], "nothing else went to the helper")
     canvas.stopIntercepting()

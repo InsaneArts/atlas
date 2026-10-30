@@ -1,32 +1,35 @@
 import SwiftUI
 
-/// One of Recent's rows: what was done and, on the right, how long ago, whose digits count rather than jump while the
-/// unit stays, and which swaps by opacity when the words change, as from "now" to "1 s" or from seconds to minutes. No
-/// mark leads it unless it carries state: a warning sign for what did not work, and a blue dot on the live row that
-/// cools away after a second. Under Reduce Motion the dot only fades as it cools: its place stays while the
-/// row is live, so the words never move. VoiceOver reads it as one.
+/// One of Recent's rows: its icon, the app's, Atlas's for what Atlas did itself or the person's mark for their own,
+/// so every row's words start at one edge; what was done, and on the right how long ago, whose digits count rather
+/// than jump while the unit stays, and which swaps by opacity when the words change, as from "now" to "1 s" or from
+/// seconds to minutes. Before the time, a warning sign for what did not work, and a blue dot on the live row that
+/// cools away after a second; neither moves the words. Under Reduce Motion the dot only fades as it cools. VoiceOver
+/// reads it as one.
 struct PanelRecentRow: View {
   /// The action.
   let entry: PanelRecentEntry
   /// Whether the live row's dot has cooled away; it does once per row, a second after the row arrives live.
   @State private var isCooled = false
-  @Environment(\.accessibilityReduceMotion) private var reduceMotion
+  @Environment(\.motionReduced) private var reduceMotion
   @Environment(\.animatesArrivals) private var animatesArrivals
 
   /// Its mark if it carries state, what was done, and how long ago.
   var body: some View {
     HStack(spacing: .zero) {
-      if entry.isFailed {
-        ActivityMark(kind: .failed)
-          .padding(.trailing, Spacing.s)
-      }
-      StatusDot(mark: .dot, tone: .active, size: .small)
-        .opacity(isGlowing ? 1 : 0)
-        .frame(width: holdsDot ? IconSize.xxs : .zero, alignment: .leading)
-        .padding(.trailing, holdsDot ? Spacing.s : .zero)
+      ActivityGlyph(icon: entry.icon, side: PanelLayout.recentIcon)
+        .padding(.trailing, Spacing.s)
       Text(entry.line)
         .truncationMode(.tail)
         .frame(maxWidth: .infinity, alignment: .leading)
+      StatusDot(mark: .dot, tone: .active, size: .small)
+        .opacity(isGlowing ? 1 : 0)
+        .frame(width: holdsDot ? IconSize.xxs : .zero, alignment: .trailing)
+        .padding(.leading, holdsDot ? Spacing.s : .zero)
+      if entry.isFailed {
+        ActivityMark(kind: .failed)
+          .padding(.leading, Spacing.s)
+      }
       ZStack(alignment: .trailing) {
         Text(entry.when)
           .font(Typography.digits(.callout))
@@ -42,7 +45,7 @@ struct PanelRecentRow: View {
     .font(Typography.font(.callout))
     .lineLimit(1)
     .frame(minHeight: PanelLayout.recentRow)
-    .padding(.horizontal, Spacing.half)
+    .padding(.horizontal, PanelLayout.textInset)
     .accessibilityElement(children: .combine)
     .onAppear(perform: cool)
     .onChange(of: entry.isLive) { cool() }
@@ -53,12 +56,12 @@ struct PanelRecentRow: View {
     entry.isLive && !isCooled
   }
 
-  /// Whether the dot keeps its place before the words.
+  /// Whether the dot keeps its place after the words.
   private var holdsDot: Bool {
     Self.holdsDot(isLive: entry.isLive, isCooled: isCooled, reduceMotion: reduceMotion)
   }
 
-  /// Whether the dot keeps its place before the words: while it glows, so the words close the gap as it cools away;
+  /// Whether the dot keeps its place after the words: while it glows, so the words' room opens as it cools away;
   /// under Reduce Motion for as long as the row is live, so cooling only fades the dot and nothing moves.
   ///
   /// - Parameters:
@@ -115,6 +118,7 @@ struct PanelRecentRow: View {
       PanelRecentRow(
         entry: PanelRecentEntry(
           id: String(attempt),
+          icon: .app(.monogram(AppMonogram(name: "Opie"))),
           line: "Turning Show Center off in Opie",
           when: "\(attempt * 3) s",
           isFailed: isFailed,

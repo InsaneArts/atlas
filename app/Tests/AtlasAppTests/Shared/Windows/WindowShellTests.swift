@@ -34,11 +34,12 @@ struct WindowShellTests {
     }
   }
 
-  @Test("every window the coordinator opens is hosted by the shell in the dark appearance")
-  func everyWindowIsHostedByTheShellInTheDark() throws {
+  @Test("every window the coordinator opens is hosted by the shell and follows the Mac's appearance")
+  func everyWindowIsHostedByTheShellInTheMacsAppearance() throws {
     let service = ScriptedService()
     let commands = ScriptedCommands([:])
     let actions = HelperActions(
+      console: SessionConsole(read: { true }),
       commands: commands,
       service: service,
       barrier: ControlBarrier(service: service, clock: ManualClock())
@@ -52,7 +53,8 @@ struct WindowShellTests {
     ]
     for (index, made) in windows.enumerated() {
       let window = try #require(made as? NSWindow)
-      #expect(window.appearance?.name == Appearance.dark?.name)
+      // No appearance of its own: the window follows the Mac's Light, Dark or Auto, and changes with it while open.
+      #expect(window.appearance == nil)
       #expect(!window.isReleasedWhenClosed)
       // The alert, last, is clear so its own corners and shadow show; every other window sits on the ground.
       #expect(window.backgroundColor == (index == windows.count - 1 ? NSColor.clear : NSColor.ground))
@@ -62,5 +64,31 @@ struct WindowShellTests {
         host?.hasPrefix("NSHostingController<ShellRoot<") == true || view?.hasPrefix("NSHostingView<ShellRoot<") == true
       )
     }
+  }
+
+  @Test("an open window redraws light and then dark as the appearance changes, with nothing reopened")
+  func anOpenWindowFollowsAnAppearanceChange() throws {
+    let commands = ScriptedCommands([:])
+    let live = WindowMaking.live
+    let made = live.settings(.scripted(commands: commands)) { _ in }
+    let window = try #require(made as? NSWindow)
+    let content = try #require(window.contentView)
+    var grounds: [CGFloat] = []
+    for name in [NSAppearance.Name.aqua, .darkAqua, .aqua] {
+      let appearance = try #require(NSAppearance(named: name))
+      // What System Settings › Appearance does to a window that sets none of its own.
+      window.appearance = appearance
+      content.layoutSubtreeIfNeeded()
+      let bitmap = try #require(content.bitmapImageRepForCachingDisplay(in: content.bounds))
+      appearance.performAsCurrentDrawingAppearance {
+        content.cacheDisplay(in: content.bounds, to: bitmap)
+      }
+      // A corner of the window's ground, clear of the title, the tabs and the panes.
+      let corner = try #require(bitmap.colorAt(x: 2, y: 2)?.usingColorSpace(.sRGB))
+      grounds.append(corner.brightnessComponent)
+    }
+    #expect(grounds[0] > 0.9, "light: \(grounds[0])")
+    #expect(grounds[1] < 0.15, "dark: \(grounds[1])")
+    #expect(grounds[2] == grounds[0], "light again: \(grounds[2])")
   }
 }

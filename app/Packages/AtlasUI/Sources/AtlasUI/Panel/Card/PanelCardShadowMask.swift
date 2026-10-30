@@ -1,7 +1,7 @@
 import SwiftUI
 
-/// Where the panel card's shadow may show: everywhere but under the card, so the glass never darkens over its own
-/// shadow.
+/// Where the panel card's shadow may show: everywhere but under the card, so nothing of it reaches the card's own
+/// ground.
 struct PanelCardShadowMask: View {
   /// The card's outline.
   let shape: RoundedRectangle
@@ -20,7 +20,7 @@ struct PanelCardShadowMask: View {
 
 #if DEBUG
   #Preview("Mask") {
-    PanelCardShadowMask(shape: RoundedRectangle(cornerRadius: PanelLayout.corner))
+    PanelCardShadowMask(shape: RoundedRectangle(cornerRadius: PanelLayout.corner, style: .continuous))
       .frame(width: PanelLayout.width, height: PanelLayout.picture.height)
       .padding(PanelLayout.shadowRoom)
       .sampleSurface()

@@ -14,31 +14,31 @@ struct ViewerSnapshot {
   var acquiring = false
   /// Text the input method is composing, not yet sent.
   var composing = ""
-  /// Whether the person asked for Details.
-  var detailsShown = false
   /// How often a picture is read while watching.
   var rate = ViewerPictureRate.live
   /// The time the window last read the clock, in seconds of uptime.
   var now: TimeInterval = 0
   /// The helper's commands running now, from any window.
   var running: Set<HelperActions.Command> = []
+  /// Whether this process's graphical session is on this Mac's console.
+  var isOnConsole = false
   /// Stop and Resume requests unanswered from any window, so Resume waits.
   var agentRequests = 0
   /// Whether control work is under way anywhere in the app: an acquisition awaiting its reply, or a release.
   var controlBusy = false
-  /// The agents connected to Atlas, as last read for Details; nil when unknown.
+  /// The agents connected to Atlas, as last read for the helper's facts; nil when unknown.
   var agents: [AgentID]?
   /// When the helper's account logged in; nil when unknown.
   var loggedInAt: Date?
-  /// The time zone Details tells the login time in.
+  /// The time zone the helper's and sessions' facts tell their times in.
   var timeZone = TimeZone.current
-  /// The locale Details tells the login time in, and the tabs their times and days.
+  /// The locale the facts tell their times in, and the lists their times and days.
   var locale = Locale.current
-  /// What the Activity, Apps and Screenshots tabs hold.
+  /// What the Activity, Apps and Screenshots panes hold.
   var panes = ViewerPanes()
-  /// The date and time now, which the tabs tell Now, today and the last hour by.
+  /// The date and time now, which the panes tell Now, today and the last hour by.
   var date = Date()
-  /// The calendar the tabs tell days and hours by; its time zone is ``timeZone``'s.
+  /// The calendar the panes tell days and hours by; its time zone is ``timeZone``'s.
   var calendar = Calendar(identifier: .gregorian)
 
   /// Whether this window holds control.

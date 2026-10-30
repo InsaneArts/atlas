@@ -18,6 +18,12 @@ public struct DesktopPicture: Equatable, Sendable {
     self.image = image
   }
 
+  /// The picture's width over its height; nil for a picture with no height.
+  public var aspectRatio: CGFloat? {
+    guard image.height > 0 else { return nil }
+    return CGFloat(image.width) / CGFloat(image.height)
+  }
+
   /// Whether two pictures are the same frame.
   ///
   /// - Parameters:

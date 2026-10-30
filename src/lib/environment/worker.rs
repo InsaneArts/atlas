@@ -1,5 +1,12 @@
 //! Runs inside the selected login. Every mutation is guarded and journaled.
-use super::{model::*, state::Store, *};
+use super::{
+    model::*,
+    reply::{TransactionSummary, Transactions},
+    state::Store,
+    *,
+};
+use crate::files::Lock;
+use crate::task::record::Lenient;
 
 /// The helper's answer for a plan it never applied.
 pub(super) const MISSING: &str =
@@ -24,11 +31,7 @@ pub fn worker(path: &Path, apply: bool) -> Result<Value> {
 
     guard()?;
     let home = account_home(packet.expected.uid)?;
-    let mutating = matches!(
-        &packet.request,
-        Request::Apply { .. } | Request::Rollback { apply: true, .. } | Request::Run { .. }
-    );
-    if apply != mutating {
+    if apply != packet.request.changes_helper() {
         return Err(problem("Worker apply flag does not match its request"));
     }
 
@@ -37,7 +40,116 @@ pub fn worker(path: &Path, apply: bool) -> Result<Value> {
         Request::Apply { plan } => apply_plan(&home, &plan, &guard),
         Request::Rollback { id, apply } => rollback(&home, &id, apply, &guard),
         Request::Run { argv } => runner::execute(&home, &argv, &guard),
+        Request::Transactions { all, ids } => transactions(&home, all, &ids, &guard),
+        Request::InstallApp { id, source, name } => {
+            installs::install(&home, &id, &source, &name, &guard)
+        }
+        Request::RemoveApp { id } => {
+            installs::remove(&home, &id, &guard, &installs::Looks::system())
+        }
+        Request::Installs { ids } => {
+            installs::states(&home, &ids, &guard, &installs::Looks::system())
+        }
     }
+}
+
+/// The most transactions listed; `more` counts those left unread.
+const LISTED: usize = 200;
+
+/// The transactions in the helper, newest first, at most [`LISTED`]: each
+/// one's ID, phase, whether it is the one that must be resumed or rolled
+/// back first, when its record last changed, and each file's target and
+/// operation. Those rolled back completely are counted as `hidden`, not
+/// listed, unless `all`, so they never push older unfinished ones out. Each
+/// of `ids` (the frozen plans the asker holds) is listed whatever its phase
+/// and age, so the asker can tell which the helper started. File contents,
+/// digests, fingerprints, sources and copies are never included, and a
+/// record that does not read is counted, not listed. It opens existing
+/// state only, creates nothing, and holds the store's shared lock only
+/// while it reads one record, so an operation that wants the store waits
+/// no longer than that.
+pub(super) fn transactions(
+    home: &Path,
+    all: bool,
+    ids: &[String],
+    guard: &impl Fn() -> Result<()>,
+) -> Result<Value> {
+    guard()?;
+    if ids.len() > LISTED {
+        return Err(problem("Too many plans were asked about"));
+    }
+    for id in ids {
+        validate_id(id)?;
+    }
+    let (mut recorded, active) = {
+        let store = Store::open(home, Lock::Shared)?;
+        let read = (recorded_transactions(&store.path), store.active()?);
+        store.confirm_read()?;
+        read
+    };
+    recorded.sort_by_key(|(_, updated)| std::cmp::Reverse(*updated));
+
+    let asked = |id: &String| ids.contains(id);
+    let (mut listed, mut hidden, mut unreadable, mut more) = (Vec::new(), 0, 0, 0);
+    for (id, updated) in &recorded {
+        let full = listed.len() >= LISTED;
+        if full && !asked(id) {
+            more += 1;
+            continue;
+        }
+        match Store::open(home, Lock::Shared)?.transaction(id) {
+            Ok(Some(transaction))
+                if !all && !asked(id) && transaction.phase == Phase::RolledBack =>
+            {
+                hidden += 1;
+            }
+            Ok(Some(transaction)) => listed.push(Lenient::Known(TransactionSummary {
+                plan_id: id.clone(),
+                phase: transaction.phase.into(),
+                active: active.as_deref() == Some(id.as_str()),
+                updated_at: *updated,
+                files: file_report(&transaction.plan),
+                retained_directories: transaction.retained_directories.len(),
+            })),
+            Ok(None) | Err(_) => unreadable += 1,
+        }
+    }
+
+    Ok(serde_json::to_value(Transactions {
+        ok: true,
+        transactions: listed,
+        hidden,
+        more,
+        unreadable,
+    })?)
+}
+
+/// The transactions whose record is in the store at `path`, by ID, with
+/// when each record last changed, in milliseconds since 1970. A folder
+/// without a record holds a preparation that never started, and is left
+/// out.
+fn recorded_transactions(path: &Path) -> Vec<(String, u64)> {
+    let Ok(entries) = fs::read_dir(path) else {
+        return Vec::new();
+    };
+
+    entries
+        .flatten()
+        .filter_map(|entry| {
+            let name = entry.file_name().to_str()?.to_owned();
+            let id = name.strip_prefix("transaction-")?;
+            validate_id(id).ok()?;
+            if !fs::symlink_metadata(entry.path()).ok()?.is_dir() {
+                return None;
+            }
+            let modified = fs::symlink_metadata(entry.path().join("transaction.json"))
+                .ok()?
+                .modified()
+                .ok()?;
+            let at = modified.duration_since(std::time::UNIX_EPOCH).ok()?;
+            Some((id.to_owned(), u64::try_from(at.as_millis()).ok()?))
+        })
+        .collect()
 }
 
 fn account_home(uid: u32) -> Result<PathBuf> {
@@ -70,7 +182,7 @@ pub(super) fn preview(
     validate_id(id)?;
     guard()?;
 
-    let store = Store::open(home, false)?;
+    let store = Store::open(home, Lock::Shared)?;
     store.require_available(id)?;
     let ledger = store.ledger()?;
     validate_files(files.iter())?;
@@ -100,6 +212,7 @@ pub(super) fn preview(
     }
 
     guard()?;
+    store.confirm_read()?;
     let plan = Plan {
         version: 1,
         id: id.into(),
@@ -160,13 +273,7 @@ fn validate_files<'a>(files: impl ExactSizeIterator<Item = &'a Payload> + Clone)
     unique_targets(files.clone().map(|file| file.target.as_path()))?;
 
     for file in files {
-        if !file.source.is_absolute()
-            || file.sha256.len() != 64
-            || !file
-                .sha256
-                .bytes()
-                .all(|b| b.is_ascii_hexdigit() && !b.is_ascii_uppercase())
-        {
+        if !file.source.is_absolute() || !crate::name::lower_hex(&file.sha256, 64) {
             return Err(problem("Invalid frozen file selection"));
         }
     }
@@ -227,7 +334,7 @@ pub(super) fn apply_plan(
     guard()?;
 
     {
-        let store = Store::open(home, false)?;
+        let store = Store::open(home, Lock::Shared)?;
         store.require_available(&plan.id)?;
 
         if store.transaction(&plan.id)?.is_none() {
@@ -236,7 +343,7 @@ pub(super) fn apply_plan(
     }
 
     guard()?;
-    let store = Store::open(home, true)?;
+    let store = Store::open(home, Lock::Exclusive)?;
     store.require_available(&plan.id)?;
     let mut ledger = store.ledger()?;
 
@@ -493,7 +600,7 @@ fn never_installed(
     };
 
     let path = destination(home, &file.payload.target)?;
-    let waiting = candidate(&path, &transaction.plan.id, index, false);
+    let waiting = candidate(&path, &transaction.plan.id, index, false)?;
 
     Ok(fingerprint(&path)?.as_ref() != Some(prepared)
         && fingerprint(&waiting)?.as_ref() == Some(prepared))
@@ -514,7 +621,7 @@ fn apply_file(
     let installed = apply_state(home, transaction, index, ledger)?;
     if !installed && file.operation != Operation::Unchanged {
         ensure_parents(home, transaction, &file.payload.target, store, guard)?;
-        let candidate = candidate(&path, &transaction.plan.id, index, false);
+        let candidate = candidate(&path, &transaction.plan.id, index, false)?;
 
         if transaction.progress[index].prepared.is_none() {
             guard()?;
@@ -593,13 +700,16 @@ fn finish_file(
     store.save(transaction)
 }
 
-fn candidate(path: &Path, id: &str, index: usize, rollback: bool) -> PathBuf {
-    path.parent()
-        .expect("a checked destination lies inside the helper home")
-        .join(format!(
-            ".atlas-{id}-{index}-{}",
-            if rollback { "restore" } else { "install" }
-        ))
+/// Where a file is prepared beside `path` before it is moved over it. A
+/// checked destination lies inside the helper home, so it has a folder.
+fn candidate(path: &Path, id: &str, index: usize, rollback: bool) -> Result<PathBuf> {
+    let folder = path
+        .parent()
+        .ok_or_else(|| problem("A destination needs a folder"))?;
+    Ok(folder.join(format!(
+        ".atlas-{id}-{index}-{}",
+        if rollback { "restore" } else { "install" }
+    )))
 }
 
 /// Write `bytes` beside their destination with the group and attributes of
@@ -686,7 +796,7 @@ pub(super) fn rollback(
     validate_id(id)?;
     guard()?;
 
-    let store = Store::open(home, apply)?;
+    let store = Store::open(home, if apply { Lock::Exclusive } else { Lock::Shared })?;
     store.require_available(id)?;
     let mut ledger = store.ledger()?;
     let mut transaction = store.transaction(id)?.ok_or_else(|| problem(MISSING))?;
@@ -713,7 +823,7 @@ pub(super) fn rollback(
             {
                 if let Some(restore) = &transaction.progress[index].restore {
                     let path = destination(home, &file.payload.target)?;
-                    if fingerprint(&candidate(&path, id, index, true))?.as_ref() != Some(restore) {
+                    if fingerprint(&candidate(&path, id, index, true)?)?.as_ref() != Some(restore) {
                         return Err(problem("A prepared restore changed or disappeared"));
                     }
                 } else {
@@ -751,6 +861,10 @@ pub(super) fn rollback(
 
         Ok(())
     })();
+
+    if !apply {
+        store.confirm_read()?;
+    }
 
     let mut value = report(&transaction, result, true);
     value["preview"] = json!(!apply);
@@ -876,7 +990,7 @@ fn rollback_file(
     // The randomized candidate name is reserved in this durable transaction.
     // A crash can leave its inode prepared before the fingerprint was recorded.
     if transaction.progress[index].prepared.is_none() {
-        let candidate = candidate(&path, &transaction.plan.id, index, false);
+        let candidate = candidate(&path, &transaction.plan.id, index, false)?;
         if let Some(prepared) = fingerprint(&candidate)? {
             if prepared.sha256 != file.payload.sha256
                 || prepared.mode != desired_mode(&file.payload)
@@ -912,7 +1026,7 @@ fn rollback_file(
                 return Err(problem("Transaction backup changed"));
             }
 
-            let candidate = candidate(&path, &transaction.plan.id, index, true);
+            let candidate = candidate(&path, &transaction.plan.id, index, true)?;
             guard()?;
             transaction.progress[index].restore = Some(prepare_inode(
                 &candidate,
@@ -934,7 +1048,7 @@ fn rollback_file(
         }
 
         if file.before.is_some() {
-            let candidate = candidate(&path, &transaction.plan.id, index, true);
+            let candidate = candidate(&path, &transaction.plan.id, index, true)?;
             if fingerprint(&candidate)? != transaction.progress[index].restore {
                 return Err(problem("Prepared restore changed"));
             }
@@ -1030,7 +1144,7 @@ fn discard_candidates(
     guard: &impl Fn() -> Result<()>,
 ) -> Result<()> {
     for restore in [false, true] {
-        let candidate = candidate(path, &transaction.plan.id, index, restore);
+        let candidate = candidate(path, &transaction.plan.id, index, restore)?;
         discard_partial(&candidate)?;
 
         if let Some(current) = fingerprint(&candidate)? {
@@ -1072,7 +1186,7 @@ fn release_untouched(
     store: &Store,
     guard: &impl Fn() -> Result<()>,
 ) -> Result<()> {
-    let waiting = candidate(path, &transaction.plan.id, index, false);
+    let waiting = candidate(path, &transaction.plan.id, index, false)?;
     discard_partial(&waiting)?;
 
     let current = fingerprint(&waiting)?;

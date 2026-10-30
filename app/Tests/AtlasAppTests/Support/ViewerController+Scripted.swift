@@ -29,6 +29,7 @@ extension ViewerController {
   ///   - wallClock: The date and time now; by default a fixed one.
   ///   - shotOutlet: Where copied screenshots go and how files are shown; by default nowhere.
   ///   - preferences: The window's saved choices; by default in memory, with `rate` saved.
+  ///   - icons: Where apps' icons are found; by default nowhere, so every app draws its tile.
   /// - Returns: The viewer, closed until it is shown.
   static func scripted(
     _ service: ScriptedService,
@@ -43,12 +44,14 @@ extension ViewerController {
     connectedAgents: @escaping @MainActor () async -> [AgentID]? = { nil },
     wallClock: @escaping @MainActor () -> Date = { Date(timeIntervalSince1970: 0) },
     shotOutlet: ShotOutlet = ShotOutlet(copy: { _ in }, reveal: { _ in }),
-    preferences: ViewerPreferences? = nil
+    preferences: ViewerPreferences? = nil,
+    icons: AppIcons = .none
   ) -> ViewerController {
     let viewer = WeakViewer()
     let actions =
       actions
       ?? HelperActions(
+        console: SessionConsole(read: { true }),
         commands: commands,
         service: service,
         barrier: ControlBarrier(service: service, clock: clock)
@@ -68,7 +71,8 @@ extension ViewerController {
         switchToHelper: switchToHelper,
         connectedAgents: connectedAgents,
         wallClock: wallClock,
-        shotOutlet: shotOutlet
+        shotOutlet: shotOutlet,
+        icons: icons
       )
     )
     viewer.controller = controller
@@ -88,6 +92,7 @@ extension ViewerController {
   ///   - actions: The helper's commands, when a test shares them with a panel.
   ///   - wallClock: The date and time now; by default a fixed one.
   ///   - shotOutlet: Where copied screenshots go and how files are shown; by default nowhere.
+  ///   - icons: Where apps' icons are found; by default nowhere.
   /// - Returns: The viewer, open and watching.
   /// - Throws: The failed requirement, when the first picture never arrives.
   static func watching(
@@ -100,7 +105,8 @@ extension ViewerController {
     pictures: PictureOutlet = PictureOutlet(copy: { _ in }, save: { _ in nil }),
     actions: HelperActions? = nil,
     wallClock: @escaping @MainActor () -> Date = { Date(timeIntervalSince1970: 0) },
-    shotOutlet: ShotOutlet = ShotOutlet(copy: { _ in }, reveal: { _ in })
+    shotOutlet: ShotOutlet = ShotOutlet(copy: { _ in }, reveal: { _ in }),
+    icons: AppIcons = .none
   ) async throws -> ViewerController {
     service.picture = png()
     let viewer = scripted(
@@ -113,7 +119,8 @@ extension ViewerController {
       pictures: pictures,
       actions: actions,
       wallClock: wallClock,
-      shotOutlet: shotOutlet
+      shotOutlet: shotOutlet,
+      icons: icons
     )
     viewer.setVisible(true)
     try await settle("the first picture never arrived") { viewer.reading.frame != nil }

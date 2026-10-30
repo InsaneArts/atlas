@@ -12,16 +12,18 @@
 //! as its own window's does, so one controller at a time holds it.
 use crate::{
     client::{Actor, Client},
-    error::{Error, Result},
+    error::{Code, Error, Result},
     helper_info::{
         FRAME_LIMIT, ICONS, Icons, capture_time, captures, frame, open_apps, read_capture,
         thumbnail,
     },
+    host_session::{Host, HostSession, Key, names::names, record, store::Store},
 };
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 use std::{
-    path::PathBuf,
+    collections::{BTreeMap, BTreeSet},
+    path::{Path, PathBuf},
     sync::{
         Arc, OnceLock,
         atomic::{AtomicBool, Ordering},
@@ -120,6 +122,9 @@ struct Server {
     held: Mutex<Option<Held>>,
     /// App icons made.
     icons: Icons,
+    /// The host session the server's environment names, read once: the
+    /// view says "This chat" only when it is certainly this one.
+    host_session: Option<HostSession>,
 }
 
 /// A frame of the menu bar's viewer: the key control requests name it by,
@@ -169,6 +174,7 @@ pub async fn serve(
         shared: Mutex::new(None),
         held: Mutex::new(None),
         icons: Icons::default(),
+        host_session: HostSession::from_env(),
     });
     let out = Arc::new(Mutex::new(tokio::io::stdout()));
     let mut input = BufReader::new(tokio::io::stdin());
@@ -244,7 +250,7 @@ pub async fn serve(
         }
         if !registry.is_empty() {
             return Err(Error::new(
-                "menubar",
+                Code::Menubar,
                 "A view's cleanup is unconfirmed; Atlas retains pending native work for recovery",
             ));
         }
@@ -323,7 +329,7 @@ async fn post(url: &str, route: &'static str, body: Value) -> Result<Value> {
     let url = url.to_owned();
     tokio::task::spawn_blocking(move || crate::viewer::post_local(&url, route, &body))
         .await
-        .map_err(|_| Error::new("menubar", "Atlas's menu bar didn't answer"))?
+        .map_err(|_| Error::new(Code::Menubar, "Atlas's menu bar didn't answer"))?
 }
 
 /// A JSON-RPC result for request `id`.
@@ -476,8 +482,24 @@ impl Server {
         let output = self.client.output_dir()?.to_path_buf();
         let (status, _) = crate::watch::read(&self.client, &output, self.port)
             .await
-            .ok_or_else(|| Error::new("menubar", "Atlas's menu bar is busy; try again"))?;
-        let status = summary(&status);
+            .ok_or_else(|| Error::new(Code::Menubar, "Atlas's menu bar is busy; try again"))?;
+        // The records and notes are read under their locks, off the runtime.
+        let client = self.client.clone();
+        let (recent, unrecorded) = tokio::task::spawn_blocking(move || {
+            let recent = Store::at(&output).recent();
+            let unrecorded = crate::overview::first_command_running(&client, &recent);
+            (recent, unrecorded)
+        })
+        .await
+        .map_err(|_| Error::new(Code::State, "Atlas could not read its sessions"))?;
+        let named = names(recent.iter().map(|seen| &seen.record));
+        let own = own_session(
+            self.host_session.as_ref(),
+            &recent,
+            parent_pid(),
+            unrecorded,
+        );
+        let status = summary(&status, &named, own.as_ref());
 
         let mut last = self.last.lock().await;
         if last.as_ref().is_none_or(|(at, _)| *at <= began) {
@@ -590,14 +612,14 @@ impl Server {
             return Ok(url);
         }
         if !start {
-            return Err(Error::new("menubar", "Atlas's menu bar isn't running"));
+            return Err(Error::new(Code::Menubar, "Atlas's menu bar isn't running"));
         }
 
         let (_, record) = crate::menubar::launch(&self.config, self.port, &output).await?;
         record["url"]
             .as_str()
             .map(str::to_owned)
-            .ok_or_else(|| Error::new("menubar", "The menu bar's record names no viewer"))
+            .ok_or_else(|| Error::new(Code::Menubar, "The menu bar's record names no viewer"))
     }
 
     /// A key the viewer at `url` keeps a frame under now: the last one seen
@@ -615,7 +637,7 @@ impl Server {
             crate::viewer::fetch_frame(&address, FRAME_DEADLINE, FRAME_LIMIT)
         })
         .await
-        .map_err(|_| Error::new("menubar", "Atlas's menu bar didn't answer"))??;
+        .map_err(|_| Error::new(Code::Menubar, "Atlas's menu bar didn't answer"))??;
         *self.shared.lock().await = Some(Seen {
             key: frame.key.clone(),
             at: Instant::now(),
@@ -640,7 +662,7 @@ impl Server {
             crate::viewer::fetch_frame(&address, FRAME_DEADLINE, FRAME_LIMIT)
         })
         .await
-        .map_err(|_| Error::new("menubar", "Atlas's menu bar didn't answer"))??;
+        .map_err(|_| Error::new(Code::Menubar, "Atlas's menu bar didn't answer"))??;
         *self.shared.lock().await = Some(Seen {
             key: frame.key.clone(),
             at: Instant::now(),
@@ -662,7 +684,7 @@ impl Server {
             let reply = post(&url, "control/acquire", json!({"frame": frame.key})).await?;
             let lease = reply["lease"]
                 .as_str()
-                .ok_or_else(|| Error::new("menubar", "The menu bar gave no control"))?;
+                .ok_or_else(|| Error::new(Code::Menubar, "The menu bar gave no control"))?;
             let taken = Held {
                 url,
                 lease: lease.to_owned(),
@@ -686,7 +708,7 @@ impl Server {
         let mut picture = self
             .frame_of(frame.png)
             .await
-            .ok_or_else(|| Error::new("capture", "The helper's screen couldn't be prepared"))?;
+            .ok_or_else(|| Error::new(Code::Capture, "The helper's screen couldn't be prepared"))?;
         picture["key"] = json!(frame.key);
         result["_meta"] = json!({ FRAME_META: picture });
         Ok(result)
@@ -724,7 +746,7 @@ impl Server {
             // (and still kept alive by the view) when the release failed.
             match post(&held.url, "control/release", json!({"lease": held.lease})).await {
                 Ok(_) => self.forget(&held).await,
-                Err(error) if error.code == "lease-lost" => self.forget(&held).await,
+                Err(error) if error.code == Code::LeaseLost => self.forget(&held).await,
                 Err(error) => return Err(error),
             }
         }
@@ -741,7 +763,10 @@ impl Server {
             .as_str()
             .filter(|key| !key.is_empty())
             .ok_or_else(|| {
-                Error::new("stale-frame", "Wait for a fresh frame before sending input")
+                Error::new(
+                    Code::StaleFrame,
+                    "Wait for a fresh frame before sending input",
+                )
             })?;
         let body = json!({"lease": held.lease, "frame": key, "actions": actions});
         let sent = post(&held.url, "input", body).await;
@@ -763,7 +788,7 @@ impl Server {
             release(&lapsed).await;
         }
         held.clone()
-            .ok_or_else(|| Error::new("lease-lost", "Take control first"))
+            .ok_or_else(|| Error::new(Code::LeaseLost, "Take control first"))
     }
 
     /// Whether the person has control from here now.
@@ -791,7 +816,11 @@ impl Server {
                 }
             }
             Err(error)
-                if same && !matches!(error.code, "busy" | "input" | "invalid-json" | "menubar") =>
+                if same
+                    && !matches!(
+                        error.code,
+                        Code::Busy | Code::Input | Code::InvalidJson | Code::Menubar
+                    ) =>
             {
                 if let Some(ended) = held.take() {
                     release(&ended).await;
@@ -812,22 +841,32 @@ impl Server {
     /// Everything done in the helper lately, newest first.
     async fn activity(&self) -> Result<Value> {
         let output = self.client.output_dir()?.to_path_buf();
-        let rows =
-            tokio::task::spawn_blocking(move || crate::overview::activity(&output, ACTIVITY))
-                .await
-                .unwrap_or_default();
+        let (rows, named) = tokio::task::spawn_blocking(move || {
+            (
+                crate::activity_log::recent(&output, ACTIVITY),
+                session_names(&output),
+            )
+        })
+        .await
+        .unwrap_or_default();
         let now = crate::client::timestamp();
         let rows = rows
             .iter()
             .map(|row| crate::overview::shown(row, now))
             .map(|row| {
-                json!({
-                    "says": row["says"],
-                    "ok": row["ok"],
-                    "started": row["started"],
-                    "actor": row["actor"],
-                    "ageSeconds": row["ageSeconds"],
-                })
+                let mut shown = json!({
+                    "says": row.says,
+                    "ok": row.ok,
+                    "started": row.started,
+                    "actor": row.actor,
+                    "ageSeconds": row.age_seconds,
+                    "reason": row.reason,
+                    "nothingSent": row.nothing_sent,
+                });
+                if let Some(name) = session_name(row.session.as_deref(), &named) {
+                    shown["session"] = json!(name);
+                }
+                shown
             })
             .collect::<Vec<_>>();
 
@@ -888,7 +927,7 @@ impl Server {
     /// One screenshot an agent took, as a thumbnail or `full`.
     async fn screenshot(&self, name: &str, full: bool) -> Result<Value> {
         if capture_time(name).is_none() {
-            return Err(Error::new("bad-request", "No screenshot has that name"));
+            return Err(Error::new(Code::BadRequest, "No screenshot has that name"));
         }
 
         let output = self.client.output_dir()?.to_path_buf();
@@ -898,7 +937,7 @@ impl Server {
             if full { frame(&png) } else { thumbnail(&png) }
         })
         .await
-        .map_err(|_| Error::new("capture", "The screenshot could not be read"))??;
+        .map_err(|_| Error::new(Code::Capture, "The screenshot could not be read"))??;
 
         Ok(json!({
             "content": [{"type": "text", "text": "A screenshot from the helper."}],
@@ -916,11 +955,11 @@ impl Server {
             let account = crate::switch::accounts(Some(helper))?
                 .into_iter()
                 .find(|account| account.helper)
-                .ok_or_else(|| Error::new("switch", "The helper's account wasn't found"))?;
+                .ok_or_else(|| Error::new(Code::Switch, "The helper's account wasn't found"))?;
             crate::switch::to(&account)
         })
         .await
-        .map_err(|_| Error::new("switch", "The screen didn't lock"))??;
+        .map_err(|_| Error::new(Code::Switch, "The screen didn't lock"))??;
 
         Ok(json!({
             "content": [{"type": "text", "text": "The screen is locked. Choose the helper there."}],
@@ -934,7 +973,7 @@ impl Server {
         let reply = self.person().logout(false).await?;
         if reply["ok"] != true {
             return Err(Error::new(
-                "logout",
+                Code::Logout,
                 reply["error"]
                     .as_str()
                     .unwrap_or("The helper didn't log out")
@@ -1131,29 +1170,156 @@ fn screen_resource() -> Value {
 }
 
 fn screen_contents() -> Value {
-    let page = SCREEN.replacen("/*SCRIPT*/", SCREEN_SCRIPT, 1);
+    let page = SCREEN
+        .replacen("/*SCRIPT*/", SCREEN_SCRIPT, 1)
+        .replacen("/*LOGOS*/", logos(), 1);
     json!({"uri": SCREEN_URI, "mimeType": APP_MIME, "text": page, "_meta": screen_meta()})
 }
 
+/// The hosts' logos the view draws beside each session, as one line of
+/// script holding a data URI for each: made once, from the app's own
+/// images.
+fn logos() -> &'static str {
+    static LOGOS: OnceLock<String> = OnceLock::new();
+    LOGOS.get_or_init(|| {
+        use base64::{Engine, engine::general_purpose::STANDARD};
+
+        let images: [(&str, &[u8]); 3] = [
+            (
+                "claude",
+                include_bytes!("../../../app/Resources/ClaudeLogo.png"),
+            ),
+            (
+                "codex",
+                include_bytes!("../../../app/Resources/CodexLogo.png"),
+            ),
+            (
+                "cursor",
+                include_bytes!("../../../app/Resources/CursorLogo.png"),
+            ),
+        ];
+        let logos: serde_json::Map<String, Value> = images
+            .into_iter()
+            .map(|(host, png)| {
+                let uri = format!("data:image/png;base64,{}", STANDARD.encode(png));
+                (host.to_owned(), json!(uri))
+            })
+            .collect();
+        format!("const LOGOS = {};", Value::Object(logos))
+    })
+}
+
+/// The process that started this server.
+fn parent_pid() -> i32 {
+    nix::unistd::getppid().as_raw()
+}
+
+/// This chat's host session, only where Atlas is certain of it: a Claude
+/// Code session whose host process started this server (`parent`) and
+/// which Atlas has recorded, moved on to the newest session that process
+/// recorded, as after `/clear`. While a session on its first command has
+/// no record yet (`unrecorded`), it may be this chat's newest, so none is
+/// named. Hosts that share one server among their chats name none.
+fn own_session(
+    own: Option<&HostSession>,
+    seen: &[record::Seen],
+    parent: i32,
+    unrecorded: bool,
+) -> Option<Key> {
+    let own = own.filter(|own| own.host() == Host::Claude)?;
+    let process = own.process().filter(|process| process.pid == parent)?;
+    let recorded = seen.iter().any(|seen| seen.record.key == *own.key());
+    if !recorded || unrecorded {
+        return None;
+    }
+
+    seen.iter()
+        .map(|seen| &seen.record)
+        .filter(|record| record.host_process == Some(process))
+        .max_by_key(|record| record.last_seen)
+        .map(|record| record.key.clone())
+}
+
+/// The name of every recorded host session in `output`, as every surface
+/// shows it.
+fn session_names(output: &Path) -> BTreeMap<Key, String> {
+    let recent = Store::at(output).recent();
+    names(recent.iter().map(|seen| &seen.record))
+}
+
+/// The name of the host session a shown row names by its key `session`,
+/// when its record is there: never its key or the host's own id.
+fn session_name<'a>(session: Option<&str>, named: &'a BTreeMap<Key, String>) -> Option<&'a String> {
+    named.get(&Key::parse(session?)?)
+}
+
+/// What a row names a session it came from that no list names: another
+/// session, never the commands no host named.
+const ANOTHER_SESSION: &str = "Another session";
+
 /// What the view and the model read of a status: the overview's state, its
-/// words and recent rows, without the doctor report around it.
-fn summary(status: &Value) -> Value {
+/// words and recent rows, without the doctor report around it. Rows name
+/// their session, by `named`, only when they come from two sessions or
+/// more or the apps speak of sessions, so one agent's status costs it
+/// nothing more. The sessions are told by name and state, only as much as
+/// the view draws and never by the host's own id; `own` is this chat's,
+/// when certain.
+fn summary(status: &Value, named: &BTreeMap<Key, String>, own: Option<&Key>) -> Value {
     let overview = &status["overview"];
-    let rows = overview["activity"]
+    let shown = overview["activity"]
         .as_array()
-        .map(|rows| {
-            rows.iter()
-                .map(|row| {
-                    json!({
-                        "says": row["says"],
-                        "ok": row["ok"],
-                        "actor": row["actor"],
-                        "ageSeconds": row["ageSeconds"],
-                    })
-                })
-                .collect::<Vec<_>>()
-        })
+        .map(Vec::as_slice)
         .unwrap_or_default();
+    let sessions_shown = overview["sessionsShown"] == true;
+    let sessions: BTreeSet<&str> = shown
+        .iter()
+        .filter_map(|row| row["session"].as_str())
+        .collect();
+    // The overview's own list names the sessions its rows come from,
+    // those on their first command included; records name the rest.
+    let listed_names: BTreeMap<&str, &str> = overview["hostSessions"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter_map(|session| Some((session["key"].as_str()?, session["name"].as_str()?)))
+        .collect();
+    let rows = shown
+        .iter()
+        .map(|row| {
+            let mut kept = json!({
+                "says": row["says"],
+                "ok": row["ok"],
+                "actor": row["actor"],
+                "ageSeconds": row["ageSeconds"],
+                "nothingSent": row["nothingSent"] == true,
+                "uncertain": row["uncertain"] == true,
+            });
+            if (sessions.len() > 1 || sessions_shown) && row["session"].is_string() {
+                let name = row["session"]
+                    .as_str()
+                    .and_then(|key| listed_names.get(key).copied())
+                    .or_else(|| session_name(row["session"].as_str(), named).map(String::as_str))
+                    .unwrap_or(ANOTHER_SESSION);
+                kept["session"] = json!(name);
+            }
+            kept
+        })
+        .collect::<Vec<_>>();
+    let listed = overview["hostSessions"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .map(|session| {
+            json!({
+                "key": session["key"],
+                "host": session["host"],
+                "name": session["name"],
+                "state": session["state"],
+                "uncertainVerb": session["uncertainVerb"],
+                "holdsHelper": session["holdsHelper"] == true,
+            })
+        })
+        .collect::<Vec<_>>();
 
     // The view is the person's: a step that names a command reads as where
     // to look instead.
@@ -1173,7 +1339,12 @@ fn summary(status: &Value) -> Value {
         "helper": overview["accountName"].as_str().or(overview["account"].as_str()),
         "display": overview["display"],
         "pending": overview["pending"],
+        "commands": overview["commands"],
         "activity": rows,
+        "sessionsShown": sessions_shown,
+        "holder": overview["holder"],
+        "self": own,
+        "sessions": listed,
     })
 }
 
@@ -1182,7 +1353,10 @@ fn summary(status: &Value) -> Value {
 fn said(status: &Value) -> Value {
     let label = status["label"].as_str().unwrap_or("Not ready");
     let headline = status["headline"].as_str().unwrap_or_default();
-    let mut text = format!("Atlas: {label}. {headline}.");
+    let mut text = format!("Atlas: {}", sentence(label));
+    if !headline.is_empty() {
+        text.push_str(&format!(" {}", sentence(headline)));
+    }
     let earlier = status["activity"]
         .as_array()
         .into_iter()
@@ -1192,7 +1366,7 @@ fn said(status: &Value) -> Value {
         .take(3)
         .collect::<Vec<_>>();
     if !earlier.is_empty() {
-        text.push_str(&format!(" Recent: {}.", earlier.join("; ")));
+        text.push_str(&format!(" Recent: {}", sentence(&earlier.join("; "))));
     }
 
     json!({
@@ -1201,12 +1375,23 @@ fn said(status: &Value) -> Value {
     })
 }
 
+/// `text` ended as a sentence: with a full stop, unless it already ends
+/// with one, an ellipsis ("Running a command…") or another mark that ends
+/// a sentence.
+fn sentence(text: &str) -> String {
+    if text.ends_with(['.', '…', '!', '?']) {
+        text.to_owned()
+    } else {
+        format!("{text}.")
+    }
+}
+
 /// The view's input after checking it is only what the person may send:
 /// pointer, move, scroll, typing and keys, at most as many as the helper
 /// takes at once. The helper's own checks (points on its display, typing
 /// within its time) come when it is sent.
 fn checked(actions: &Value) -> Result<&Value> {
-    let refused = |why: &str| Error::new("input", why.to_owned());
+    let refused = |why: &str| Error::new(Code::Input, why.to_owned());
     let list = actions
         .as_array()
         .filter(|list| (1..=ACTIONS).contains(&list.len()))

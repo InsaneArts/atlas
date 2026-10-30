@@ -9,7 +9,7 @@ struct OutcomeMark: View {
   let kind: StatusLine.Kind
   /// The mark's side, in points.
   var side = StatusLine.markSide
-  @Environment(\.accessibilityReduceMotion) private var reduceMotion
+  @Environment(\.motionReduced) private var reduceMotion
   @Environment(\.marksSwapAtOnce) private var swapsAtOnce
 
   /// The spinner, the round "!" or the check, one at a time, landing in place of the last.
@@ -44,10 +44,10 @@ struct OutcomeMark: View {
   /// the same small size.
   private static var landing: AnyTransition {
     .asymmetric(
-      insertion: .scale(scale: Layout.landingScale)
+      insertion: .scale(scale: OutcomeMarkLayout.landingScale)
         .combined(with: .opacity)
         .animation(Motion.pop),
-      removal: .scale(scale: Layout.landingScale)
+      removal: .scale(scale: OutcomeMarkLayout.landingScale)
         .combined(with: .opacity)
         .animation(Motion.leave)
     )
@@ -65,12 +65,6 @@ struct OutcomeMark: View {
     case .done: .success
     }
   }
-}
-
-/// The mark's scale while it appears or gives way to another.
-private enum Layout {
-  /// 0.6: the size a mark shrinks to as it leaves, and pops in from.
-  static let landingScale: CGFloat = 0.6
 }
 
 #if DEBUG

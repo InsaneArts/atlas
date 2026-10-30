@@ -14,8 +14,9 @@ and test apps without touching my desktop, windows, keyboard or mouse.
   `atlas screenshot --app NAME`, show me the screenshots, and
   `atlas close --app NAME` for each app you opened when you are done.
 - If the app needs my settings or files, copy only those into the helper
-  yourself with `atlas environment`, and roll the copy back when you are done.
-  Never ask me to copy anything.
+  yourself with `atlas environment`. When you are done, run `atlas cleanup`,
+  then `atlas cleanup --apply`, to roll the copies back. Never ask me to copy
+  anything.
 - Never test on my own desktop and never change privacy permissions. If an
   action's outcome is unknown, never repeat it: take a screenshot, run
   `atlas restart` only if that action was yours, look again, and tell me.

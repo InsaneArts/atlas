@@ -11,8 +11,6 @@ Choose the operation that matches the problem. Updating changes Atlas's version.
 | Remove Atlas and delete the helper account and its files   | `atlas uninstall --remove-helper`                               |
 | Remove Atlas while keeping configuration, records and logs | `atlas uninstall --keep-config`                                 |
 
-Public releases become available when Atlas is open source. Until then, the public updater can report that there is no release. This is separate from whether a development build exists.
-
 ## Update
 
 Use the installed `atlas` command from your own account. Finish current helper work and give back control before updating.
@@ -80,7 +78,7 @@ Atlas requires confirmed logout and verifies that the account is the helper it r
 
 Uninstall is not a complete reset of every related state:
 
-- The helper account and its application data remain unless you choose `--remove-helper`.
+- The helper account and its application data remain unless you choose `--remove-helper`. So do test apps `atlas install-app` put in the helper's `~/Applications` and their install records: clean them up with `atlas cleanup --apply` first, which moves them aside in the helper's `~/.config/atlas/installs/held` and removes them 7 days later.
 - macOS privacy approvals and Atlas's user-default preferences are not cleared. Picture rate, mini-screen position and other UI choices can survive reinstalling.
 - Project instructions added with `atlas agents project` remain in the project. Use `atlas agents forget DIR` before uninstalling if you want to remove Atlas's sections.
 - Unrelated plugin entries and host configuration are preserved. A host that could not disconnect is reported in warnings and can retain its Atlas entry.

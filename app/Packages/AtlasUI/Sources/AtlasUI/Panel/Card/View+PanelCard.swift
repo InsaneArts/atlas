@@ -1,13 +1,12 @@
 import SwiftUI
 
 extension View {
-  /// Draws the panel's surface where no popover holds it, as in a design render or a preview: the glass under
-  /// the panel's tinted ground, opaque under Reduce Transparency, its corners, a fine edge with a brighter
-  /// 0.5-point highlight along the top, and its shadow.
+  /// Draws the panel's surface where no popover holds it, as in a design render or a preview: its corners round the
+  /// panel's own opaque ground, a fine edge with a brighter 0.5-point highlight along the top, and its shadow.
   ///
   /// - Returns: The panel on its card.
   public func panelCard() -> some View {
-    let shape = RoundedRectangle(cornerRadius: PanelLayout.corner)
+    let shape = RoundedRectangle(cornerRadius: PanelLayout.corner, style: .continuous)
     return
       clipShape(shape)
       .overlay(
@@ -18,10 +17,6 @@ extension View {
             .strokeBorder(PanelCardHighlight.gradient, lineWidth: Stroke.hairline)
         }
         .allowsHitTesting(false)
-      )
-      .background(
-        Color.clear
-          .glass(.regular, in: shape)
       )
       .background(
         shape

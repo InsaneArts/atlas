@@ -3,7 +3,7 @@
 //! Developer ID requirement and notarization — swapping by rename so a
 //! running helper daemon never sees a half-written executable.
 use crate::{
-    error::{Error, Result},
+    error::{Code, Error, Result},
     setup,
 };
 use serde_json::{Value, json};
@@ -57,7 +57,7 @@ impl Source {
 }
 
 fn problem(message: impl Into<String>) -> Error {
-    Error::new("update", message)
+    Error::new(Code::Update, message)
 }
 
 /// The Atlas.app this executable belongs to.
@@ -419,10 +419,6 @@ fn verify(work: &Path, name: &str, allow_unnotarized: bool) -> Result<PathBuf> {
 }
 
 /// Exchange two paths in one atomic step (both must exist).
-#[allow(
-    unsafe_code,
-    reason = "FFI: renamex_np(RENAME_SWAP) has no safe binding"
-)]
 fn exchange(first: &Path, second: &Path) -> Result<()> {
     use std::{ffi::CString, os::unix::ffi::OsStrExt};
 
@@ -431,12 +427,7 @@ fn exchange(first: &Path, second: &Path) -> Result<()> {
     };
     let (first, second) = (path(first)?, path(second)?);
 
-    // SAFETY: two NUL-terminated paths; RENAME_SWAP exchanges them or fails
-    // leaving both in place.
-    if unsafe { libc::renamex_np(first.as_ptr(), second.as_ptr(), libc::RENAME_SWAP) } != 0 {
-        return Err(std::io::Error::last_os_error().into());
-    }
-
+    crate::fs_move::rename_path(&first, &second, crate::fs_move::Replace::Swap)?;
     Ok(())
 }
 
@@ -505,12 +496,9 @@ const UPDATE: &str = "update-";
 /// its process ID.
 const INSTALL: [&str; 2] = ["install-", "install-previous-"];
 
-/// Whether `text` is exactly a token from [`crate::control::token`].
+/// Whether `text` is exactly a token from [`crate::files::token`].
 fn token_shaped(text: &str) -> bool {
-    text.len() == crate::control::TOKEN_BYTES * 2
-        && text
-            .bytes()
-            .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+    crate::files::Token::parse(text).is_some()
 }
 
 /// Whether `name` is a copy `atlas update` stages: `.Atlas.app.update-` and
@@ -607,7 +595,7 @@ fn swap_recording(new: &Path, installed: &Path, name: &str, record: &Path) -> Re
         let _ = fs::remove_dir_all(&path);
     }
 
-    let staged = parent.join(format!("{STAGED}{UPDATE}{}", crate::control::token()));
+    let staged = parent.join(format!("{STAGED}{UPDATE}{}", crate::files::token()));
     check(
         "/usr/bin/ditto",
         &[new.as_os_str(), staged.as_os_str()],
@@ -1186,12 +1174,9 @@ mod tests {
         // person's own folders beside the app, and install.sh's, stay.
         let stale = root.join(format!(
             "Applications/.Atlas.app.update-{}",
-            crate::control::token()
+            crate::files::token()
         ));
-        let legacy = root.join(format!(
-            "Applications/.Atlas.app.{}",
-            crate::control::token()
-        ));
+        let legacy = root.join(format!("Applications/.Atlas.app.{}", crate::files::token()));
         let kept = [
             ".Atlas.app.feature",
             ".Atlas.app.previous",
@@ -1283,7 +1268,7 @@ mod tests {
         let installed = root.join("Applications/Atlas.app");
         let record = root.join("update.json");
 
-        let token = crate::control::token();
+        let token = crate::files::token();
         for previous in [
             root.join("Documents"),
             root.join("Applications/Other.app"),
@@ -1329,7 +1314,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let root = fs::canonicalize(dir.path()).unwrap();
         let installed = root.join("Atlas.app");
-        let token = crate::control::token();
+        let token = crate::files::token();
 
         let ours = [
             format!(".Atlas.app.update-{token}"),

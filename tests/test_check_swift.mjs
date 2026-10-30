@@ -10,9 +10,34 @@ import path from 'node:path';
 import test from 'node:test';
 import { fileURLToPath } from 'node:url';
 import { packages, steps, summaryLine } from '../scripts/check-swift.mjs';
+import { violations as typeViolations } from '../scripts/check-swift-types.mjs';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const fixtures = path.join(root, 'tests/check-swift');
+
+test('one Swift type per file permits nested types and extensions but rejects a separate Layout', () => {
+  const source = [
+    '// struct Ignored {}',
+    'struct Badge { enum Kind {} }',
+    'extension Badge { struct Words {} }',
+    'private enum Layout {}',
+    '#if DEBUG',
+    'struct Sample {}',
+    '#endif',
+  ].join('\n');
+  assert.deepEqual(typeViolations(source), [
+    { line: 4, rule: 'types', message: "one type per file: move Layout out of Badge's file" },
+    { line: 6, rule: 'types', message: "one type per file: move Sample out of Badge's file" },
+  ]);
+  assert.deepEqual(typeViolations('enum Layout { static let name = "struct Fake {}" }'), []);
+});
+
+test('all maintained Swift sources declare at most one top-level type', () => {
+  const result = spawnSync(process.execPath, [path.join(root, 'scripts/check-swift-types.mjs')], {
+    encoding: 'utf8',
+  });
+  assert.equal(result.status, 0, result.stdout + result.stderr);
+});
 
 // Runs one checker on `folder` under `base`.
 function check(checker, folder, { base = path.join(fixtures, checker), list = false } = {}) {
@@ -112,6 +137,26 @@ test('the modifier checker flags a modifier after a closing brace', () => {
 test('the modifier checker passes calls that each start a line, and calls inside arguments', () => {
   const { status, lines } = check('modifiers', 'clean');
   assert.equal(status, 0, lines.join('\n'));
+});
+
+test('the surfaces checker flags SwiftUI and AppKit glass and every material', () => {
+  const { status, lines } = check('surfaces', 'dirty');
+  assert.equal(status, 1);
+  assert.deepEqual(lines, [
+    'dirty/Chip.swift:9: glass: glassEffect; draw an opaque fill instead',
+    'dirty/Chip.swift:11: glass: .glass; draw an opaque fill instead',
+    'dirty/Chip.swift:13: material: ultraThinMaterial; draw an opaque fill instead',
+    'dirty/Chip.swift:14: glass: GlassEffectContainer; draw an opaque fill instead',
+    'dirty/Chip.swift:16: glass: .glassProminent; draw an opaque fill instead',
+    'dirty/Chip.swift:21: glass: NSGlassEffectView; draw an opaque fill instead',
+    'dirty/Chip.swift:21: material: NSVisualEffectView; draw an opaque fill instead',
+  ]);
+});
+
+test('the surfaces checker passes opaque fills, and glass or a material named only in comments and strings', () => {
+  const { status, lines } = check('surfaces', 'clean');
+  assert.equal(status, 0, lines.join('\n'));
+  assert.deepEqual(lines, []);
 });
 
 test("the docs checker flags a package declaration, a local wire type or its field, and a field on its type's line, without a doc comment", () => {

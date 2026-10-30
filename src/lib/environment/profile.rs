@@ -142,7 +142,7 @@ pub async fn sync(client: &Client, path: &Path, apply: bool) -> Result<Value> {
     }
 
     let temporary = fs::canonicalize(client.output_dir()?)?
-        .join(format!("environment-profile-{}", crate::control::token()));
+        .join(format!("environment-profile-{}", crate::files::token()));
     fs::DirBuilder::new().mode(0o700).create(&temporary)?;
     let generated = temporary.join("environment.json");
 

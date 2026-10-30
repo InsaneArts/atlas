@@ -31,6 +31,8 @@ extension PanelController {
       task.cancel()
     }
     polling = []
+    for request in iconRequests.values { request.cancel() }
+    iconRequests = [:]
   }
 
   /// Runs `step` now and then every `pause`, until cancelled or the controller is gone.
@@ -86,6 +88,7 @@ extension PanelController {
     status = latest ?? ViewerStatus()
     answered = latest != nil
     links.read(latest)
+    wantRecentIcons()
   }
 
   /// Reads the picture, under the same rule, decoding it off the main actor (``ImageDecoding``); a reading overtaken

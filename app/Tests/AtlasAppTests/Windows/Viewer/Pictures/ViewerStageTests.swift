@@ -39,27 +39,6 @@ struct ViewerStageTests {
     #expect(host.scrollViews.count == 2, "a pane was built again")
   }
 
-  @Test("the picture gives Details its room on Details' own slide, never in one jump")
-  func thePictureGivesDetailsItsRoomOnTheSlide() throws {
-    var shown = PreviewStates.viewerDetails
-    shown.screen.picture = try LayerPictureTests.picture(PictureColour.stage.rawValue)
-    var hidden = shown
-    hidden.details = nil
-    // Settled, the square picture reaches past 1,000 points across without Details, and stops short of it beside it.
-    #expect(try ViewerHost(hidden).colour(at: Self.besideDetails) == .stage)
-    #expect(try ViewerHost(shown).colour(at: Self.besideDetails) == nil)
-    #expect(try ViewerHost(shown).colour(at: Self.middle) == .stage)
-    // Details' first frame: the picture still stands where it stood, about to shrink as the column slides in, rather
-    // than leaving a gap at once while Details is still past the window's edge.
-    let host = ViewerHost(hidden)
-    host.show(shown)
-    #expect(try host.colour(at: Self.besideDetails) == .stage)
-    // And hiding it, the picture grows back as the column leaves: its first frame keeps the narrower picture.
-    let back = ViewerHost(shown)
-    back.show(hidden)
-    #expect(try back.colour(at: Self.besideDetails) == nil)
-  }
-
   @Test("a new action arrives at the top and shows there, while a list scrolled down keeps the line read in place")
   func aNewActionKeepsAScrolledListInPlace() throws {
     let top = ViewerHost(try Self.activity(lines: 80))
@@ -84,42 +63,40 @@ struct ViewerStageTests {
     #expect(after == Self.scrolled + Self.lineHeight, "at \(after)")
   }
 
-  /// Below the top row and clear of the small screen: where the panes draw.
-  static let panes = CGRect(x: 0, y: 60, width: 1100, height: 600)
+  /// In the card, under its header and clear of the small screen: where the panes draw.
+  static let panes = CGRect(x: 260, y: 60, width: 840, height: 600)
 
-  /// An Activity line's height.
-  static let lineHeight: CGFloat = 38
+  /// An Activity step's height.
+  static let lineHeight: CGFloat = 30
   /// How far the list is scrolled before the switches.
   static let scrolled: CGFloat = 240
-  /// Right of a square picture beside Details, and on one without it: 1,100 across, halfway down.
-  static let besideDetails = CGPoint(x: 1100, y: 450)
-  /// The middle of the picture beside Details.
-  static let middle = CGPoint(x: 574, y: 450)
 
-  /// The Activity tab with `lines` lines, enough to scroll.
+  /// The Activity tab with one open moment of `lines` steps, enough to scroll.
   ///
-  /// - Parameter lines: How many lines.
+  /// - Parameter lines: How many steps.
   /// - Returns: What the window shows.
   /// - Throws: Never; the samples always have Activity.
   static func activity(lines: Int) throws -> ViewerState {
     var state = PreviewStates.viewerActivity
-    guard case .activity(var activity) = state.pane, let line = activity.groups.first?.lines.first else {
+    guard case .activity(var activity) = state.pane,
+      var moment = activity.days.first?.moments.first,
+      let step = moment.steps.first
+    else {
       return state
     }
-    // Numbered from the oldest, so one more line is a new one at the top.
+    // Numbered from the oldest, so one more step is a new one at the top.
     let many = (0..<lines)
       .reversed()
       .map { index in
-        ViewerActivityLine(
-          id: "line \(index)",
-          time: line.time,
-          lead: .quiet,
-          kind: line.kind,
-          text: line.text,
-          label: line.label
-        )
+        var line = step
+        line.id = "line \(index)"
+        line.mark = .quiet
+        line.shot = nil
+        line.isLast = index == 0
+        return line
       }
-    activity.groups = [ViewerActivityGroup(id: "today", title: "Today", lines: many)]
+    moment.steps = many
+    activity.days = [ViewerActivityDay(id: "today", title: "", moments: [moment])]
     state.pane = .activity(activity)
     return state
   }

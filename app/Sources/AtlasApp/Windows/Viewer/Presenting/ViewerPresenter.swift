@@ -5,37 +5,50 @@ import AtlasUI
 /// Builds the main window's state from what its controller holds. Pure: every choice the window shows is made here,
 /// from the snapshot, its rules (`ViewerSnapshot+Rules`, which the controller's guards follow too), the status table
 /// (`Mode+StatusSummary`), the shared ``Words`` and the domain packages' (``Mode``, ``StatusReading``,
-/// ``ActivityGrouping``, ``ShotGrouping``). Its parts are in `ViewerPresenter+TopRow`, `+Screen`, `+Details`,
-/// `+Alert`, `+MoreMenu`, `+Activity`, `+Apps` and `+Shots`.
+/// ``ActivityGrouping``, ``ShotGrouping``). Its parts are in `ViewerPresenter+Header`, `+Footer`, `+Screen`,
+/// `+ScreenMenu`, `+Sidebar`, `+SessionMenu`, `+SessionFacts`, `+Sessions`, `+Library`, `+HelperLine`, `+HelperFacts`,
+/// `+Alert`, `+Activity`, `+Apps` and `+Shots`.
 enum ViewerPresenter {
-  /// The window as it should look now.
+  /// The window as it should look now, given way to the window's size as the controller last fitted it.
   ///
   /// - Parameter snapshot: What the controller holds.
   /// - Returns: Everything the window draws.
   static func state(_ snapshot: ViewerSnapshot) -> ViewerState {
-    let tab = snapshot.session.tab
-    return ViewerState(
-      top: top(snapshot),
+    let place = snapshot.session.place
+    let state = ViewerState(
+      header: header(snapshot),
       screen: screen(snapshot),
-      details: snapshot.detailsShown ? details(snapshot) : nil,
+      footer: footer(snapshot),
+      sidebar: sidebar(snapshot),
       alert: alert(snapshot),
-      // The screen keeps the corner over Activity and Apps, faded while paused; the Screenshots grid has pictures of
-      // its own.
-      mini: tab.keepsScreenInCorner
+      // The screen keeps the corner over every list, faded while paused.
+      mini: place.keepsScreenInCorner
         ? snapshot.reading.picture.map { MiniScreenState(picture: $0, isPaused: snapshot.session.paused) } : nil,
       miniCorner: snapshot.session.corner,
       pane: pane(snapshot),
-      toast: snapshot.session.toast,
-      announcement: snapshot.session.announcement
+      announcement: snapshot.session.announcement,
+      isFullScreen: snapshot.session.fullScreen,
+      isResizing: snapshot.session.liveResizing
     )
+    return state.fitted(snapshot.session.fit)
   }
 
-  /// What shows under the top row: the screen, or the selected tab's pane, made only while it shows.
+  /// Whether the sidebar shows, beside the card or over it, as the toggle and View's item say: not while the person
+  /// hid it or the window is too narrow for it, unless it shows over the card.
+  ///
+  /// - Parameter snapshot: What the controller holds.
+  /// - Returns: Whether it shows.
+  static func sidebarShows(_ snapshot: ViewerSnapshot) -> Bool {
+    let session = snapshot.session
+    return session.overlayShown || (!session.sidebarHidden && session.fit.sidebar != .hidden)
+  }
+
+  /// What the card shows: the screen, or the chosen list's pane, made only while it shows.
   ///
   /// - Parameter snapshot: What the controller holds.
   /// - Returns: The pane.
   static func pane(_ snapshot: ViewerSnapshot) -> ViewerPane {
-    switch snapshot.session.tab {
+    switch snapshot.session.place {
     case .screen: .screen
     case .activity: .activity(activity(snapshot))
     case .apps: .apps(apps(snapshot))

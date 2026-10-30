@@ -58,6 +58,23 @@ const KEYS = {
   PageDown: 'pagedown',
   ' ': 'space',
 };
+/** The hosts' own logos as data URIs, which Atlas puts in the page before
+ * this script; none where it did not. */
+const HOST_LOGOS = typeof LOGOS === 'undefined' || !LOGOS ? {} : LOGOS;
+/** The hosts drawn from a bundled logo, and those drawn from a mark in the page. */
+const LOGO_HOSTS = ['claude', 'codex', 'cursor'];
+const MARK_HOSTS = ['pi', 'opencode'];
+/** What an action of each kind is called when it may not have finished. */
+const ACTION_NOUNS = {
+  click: 'A click',
+  'double-click': 'A click',
+  'right-click': 'A click',
+  type: 'Typing',
+  key: 'A key press',
+  scroll: 'A scroll',
+  drag: 'A drag',
+  run: 'A command',
+};
 
 /** How often to ask for a new screen, in milliseconds; null not at all. */
 function interval(state, { hidden = false, picture = 'live', ours = false } = {}) {
@@ -108,27 +125,157 @@ function take(model) {
   return { shown: true, enabled, title: 'Take Control' };
 }
 
-/** The state's word; "Connecting" before Atlas has said. */
-function label(status, ours = false) {
+/** Whether the view speaks of sessions: Atlas says two or more are live. */
+function sessionsShown(status) {
+  return Boolean(status && status.sessionsShown === true);
+}
+
+/** Whether Atlas said which session this chat is. */
+function known(self) {
+  return typeof self === 'string' && self !== '';
+}
+
+/** The sessions the status lists, skipping any that is not one. */
+function sessionsOf(status) {
+  const sessions = status && Array.isArray(status.sessions) ? status.sessions : [];
+  return sessions.filter((session) => session && typeof session === 'object');
+}
+
+/** A session's name as the view says it; rows no host named are Terminal's. */
+function nameOf(session) {
+  return (session && typeof session.name === 'string' && session.name) || 'Terminal';
+}
+
+/** Whether a row came from a session: by its name, or with none for Terminal's. */
+function fromSession(row, session) {
+  return session.key === '' ? !row.session : row.session === session.name;
+}
+
+/** The session that has the helper, and whether it is this chat (only
+ * when Atlas knows which chat this is: null otherwise). */
+function holder(status, self) {
+  // Atlas names the holder by its key, or says nobody has it; a status
+  // without the field says it on the session instead.
+  if (!sessionsShown(status) || status.holder === null) return null;
+  const named = typeof status.holder === 'string';
+  const session = sessionsOf(status).find((one) =>
+    named ? one.key === status.holder : one.holdsHelper === true,
+  );
+  if (!session) return null;
+  return { session, thisChat: known(self) ? session.key === self : null };
+}
+
+/** The holder, while an agent's work is what the status is about: not
+ * while agents are stopped, the helper needs the person or isn't ready. */
+function acting(status, self) {
+  const state = status && status.state;
+  return state === 'working' || state === 'idle' ? holder(status, self) : null;
+}
+
+/** Whether this chat waits while another session has the helper. */
+function chatWaits(status, self) {
+  const held = acting(status, self);
+  return Boolean(held && held.thisChat === false);
+}
+
+/** The state's word, with this chat named: "This chat" while it acts,
+ * "Waiting" while another session has the helper; otherwise as before,
+ * and "Connecting" before Atlas has said. */
+function label(status, ours = false, self = null) {
   if (ours) return 'You have control';
   // Control held elsewhere (Atlas's own window) is not the person's here.
   if (status && status.state === 'control') return 'In use in Atlas';
+  const held = acting(status, self);
+  if (held && held.thisChat === true) return 'This chat';
+  if (held && held.thisChat === false) return 'Waiting';
   return (status && status.label) || 'Connecting';
 }
 
-/** The quieter words beside the state. */
+/** The words beside it: this chat's own action plain; "Codex ·
+ * atlas-landing has the helper" while another has it, or "… is acting"
+ * when Atlas doesn't know which chat this is; whose action may not have
+ * finished while the helper needs the person; otherwise as before. */
 function hint(model) {
   const status = model.status;
   const state = status && status.state;
-  if (model.ours) return 'Your clicks and typing go to the helper. The agent waits.';
+  if (model.ours) {
+    // A command an agent started goes on beside the person's control.
+    return status && status.commands > 0
+      ? 'Your clicks and typing go to the helper. A command an agent started is still running.'
+      : 'Your clicks and typing go to the helper. The agent waits.';
+  }
   if (!status) return '';
   if (state === 'control') return 'Someone has control in Atlas';
   if (state === 'stopped' && model.canResume === false) return 'Resume from the Atlas menu bar';
+  const shared = sessionHint(status, model.self);
+  if (shared) return shared;
   if (state === 'working')
     return model.picture === 'paused' ? 'Atlas · Picture paused' : 'Atlas · Live';
   const row = newest(status);
   const headline = status.headline || '';
   return state === 'idle' && row && headline ? `${headline} · ${ago(row.ageSeconds)}` : headline;
+}
+
+/** The hint's words about sessions, or none while they don't show or have
+ * nothing to say. */
+function sessionHint(status, self) {
+  if (!sessionsShown(status)) return '';
+  if (status.state === 'needsYou') {
+    const causer = sessionsOf(status).find((session) => session.state === 'needsYou');
+    if (!causer) return '';
+    const who = known(self) && causer.key === self ? 'this chat' : nameOf(causer);
+    const noun = ACTION_NOUNS[causer.uncertainVerb] || 'An action';
+    return `${noun} by ${who} may not have finished`;
+  }
+  const held = acting(status, self);
+  if (!held) return '';
+  if (held.thisChat === false) return `${nameOf(held.session)} has the helper`;
+  if (held.thisChat === null) return `${nameOf(held.session)} is acting`;
+  const own = ((status && status.activity) || []).find(
+    (row) => row.actor !== 'viewer' && fromSession(row, held.session),
+  );
+  return own ? rowText(own) : '';
+}
+
+/** The session another session's row came from, while sessions show (any
+ * agent's row when Atlas doesn't know which chat this is); null for this
+ * chat's own rows and the person's. */
+function whose(row, status, self) {
+  if (!row || row.actor === 'viewer' || !sessionsShown(status)) return null;
+  const sessions = sessionsOf(status);
+  const named = typeof row.session === 'string' && row.session ? row.session : null;
+  const session = named
+    ? sessions.find((one) => one.name === named) || { name: named, host: null }
+    : sessions.find((one) => one.key === '') || { key: '', host: 'none', name: 'Terminal' };
+  if (known(self) && session.key === self) return null;
+  return session;
+}
+
+/** A session's icon: its host's logo, its host's mark, or the terminal
+ * prompt's mark for any other host and for Terminal. */
+function iconOf(session) {
+  const host = session && session.host;
+  const name = nameOf(session);
+  const logo = LOGO_HOSTS.includes(host) ? HOST_LOGOS[host] : null;
+  if (typeof logo === 'string' && logo.startsWith('data:image/')) return { name, logo };
+  if (MARK_HOSTS.includes(host)) return { name, mark: `host-${host}` };
+  return { name, mark: 'host-terminal' };
+}
+
+/** A host's icon for a row of another session: a logo or a mark;
+ * null for this chat's own rows, the person's, and a session the status
+ * does not list, whose host is unknown. */
+function iconFor(row, status, self) {
+  const session = whose(row, status, self);
+  return session && session.host ? iconOf(session) : null;
+}
+
+/** The chip over the screen while another session has the helper: its
+ * icon and its words; null otherwise. */
+function holderChip(status, self) {
+  const held = acting(status, self);
+  if (!held || held.thisChat !== false) return null;
+  return { icon: iconOf(held.session), text: `${nameOf(held.session)} has the helper` };
 }
 
 /** The newest agent row, which the headline's age belongs to. */
@@ -137,15 +284,18 @@ function newest(status) {
   return rows.find((row) => row.actor !== 'viewer') || null;
 }
 
-/** The view's next model from a tool result: its status, whether this app
- * may resume and take control, whether the control shown is the view's
- * own, where clicks land, and the screen from `_meta` (kept while the
- * picture is paused). */
+/** The view's next model from a tool result: its status and which session
+ * this chat is (when Atlas knows), whether this app may resume and take
+ * control, whether the control shown is the view's own, where clicks land,
+ * and the screen from `_meta` (kept while the picture is paused). */
 function merge(current, result) {
   const next = { ...current };
   const structured = (result && result.structuredContent) || {};
   const frame = result && result._meta && result._meta[FRAME_META];
-  if (structured.status) next.status = structured.status;
+  if (structured.status) {
+    next.status = structured.status;
+    next.self = known(structured.status.self) ? structured.status.self : null;
+  }
   if (typeof structured.canResume === 'boolean') next.canResume = structured.canResume;
   if (typeof structured.canControl === 'boolean') next.canControl = structured.canControl;
   if (typeof structured.control === 'boolean') next.ours = structured.control;
@@ -179,24 +329,32 @@ function rowText(entry) {
   return says.charAt(0).toUpperCase() + says.slice(1);
 }
 
-/** Rows as lines: one line for each run of the same words, saying how many
- * times, with the newest row's age and whether any of them failed. */
-function grouped(rows) {
+/** Whether a row failed: refused before anything was sent is not a failure. */
+function failed(row) {
+  return row.ok === false && row.nothingSent !== true;
+}
+
+/** Rows as lines: one line for each run of the same words (from the same
+ * session, while sessions show), saying how many times, with the newest
+ * row's age and whether any of them failed. */
+function grouped(rows, bySession = false) {
   const lines = [];
   for (const row of rows) {
     const text = rowText(row);
     const last = lines[lines.length - 1];
-    if (last && last.text === text) {
+    if (last && last.text === text && (!bySession || last.row.session === row.session)) {
       last.times += 1;
-      last.failed = last.failed || row.ok === false;
+      last.failed = last.failed || failed(row);
     } else {
       lines.push({
         text,
         times: 1,
         ageSeconds: row.ageSeconds,
         actor: row.actor,
-        failed: row.ok === false,
+        failed: failed(row),
         started: row.started === true,
+        // The newest row, which says whose the line is.
+        row,
       });
     }
   }
@@ -204,29 +362,45 @@ function grouped(rows) {
 }
 
 /** The captions over the screen: the newest few lines of the last minute,
- * oldest first, the newest marked. */
-function captions(status, count) {
+ * oldest first, the newest marked; while sessions show, another session's
+ * carry its icon (every agent's when Atlas doesn't know which chat this is). */
+function captions(status, count, self = null) {
   const rows = ((status && status.activity) || []).filter(
     (row) => typeof row.ageSeconds === 'number' && row.ageSeconds <= CAPTION_SECONDS,
   );
-  const lines = grouped(rows).slice(0, count).reverse();
-  return lines.map((line, index) => ({
-    text: line.times > 1 ? `${line.text} ×${line.times}` : line.text,
-    when: ago(line.ageSeconds),
-    newest: index === lines.length - 1,
-  }));
+  const lines = grouped(rows, sessionsShown(status)).slice(0, count).reverse();
+  return lines.map((line, index) => {
+    const caption = {
+      text: line.times > 1 ? `${line.text} ×${line.times}` : line.text,
+      when: ago(line.ageSeconds),
+      newest: index === lines.length - 1,
+    };
+    const icon = iconFor(line.row, status, self);
+    if (icon) caption.icon = icon;
+    return caption;
+  });
 }
 
 /** The activity a filter shows, in groups: what happened in the last two
- * minutes under "Now", the rest under "Earlier". */
-function activityGroups(rows, filter = 'all') {
+ * minutes under "Now", the rest under "Earlier". While sessions show, a line
+ * from another session names it; a line that sent nothing says why, and is
+ * never a problem. */
+function activityGroups(rows, filter = 'all', status = null, self = null) {
   const kept = (rows || []).filter((row) => {
     if (filter === 'agent') return row.actor !== 'viewer';
     if (filter === 'you') return row.actor === 'viewer';
-    if (filter === 'problems') return row.ok === false;
+    if (filter === 'problems') return failed(row);
     return true;
   });
-  const lines = grouped(kept);
+  const lines = grouped(kept, sessionsShown(status));
+  for (const line of lines) {
+    const session = whose(line.row, status, self);
+    if (session) line.who = nameOf(session);
+    if (line.row.nothingSent === true) {
+      line.nothingSent = true;
+      line.reason = line.row.reason || 'Another app was in front';
+    }
+  }
   const groups = [];
   for (const line of lines) {
     const title =
@@ -368,6 +542,13 @@ function portion(actions) {
 function fills(context) {
   const dimensions = (context && context.containerDimensions) || {};
   return (context && context.displayMode === 'fullscreen') || typeof dimensions.height === 'number';
+}
+
+/** The theme the app names in its host context, 'light' or 'dark', or null
+ * when it names none, so the view follows the Mac's appearance. */
+function themeOf(context) {
+  const theme = context && context.theme;
+  return theme === 'light' || theme === 'dark' ? theme : null;
 }
 
 /** The words for an app's window: its title and size. */
@@ -519,7 +700,11 @@ if (typeof document !== 'undefined') {
 
   const showStatus = () => {
     const status = model.status;
-    const state = model.ours ? 'control' : (status && status.state) || 'connecting';
+    const state = model.ours
+      ? 'control'
+      : chatWaits(status, model.self)
+        ? 'waiting'
+        : (status && status.state) || 'connecting';
     const dot = one('[data-dot]');
     const word = one('[data-label]');
     // A card a newer one replaced says so, and nothing it no longer knows.
@@ -531,16 +716,35 @@ if (typeof document !== 'undefined') {
       return;
     }
     dot.className = `dot ${state}`;
-    word.textContent = label(status, model.ours);
+    word.textContent = label(status, model.ours, model.self);
     word.className = `label ${state}`;
     one('[data-hint]').textContent = hint(model);
 
     // Screen readers hear the state when it changes, not every action.
-    const words = label(status, model.ours);
+    const words = label(status, model.ours, model.self);
     if (words !== spoken) {
       spoken = words;
       one('[data-live]').textContent = words;
     }
+  };
+
+  // A host's icon before a caption's words: its logo or its mark from the
+  // page. Marks take the namespace of the page's own SVG.
+  const svg = (name) => document.createElementNS(one('[data-orbit]').namespaceURI, name);
+  const icon = (shown) => {
+    if (shown.logo) {
+      const image = el('img', 'ic');
+      image.alt = '';
+      image.src = shown.logo;
+      return image;
+    }
+    const mark = svg('svg');
+    mark.setAttribute('class', 'ic');
+    mark.setAttribute('aria-hidden', 'true');
+    const use = svg('use');
+    use.setAttribute('href', `#${shown.mark}`);
+    mark.append(use);
+    return mark;
   };
 
   const showScreen = () => {
@@ -591,14 +795,22 @@ if (typeof document !== 'undefined') {
       top.append(chip);
     } else if (model.picture === 'paused') {
       top.append(el('div', 'chip', 'Picture paused'));
+    } else {
+      const held = holderChip(model.status, model.self);
+      if (held) {
+        const chip = el('div', 'chip');
+        chip.append(icon(held.icon), el('span', 'what', held.text));
+        top.append(chip);
+      }
     }
     top.hidden = !top.firstChild;
 
-    const lines = model.ours ? [] : captions(model.status, full() ? 3 : 2);
+    const lines = model.ours ? [] : captions(model.status, full() ? 3 : 2, model.self);
     one('[data-captions]').replaceChildren(
       ...lines.map((line) => {
         const chip = el('div', line.newest ? 'chip' : 'chip old');
-        if (line.newest) chip.append(el('span', 'dot working'));
+        if (line.icon) chip.append(icon(line.icon));
+        else if (line.newest) chip.append(el('span', 'dot working'));
         chip.append(el('span', 'what', line.text), el('span', 'when', line.when));
         return chip;
       }),
@@ -1097,7 +1309,7 @@ if (typeof document !== 'undefined') {
       : '';
     for (const button of all('[data-filter]'))
       button.setAttribute('aria-selected', String(button.dataset.filter === model.filter));
-    const groups = activityGroups(rows, model.filter);
+    const groups = activityGroups(rows, model.filter, model.status, model.self);
     const body = one('[data-activity]');
     if (!groups.length) {
       body.replaceChildren(
@@ -1126,7 +1338,9 @@ if (typeof document !== 'undefined') {
         }
         const text = el('span', 'text');
         text.append(el('span', '', line.text));
+        if (line.who) text.append(el('span', 'who', line.who));
         if (line.failed) text.append(el('span', 'why', "This didn't work"));
+        else if (line.nothingSent) text.append(el('span', 'why quiet', line.reason));
         row.append(
           el('span', 'time', clock(line.ageSeconds, now)),
           mark,
@@ -1373,6 +1587,9 @@ if (typeof document !== 'undefined') {
 
   const applyContext = (changed) => {
     context = { ...context, ...changed };
+    const theme = themeOf(context);
+    if (theme) document.documentElement.dataset.theme = theme;
+    else delete document.documentElement.dataset.theme;
     document.body.classList.toggle('full', fills(context) || inlineExpanded);
     document.body.classList.toggle('inline-expanded', inlineExpanded && !fills(context));
     const maximum = context.containerDimensions?.maxHeight;
@@ -1601,8 +1818,13 @@ if (typeof module !== 'undefined') {
     ago,
     action,
     take,
+    sessionsShown,
+    holder,
+    chatWaits,
     label,
     hint,
+    iconFor,
+    holderChip,
     newest,
     merge,
     rowText,
@@ -1618,6 +1840,7 @@ if (typeof module !== 'undefined') {
     batched,
     portion,
     fills,
+    themeOf,
     windowWords,
   };
 }

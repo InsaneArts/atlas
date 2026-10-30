@@ -26,16 +26,50 @@ extension ViewerStatus {
     public var pending = 0
     /// Actions a live process is still carrying out, whose outcome is not known yet.
     var inFlight = 0
+    /// Commands agents started with `run` that are still running, beside whoever has control: recovery waits for
+    /// them to end.
+    public var commands = 0
+    /// Whether a command an agent started is still running.
+    public var commandRuns: Bool { commands > 0 }
     /// Recent operations, newest first.
     public var activity: [Activity] = []
+    /// Whether every app speaks of host sessions: two or more are live, as the service decides.
+    public var sessionsShown = false
+    /// The key of the host session that has the helper now, when one does; empty for Terminal.
+    public var holder: String?
+    /// The host sessions the service lists, in its order: needing the person, acting, waiting, idle, then ended; each
+    /// in turn by when it was last seen, newest first.
+    public var hostSessions: [HostSession] = []
+    /// How many more sessions there are than the service lists.
+    public var moreSessions = 0
+    /// The background jobs agents keep running in the helper.
+    public var jobs = Jobs()
 
     /// How long after an agent's last action Stop Agent stays offered, in seconds: an agent between two steps still
     /// reads as working, so Stop stays where the person reaches for it.
     static let stopStaysFor: Double = 60
 
-    /// Whether Stop Agent is offered: an agent acts, or acted within ``stopStaysFor``.
+    /// Whether Stop Agent is offered: an agent acts, or acted within ``stopStaysFor``, or a background job an agent
+    /// started may still run (running, starting, or of a record the helper cannot read), however long ago it started.
+    /// Stop also ends those jobs, so it stays the person's way to end them while the helper otherwise looks idle, and
+    /// while the person holds control, which ends no job.
     public var offersStop: Bool {
-      mode == .agent || (mode == .observing && agentActed(within: Self.stopStaysFor))
+      mode == .agent
+        || (mode == .observing && agentActed(within: Self.stopStaysFor))
+        || (jobs.mayRun && Self.jobsStop.contains(mode))
+    }
+
+    /// The modes in which background jobs that may still run keep Stop offered: wherever the helper is reached and
+    /// agents are not stopped already, the person's own control included.
+    static let jobsStop: Set<HelperMode> = [.observing, .agent, .recovering, .blocked, .controlling]
+
+    /// Whether Stop Agent is offered to the person, holding control or not: while they hold it no agent acts, so only
+    /// a background job that may still run keeps Stop, as control ends no job; otherwise ``offersStop``.
+    ///
+    /// - Parameter holdingControl: Whether the person holds control.
+    /// - Returns: Whether Stop is offered.
+    public func offersStop(holdingControl: Bool) -> Bool {
+      holdingControl ? jobs.mayRun : offersStop
     }
 
     /// Whether Resume Agent is offered: the person stopped agents.
@@ -53,7 +87,7 @@ extension ViewerStatus {
     /// Whether Recover helps now: an action's outcome is unknown, or what keeps the helper not ready is something
     /// Recover fixes. The panel's recovery card and the viewer's alert both follow it.
     public var recoveryHelps: Bool {
-      recoveryEligibility ?? (mode == .recovering || (mode == .blocked && recoverable))
+      !commandRuns && (recoveryEligibility ?? (mode == .recovering || (mode == .blocked && recoverable)))
     }
 
     /// Whether Recover restarts the helper, as the viewer service's own recovery decides: only while an action's
@@ -69,7 +103,7 @@ extension ViewerStatus {
     enum CodingKeys: String, CodingKey {
       /// Each field by the name the service writes.
       case mode, state, label, reason, recoverable, recoveryHelps, account, accountName, display, pending, inFlight,
-        activity
+        commands, activity, sessionsShown, holder, hostSessions, moreSessions, jobs
     }
 
     /// Decodes an overview, keeping the default of anything missing or of the wrong type.
@@ -89,7 +123,14 @@ extension ViewerStatus {
       display = try? container.decodeIfPresent(Size.self, forKey: .display)
       pending = max(0, (try? container.decodeIfPresent(Int.self, forKey: .pending)) ?? 0)
       inFlight = max(0, (try? container.decodeIfPresent(Int.self, forKey: .inFlight)) ?? 0)
-      activity = (try? container.decodeIfPresent([Activity].self, forKey: .activity)) ?? []
+      commands = max(0, (try? container.decodeIfPresent(Int.self, forKey: .commands)) ?? 0)
+      // Each row and session decodes on its own, so one odd entry is dropped and the rest are kept.
+      activity = container.lenientList(Activity.self, forKey: .activity)
+      sessionsShown = (try? container.decodeIfPresent(Bool.self, forKey: .sessionsShown)) == true
+      holder = try? container.decodeIfPresent(String.self, forKey: .holder)
+      hostSessions = container.lenientList(HostSession.self, forKey: .hostSessions)
+      moreSessions = max(0, (try? container.decodeIfPresent(Int.self, forKey: .moreSessions)) ?? 0)
+      jobs = (try? container.decodeIfPresent(Jobs.self, forKey: .jobs)) ?? Jobs()
     }
   }
 }

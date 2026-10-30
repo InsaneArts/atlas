@@ -10,7 +10,7 @@ enum AlertCardLayout {
   static let shortLabel = 10
   /// 7: between a button's mark and its word.
   static let markGap: CGFloat = 7
-  /// The top highlight: the glass edge again, faded out by a fifth of the way down, where the corners end.
+  /// The top highlight: the surface's edge again, faded out by a fifth of the way down, where the corners end.
   static var highlight: LinearGradient {
     LinearGradient(
       colors: [Color.strokeStrong, .clear],

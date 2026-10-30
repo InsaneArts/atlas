@@ -1,15 +1,9 @@
 use super::*;
-use crate::config::Config;
 
 pub(super) fn server(dir: &std::path::Path) -> Server {
-    let text = "helper_uid = 60001\nsocket_path = \"c.sock\"\noutput_dir = \"out\"\n\
-                identity_probe = \"probe\"\ninput_socket = \"i.sock\"\n";
-    let config = Config::parse(text.as_bytes(), &dir.join("u.toml")).unwrap();
-    let mut client = Client::new(config).unwrap();
     // The controller's notes (a Stop among them) stay in this test's folder.
-    client.controller = crate::control::Controller::at(60001, &dir.join("state"));
     Server {
-        client,
+        client: crate::test_support::client_in(dir),
         config: dir.join("u.toml"),
         port: 1,
         read_only: false,
@@ -20,6 +14,7 @@ pub(super) fn server(dir: &std::path::Path) -> Server {
         shared: Mutex::new(None),
         held: Mutex::new(None),
         icons: Icons::default(),
+        host_session: None,
     }
 }
 
@@ -389,6 +384,34 @@ async fn a_tool_that_fails_says_why_as_an_error_result() {
 }
 
 #[tokio::test]
+async fn a_refused_app_list_is_an_error_in_the_view_not_zero_apps() {
+    use crate::test_support::{Helper, UID};
+
+    let dir = tempfile::tempdir().unwrap();
+    let mut server = server(dir.path());
+    server.views.store(true, Ordering::Relaxed);
+    let (client, helper) = Helper::client(dir.path(), UID);
+    server.client = client;
+
+    let listed = helper
+        .serve(
+            ask(&server, "tools/call", json!({"name": "helper_apps"})),
+            |_| {
+                Some(json!({"ok": false, "code": "busy", "uncertain": false,
+                    "error": "The helper is serving too many connections"}))
+            },
+        )
+        .await;
+
+    assert_eq!(listed["result"]["isError"], true, "{listed}");
+    assert_eq!(
+        listed["result"]["structuredContent"]["error"]["code"],
+        "busy"
+    );
+    assert!(listed["result"]["structuredContent"]["apps"].is_null());
+}
+
+#[tokio::test]
 async fn a_status_read_that_began_earlier_never_replaces_a_later_one() {
     let dir = tempfile::tempdir().unwrap();
     let server = server(dir.path());
@@ -420,18 +443,238 @@ async fn a_screen_that_has_not_changed_reuses_its_frame() {
 }
 
 #[test]
+fn the_model_sees_session_names_only_when_two_sessions_acted() {
+    use crate::host_session::Host;
+    let (claude, codex) = (Key::of(Host::Claude, "left"), Key::of(Host::Codex, "right"));
+    let named = BTreeMap::from([
+        (claude.clone(), "Claude Code · left".to_owned()),
+        (codex.clone(), "Codex · right".to_owned()),
+    ]);
+    let status = |sessions: [&Key; 2]| {
+        json!({"overview": {"activity": [
+            {"says": "clicked Save", "actor": "agent", "ok": true, "ageSeconds": 1, "session": sessions[0]},
+            {"says": "typed in TextEdit", "actor": "agent", "ok": true, "ageSeconds": 5, "session": sessions[1]},
+            {"says": "sent 1 action", "actor": "viewer", "ok": true, "ageSeconds": 9, "session": null},
+        ]}})
+    };
+
+    let alone = summary(&status([&claude, &claude]), &named, None);
+    assert!(
+        alone["activity"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .all(|row| row.get("session").is_none())
+    );
+
+    let two = summary(&status([&claude, &codex]), &named, None);
+    assert_eq!(two["activity"][0]["session"], "Claude Code · left");
+    assert_eq!(two["activity"][1]["session"], "Codex · right");
+    assert!(two["activity"][2].get("session").is_none());
+    let text = two.to_string() + &said(&two).to_string();
+    assert!(
+        !text.contains(claude.as_str()) && !text.contains(codex.as_str()),
+        "{text}"
+    );
+    assert!(!text.contains("hostSession") && !text.contains("hostSessions"));
+    assert_eq!(
+        said(&two)["content"],
+        said(&alone)["content"],
+        "the model's words are as before"
+    );
+}
+
+#[test]
+fn the_models_text_is_unchanged_by_sessions() {
+    use crate::host_session::Host;
+    let (claude, codex) = (Key::of(Host::Claude, "left"), Key::of(Host::Codex, "right"));
+    let named = BTreeMap::from([
+        (claude.clone(), "Claude Code · left".to_owned()),
+        (codex.clone(), "Codex · right".to_owned()),
+    ]);
+    let rows = json!([
+        {"says": "clicked Save", "actor": "agent", "ok": true, "ageSeconds": 1, "session": claude},
+        {"says": "didn't type in Notes", "actor": "agent", "ok": false, "ageSeconds": 3,
+            "session": codex, "nothingSent": true},
+    ]);
+    let plain = json!({"overview": {"state": "working", "label": "Working",
+        "headline": "Clicked Save", "activity": rows}});
+    let mut with_sessions = plain.clone();
+    with_sessions["overview"]["sessionsShown"] = json!(true);
+    with_sessions["overview"]["holder"] = json!(claude);
+    with_sessions["overview"]["hostSessions"] = json!([
+        {"key": claude, "host": "claude", "hostLabel": "Claude Code", "name": "Claude Code · left",
+            "hostSession": "left", "folder": "left", "state": "acting", "holdsHelper": true},
+        {"key": codex, "host": "codex", "hostLabel": "Codex", "name": "Codex · right",
+            "hostSession": "right", "state": "waiting", "waitingFor": "helper",
+            "waitingSeconds": 4, "holdsHelper": false},
+    ]);
+
+    let before = summary(&plain, &named, None);
+    let after = summary(&with_sessions, &named, Some(&claude));
+    assert_eq!(said(&before)["content"], said(&after)["content"]);
+    assert_eq!(before["sessionsShown"], false);
+    assert_eq!(after["sessionsShown"], true);
+    assert_eq!(after["holder"], claude.as_str());
+    assert_eq!(after["self"], claude.as_str());
+    assert_eq!(after["sessions"][1]["state"], "waiting");
+    assert!(
+        after["sessions"][1].get("waitingSeconds").is_none(),
+        "only what the view draws"
+    );
+    assert_eq!(after["sessions"][1]["name"], "Codex · right");
+    assert_eq!(after["activity"][1]["nothingSent"], true);
+    assert_eq!(after["activity"][1]["session"], "Codex · right");
+    let text = after.to_string();
+    assert!(
+        !text.contains("hostSession\"") && !text.contains("\"folder\""),
+        "no host id or folder reaches the view: {text}"
+    );
+}
+
+#[test]
+fn rows_are_named_from_the_status_they_came_with_and_never_taken_for_terminal() {
+    use crate::host_session::Host;
+    let (first, gone) = (Key::of(Host::Codex, "first"), Key::of(Host::Pi, "gone"));
+    let status = json!({"overview": {"sessionsShown": true, "activity": [
+        {"says": "opened Notes", "actor": "agent", "ok": true, "ageSeconds": 1, "session": first},
+        {"says": "clicked", "actor": "agent", "ok": true, "ageSeconds": 2, "session": gone},
+        {"says": "ran a command", "actor": "agent", "ok": true, "ageSeconds": 3, "session": null},
+    ], "hostSessions": [
+        {"key": first, "host": "codex", "name": "Codex", "state": "acting", "holdsHelper": true},
+    ]}});
+
+    let summary = summary(&status, &BTreeMap::new(), None);
+    assert_eq!(
+        summary["activity"][0]["session"], "Codex",
+        "a session on its first command has no record, but is listed"
+    );
+    assert_eq!(summary["activity"][1]["session"], "Another session");
+    assert!(summary["activity"][2].get("session").is_none());
+}
+
+#[test]
+fn the_view_learns_its_own_session_only_when_certain() {
+    use crate::host_session::{Host, HostSession, Instance, record::Record};
+
+    let claude = Instance::new(4242, [1_700_000_000, 5]);
+    let record = |host: Host, id: &str, process: Option<Instance>, last_seen: u64| {
+        let session = HostSession::new(host, id).unwrap();
+        let mut record = Record::new(&session, last_seen, None);
+        record.host_process = process;
+        crate::host_session::record::Seen {
+            record,
+            copies_left: 0,
+        }
+    };
+    let seen = [
+        record(Host::Claude, "before-clear", Some(claude), 10),
+        record(Host::Claude, "after-clear", Some(claude), 20),
+        record(
+            Host::Claude,
+            "elsewhere",
+            Some(Instance::new(7, [1, 0])),
+            30,
+        ),
+    ];
+    let own = HostSession::new(Host::Claude, "before-clear")
+        .unwrap()
+        .run_by(Some(claude));
+
+    assert_eq!(
+        own_session(Some(&own), &seen, 4242, false),
+        Some(seen[1].record.key.clone()),
+        "followed past /clear to its process's newest session"
+    );
+    assert_eq!(
+        own_session(Some(&own), &seen, 99, false),
+        None,
+        "not started by that Claude Code"
+    );
+    assert_eq!(
+        own_session(Some(&own), &[], 4242, false),
+        None,
+        "nothing recorded yet"
+    );
+    let codex = HostSession::new(Host::Codex, "shared").unwrap();
+    assert_eq!(
+        own_session(Some(&codex), &seen, 4242, false),
+        None,
+        "a host that shares one server among chats"
+    );
+    assert_eq!(own_session(None, &seen, 4242, false), None);
+
+    let cleared = HostSession::new(Host::Claude, "after-another-clear")
+        .unwrap()
+        .run_by(Some(claude));
+    assert_eq!(
+        own_session(Some(&cleared), &seen, 4242, false),
+        None,
+        "a new conversation with only older records is not the newest of them"
+    );
+    assert_eq!(
+        own_session(Some(&own), &seen, 4242, true),
+        None,
+        "a session on its first command may be this chat's newest"
+    );
+}
+
+#[test]
+fn the_page_carries_the_host_logos() {
+    let page = screen_contents()["text"].as_str().unwrap().to_owned();
+    assert!(!page.contains("/*LOGOS*/") && !page.contains("/*SCRIPT*/"));
+    for host in ["claude", "codex", "cursor"] {
+        assert!(
+            page.contains(&format!("\"{host}\":\"data:image/png;base64,")),
+            "{host}"
+        );
+    }
+    assert!(page.len() < SCREEN.len() + SCREEN_SCRIPT.len() + 16 * 1024);
+}
+
+#[test]
+fn mcp_actions_are_recorded_without_a_session() {
+    let dir = tempfile::tempdir().unwrap();
+    let server = server(dir.path());
+    assert_eq!(server.client.host_session, None);
+
+    let mut acting = server
+        .client
+        .clone()
+        .doing(crate::doing::Doing::new("input"));
+    acting.actor = Actor::Viewer;
+    acting.record_for_test(
+        &json!({"op": "input", "actions": [{}]}),
+        &json!({"ok": true}),
+    );
+    let log = std::fs::read_to_string(
+        server
+            .client
+            .output_dir()
+            .unwrap()
+            .join(crate::activity_log::FILE),
+    )
+    .unwrap();
+    assert!(!log.contains("session"), "{log}");
+}
+
+#[test]
 fn a_status_reads_in_a_line_for_the_model_and_whole_for_the_view() {
-    let status = summary(&json!({"overview": {
-        "state": "working",
-        "label": "Working",
-        "headline": "Clicked Save in TextEdit",
-        "accountName": "Atlas",
-        "activity": [
-            {"says": "clicked Save in TextEdit", "actor": "agent", "ok": true, "ageSeconds": 1, "verb": "click"},
-            {"says": "sent 1 action", "actor": "viewer", "ok": true, "ageSeconds": 2},
-            {"says": "opened TextEdit", "actor": "agent", "ok": true, "ageSeconds": 9},
-        ],
-    }}));
+    let status = summary(
+        &json!({"overview": {
+            "state": "working",
+            "label": "Working",
+            "headline": "Clicked Save in TextEdit",
+            "accountName": "Atlas",
+            "activity": [
+                {"says": "clicked Save in TextEdit", "actor": "agent", "ok": true, "ageSeconds": 1, "verb": "click"},
+                {"says": "sent 1 action", "actor": "viewer", "ok": true, "ageSeconds": 2},
+                {"says": "opened TextEdit", "actor": "agent", "ok": true, "ageSeconds": 9},
+            ],
+        }}),
+        &BTreeMap::new(),
+        None,
+    );
     assert_eq!(status["helper"], "Atlas");
     assert_eq!(
         status["activity"][0].get("verb"),
@@ -439,7 +682,11 @@ fn a_status_reads_in_a_line_for_the_model_and_whole_for_the_view() {
         "only what the view shows"
     );
 
-    let step = summary(&json!({"overview": {"headline": "Run atlas start-input"}}));
+    let step = summary(
+        &json!({"overview": {"headline": "Run atlas start-input"}}),
+        &BTreeMap::new(),
+        None,
+    );
     assert_eq!(
         step["headline"], "The helper isn't ready. Open Atlas to see why",
         "no commands for the person"
@@ -452,6 +699,36 @@ fn a_status_reads_in_a_line_for_the_model_and_whole_for_the_view() {
     );
     assert_eq!(result["structuredContent"]["status"]["state"], "working");
     assert_eq!(result.get("_meta"), None, "no screen for the model");
+}
+
+#[test]
+fn a_line_that_ends_with_an_ellipsis_gets_no_full_stop_after_it() {
+    let status = json!({
+        "state": "working",
+        "label": "Working",
+        "headline": "Running a command…",
+        "activity": [
+            {"actor": "agent", "says": "running a command…"},
+            {"actor": "agent", "says": "opened TextEdit"},
+        ],
+    });
+    assert_eq!(
+        said(&status)["content"][0]["text"],
+        "Atlas: Working. Running a command… Recent: running a command…; opened TextEdit."
+    );
+
+    let last = json!({
+        "label": "Working",
+        "headline": "Clicked Save",
+        "activity": [{"actor": "agent", "says": "running a command…"}],
+    });
+    assert_eq!(
+        said(&last)["content"][0]["text"],
+        "Atlas: Working. Clicked Save. Recent: running a command…"
+    );
+
+    let quiet = json!({"label": "Idle", "headline": "", "activity": []});
+    assert_eq!(said(&quiet)["content"][0]["text"], "Atlas: Idle.");
 }
 
 #[tokio::test]
@@ -630,7 +907,7 @@ async fn a_late_failure_on_older_control_never_ends_control_taken_since() {
     let server = server(dir.path());
     let now = Instant::now();
     let lost = Err(Error::new(
-        "lease-lost",
+        Code::LeaseLost,
         "Native control was released or expired",
     ));
 
@@ -639,13 +916,13 @@ async fn a_late_failure_on_older_control_never_ends_control_taken_since() {
     assert_eq!(server.held.lock().await.as_ref().unwrap().lease, "b");
 
     server
-        .settle(&held("b", now), &Err(Error::new("busy", "busy")), true)
+        .settle(&held("b", now), &Err(Error::new(Code::Busy, "busy")), true)
         .await;
     assert!(
         server.held.lock().await.is_some(),
         "a busy helper ends nothing"
     );
-    let unanswered = Err(Error::new("menubar", "Atlas's menu bar didn't answer"));
+    let unanswered = Err(Error::new(Code::Menubar, "Atlas's menu bar didn't answer"));
     server.settle(&held("b", now), &unanswered, true).await;
     assert!(
         server.held.lock().await.is_some(),

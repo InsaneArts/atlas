@@ -1,8 +1,11 @@
 //! The `hello` reply: who the daemon runs as, in which session, on which
 //! display, with which permissions.
-use crate::native::{
-    accessibility_trusted as accessibility, capture,
-    cf::{self, CFBoolean, CFDictionary, CFString},
+use crate::{
+    daemon::protocol::Census,
+    native::{
+        accessibility_trusted as accessibility, capture,
+        cf::{self, CFBoolean, CFDictionary, CFString},
+    },
 };
 use objc2_application_services::AXIsProcessTrustedWithOptions;
 use objc2_core_graphics::{
@@ -12,7 +15,10 @@ use serde_json::{Value, json};
 use std::time::Duration;
 
 /// Ask for Accessibility with the system prompt, unless it is allowed.
-#[allow(unsafe_code)] // FFI: the consent prompt takes an options dictionary.
+#[allow(
+    unsafe_code,
+    reason = "FFI: the consent prompt takes an options dictionary"
+)]
 fn request_accessibility() {
     if accessibility() {
         return;
@@ -610,9 +616,17 @@ pub fn manager_name() -> String {
         .unwrap_or_else(|| "Unknown".into())
 }
 
-/// The full `hello` reply.
-pub fn hello(manager: &str) -> Value {
-    json!({
+/// The daemon's hello: who and where the helper is, what it may do, and,
+/// when it keeps background jobs, how many may still run, are launching,
+/// or have records it cannot read (`jobs`).
+pub fn hello(manager: &str, jobs: Option<Census>) -> Value {
+    use crate::daemon::protocol::{JOBS, READ, SESSION_PIN};
+
+    let mut capabilities = vec![SESSION_PIN, READ];
+    if jobs.is_some() {
+        capabilities.push(JOBS);
+    }
+    let mut hello = json!({
         "ok": true,
         "op": "hello",
         "user": user(),
@@ -623,8 +637,13 @@ pub fn hello(manager: &str) -> Value {
         },
         "session": session(manager),
         "display": display(),
-        "daemon": {"protocol": 1, "pid": std::process::id(), "version": env!("CARGO_PKG_VERSION")},
-    })
+        "daemon": {"protocol": 1, "pid": std::process::id(), "version": env!("CARGO_PKG_VERSION"),
+            "capabilities": capabilities},
+    });
+    if let Some(jobs) = jobs {
+        hello["daemon"]["jobs"] = json!(jobs);
+    }
+    hello
 }
 
 #[cfg(test)]
@@ -653,7 +672,10 @@ mod tests {
 
     /// The prompt option is passed by name; it is the exported constant.
     #[test]
-    #[allow(unsafe_code)]
+    #[allow(
+        unsafe_code,
+        reason = "FFI: the framework's constants are extern statics"
+    )]
     fn the_prompt_option_is_the_framework_constant() {
         // SAFETY: reading an immutable framework constant in a test.
         let key = unsafe { objc2_application_services::kAXTrustedCheckOptionPrompt };
@@ -770,7 +792,7 @@ mod tests {
 
     #[test]
     fn hello_describes_this_process_in_its_session() {
-        let reply = hello(&manager_name());
+        let reply = hello(&manager_name(), None);
         assert_eq!(reply["user"]["uid"], nix::unistd::getuid().as_raw());
         assert!(reply["user"]["name"].is_string());
         assert!(
@@ -780,6 +802,10 @@ mod tests {
         );
         assert_eq!(reply["daemon"]["pid"], std::process::id());
         assert_eq!(reply["daemon"]["protocol"], 1);
+        assert!(crate::session::has_capability(
+            &reply["daemon"],
+            crate::daemon::protocol::SESSION_PIN
+        ));
         assert!(reply["permissions"]["screenCapture"].is_boolean());
         assert!(
             reply["display"]["scale"]

@@ -9,9 +9,9 @@
 //! whether the helper has its own state for it. Launching apps and sign-ins
 //! are not verified: credentials are never copied, so only the app can tell.
 use crate::{
-    client::Client,
+    client::{Client, Run},
     environment::{discovery::discover, run as environment_run},
-    error::{Error, Result},
+    error::{Code, Error, Result},
     transport::run_output,
 };
 use serde_json::{Value, json};
@@ -77,13 +77,28 @@ pub(crate) fn tool_status(reply: &Value, output: &[u8]) -> (&'static str, String
 /// helper PATH when no environment profile is installed.
 async fn probe(client: &Client, home: &str, name: &str) -> Result<(Value, &'static str)> {
     let argv = vec![name.to_owned(), "--version".to_owned()];
-    match environment_run(client, argv, crate::client::RUN_TIMEOUT).await {
+    probe_using(
+        client,
+        home,
+        name,
+        environment_run(client, argv, crate::client::RUN_TIMEOUT),
+    )
+    .await
+}
+
+async fn probe_using(
+    client: &Client,
+    home: &str,
+    name: &str,
+    environment: impl Future<Output = Result<Value>>,
+) -> Result<(Value, &'static str)> {
+    match environment.await {
         Ok(reply) => Ok((reply, "environment")),
         // An older helper build refused with the generic code; its wording
         // is matched only for that.
         Err(error)
             if error.code == crate::environment::NO_PROFILE
-                || (error.code == "environment"
+                || (error.code == Code::Environment
                     && error.error.contains("No helper environment profile")) =>
         {
             let argv = vec![
@@ -93,7 +108,7 @@ async fn probe(client: &Client, home: &str, name: &str) -> Result<(Value, &'stat
                 "--version".to_owned(),
             ];
 
-            Ok((client.run(argv).await?, "path"))
+            Ok((client.run(argv, Run::held()).await?, "path"))
         }
         Err(error) => Err(error),
     }
@@ -160,13 +175,16 @@ async fn app(client: &Client, name: &str, bundle: &str) -> Result<Value> {
 
     // One app the helper could not look at leaves the others' report whole.
     let reply = client
-        .inspect(vec![
-            "/bin/sh".into(),
-            "-c".into(),
-            script.into(),
-            "sh".into(),
-            bundle.into(),
-        ])
+        .run(
+            vec![
+                "/bin/sh".into(),
+                "-c".into(),
+                script.into(),
+                "sh".into(),
+                bundle.into(),
+            ],
+            Run::inspect(),
+        )
         .await
         .unwrap_or(Value::Null);
 
@@ -219,7 +237,7 @@ fn usable_bundle(item: &Value) -> Option<&str> {
 pub async fn readiness(client: &Client, tools: &[String], apps: &[String]) -> Result<Value> {
     if tools.is_empty() && apps.is_empty() {
         return Err(Error::new(
-            "usage",
+            Code::Usage,
             "Select tools with --tool and apps with --app",
         ));
     }
@@ -228,7 +246,7 @@ pub async fn readiness(client: &Client, tools: &[String], apps: &[String]) -> Re
     let home = client.status().await["user"]["home"]
         .as_str()
         .map(str::to_owned)
-        .ok_or_else(|| Error::new("identity", "The helper home is unknown"))?;
+        .ok_or_else(|| Error::new(Code::Identity, "The helper home is unknown"))?;
     let mut reports = Vec::new();
 
     for item in found["selections"].as_array().into_iter().flatten() {
@@ -267,6 +285,7 @@ pub async fn readiness(client: &Client, tools: &[String], apps: &[String]) -> Re
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::test_support::{Helper, UID, completed};
 
     fn reply(exit: i64) -> Value {
         json!({"exitCode": exit, "timedOut": false, "signal": null})
@@ -339,6 +358,129 @@ mod tests {
         ]});
         assert_eq!(usable_bundle(&item), Some("/Users/h/Applications/A.app"));
         assert_eq!(usable_bundle(&json!({"helperCandidates": []})), None);
+    }
+
+    /// A client of a stand-in helper, both kept in `directory`. The helper
+    /// is the system's own `nobody`, an account that exists everywhere, so
+    /// requests can be staged for it.
+    fn helped(directory: &std::path::Path) -> (Client, Helper) {
+        let nobody = nix::unistd::User::from_name("nobody").unwrap().unwrap();
+        Helper::staging(directory, nobody.uid.as_raw())
+    }
+
+    /// Answer as a helper where every path discovery looks at is a runnable
+    /// file and a readable folder, and every app is Finder.
+    fn found(request: &Value) -> Option<Value> {
+        let argv = request["argv"].as_array().unwrap();
+        let output = if argv[2].as_str().unwrap().contains("plutil") {
+            "id=com.apple.finder\n".to_owned()
+        } else {
+            "-fdrx\n".repeat(argv.len() - 4)
+        };
+
+        Some(completed(&output))
+    }
+
+    #[tokio::test]
+    async fn a_tool_version_probe_still_needs_control() {
+        let directory = tempfile::tempdir().unwrap();
+        let (client, helper) = helped(directory.path());
+        let _held = client.controller.acquire(false).unwrap();
+        let mut heard = Vec::new();
+
+        let error = helper
+            .serve(readiness(&client, &["cat".into()], &[]), |request| {
+                heard.push(request["argv"].clone());
+                found(request)
+            })
+            .await
+            .unwrap_err();
+        assert_eq!(error.code, "busy");
+        assert_eq!(heard.len(), 1, "only discovery reached the helper");
+        assert_eq!(heard[0][0], "/bin/sh");
+        assert!(client.controller.pending().unwrap().is_empty());
+    }
+
+    /// Without an environment profile a tool's `--version` runs on the
+    /// helper's PATH, and that run still holds control and stays pending
+    /// until its reply settles it.
+    #[tokio::test]
+    async fn the_path_version_probe_runs_under_control() {
+        if !crate::test_support::isolated(
+            "readiness::tests::the_path_version_probe_runs_under_control",
+        ) {
+            return;
+        }
+        let directory = tempfile::tempdir().unwrap();
+        let (client, helper) = Helper::client(directory.path(), UID);
+        let mut fallbacks = 0;
+
+        // Profile staging has its own account and ACL tests in environment.
+        // This test controls its result without starting timed subprocesses.
+        let missing = async { Err(Error::new(crate::environment::NO_PROFILE, "No profile")) };
+        let (reply, context) = helper
+            .serve(
+                probe_using(&client, "/Users/helper", "cat", missing),
+                |request| {
+                    let argv = request["argv"].as_array().unwrap();
+                    assert_eq!(argv[0], "/usr/bin/env");
+                    fallbacks += 1;
+                    assert_eq!(argv[2..], [json!("cat"), json!("--version")]);
+                    assert!(!client.controller.pending().unwrap().is_empty());
+                    assert_eq!(client.controller.acquire(false).unwrap_err().code, "busy");
+                    Some(completed("cat 1.0\n"))
+                },
+            )
+            .await
+            .unwrap();
+        assert_eq!(fallbacks, 1);
+        assert_eq!(context, "path");
+        assert_eq!(
+            tool_status(&reply, &run_output(&reply, 16384).unwrap()).0,
+            "ready"
+        );
+        assert!(client.controller.pending().unwrap().is_empty());
+    }
+
+    #[tokio::test]
+    async fn a_profile_probe_success_or_failure_is_returned_without_a_path_fallback() {
+        let directory = tempfile::tempdir().unwrap();
+        let client = crate::test_support::client(directory.path());
+        let expected = completed("cat 1.0\n");
+        let (reply, context) = probe_using(&client, "/Users/helper", "cat", async {
+            Ok(expected.clone())
+        })
+        .await
+        .unwrap();
+        assert_eq!(reply, expected);
+        assert_eq!(context, "environment");
+
+        for code in [Code::Permission, Code::Busy, Code::Environment] {
+            let error = probe_using(&client, "/Users/helper", "cat", async {
+                Err(Error::new(code, "Profile probe failed"))
+            })
+            .await
+            .unwrap_err();
+            assert_eq!(error.code, code);
+            assert_eq!(error.error, "Profile probe failed");
+        }
+        assert!(client.controller.pending().unwrap().is_empty());
+    }
+
+    #[tokio::test]
+    async fn readiness_for_apps_alone_needs_no_control() {
+        let directory = tempfile::tempdir().unwrap();
+        let (client, helper) = helped(directory.path());
+        let _held = client.controller.acquire(false).unwrap();
+
+        let report = helper
+            .serve(readiness(&client, &[], &["Finder".into()]), found)
+            .await
+            .unwrap();
+        assert_eq!(report["ok"], true);
+        assert_eq!(report["items"][0]["status"], "installed", "{report}");
+        assert_eq!(report["items"][0]["bundleIdentifier"], "com.apple.finder");
+        assert!(client.controller.pending().unwrap().is_empty());
     }
 
     #[test]

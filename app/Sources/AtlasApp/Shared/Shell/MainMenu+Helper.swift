@@ -1,9 +1,10 @@
 import AppKit
 
 extension MainMenu {
-  /// Take Control ⌃⇧⎋ (Give Back Control while in control) and Stop Agent ⌘. (Resume Agent); Recover…, with Restart
-  /// Helper… in its place while Option is held, since only someone who knows Recover cannot help should reach for it;
-  /// then Switch to and Log Out, which name the helper once the window in front knows it. While the main window holds
+  /// Take Control ⌃⇧⎋ (Give Back Control while in control), Stop Agent ⌘. (Resume Agent) and Send Key, whose keys go
+  /// to the helper while the window in front holds control; Check Again ⌘R and Open Settings on Helper…; Recover…,
+  /// with Restart Helper… in its place while Option is held, since only someone who knows Recover cannot help should
+  /// reach for it; then Switch to and Log Out, which name the helper once the window in front knows it. While the main window holds
   /// control, its screen's key monitor answers ⌃⇧⎋ first, giving control back, and sends ⌘. to the helper.
   ///
   /// - Returns: The menu.
@@ -19,6 +20,19 @@ extension MainMenu {
       withTitle: ViewerWords.stopAgentItem,
       action: #selector(ViewerMenuActions.toggleAgent(_:)),
       keyEquivalent: "."
+    )
+    let keys = helper.addItem(withTitle: ViewerWords.sendKeyItem, action: nil, keyEquivalent: "")
+    keys.submenu = KeysMenu.menu()
+    helper.addItem(.separator())
+    helper.addItem(
+      withTitle: ViewerWords.checkAgainItem,
+      action: #selector(ViewerMenuActions.checkAgain(_:)),
+      keyEquivalent: "r"
+    )
+    helper.addItem(
+      withTitle: ViewerWords.openSettingsItem,
+      action: #selector(ViewerMenuActions.openHelperSettings(_:)),
+      keyEquivalent: ""
     )
     helper.addItem(.separator())
     let recover = helper.addItem(

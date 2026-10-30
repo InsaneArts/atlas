@@ -1,13 +1,7 @@
 import SwiftUI
 
-/// One row of tabs. As a `track`, the tabs sit side by side in a capsule track, each its word or its symbol, the
-/// selected one on a brighter thumb that glides to it (`matchedGeometryEffect(id: "thumb")`) in 0.25 seconds with no
-/// overshoot, as a segmented control's does, and jumps there at once under Reduce Motion
-/// (``TabsLayout/thumbGlide(reduceMotion:)``). As a `segment` they
-/// sit the same way in a small rounded track, as a pane's filters. As `symbolOverWord`, each tab is its symbol over
-/// its word, the selected one on a filled tile with its symbol in blue, as a settings window's. Each tab is a button
-/// VoiceOver reads as selected or not; anything a tab carries beside its word, such as a dot for something new, comes
-/// from `accessory`.
+/// A row of choices: both capsule styles share one interruptible, draggable thumb; settings tiles keep their
+/// symbol-over-word layout. Labels retain their size and accessories hang outside their measured frames.
 struct Tabs<Tab: Hashable & Sendable, Accessory: View>: View {
   /// How the tabs are drawn.
   typealias Style = TabsStyle
@@ -24,8 +18,6 @@ struct Tabs<Tab: Hashable & Sendable, Accessory: View>: View {
   private let send: @MainActor (Tab) -> Void
   /// What a tab carries beside its word, by the tab.
   private let accessory: (Tab) -> Accessory
-  @Namespace private var thumb
-  @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
   /// Creates a row of tabs.
   ///
@@ -52,80 +44,14 @@ struct Tabs<Tab: Hashable & Sendable, Accessory: View>: View {
   /// The tabs in their track, or as tiles.
   var body: some View {
     switch style {
-    case .track: track
-    case .segment: segment
+    case .track, .segment: capsule
     case .symbolOverWord: tiles
     }
   }
 
-  /// The tabs in their capsule track.
-  private var track: some View {
-    HStack(spacing: TabsLayout.trackGap) {
-      ForEach(state.tabs) { tab in
-        Button {
-          send(tab.id)
-        } label: {
-          trackLabel(tab)
-            .modifier(hanging(tab.id, gap: face == .symbol ? Spacing.xs : Spacing.xsPlus))
-        }
-        .buttonStyle(TrackTabStyle(isSelected: tab.id == state.selected, face: face, thumb: thumb))
-        .help(tab.help ?? (face == .symbol ? tab.title : ""))
-        .accessibilityLabel(tab.title)
-        .accessibilityAddTraits(tab.id == state.selected ? .isSelected : [])
-      }
-    }
-    .padding(TabsLayout.trackInset)
-    .background(
-      Capsule()
-        .fill(Color.fillControl)
-    )
-    .overlay(
-      RoundedRectangle(cornerRadius: TabsLayout.trackHeight / 2, style: .circular)
-        .strokeBorder(Color.separator, lineWidth: Stroke.hairline)
-    )
-    .fixedSize()
-    .animation(TabsLayout.thumbGlide(reduceMotion: reduceMotion), value: state.selected)
-    .accessibilityElement(children: .contain)
-    .accessibilityLabel(state.label)
-  }
-
-  /// A track tab's word, or its symbol.
-  ///
-  /// - Parameter tab: The tab.
-  /// - Returns: The label.
-  @ViewBuilder private func trackLabel(_ tab: CapsuleTab<Tab>) -> some View {
-    if face == .symbol, let symbol = tab.symbol {
-      Image(systemName: symbol.rawValue)
-        .font(Typography.symbol(.control, weight: .medium))
-    } else {
-      Text(tab.title)
-    }
-  }
-
-  /// The tabs in a small rounded track, each its word, as a pane's filters.
-  private var segment: some View {
-    HStack(spacing: .zero) {
-      ForEach(state.tabs) { tab in
-        Button {
-          send(tab.id)
-        } label: {
-          Text(tab.title)
-            .modifier(hanging(tab.id, gap: Spacing.xs))
-        }
-        .buttonStyle(SegmentTabStyle(isSelected: tab.id == state.selected, thumb: thumb))
-        .accessibilityLabel(tab.title)
-        .accessibilityAddTraits(tab.id == state.selected ? .isSelected : [])
-      }
-    }
-    .padding(Spacing.half)
-    .background(
-      RoundedRectangle(cornerRadius: Radius.small)
-        .fill(Color.fillControl)
-    )
-    .fixedSize()
-    .animation(TabsLayout.thumbGlide(reduceMotion: reduceMotion), value: state.selected)
-    .accessibilityElement(children: .contain)
-    .accessibilityLabel(state.label)
+  /// The shared interaction for either capsule finish.
+  private var capsule: some View {
+    TabsCapsule(state: state, style: style, face: face, send: send, accessory: accessory)
   }
 
   /// The tabs as tiles, each its symbol over its word.

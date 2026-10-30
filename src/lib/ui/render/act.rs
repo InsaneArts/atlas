@@ -1,10 +1,11 @@
 //! Views of what was done in the helper: input, typing, commands, opening,
 //! waiting and recovery.
-use super::{Rendered, card, element_name, failed, style, text};
+use super::{Rendered, advised_card, card, element_name, failed, style, text, with_sessions};
+use crate::error::Code;
 use serde_json::Value;
 
 /// An input action, said as done; a failure says how far it got.
-pub fn action(done: &str, value: &Value) -> Rendered {
+pub(super) fn action(done: &str, value: &Value) -> Rendered {
     if value["ok"] == false
         && let Some(performed) = value["performed"].as_u64()
         && performed > 0
@@ -39,21 +40,22 @@ pub fn action(done: &str, value: &Value) -> Rendered {
     Rendered::out(format!("{} {done}", style::ok()))
 }
 
-pub fn typed(value: &Value) -> Rendered {
+pub(super) fn typed(value: &Value) -> Rendered {
     let characters = value["typed"].as_u64().unwrap_or(0) as usize;
 
     if value["ok"] == false {
-        let batches = value["batches"].as_u64().unwrap_or(0);
-        let confirmed = value["confirmedBatches"].as_u64().unwrap_or(0);
         let message = format!(
-            "Typed {confirmed} of {batches} parts: {}",
+            "Typed {} before it stopped: {}",
+            text::count(characters, "character"),
             value["error"]
                 .as_str()
                 .unwrap_or("the helper did not confirm the rest")
         );
-        let code = value["code"].as_str().unwrap_or("input");
-
-        return Rendered::err(card(&message, Some(code), value["uncertain"] == true));
+        let shown = match value["code"].as_str() {
+            Some(_) => advised_card(&message, value),
+            None => card(&message, Some(Code::Input), value["uncertain"] == true),
+        };
+        return Rendered::err(with_sessions(shown, value));
     }
 
     Rendered::out(format!(
@@ -64,7 +66,7 @@ pub fn typed(value: &Value) -> Rendered {
 }
 
 /// The command's own output, as it printed it; a note only when it failed.
-pub fn run(value: &Value) -> Rendered {
+pub(super) fn run(value: &Value) -> Rendered {
     if let Some(failure) = failed(value) {
         return failure;
     }
@@ -118,7 +120,7 @@ pub fn run(value: &Value) -> Rendered {
     rendered
 }
 
-pub fn wait(value: &Value, gone: bool) -> String {
+pub(super) fn wait(value: &Value, gone: bool) -> String {
     let after = value["waitedMs"]
         .as_f64()
         .map(|ms| format!(" after {}", text::duration(ms)))
@@ -142,7 +144,7 @@ pub fn wait(value: &Value, gone: bool) -> String {
     format!("{} {name} appeared{after}", style::ok())
 }
 
-pub fn restart(value: &Value) -> String {
+pub(super) fn restart(value: &Value) -> String {
     let mut line = format!("{} The helper restarted and is ready", style::ok());
 
     if value["inputReplaced"] == true {
@@ -152,7 +154,7 @@ pub fn restart(value: &Value) -> String {
     line
 }
 
-pub fn logout(_: &Value) -> String {
+pub(super) fn logout(_: &Value) -> String {
     format!(
         "{} The helper is logged out  {}",
         style::ok(),
@@ -160,7 +162,7 @@ pub fn logout(_: &Value) -> String {
     )
 }
 
-pub fn start_input(value: &Value) -> String {
+pub(super) fn start_input(value: &Value) -> String {
     let how = if value["alreadyRunning"] == true {
         "was already running"
     } else if value["recovered"] == true {
@@ -174,7 +176,7 @@ pub fn start_input(value: &Value) -> String {
     format!("{} The input service {how}", style::ok())
 }
 
-pub fn install(value: &Value) -> String {
+pub(super) fn install(value: &Value) -> String {
     let path = value["path"].as_str().map(text::tilde).unwrap_or_default();
 
     if value["alreadyInstalled"] == true {
@@ -192,9 +194,81 @@ pub fn install(value: &Value) -> String {
     }
 }
 
+/// The copies into the helper `environment list` found: each plan's ID,
+/// state and the files it copies.
+pub(super) fn plans(value: &Value) -> String {
+    let plans = value["plans"].as_array().map_or(&[][..], Vec::as_slice);
+    let count = |field: &str| value[field].as_u64().unwrap_or(0);
+    let (hidden, more, unreadable) = (count("hidden"), count("more"), count("unreadable"));
+
+    let mut lines = Vec::new();
+    if plans.is_empty() {
+        // Nothing listed is proof of nothing only when nothing was left out.
+        lines.push(if hidden + more + unreadable == 0 {
+            format!("{} Nothing has been copied into the helper", style::ok())
+        } else {
+            "No copy into the helper is listed".to_owned()
+        });
+    } else {
+        lines.push(plan_table(plans));
+    }
+    if unreadable > 0 {
+        lines.push(format!(
+            "{} {} could not be read, so this list may be missing some",
+            style::warn(),
+            text::count(usize::try_from(unreadable).unwrap_or(usize::MAX), "record")
+        ));
+    }
+    if more > 0 {
+        lines.push(style::dim(format!("{more} older not shown")));
+    }
+    if hidden > 0 {
+        lines.push(style::dim(format!(
+            "{hidden} undone completely not shown (--all lists them)"
+        )));
+    }
+    lines.join("\n")
+}
+
+/// The plans `environment list` found, one row each.
+fn plan_table(plans: &[Value]) -> String {
+    let rows: Vec<Vec<String>> = plans
+        .iter()
+        .map(|plan| {
+            let targets: Vec<String> = plan["files"]
+                .as_array()
+                .into_iter()
+                .flatten()
+                .filter_map(|file| file["target"].as_str())
+                .map(|target| text::printable(target).into_owned())
+                .collect();
+            vec![
+                plan["planId"].as_str().unwrap_or("?").to_owned(),
+                plan_state(plan["state"].as_str().unwrap_or("")).to_owned(),
+                targets.join(", "),
+            ]
+        })
+        .collect();
+    crate::ui::table::render(&["PLAN", "STATE", "FILES"], &rows)
+}
+
+/// A listed plan's state, in words.
+fn plan_state(state: &str) -> &str {
+    match state {
+        "previewed" => "previewed",
+        "applying" => "stopped while copying",
+        "applied" => "copied",
+        "rollingBack" => "stopped while undoing",
+        "rolledBack" => "undone",
+        "running" => "in use now",
+        "unknown" => "outcome unknown",
+        other => other,
+    }
+}
+
 /// An environment preview, copy or undo: what changes in the helper's home,
 /// and the one command that comes next.
-pub fn environment(value: &Value) -> Rendered {
+pub(super) fn environment(value: &Value) -> Rendered {
     let Some(files) = value["files"].as_array() else {
         return failed(value).unwrap_or_else(|| Rendered::out(super::generic(value)));
     };
@@ -367,7 +441,7 @@ pub fn environment(value: &Value) -> Rendered {
 }
 
 /// An app closed in the helper, and whether its copy went with it.
-pub fn close(value: &Value) -> String {
+pub(super) fn close(value: &Value) -> String {
     // `close --all` names every app it quit.
     if let Some(apps) = value["apps"].as_array() {
         let names: Vec<String> = apps
@@ -405,6 +479,7 @@ pub fn close(value: &Value) -> String {
             ));
         }
 
+        line.push_str(&copies_left(value));
         return line;
     }
 
@@ -423,11 +498,39 @@ pub fn close(value: &Value) -> String {
         line.push_str(&style::dim(" · removed Atlas's copy of it"));
     }
 
+    line.push_str(&copies_left(value));
     line
 }
 
+/// What a close left of Atlas's copies: those another session made, and
+/// those that could not be removed.
+fn copies_left(value: &Value) -> String {
+    let copies = |count: u64| match count {
+        1 => "1 copy".to_owned(),
+        count => format!("{count} copies"),
+    };
+    let mut said = String::new();
+    if let Some(others) = value["keptOthers"].as_u64().filter(|count| *count > 0) {
+        said.push_str(&style::dim(format!(
+            " · kept {} another session made",
+            copies(others)
+        )));
+    }
+    if let Some(failed) = value["failed"]
+        .as_array()
+        .filter(|failed| !failed.is_empty())
+    {
+        said.push_str(&format!(
+            "\n{} Could not remove {}; run the same close again",
+            style::warn(),
+            copies(u64::try_from(failed.len()).unwrap_or(u64::MAX))
+        ));
+    }
+    said
+}
+
 /// What `environment discover` found, here and in the helper.
-pub fn discover(value: &Value) -> String {
+pub(super) fn discover(value: &Value) -> String {
     let mut rows: Vec<Vec<String>> = Vec::new();
 
     for item in value["selections"].as_array().into_iter().flatten() {
@@ -516,7 +619,7 @@ pub fn discover(value: &Value) -> String {
 }
 
 /// `setup` without --apply: whether anything needs doing.
-pub fn setup_preview(value: &Value) -> String {
+pub(super) fn setup_preview(value: &Value) -> String {
     let steps: Vec<&str> = value["nextSteps"]
         .as_array()
         .into_iter()

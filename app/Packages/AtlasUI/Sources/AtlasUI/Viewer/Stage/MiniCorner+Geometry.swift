@@ -39,13 +39,14 @@ extension MiniCorner {
     }
   }
 
-  /// The small screen's centre in this corner of a stage of `size`, ``ViewerLayout/miniInset`` from its two edges.
+  /// The small screen's centre in this corner of a stage of `size`, ``ViewerLayout/pipInset`` from its two edges.
   ///
-  /// - Parameter size: The stage's size.
+  /// - Parameters:
+  ///   - size: The stage's size.
+  ///   - mini: The small screen's size.
   /// - Returns: The centre, in the stage's points from its top left.
-  func centre(in size: CGSize) -> CGPoint {
-    let mini = ViewerLayout.miniSize(stageWidth: size.width)
-    let inset = ViewerLayout.miniInset
+  func centre(in size: CGSize, mini: CGSize) -> CGPoint {
+    let inset = ViewerLayout.pipInset
     let x = isLeading ? inset + mini.width / 2 : size.width - inset - mini.width / 2
     let y = isTop ? inset + mini.height / 2 : size.height - inset - mini.height / 2
     return CGPoint(x: x, y: y)
@@ -57,9 +58,10 @@ extension MiniCorner {
   /// - Parameters:
   ///   - translation: How far it was dragged from this corner, where the pointer would come to rest.
   ///   - size: The stage's size.
+  ///   - mini: The small screen's size.
   /// - Returns: The corner.
-  func settling(after translation: CGSize, in size: CGSize) -> MiniCorner {
-    let from = centre(in: size)
+  func settling(after translation: CGSize, in size: CGSize, mini: CGSize) -> MiniCorner {
+    let from = centre(in: size, mini: mini)
     return Self.nearest(to: CGPoint(x: from.x + translation.width, y: from.y + translation.height), in: size)
   }
 
@@ -72,15 +74,17 @@ extension MiniCorner {
   ///   - translation: How far it was dragged from this corner when let go.
   ///   - velocity: How fast the pointer moved as it let go, in points a second.
   ///   - size: The stage's size.
+  ///   - mini: The small screen's size.
   /// - Returns: The velocity, zero or more.
   func landingVelocity(
     to corner: MiniCorner,
     after translation: CGSize,
     velocity: CGSize,
-    in size: CGSize
+    in size: CGSize,
+    mini: CGSize
   ) -> Double {
-    let from = centre(in: size)
-    let to = corner.centre(in: size)
+    let from = centre(in: size, mini: mini)
+    let to = corner.centre(in: size, mini: mini)
     let way = CGVector(dx: to.x - from.x - translation.width, dy: to.y - from.y - translation.height)
     let length = way.dx * way.dx + way.dy * way.dy
     guard length > 0 else { return 0 }

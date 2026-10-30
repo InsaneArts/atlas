@@ -8,7 +8,7 @@ struct HoverReveal: ViewModifier {
   /// Whether the pointer is over the row.
   let isRevealed: Bool
   @FocusState private var isFocused: Bool
-  @Environment(\.accessibilityReduceMotion) private var reduceMotion
+  @Environment(\.motionReduced) private var reduceMotion
 
   /// The control, shown or hidden.
   ///

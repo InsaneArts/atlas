@@ -1,9 +1,13 @@
 import SwiftUI
 
-/// The Screenshots tab: the screenshots agents took, newest first, in an adaptive grid under Now, Earlier today and the
-/// days before, their headers pinned as the grid scrolls; or why none shows, on the pane's own ground. The time groups
-/// find a picture, so there is no search. A screenshot shown large has zoomed out of its tile, so its place in the grid
-/// waits empty. The grid tells the window how many tiles stand in a row, which ↑ and ↓ step by.
+/// The Screenshots list, inside the card with no ground of its own: the screenshots agents took, newest first, in one
+/// adaptive grid under Now, Earlier today and the days before, their headings scrolling with the tiles; or why none
+/// shows. It scrolls in the card's one list scroll (``CardScroll``), under the small screen, and a step to a tile
+/// scrolls it into view only as far as it must, clear of the small screen. The time groups find a picture, so the
+/// search leaves it be. A screenshot shown large has zoomed out of its tile, so its place in the grid waits empty.
+/// The grid tells the window how many tiles stand in a row, which ↑ and ↓ step by. While the window is being resized
+/// it keeps its count and stretches its tiles within it, so the tiles never jump from row to row under the pointer;
+/// let go, the count follows the width and the tiles move to their places on ``Motion/state``.
 struct ViewerShotsPane: View {
   /// What the pane shows.
   let state: ViewerShotsState
@@ -11,19 +15,17 @@ struct ViewerShotsPane: View {
   let zoom: Namespace.ID
   /// Receives what the person does.
   let send: @MainActor (ViewerEvent) -> Void
-  @Environment(\.paneSettled) private var paneSettled
+  @Environment(\.paneShows) private var paneShows
+  @Environment(\.motionReduced) private var reduceMotion
 
-  /// The header over the tiles, or why there are none.
+  /// The tiles, or why there are none.
   var body: some View {
-    VStack(spacing: .zero) {
-      PaneHeader(title: "Screenshots", meta: state.meta)
-      content
-    }
-    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
-    .clipShape(RoundedRectangle(cornerRadius: Radius.large))
-    .cardSurface()
-    .accessibilityElement(children: .contain)
-    .accessibilityLabel("Screenshots")
+    content
+      .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+      .accessibilityElement(children: .contain)
+      .modifier(ScreenshotFocus(enabled: paneShows && state.large == nil))
+      .accessibilityLabel("Screenshots")
+      .accessibilityValue(state.meta)
   }
 
   /// The groups of tiles, or why there are none.
@@ -31,51 +33,61 @@ struct ViewerShotsPane: View {
     if let empty = state.empty {
       EmptyMessage(state: empty, size: .stage, ground: .pane, symbol: .photos)
     } else {
-      ScrollViewReader { scroll in
-        ScrollView {
-          LazyVStack(alignment: .leading, spacing: .zero, pinnedViews: .sectionHeaders) {
-            ForEach(state.days) { day in
-              Section {
-                grid(day)
-              } header: {
-                PinnedHeader(title: day.title)
-              }
-            }
-          }
-          .onGeometryChange(for: Int.self) { proxy in
-            Self.columns(across: proxy.size.width)
-          } action: { columns in
-            send(.shotColumns(columns))
-          }
-        }
-        .scrollIndicators(paneSettled ? .automatic : .hidden)
-        .onChange(of: state.scrollRequest) { _, _ in
-          if let selected = state.days.flatMap(\.shots).first(where: \.isSelected) {
-            scroll.scrollTo(selected.id, anchor: .center)
-          }
-        }
+      CardScroll(reveal: reveal) {
+        grid
       }
     }
   }
 
-  /// A group's tiles, as many to a row as fit.
-  ///
-  /// - Parameter day: The group.
-  /// - Returns: The grid.
-  private func grid(_ day: ViewerShotDay) -> some View {
-    LazyVGrid(columns: columns, alignment: .leading, spacing: ViewerLayout.shotGap) {
-      ForEach(day.shots) { tile in
-        ShotTileView(tile: tile, isOpen: tile.id == state.large?.id, zoom: zoom, send: send)
-          .id(tile.id)
+  /// Every group's heading and tiles in one grid, each group starting a row of its own.
+  private var grid: some View {
+    let place = state.tileShape
+    return LazyVGrid(columns: columns, alignment: .leading, spacing: ViewerLayout.shotGap) {
+      ForEach(Array(state.days.enumerated()), id: \.element.id) { index, day in
+        Section {
+          ForEach(day.shots) { tile in
+            ShotTileView(tile: tile, place: place, isOpen: tile.id == state.large?.id, zoom: zoom, send: send)
+              .listSelection(tile.id, isSelected: tile.isSelected)
+          }
+        } header: {
+          ListHeading(title: day.title)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(.top, index == .zero ? ViewerLayout.shotHeadingTop : ViewerLayout.shotHeadingAbove)
+        }
       }
     }
+    .scrollTargetLayout()
+    .animation(Motion.layout(Motion.state, reduceMotion: reduceMotion), value: state.heldColumns)
     .padding(.horizontal, ViewerLayout.swapInset)
     .padding(.bottom, ViewerLayout.swapInset)
+    .onGeometryChange(for: Int.self) { proxy in
+      Self.columns(across: proxy.size.width)
+    } action: { columns in
+      send(.shotColumns(state.heldColumns ?? columns))
+    }
   }
 
-  /// As many columns as fit, each at least ``ViewerLayout/shotLeastWidth`` wide, sharing the width.
+  /// The selected tile, which each keyboard step scrolls into view.
+  private var reveal: CardScrollReveal {
+    CardScrollReveal(
+      id: state.days
+        .flatMap(\.shots)
+        .first(where: \.isSelected)?
+        .id,
+      request: state.scrollRequest
+    )
+  }
+
+  /// As many columns as fit, each at least ``ViewerLayout/shotLeastWidth`` wide, sharing the width; while the window
+  /// is being resized, the count it held as the resize began, sharing whatever width there is.
   private var columns: [GridItem] {
-    [GridItem(.adaptive(minimum: ViewerLayout.shotLeastWidth), spacing: ViewerLayout.shotGap, alignment: .top)]
+    guard let held = state.heldColumns else {
+      return [GridItem(.adaptive(minimum: ViewerLayout.shotLeastWidth), spacing: ViewerLayout.shotGap, alignment: .top)]
+    }
+    return Array(
+      repeating: GridItem(.flexible(), spacing: ViewerLayout.shotGap, alignment: .top),
+      count: max(held, 1)
+    )
   }
 
   /// How many tiles stand in a row of a pane `width` wide, as the adaptive grid lays them out: as many of the least

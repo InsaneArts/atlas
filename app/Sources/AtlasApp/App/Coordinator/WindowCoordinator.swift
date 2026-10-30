@@ -50,10 +50,17 @@ final class WindowCoordinator {
     self.viewerPreferences = viewerPreferences
   }
 
-  /// The main window; brought forward when already open, on `tab` when one is given.
+  /// The main window; brought forward when already open, on `place` when one is given.
   ///
-  /// - Parameter tab: The tab to show, or nil for the one it shows.
-  func openViewer(tab: ViewerTab? = nil) {
+  /// - Parameters:
+  ///   - place: The place to show, or nil for the one it shows.
+  ///   - session: Whose work to show, every host session's or one's, or nil for the window's own choice; it is
+  ///     chosen before the window shows.
+  func openViewer(place: ViewerPlace? = nil, session: ViewerSessionChoice? = nil) {
+    let prepare = { (controller: ViewerController) in
+      if let session { controller.chooseSession(session) }
+    }
+    if let open = viewer, open.window.isPresented { prepare(open.controller) }
     let controller = present(
       \.viewer,
       controller: {
@@ -61,11 +68,12 @@ final class WindowCoordinator {
         if let controller, let panel = parts?.panel {
           controller.readingLoop.begin(with: panel.answer, picture: panel.picture)
         }
+        if let controller { prepare(controller) }
         return controller
       },
       window: windows.viewer
     )
-    if let tab { controller?.selectTab(tab) }
+    if let place { controller?.show(place) }
   }
 
   /// The Settings window; brought forward when already open. Its controller is made once and kept.

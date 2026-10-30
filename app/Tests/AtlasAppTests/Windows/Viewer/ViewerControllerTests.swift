@@ -46,7 +46,7 @@ struct ViewerControllerTests {
     viewer.togglePause()
     viewer.setVisible(false)
     viewer.control.lostFocus()
-    try #require(viewer.state.top.actions.control?.isEnabled == true)
+    try #require(viewer.state.footer.controls.control?.isEnabled == true)
     var presentations = 0
 
     viewer.toggleControl {
@@ -77,13 +77,30 @@ struct ViewerControllerTests {
     let viewer = ViewerController.scripted(service)
     await viewer.setStopped(true)
     #expect(service.log == ["stop"])
-    #expect(viewer.session.notice == ViewerWords.agentStopped)
+    #expect(viewer.session.notice == "Agents stopped.")
     await viewer.setStopped(false)
     #expect(service.log == ["stop", "resume"])
     #expect(viewer.session.notice == ViewerWords.agentResumed)
     service.fail = ["hold"]
     await viewer.setStopped(true)
     #expect(viewer.session.notice == "hold failed", "a refusal says why")
+    viewer.close()
+  }
+
+  @Test("a Stop that left background jobs running says so, with what the service warned of")
+  func aStopThatLeftJobsRunningSaysSo() async throws {
+    let service = ScriptedService()
+    service.stopOutcome = StopOutcome(
+      warnings: ["Atlas could not stop 1 background job"],
+      refused: [StopOutcome.Job(id: "7c2e91a04b3f", reason: .identity)]
+    )
+    let viewer = ViewerController.scripted(service)
+    await viewer.setStopped(true)
+    #expect(
+      viewer.session.notice
+        == "Agents stopped, but 1 background job couldn't be stopped. It may still run in the helper. "
+        + "Atlas could not stop 1 background job."
+    )
     viewer.close()
   }
 
@@ -172,8 +189,10 @@ struct ViewerControllerTests {
     #expect(viewer.state.alert == nil)
   }
 
-  @Test("Details reads the connected agents when it opens and by Check Again, never with each reading")
-  func detailsReadsAgentsWhenItOpens() async throws {
+  @Test(
+    "the helper's facts read the connected agents once the window first shows and by Check Again, never with each reading"
+  )
+  func theHelpersFactsReadAgentsOnceShownAndByCheckAgain() async throws {
     let service = ScriptedService()
     let reads = CallCount()
     let clock = ManualClock()
@@ -186,13 +205,14 @@ struct ViewerControllerTests {
       }
     )
     service.picture = png()
+    #expect(reads.count == 0, "a window not yet shown reads nothing")
     viewer.setVisible(true)
+    try await settle("the agents were never read") { viewer.helperFacts.agents == [.codex] }
     try await settle("the first picture never arrived") { viewer.reading.frame != nil }
-    #expect(reads.count == 0, "closed Details reads nothing")
-    viewer.send(.toggleDetails)
-    try await settle("the agents were never read") { viewer.details.agents == [.codex] }
     await viewer.readingLoop.read(viewer.readingLoop.generation)
-    #expect(reads.count == 1, "a reading leaves them be")
+    viewer.setVisible(false)
+    viewer.setVisible(true)
+    #expect(reads.count == 1, "a reading, or showing the window again, leaves them be")
     let checking = Task { await viewer.checkAgain() }
     try await settle("Check Again never read the agents") { reads.count == 2 }
     // Check Again holds its least time on the window's clock before it ends.
@@ -200,16 +220,16 @@ struct ViewerControllerTests {
     clock.advance(by: .seconds(Motion.Duration.leastWork.seconds))
     try await checking.value("Check Again never ended")
     #expect(reads.count == 2)
-    #expect(viewer.state.details?.session.map(\.value) == ["Codex"])
+    #expect(viewer.state.sidebar.helper.help.contains("Agents: Codex"))
     viewer.close()
   }
 
   @Test(
-    "only the newest Details read can replace known agents, including when it fails",
+    "only the newest read of the helper's facts can replace known agents, including when it fails",
     arguments: [true, false],
     [true, false]
   )
-  func detailsKeepsOnlyItsNewestRead(newestSucceeds: Bool, olderAnswersFirst: Bool) async throws {
+  func theHelpersFactsKeepOnlyTheNewestRead(newestSucceeds: Bool, olderAnswersFirst: Bool) async throws {
     let olderReply = ReleaseSignal()
     let newerReply = ReleaseSignal()
     let reads = CallCount()
@@ -230,15 +250,15 @@ struct ViewerControllerTests {
       newerReply.open()
       viewer.close()
     }
-    viewer.details.agents = [.claude]
-    let older = Task { await viewer.readDetails() }
-    try await settle("the older Details read never started") { reads.count == 1 }
-    let newer = Task { await viewer.readDetails() }
-    try await settle("the newer Details read never started") { reads.count == 2 }
+    viewer.helperFacts.agents = [.claude]
+    let older = Task { await viewer.readHelperFacts() }
+    try await settle("the older read never started") { reads.count == 1 }
+    let newer = Task { await viewer.readHelperFacts() }
+    try await settle("the newer read never started") { reads.count == 2 }
     if olderAnswersFirst {
       olderReply.open()
       await older.value
-      #expect(viewer.details.agents == [.claude], "a superseded reply cannot replace known facts")
+      #expect(viewer.helperFacts.agents == [.claude], "a superseded reply cannot replace known facts")
       newerReply.open()
       await newer.value
     } else {
@@ -247,83 +267,7 @@ struct ViewerControllerTests {
       olderReply.open()
       await older.value
     }
-    #expect(viewer.details.agents == (newestSucceeds ? [.pi] : [.claude]))
-  }
-
-  @Test("hiding and reopening Details keeps the new opening's agents when the old reply arrives")
-  func reopeningDetailsKeepsItsNewAgents() async throws {
-    let olderReply = ReleaseSignal()
-    let reads = CallCount()
-    let olderAnswered = CallCount()
-    let viewer = ViewerController.scripted(
-      ScriptedService(),
-      connectedAgents: {
-        reads.count += 1
-        if reads.count == 1 {
-          await olderReply.wait()
-          olderAnswered.count += 1
-          return [.codex]
-        }
-        return [.pi]
-      }
-    )
-    defer {
-      olderReply.open()
-      viewer.close()
-    }
-    viewer.send(.toggleDetails)
-    try await settle("Details never read the agents") { reads.count == 1 }
-    viewer.send(.toggleDetails)
-    viewer.send(.toggleDetails)
-    try await settle("reopened Details never read the agents") { viewer.details.agents == [.pi] }
-    olderReply.open()
-    try await settle("the older Details reply never arrived") { olderAnswered.count == 1 }
-    #expect(viewer.details.agents == [.pi])
-    #expect(viewer.details.shown)
-  }
-
-  @Test("a closed viewer's late agents reply preserves the next viewer's hidden Details choice")
-  func aLateAgentsReplyPreservesTheNextViewersDetailsChoice() async throws {
-    let preferences = ViewerPreferences.memory()
-    let reply = ReleaseSignal()
-    let reads = CallCount()
-    let first = ViewerController.scripted(
-      ScriptedService(),
-      connectedAgents: {
-        reads.count += 1
-        await reply.wait()
-        return [.codex]
-      },
-      preferences: preferences
-    )
-    defer {
-      reply.open()
-      first.close()
-    }
-    first.setVisible(true)
-    first.send(.toggleDetails)
-    try await settle("the first agents read never started") { reads.count == 1 }
-    first.close()
-
-    let next = ViewerController.scripted(
-      ScriptedService(),
-      connectedAgents: { [.codex] },
-      preferences: preferences
-    )
-    defer { next.close() }
-    #expect(next.details.shown)
-    next.setVisible(true)
-    try await settle("the next viewer never read the agents") { next.details.agents == [.codex] }
-    next.send(.toggleDetails)
-    #expect(!preferences.loadDetails())
-
-    reply.open()
-    try await settle("the closed viewer's agents reply never arrived") { first.details.agents == [.codex] }
-    #expect(!preferences.loadDetails())
-    next.close()
-    let reopened = ViewerController.scripted(ScriptedService(), preferences: preferences)
-    defer { reopened.close() }
-    #expect(!reopened.details.shown)
+    #expect(viewer.helperFacts.agents == (newestSucceeds ? [.pi] : [.claude]))
   }
 
   @Test("the small screen's corner is kept for the next window")
@@ -335,6 +279,37 @@ struct ViewerControllerTests {
     #expect(first.state.miniCorner == .topLeading)
     let next = ViewerController.scripted(ScriptedService(), preferences: preferences)
     #expect(next.state.miniCorner == .topLeading)
+  }
+
+  @Test("hiding the sidebar is remembered for the next window")
+  func hidingTheSidebarIsRemembered() {
+    let preferences = ViewerPreferences.memory()
+    let first = ViewerController.scripted(ScriptedService(), preferences: preferences)
+    defer { first.close() }
+    #expect(first.state.sidebar.mode == .full)
+    first.send(.toggleSidebar)
+    #expect(first.state.sidebar.mode == .hidden)
+    let next = ViewerController.scripted(ScriptedService(), preferences: preferences)
+    defer { next.close() }
+    #expect(next.state.sidebar.mode == .hidden)
+    next.send(.toggleSidebar)
+    #expect(!preferences.loadSidebarHidden())
+  }
+
+  @Test("the sidebar's search opens with the focus, keeps its query, and closes empty; Ended opens and folds")
+  func theSearchAndEndedFollowTheSidebar() {
+    let viewer = ViewerController.scripted(ScriptedService())
+    defer { viewer.close() }
+    viewer.send(.openSearch)
+    #expect(viewer.state.sidebar.search == ViewerSearchState(isOpen: true, focusRequests: 1))
+    viewer.send(.search("opie"))
+    #expect(viewer.state.sidebar.search.query == "opie")
+    viewer.send(.closeSearch)
+    #expect(!viewer.state.sidebar.search.isOpen && viewer.state.sidebar.search.query.isEmpty)
+    viewer.send(.toggleEnded)
+    #expect(viewer.state.sidebar.sessions.endedShown)
+    viewer.send(.toggleEnded)
+    #expect(!viewer.state.sidebar.sessions.endedShown)
   }
 
   @Test("Check Again holds for 0.6 seconds on the window's clock, however quickly the helper answers")

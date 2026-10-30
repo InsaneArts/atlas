@@ -6,7 +6,7 @@
 //! dictionary, and its login-window call does nothing from a command-line
 //! process, so the screen lock (confirmed by the window server) is used.
 use crate::{
-    error::{Error, Result},
+    error::{Code, Error, Result},
     session::Blocker,
 };
 use serde::Serialize;
@@ -28,7 +28,7 @@ pub struct Account {
 fn parse_accounts(listing: &str) -> Result<Vec<(String, u32)>> {
     let mut accounts = Vec::new();
     for line in listing.lines() {
-        let unreadable = || Error::new("switch", "Could not read an account's user ID");
+        let unreadable = || Error::new(Code::Switch, "Could not read an account's user ID");
         let mut columns = line.split_whitespace();
         let name = columns.next().ok_or_else(unreadable)?;
         let uid = columns
@@ -58,7 +58,7 @@ pub fn accounts(helper: Option<u32>) -> Result<Vec<Account>> {
     // A failed listing is an error, never "no other accounts".
     if !output.status.success() {
         return Err(Error::new(
-            "switch",
+            Code::Switch,
             format!(
                 "macOS could not list the accounts: {}",
                 String::from_utf8_lossy(&output.stderr).trim()
@@ -69,7 +69,7 @@ pub fn accounts(helper: Option<u32>) -> Result<Vec<Account>> {
     let me = nix::unistd::getuid().as_raw();
     listed(
         std::str::from_utf8(&output.stdout)
-            .map_err(|_| Error::new("switch", "Could not read the accounts"))?,
+            .map_err(|_| Error::new(Code::Switch, "Could not read the accounts"))?,
         me,
         helper,
         crate::setup::real_name,
@@ -114,7 +114,7 @@ fn login_symbol(symbol: &std::ffi::CStr) -> Result<extern "C" fn() -> i32> {
     const FRAMEWORK: &std::ffi::CStr =
         c"/System/Library/PrivateFrameworks/login.framework/Versions/A/login";
 
-    let unavailable = || Error::new("switch", "This macOS cannot lock the screen from here");
+    let unavailable = || Error::new(Code::Switch, "This macOS cannot lock the screen from here");
 
     // SAFETY: a NUL-terminated path; the handle stays open for the process.
     let handle = unsafe { libc::dlopen(FRAMEWORK.as_ptr(), libc::RTLD_LAZY) };
@@ -131,11 +131,6 @@ fn login_symbol(symbol: &std::ffi::CStr) -> Result<extern "C" fn() -> i32> {
     // SAFETY: the login calls used here take no arguments and return a
     // status (as Chromium's login_util declares them).
     Ok(unsafe { std::mem::transmute::<*mut std::ffi::c_void, extern "C" fn() -> i32>(function) })
-}
-
-/// Call a no-argument function of the login framework.
-fn login_call(symbol: &std::ffi::CStr) -> Result<i32> {
-    Ok(login_symbol(symbol)?())
 }
 
 /// Whether this login's screen is locked now, from the window server.
@@ -160,13 +155,45 @@ fn locked_within(seconds: u64) -> bool {
 
 /// Lock the screen now, so the person can choose another account from the
 /// lock screen; confirmed from the window server, not assumed. Only the
-/// lock asked for: the display is never put to sleep instead.
+/// lock asked for: the display is never put to sleep instead. Every caller,
+/// including switch-to and lock-only commands, must be on the console.
 pub fn lock_screen() -> Result<Value> {
-    login_call(c"SACLockScreenImmediate")?;
+    let lock = login_symbol(c"SACLockScreenImmediate")?;
+    lock_screen_using(
+        nix::unistd::getuid().as_raw(),
+        crate::native::session_info,
+        || {
+            lock();
+        },
+        || locked_within(5),
+    )
+}
 
-    if !locked_within(5) {
+fn lock_screen_using(
+    uid: u32,
+    session: impl FnOnce() -> Result<Value>,
+    lock: impl FnOnce(),
+    confirmed: impl FnOnce() -> bool,
+) -> Result<Value> {
+    // Read this process's graphical session immediately before the call.
+    // A console owner's UID alone cannot prove that this session is there.
+    let proof = session()?;
+    if proof["uid"].as_u64() != Some(u64::from(uid)) || proof["hasGraphicAccess"] != true {
         return Err(Error::new(
-            "switch",
+            Code::Identity,
+            "Atlas could not verify this login's graphical session.",
+        ));
+    }
+    if proof["onConsole"] != true {
+        return Err(not_ready(
+            "this login must be on screen at the Mac to switch accounts or lock the screen.",
+        ));
+    }
+    lock();
+
+    if !confirmed() {
+        return Err(Error::new(
+            Code::Switch,
             "The screen could not be locked from here; lock it from the Apple menu",
         ));
     }
@@ -198,7 +225,7 @@ pub struct Target {
 
 /// The refusal for a switch that must wait, after "Atlas can't switch yet:".
 fn not_ready(why: &str) -> Error {
-    Error::new("not-ready", format!("Atlas can't switch yet: {why}"))
+    Error::new(Code::NotReady, format!("Atlas can't switch yet: {why}"))
 }
 
 /// Whether the switch to `target` may go ahead, given what would make a
@@ -331,6 +358,91 @@ pub fn to(account: &Account) -> Result<Value> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn console_proof() -> Value {
+        json!({"uid": 503, "hasGraphicAccess": true, "onConsole": true})
+    }
+
+    #[test]
+    fn an_off_console_or_unknown_session_cannot_lock_or_switch_accounts() {
+        for state in [json!(false), Value::Null, json!("true")] {
+            let mut proof = console_proof();
+            proof["onConsole"] = state;
+            let error = lock_screen_using(
+                503,
+                || Ok(proof),
+                || panic!("an off-console session must never lock"),
+                || panic!("a refused lock must never be awaited"),
+            )
+            .unwrap_err();
+            assert_eq!(error.code, Code::NotReady);
+            assert_eq!(
+                error.error,
+                "Atlas can't switch yet: this login must be on screen at the Mac to switch accounts or lock the screen."
+            );
+        }
+    }
+
+    #[test]
+    fn a_lock_requires_this_accounts_verified_graphical_session() {
+        for (key, value) in [
+            ("uid", json!(501)),
+            ("uid", Value::Null),
+            ("hasGraphicAccess", json!(false)),
+            ("hasGraphicAccess", Value::Null),
+        ] {
+            let mut proof = console_proof();
+            proof[key] = value;
+            let error = lock_screen_using(
+                503,
+                || Ok(proof),
+                || panic!("an unverified session must never lock"),
+                || panic!("a refused lock must never be awaited"),
+            )
+            .unwrap_err();
+            assert_eq!(error.code, Code::Identity);
+        }
+        let error = lock_screen_using(
+            503,
+            || {
+                Err(Error::new(
+                    Code::Identity,
+                    "No graphical session dictionary",
+                ))
+            },
+            || panic!("a failed session probe must never lock"),
+            || panic!("a refused lock must never be awaited"),
+        )
+        .unwrap_err();
+        assert_eq!(error.error, "No graphical session dictionary");
+    }
+
+    #[test]
+    fn an_on_console_session_is_checked_before_locking_and_success_requires_confirmation() {
+        use std::cell::RefCell;
+
+        for confirmed in [false, true] {
+            let calls = RefCell::new(Vec::new());
+            let result = lock_screen_using(
+                503,
+                || {
+                    calls.borrow_mut().push("session");
+                    Ok(console_proof())
+                },
+                || calls.borrow_mut().push("lock"),
+                || {
+                    calls.borrow_mut().push("confirm");
+                    confirmed
+                },
+            );
+            assert_eq!(*calls.borrow(), ["session", "lock", "confirm"]);
+            if confirmed {
+                assert_eq!(result.unwrap(), json!({"ok": true, "locked": true}));
+            } else {
+                assert_eq!(result.unwrap_err().code, Code::Switch);
+            }
+        }
+    }
 
     #[test]
     fn only_ordinary_logins_are_offered() {

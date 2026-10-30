@@ -9,7 +9,7 @@ extension ViewerController {
     session.actualSize.toggle()
   }
 
-  /// One of the ⋯ menu's picture choices: Live, every five seconds, or paused.
+  /// One of the picture's choices: Live, every five seconds, or paused.
   ///
   /// - Parameter choice: The choice.
   func choosePicture(_ choice: SettingsPicture) {

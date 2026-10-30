@@ -19,7 +19,7 @@ use crate::{
     client::Client,
     config::{self, Config},
     control::{Controller, Ownership},
-    error::{Error, Result},
+    error::{Code, Error, Result},
     init,
     setup::{
         self,
@@ -51,7 +51,7 @@ pub const WINDOW_MARKER: &str = "onboarding-window";
 const APPROVAL: Duration = Duration::from_secs(10 * 60);
 
 fn problem(message: impl Into<String>) -> Error {
-    Error::new("onboarding", message)
+    Error::new(Code::Onboarding, message)
 }
 
 /// An account (the controller) asking another one to be its helper.
@@ -88,7 +88,7 @@ fn read_request(path: &Path) -> Option<Pairing> {
     let folder = fs::symlink_metadata(path.parent()?).ok()?;
 
     // Opened without following a link, and checked as opened.
-    let mut file = crate::helper_info::open_plain(path)?;
+    let mut file = crate::files::open_plain(path)?;
     let metadata = file.metadata().ok()?;
     if !metadata.is_file() || metadata.mode() & 0o022 != 0 {
         return None;
@@ -107,7 +107,7 @@ fn read_request(path: &Path) -> Option<Pairing> {
         ticket: match value.get("ticket") {
             Some(Value::String(ticket)) => ticket.clone(),
             None => setup::helper::text_sha256(&String::from_utf8_lossy(&body))
-                [..crate::control::TOKEN_BYTES * 2]
+                [..crate::files::TOKEN_BYTES * 2]
                 .to_owned(),
             _ => return None,
         },
@@ -117,7 +117,7 @@ fn read_request(path: &Path) -> Option<Pairing> {
         helper_name: value["helperName"].as_str()?.to_owned(),
         helper_identity: serde_json::from_value(value["helperIdentity"].clone()).ok()?,
     };
-    if request.ticket.len() != crate::control::TOKEN_BYTES * 2
+    if request.ticket.len() != crate::files::TOKEN_BYTES * 2
         || !request.ticket.bytes().all(|byte| byte.is_ascii_hexdigit())
         || request.helper_identity.uid != request.helper_uid
         || request.helper_identity.name != request.helper_name
@@ -290,12 +290,13 @@ pub async fn status(config_path: &Path) -> Result<Value> {
 
     // Asked by this window but never answered: the request may be taken
     // back, so another account can be chosen.
-    let forgettable = may_forget(
-        requested(uid, &helper),
-        setup::migrate::in_effect_for(helper.uid, &helper.home),
-        answering || answers(&config),
-        prepared(&helper),
-    );
+    let forgettable = Asked {
+        requested: requested(uid, &helper),
+        recorded: setup::migrate::in_effect_for(helper.uid, &helper.home),
+        answered: answering || answers(&config),
+        prepared: prepared(&helper),
+    }
+    .may_forget();
 
     Ok(json!({
         "ok": true,
@@ -428,7 +429,7 @@ fn candidates() -> Result<Vec<Value>> {
 fn settings(config_path: &Path) -> Result<Option<Config>> {
     match Config::load(config_path) {
         Ok(settings) => Ok(Some(settings)),
-        Err(error) if error.code == "config" => Ok(None),
+        Err(error) if error.code == Code::Config => Ok(None),
         Err(error) => Err(error),
     }
 }
@@ -450,11 +451,26 @@ fn requested(controller: u32, helper: &setup::Account) -> bool {
     })
 }
 
-/// Whether a request may be taken back: this account's own, for a helper
-/// that never answered, was never prepared for it and has no setup
-/// recorded. A real setup is never undone this way.
-fn may_forget(requested: bool, recorded: bool, answered: bool, prepared: bool) -> bool {
-    requested && !recorded && !answered && !prepared
+/// What is known of a shared request when it is shown.
+#[derive(Clone, Copy, Debug, Default)]
+struct Asked {
+    /// It is this account's own.
+    requested: bool,
+    /// A setup for its helper is recorded.
+    recorded: bool,
+    /// The helper answered it.
+    answered: bool,
+    /// The helper was prepared for this account.
+    prepared: bool,
+}
+
+impl Asked {
+    /// Whether the request may be taken back: this account's own, for a
+    /// helper that never answered, was never prepared for it and has no
+    /// setup recorded. A real setup is never undone this way.
+    fn may_forget(self) -> bool {
+        self.requested && !self.recorded && !self.answered && !self.prepared
+    }
 }
 
 /// Whether `helper`'s Atlas folder was prepared for this account, as `atlas
@@ -671,7 +687,7 @@ fn use_helper(
     write_request(
         Path::new(REQUEST),
         &Pairing {
-            ticket: crate::control::token(),
+            ticket: crate::files::token(),
             controller_uid: uid,
             controller_name: me_name,
             helper_uid: helper.uid,
@@ -1506,7 +1522,7 @@ pub fn window_open(home: &Path) -> bool {
 /// Read only a bounded plain text file, without waiting for a pipe's writer.
 fn read_text(path: &Path, limit: u64) -> Option<String> {
     let mut text = String::new();
-    crate::helper_info::open_plain(path)?
+    crate::files::open_plain(path)?
         .take(limit + 1)
         .read_to_string(&mut text)
         .ok()?;
@@ -1628,13 +1644,13 @@ mod tests {
 
     #[test]
     fn setup_without_orphans_excludes_teardown_and_keeps_its_executor_after_caller_death() {
-        if !crate::transaction_test::isolated(
+        if !crate::test_support::isolated(
             "onboarding::tests::setup_without_orphans_excludes_teardown_and_keeps_its_executor_after_caller_death",
         ) {
             return;
         }
         for mode in ["selected", "allocated"] {
-            crate::transaction_test::interrupted_executor(
+            crate::test_support::interrupted_executor(
                 "onboarding::tests::an_account_setup_test_caller",
                 mode,
             );
@@ -1643,12 +1659,12 @@ mod tests {
 
     #[test]
     fn interactive_creation_keeps_its_worker_claim_after_the_caller_dies() {
-        if !crate::transaction_test::isolated(
+        if !crate::test_support::isolated(
             "onboarding::tests::interactive_creation_keeps_its_worker_claim_after_the_caller_dies",
         ) {
             return;
         }
-        crate::transaction_test::interrupted_executor(
+        crate::test_support::interrupted_executor(
             "onboarding::tests::an_account_setup_test_caller",
             "interactive",
         );
@@ -1657,13 +1673,18 @@ mod tests {
     /// A subprocess entry point using only temporary state and a harmless executor.
     #[test]
     fn an_account_setup_test_caller() {
-        let Some(directory) = crate::transaction_test::directory() else {
+        let Some(directory) = crate::test_support::directory() else {
             return;
         };
         if std::env::var("ATLAS_MUTATION_TEST_MODE").unwrap() == "interactive" {
             let controller = Controller::at(7001, &directory.join("state"));
             let _ = init::setup_transaction(&controller, || {
-                let script = r#"print -r -- $$ > "$4"; /usr/bin/touch "$3" "$2"; while [[ ! -e $1 ]]; do /bin/sleep 0.01; done"#;
+                // The stand-in outlives its caller, as the test needs: once
+                // the caller dies, `script` dies writing to it and hangs up
+                // the worker's terminal, which would otherwise end the
+                // stand-in at whatever moment that comes. It ends once told
+                // to, or once the test's folder is gone.
+                let script = r#"trap '' HUP; print -r -- $$ > "$4"; /usr/bin/touch "$3" "$2"; while [[ ! -e $1 && -d ${1:h} ]]; do /bin/sleep 0.01; done"#;
                 let paths = [
                     directory.join("continue"),
                     directory.join("paused"),
@@ -1682,7 +1703,7 @@ mod tests {
             &[],
             |uid| Ok(Controller::at(uid, &directory.join("state"))),
             || {
-                crate::transaction_test::pause_executor(&directory);
+                crate::test_support::pause_executor(&directory);
                 Ok(())
             },
             || true,
@@ -1691,7 +1712,7 @@ mod tests {
 
     #[test]
     fn setup_requires_its_own_acknowledgement_even_when_every_orphan_is_gone() {
-        if !crate::transaction_test::isolated(
+        if !crate::test_support::isolated(
             "onboarding::tests::setup_requires_its_own_acknowledgement_even_when_every_orphan_is_gone",
         ) {
             return;
@@ -1707,7 +1728,7 @@ mod tests {
                 || panic!("setup cannot dispatch while teardown owns the helper"),
                 || true,
             );
-            assert!(matches!(blocked, Err(error) if error.code == "busy"));
+            assert!(matches!(blocked, Err(error) if error.code == Code::Busy));
             drop(competing_teardown);
             let directory = tempfile::tempdir().unwrap();
             let controller = Controller::at(7001, directory.path());
@@ -1740,7 +1761,7 @@ mod tests {
     }
     #[test]
     fn preparing_an_account_holds_every_orphan_and_records_interrupted_cleanup() {
-        if !crate::transaction_test::isolated(
+        if !crate::test_support::isolated(
             "onboarding::tests::preparing_an_account_holds_every_orphan_and_records_interrupted_cleanup",
         ) {
             return;
@@ -1759,7 +1780,7 @@ mod tests {
                 },
                 || true,
             );
-            assert!(matches!(result, Err(error) if error.code == "busy"));
+            assert!(matches!(result, Err(error) if error.code == Code::Busy));
             drop(other);
         }
         let result = setup_batch(
@@ -1841,7 +1862,7 @@ mod tests {
 
     fn pairing(controller: u32) -> Pairing {
         Pairing {
-            ticket: "a".repeat(crate::control::TOKEN_BYTES * 2),
+            ticket: "a".repeat(crate::files::TOKEN_BYTES * 2),
             controller_uid: controller,
             controller_name: "person".into(),
             helper_uid: controller + 1,
@@ -1872,7 +1893,7 @@ mod tests {
         config::write_atomic(&path, &serde_json::to_vec(&legacy).unwrap(), 0o644).unwrap();
         let read = read_request(&path).unwrap();
         assert_eq!(read.controller_uid, me);
-        assert_eq!(read.ticket.len(), crate::control::TOKEN_BYTES * 2);
+        assert_eq!(read.ticket.len(), crate::files::TOKEN_BYTES * 2);
         assert_eq!(read_request(&path), Some(read));
 
         // Written by someone else than the controller it names: ignored.
@@ -1914,7 +1935,7 @@ mod tests {
     /// socket file left behind, or none, is silent.
     #[test]
     fn a_helper_answers_only_while_its_socket_listens() {
-        if !crate::transaction_test::isolated(
+        if !crate::test_support::isolated(
             "onboarding::tests::a_helper_answers_only_while_its_socket_listens",
         ) {
             return;
@@ -1966,17 +1987,27 @@ mod tests {
     /// was never prepared and has no setup recorded, may be taken back.
     #[test]
     fn only_an_unanswered_request_may_be_taken_back() {
-        assert!(may_forget(true, false, false, false));
-        assert!(
-            !may_forget(false, false, false, false),
-            "not this account's"
-        );
-        assert!(!may_forget(true, true, false, false), "a setup is recorded");
-        assert!(!may_forget(true, false, true, false), "the helper answered");
-        assert!(
-            !may_forget(true, false, false, true),
-            "prepared for this account"
-        );
+        let mine = Asked {
+            requested: true,
+            ..Asked::default()
+        };
+        assert!(mine.may_forget());
+        assert!(!Asked::default().may_forget(), "not this account's");
+        let recorded = Asked {
+            recorded: true,
+            ..mine
+        };
+        assert!(!recorded.may_forget(), "a setup is recorded");
+        let answered = Asked {
+            answered: true,
+            ..mine
+        };
+        assert!(!answered.may_forget(), "the helper answered");
+        let prepared = Asked {
+            prepared: true,
+            ..mine
+        };
+        assert!(!prepared.may_forget(), "prepared for this account");
     }
 
     #[test]
@@ -2055,7 +2086,7 @@ mod tests {
 
     #[test]
     fn every_leftover_login_closes_under_one_approval() {
-        if !crate::transaction_test::isolated(
+        if !crate::test_support::isolated(
             "onboarding::tests::every_leftover_login_closes_under_one_approval",
         ) {
             return;
@@ -2109,7 +2140,7 @@ mod tests {
 
     #[test]
     fn closing_leftover_logins_holds_the_helper_and_keeps_an_unknown_outcome() {
-        if !crate::transaction_test::isolated(
+        if !crate::test_support::isolated(
             "onboarding::tests::closing_leftover_logins_holds_the_helper_and_keeps_an_unknown_outcome",
         ) {
             return;
@@ -2126,7 +2157,7 @@ mod tests {
             |_| unreachable!("root is not asked"),
             |_| true,
         );
-        assert!(matches!(busy, Err(Held::State(error)) if error.code == "busy"));
+        assert!(matches!(busy, Err(Held::State(error)) if error.code == Code::Busy));
         drop(other);
 
         // Held throughout, and recorded before root is asked.
@@ -2179,7 +2210,7 @@ mod tests {
 
     #[test]
     fn the_helper_is_logged_out_as_root_only_under_control_held_throughout() {
-        if !crate::transaction_test::isolated(
+        if !crate::test_support::isolated(
             "onboarding::tests::the_helper_is_logged_out_as_root_only_under_control_held_throughout",
         ) {
             return;
@@ -2195,7 +2226,7 @@ mod tests {
             |_| unreachable!("root is not asked"),
             || true,
         );
-        assert!(matches!(busy, Err(Held::State(error)) if error.code == "busy"));
+        assert!(matches!(busy, Err(Held::State(error)) if error.code == Code::Busy));
         drop(other);
 
         // Held while root runs and while the login is looked at.
@@ -2215,7 +2246,7 @@ mod tests {
                     },
                 );
                 match result {
-                    Err(Held::State(error)) if error.code == "busy" => {
+                    Err(Held::State(error)) if error.code == Code::Busy => {
                         std::thread::sleep(Duration::from_millis(20));
                         None
                     }
@@ -2230,7 +2261,7 @@ mod tests {
 
     #[test]
     fn a_log_out_as_root_stays_pending_until_the_login_is_seen_gone() {
-        if !crate::transaction_test::isolated(
+        if !crate::test_support::isolated(
             "onboarding::tests::a_log_out_as_root_stays_pending_until_the_login_is_seen_gone",
         ) {
             return;
@@ -2277,7 +2308,7 @@ mod tests {
 
     #[test]
     fn a_root_run_whose_reply_was_lost_stays_pending_though_the_login_looks_gone() {
-        if !crate::transaction_test::isolated(
+        if !crate::test_support::isolated(
             "onboarding::tests::a_root_run_whose_reply_was_lost_stays_pending_though_the_login_looks_gone",
         ) {
             return;
@@ -2305,7 +2336,7 @@ mod tests {
 
     #[test]
     fn a_log_out_root_never_started_leaves_nothing_pending() {
-        if !crate::transaction_test::isolated(
+        if !crate::test_support::isolated(
             "onboarding::tests::a_log_out_root_never_started_leaves_nothing_pending",
         ) {
             return;

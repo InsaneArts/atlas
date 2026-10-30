@@ -2,7 +2,8 @@
   import SwiftUI
 
   extension PreviewStates {
-    /// Every panel sample, in the order the renders list them, then a stop the service refused, which no card draws.
+    /// Every panel sample, in the order the renders list them, then a stop the service refused, which no card draws,
+    /// then the host sessions' samples.
     @MainActor public static var panel: [PreviewState<PanelState>] {
       [
         PreviewState(name: "Idle", value: panelIdle),
@@ -16,6 +17,13 @@
         PreviewState(name: "Paused", value: panelPaused),
         PreviewState(name: "In use elsewhere", value: panelInUseElsewhere),
         PreviewState(name: "Stop refused", value: panelStopRefused),
+        PreviewState(name: "Sessions", value: panelSessions),
+        PreviewState(name: "Sessions waiting", value: panelSessionsWaiting),
+        PreviewState(name: "Sessions need you", value: panelSessionsNeedsYou),
+        PreviewState(name: "Sessions, more than three", value: panelSessionsMore),
+        PreviewState(name: "Stopped, jobs left", value: panelStoppedJobsLeft),
+        PreviewState(name: "You have control, a command runs", value: panelControlCommandRuns),
+        PreviewState(name: "Needs you, a command runs", value: panelNeedsYouCommandRuns),
       ]
     }
 
@@ -44,11 +52,12 @@
     /// Open Atlas, the main action while nothing needs the person.
     private static let openAtlas = PanelMainButton(title: "Open Atlas", help: "Open Atlas's window", event: .openAtlas)
 
-    /// An agent's actions two minutes ago, newest first, as Recent lists them.
-    private static let earlier = [
+    /// An agent's action in Opie two minutes ago, Atlas recovering the helper and the person's own click before it,
+    /// newest first, as Recent lists them.
+    @MainActor private static let earlier = [
       recent(0, "Turned Show Center off", "2 min"),
-      recent(1, "Clicked Ring in Opie", "2 min"),
-      recent(2, "Opened Opie", "2 min"),
+      recent(1, "Recovered the helper", "2 min", icon: .atlas),
+      recent(2, "You clicked in Opie", "2 min", icon: .you),
     ]
 
     /// Nothing acts in the helper; its screen shows, with what an agent did last.
@@ -76,8 +85,8 @@
       ),
       recent: [
         recent(0, "Turning Show Center off in Opie", "2 s", isLive: true),
-        recent(1, "Clicked Ring in Opie", "9 s"),
-        recent(2, "Opened Opie", "31 s"),
+        recent(1, "Recovered the helper", "9 s", icon: .atlas),
+        recent(2, "You clicked in Opie", "31 s", icon: .you),
       ],
       controls: PanelControls(agent: .stop, agentHelp: "Stop Agent (⌘.)", main: openAtlas)
     )
@@ -105,7 +114,8 @@
       controls: PanelControls(main: recover)
     )
 
-    /// The person stopped agents: Resume in glass before Open Atlas, as Stop stands before it while an agent works.
+    /// The person stopped agents: Resume as the secondary button before Open Atlas, as Stop stands before it while an
+    /// agent works.
     @MainActor static let panelStopped = PanelState(
       status: StatusSummary(label: "Stopped", tone: .attention, mark: .square, line: "Resume when you're ready"),
       picture: screen(.live),
@@ -193,6 +203,66 @@
       return state
     }()
 
+    /// Two agents at work: Claude Code has the helper and Cursor is idle, so Sessions takes Recent's place, the line
+    /// names the holder and Claude Code's icon leads the caption.
+    @MainActor static let panelSessions = sessions([SessionSamples.claudeActing, SessionSamples.cursorIdle])
+
+    /// Three agents at work: Claude Code has the helper, Codex waits its turn, Cursor is idle.
+    @MainActor static let panelSessionsWaiting = sessions([
+      SessionSamples.claudeActing, SessionSamples.codexWaiting, SessionSamples.cursorIdle,
+    ])
+
+    /// Claude Code's click may not have finished: Needs you names it, its row is orange, and Codex waits until the
+    /// person recovers.
+    @MainActor static let panelSessionsNeedsYou = PanelState(
+      status: StatusSummary(
+        label: "Needs you",
+        tone: .attention,
+        mark: .dot,
+        line: "A click by Claude Code may not have finished"
+      ),
+      picture: screen(.needsYou),
+      recent: [],
+      sessions: [SessionSamples.claudeNeedsYou, SessionSamples.codexRecovery, SessionSamples.cursorIdle],
+      controls: PanelControls(main: recover)
+    )
+
+    /// Five agents at work: the first three rows, then one that opens the other two.
+    @MainActor static let panelSessionsMore: PanelState = {
+      var state = sessions(Array(SessionSamples.panelEntries.prefix(PanelState.mostSessions)))
+      state.moreSessions = "+2 more"
+      return state
+    }()
+
+    /// Agents at work while Claude Code has the helper: its newest action over the screen with its icon, and Stop
+    /// before Open Atlas.
+    ///
+    /// - Parameter sessions: The rows, Claude Code's first.
+    /// - Returns: The panel's state.
+    @MainActor private static func sessions(_ sessions: [PanelSessionEntry]) -> PanelState {
+      PanelState(
+        status: StatusSummary(
+          label: "Working",
+          tone: .active,
+          mark: .pulsing,
+          line: "Claude Code · understudy has the helper"
+        ),
+        picture: PanelPictureState(
+          look: .live,
+          picture: SampleDesktop.picture,
+          caption: PanelCaption(
+            text: SessionSamples.claudeDoing,
+            time: "just now",
+            icon: SessionSamples.claudeIcon
+          ),
+          pause: pictureLive
+        ),
+        recent: [],
+        sessions: sessions,
+        controls: PanelControls(agent: .stop, agentHelp: "Stop Agent (⌘.)", main: openAtlas)
+      )
+    }
+
     /// Recover…, the main action while the helper needs recovering.
     private static let recover = PanelMainButton(
       title: "Recover…",
@@ -200,16 +270,24 @@
       event: .askRecover
     )
 
-    /// One of Recent's rows: an agent's action that worked.
+    /// One of Recent's rows: an action that worked, in Opie unless it says otherwise.
     ///
     /// - Parameters:
     ///   - id: Its place, newest first.
     ///   - line: What was done.
     ///   - when: How long ago, short.
+    ///   - icon: What leads it; Opie's icon by default.
     ///   - isLive: Whether it is the action running now.
     /// - Returns: The row's entry.
-    private static func recent(_ id: Int, _ line: String, _ when: String, isLive: Bool = false) -> PanelRecentEntry {
-      PanelRecentEntry(id: String(id), line: line, when: when, isLive: isLive)
+    @MainActor private static func recent(
+      _ id: Int,
+      _ line: String,
+      _ when: String,
+      icon: ActivityIcon? = nil,
+      isLive: Bool = false
+    ) -> PanelRecentEntry {
+      let opie = ActivityIcon.app(.of(SampleAppIcons.icons[SampleAppIcons.opie], name: "Opie"))
+      return PanelRecentEntry(id: String(id), icon: icon ?? opie, line: line, when: when, isLive: isLive)
     }
   }
 #endif

@@ -8,7 +8,7 @@ struct ShotZoom: ViewModifier {
   let id: String
   /// The namespace the picture moves in.
   let namespace: Namespace.ID
-  @Environment(\.accessibilityReduceMotion) private var reduceMotion
+  @Environment(\.motionReduced) private var reduceMotion
 
   /// The view, carrying the screenshot's identity unless Reduce Motion is on.
   func body(content: Content) -> some View {

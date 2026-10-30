@@ -75,6 +75,21 @@ struct ViewerClientFetchTests {
     #expect(screenshots?.isStillRecovering == false, "only Recover carries on in the service")
   }
 
+  @Test("a cleanup that got no answer may still run, while a preview that got none is only late")
+  func aCleanupWithNoAnswerMayStillRun() async throws {
+    let late = try client(.failure(.timedOut))
+    let applied = await #expect(throws: ServiceError.self) { try await late.cleanup(session: "a1", apply: true) }
+    #expect(applied?.isCleanupUnanswered == true)
+    #expect(applied?.message == ViewerClient.lateReply)
+    let previewed = await #expect(throws: ServiceError.self) { try await late.cleanup(session: "a1", apply: false) }
+    #expect(previewed?.isCleanupUnanswered == false, "a preview changes nothing, so nothing may still run")
+    let refusal = Data(#"{"ok": false, "code": "busy", "error": "Release control before cleaning up"}"#.utf8)
+    let refused = try client(.reply(status: 409, body: refusal))
+    await #expect(throws: ServiceError("Release control before cleaning up", code: "busy")) {
+      try await refused.cleanup(session: "a1", apply: true)
+    }
+  }
+
   @Test("a screenshot comes back as its bytes, and any other reply than a 200 is the service's error")
   func aScreenshotIsItsBytes() async throws {
     let picture = Data([0x89, 0x50, 0x4E, 0x47])

@@ -6,11 +6,14 @@ import { readFileSync } from 'node:fs';
 import test from 'node:test';
 import {
   ALERT_RENDERS,
+  appearanceFlags,
   GROUPS,
   MENUBAR_BARS,
   MENUBAR_STATES,
   NOTICE_RENDERS,
   PANEL_MODES,
+  PANEL_SESSIONS,
+  parse,
 } from '../scripts/render-app.mjs';
 
 const swift = readFileSync(
@@ -39,6 +42,16 @@ function arrayLiteral(name) {
 test('the render table names exactly the modes in PanelRender.modes', () => {
   const modes = [...arrayLiteral('modes').matchAll(literal)].map((match) => unquote(match[1]));
   assert.deepEqual(PANEL_MODES, modes);
+});
+
+test('the render table names exactly the sessions in PanelRender.sessions', () => {
+  const sessions = [...arrayLiteral('sessions').matchAll(literal)].map((match) =>
+    unquote(match[1]),
+  );
+  assert.deepEqual(
+    PANEL_SESSIONS.map(({ name }) => name),
+    sessions,
+  );
 });
 
 // Each `("file", ["KEY": "value", ...])` in PanelRender.NAME.
@@ -106,4 +119,14 @@ test('the render table names exactly the bars in MenuBarRender.bars', () => {
 
 test('the menu bar is a render group of its own', () => {
   assert.ok(GROUPS.includes('menubar'));
+});
+
+test('every group is drawn in both appearances unless one is asked for', () => {
+  assert.deepEqual(parse(['out']).appearances, ['light', 'dark']);
+  assert.deepEqual(parse(['out', '--appearance', 'dark']).appearances, ['dark']);
+});
+
+test('only the dark appearance asks the app for --dark', () => {
+  assert.deepEqual(appearanceFlags('light'), []);
+  assert.deepEqual(appearanceFlags('dark'), ['--dark']);
 });

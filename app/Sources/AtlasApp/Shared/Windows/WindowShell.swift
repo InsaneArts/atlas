@@ -2,18 +2,18 @@ import AppKit
 import SwiftUI
 
 /// The AppKit host of every SwiftUI view Atlas puts on screen: each window, the alert, the panel's popover
-/// and the drag ghost's overlay call one of these, so the hosting view, ``ShellRoot`` and the dark appearance
-/// (``Appearance/dark``) are written once. Atlas's windows are opaque on `NSColor.ground`; the alert and the
-/// ghost are the clear ones, drawing their own surface inside the window's frame.
+/// and the drag ghost's overlay call one of these, so the hosting view and ``ShellRoot`` are written once. None sets
+/// an appearance: each follows the Mac's Light, Dark or Auto setting, and changes with it while open. Atlas's windows
+/// are opaque on `NSColor.ground`, which follows it too; the alert and the ghost are the clear ones, drawing their
+/// own surface inside the window's frame.
 enum WindowShell {
-  /// Makes a SwiftUI view an opaque window's content: dark, on the ground, so a resize never flashes another colour,
-  /// in a hosting view that never resizes its window.
+  /// Makes a SwiftUI view an opaque window's content: on the ground, so a resize never flashes another colour, in a
+  /// hosting view that never resizes its window.
   ///
   /// - Parameters:
   ///   - window: The window to fill.
   ///   - content: Builds the window's view from its controller; called inside ``ShellRoot``'s body.
   static func host<Content: View>(in window: NSWindow, @ViewBuilder content: @escaping @MainActor () -> Content) {
-    window.appearance = Appearance.dark
     window.backgroundColor = .ground
     let hostingView = NSHostingView(rootView: ShellRoot(content: content))
     // The window keeps the size it is given; the content fills it.
@@ -35,16 +35,15 @@ enum WindowShell {
     window.backgroundColor = .clear
     // The view draws its own shadow inside the window's clear frame.
     window.hasShadow = false
-    window.appearance = Appearance.dark
     let controller = NSHostingController(rootView: ShellRoot(content: content))
     // The window follows the view as its words change.
     controller.sizingOptions = [.preferredContentSize]
     window.contentViewController = controller
   }
 
-  /// Makes a SwiftUI view a popover's content, dark like Atlas's windows. The view sits at the top of a container
-  /// (``PopoverContent``) that hands each new size the view asks for to `follow`, which sets the popover's size, so
-  /// the owner decides whether a change eases or lands at once.
+  /// Makes a SwiftUI view a popover's content, in the Mac's appearance like Atlas's windows. The view sits at the top
+  /// of a container (``PopoverContent``) that hands each new size the view asks for to `follow`, which sets the
+  /// popover's size, so the owner decides whether a change eases or lands at once.
   ///
   /// - Parameters:
   ///   - popover: The popover to fill.
@@ -61,7 +60,6 @@ enum WindowShell {
     // The view tells the container the size it wants, and holds that height at the container's top.
     controller.sizingOptions = [.preferredContentSize, .intrinsicContentSize]
     popover.contentViewController = PopoverContent(content: controller, label: label, follow: follow)
-    popover.appearance = Appearance.dark
   }
 
   /// Makes a SwiftUI view a see-through overlay's content: a clear panel with no shadow, which its owner sizes and
@@ -74,7 +72,6 @@ enum WindowShell {
     panel.isOpaque = false
     panel.backgroundColor = .clear
     panel.hasShadow = false
-    panel.appearance = Appearance.dark
     let hostingView = NSHostingView(rootView: ShellRoot(content: content))
     // The owner sizes the overlay; the view never resizes it.
     hostingView.sizingOptions = []

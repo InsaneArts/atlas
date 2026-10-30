@@ -18,11 +18,16 @@ enum PanelRender {
     "observing", "agent", "controlling", "recovering", "loggedOut", "unavailable", "stopped", "connecting",
     "elsewhere",
   ]
+  /// The host sessions `ATLAS_RENDER_SESSIONS` names (``PanelRenderSessions``), each drawn over the mode it goes with:
+  /// one at work, which reads as the panel always has, two, one waiting its turn, one whose action may not have
+  /// finished, and more than the panel's rows.
+  nonisolated static let sessions = ["one", "two", "waiting", "needsYou", "more"]
   /// Each alert window render's file name with the `ATLAS_RENDER_*` settings that draw it: every alert, one whose
   /// command did not run, one whose command runs, and Recover once it worked.
   nonisolated static let alerts: [(file: String, environment: [String: String])] = [
     ("alert-recover", ["ATLAS_RENDER_ALERT": "recover", "ATLAS_RENDER_MODE": "recovering"]),
-    ("alert-switch", ["ATLAS_RENDER_ALERT": "switch"]),
+    ("alert-switch", ["ATLAS_RENDER_ALERT": "switch", "ATLAS_RENDER_ALERT_ON_CONSOLE": "1"]),
+    ("alert-switch-off-console", ["ATLAS_RENDER_ALERT": "switch"]),
     ("alert-log-out", ["ATLAS_RENDER_ALERT": "logOut"]),
     ("alert-log-out-anyway", ["ATLAS_RENDER_ALERT": "logOutAnyway"]),
     (
@@ -56,7 +61,7 @@ enum PanelRender {
   ///   - service: The viewer service to read.
   ///   - overrides: What the design check changes, from `ATLAS_RENDER_*`.
   ///   - path: Where to write the PNG.
-  ///   - appearance: The appearance of the menu bar strip around the panel.
+  ///   - appearance: The appearance to draw the panel, its card and the menu bar strip in, light or dark.
   /// - Returns: Whether the PNG was written.
   static func draw(
     service: any ViewerService,
@@ -80,7 +85,7 @@ enum PanelRender {
     if let alert = overrides.alertSnapshot(over: snapshot.status.overview) {
       return draw(alert: alert, to: path, appearance: appearance)
     }
-    return draw(snapshot, to: path, appearance: appearance, reduceTransparency: overrides.reducesTransparency)
+    return draw(snapshot, to: path, appearance: appearance)
   }
 
   /// Draws the panel for `snapshot` on its card, under a strip of menu bar holding its glyph.
@@ -88,22 +93,18 @@ enum PanelRender {
   /// - Parameters:
   ///   - snapshot: What the panel's controller would hold.
   ///   - path: Where to write the PNG.
-  ///   - appearance: The appearance of the menu bar strip around the panel.
-  ///   - reduceTransparency: Whether to draw it as under Reduce Transparency, its glass opaque.
+  ///   - appearance: The appearance to draw the panel, its card and the menu bar strip in, light or dark.
   /// - Returns: Whether the PNG was written.
   static func draw(
     _ snapshot: PanelSnapshot,
     to path: String,
-    appearance: NSAppearance?,
-    reduceTransparency: Bool = false
+    appearance: NSAppearance?
   ) -> Bool {
     let content = PNG.host(
       ShellRoot {
         PanelView(state: PanelPresenter.state(snapshot)) { _ in }
           .panelCard()
           .padding(margin)
-          // The setting's own value is read-only; its underscored twin is the one SwiftUI lets a render set.
-          .environment(\._accessibilityReduceTransparency, reduceTransparency)
       }
     )
     let size = content.fittingSize
@@ -134,7 +135,7 @@ enum PanelRender {
   /// - Parameters:
   ///   - alert: The alert, as the alert window's controller would hold it.
   ///   - path: Where to write the PNG.
-  ///   - appearance: The appearance of the ground behind it.
+  ///   - appearance: The appearance to draw the alert and the ground behind it in, light or dark.
   /// - Returns: Whether the PNG was written.
   static func draw(alert: AlertSnapshot, to path: String, appearance: NSAppearance?) -> Bool {
     let state = AlertPresenter.state(alert)

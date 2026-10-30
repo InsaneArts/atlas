@@ -37,6 +37,14 @@ impl Fixture {
     }
 
     fn run_line(&self, config: Option<&Path>, args: &[&str], atlas_json: Option<&str>) -> Output {
+        let variables: Vec<_> = atlas_json
+            .map(|value| ("ATLAS_JSON", value))
+            .into_iter()
+            .collect();
+        self.run_with(config, args, &variables)
+    }
+
+    fn run_with(&self, config: Option<&Path>, args: &[&str], variables: &[(&str, &str)]) -> Output {
         let before = self.files();
         let mut command = Command::new(env!("CARGO_BIN_EXE_atlas"));
         command
@@ -55,9 +63,7 @@ impl Fixture {
             command.arg("--config").arg(config);
         }
         command.args(args);
-        if let Some(value) = atlas_json {
-            command.env("ATLAS_JSON", value);
-        }
+        command.envs(variables.iter().copied());
 
         let output = command.output().unwrap();
         assert_eq!(
@@ -219,6 +225,53 @@ fn invalid_arguments_report_one_json_error_before_execution() {
             .unwrap()
             .contains("Give 1 to 600 seconds.")
     );
+}
+
+/// Only a command that waits for control reads `ATLAS_WAIT`: a bad value
+/// is a usage error there, before anything runs, and is ignored by every
+/// other command; `--wait` takes its place.
+#[test]
+fn only_a_command_that_waits_reads_atlas_wait_and_the_flag_wins_over_it() {
+    let fixture = Fixture::new();
+    let missing = fixture.config("missing.toml");
+    let run = |args: &[&str], wait: &str| {
+        let output = fixture.run_with(Some(&missing), args, &[("ATLAS_WAIT", wait)]);
+        let reply: Value = serde_json::from_slice(&output.stderr).unwrap_or(Value::Null);
+        (output.status.code(), reply)
+    };
+
+    for wait in ["soon", "601", "-1", "1.5", ""] {
+        let (status, error) = run(&["key", "escape"], wait);
+        assert_eq!(status, Some(2), "{wait:?}");
+        assert_eq!(error["code"], "usage", "{wait:?}");
+        assert!(
+            error["error"]
+                .as_str()
+                .unwrap()
+                .ends_with("does not work for ATLAS_WAIT. Give 0 to 600 seconds."),
+            "{error}"
+        );
+    }
+
+    // A good value, or the flag in place of a bad one, goes on to the
+    // command, which finds no settings.
+    for (args, wait) in [
+        (&["key", "escape"][..], "5"),
+        (&["key", "escape"], "0"),
+        (&["--wait", "5", "key", "escape"], "soon"),
+        (&["run", "--wait", "0", "--", "/usr/bin/true"], "soon"),
+        (&["screenshot"], "soon"),
+    ] {
+        let (status, error) = run(args, wait);
+        assert_eq!(
+            (status, error["code"].as_str()),
+            (Some(1), Some("config")),
+            "{args:?}"
+        );
+    }
+
+    let (status, _) = run(&["agent-guide", "--errors"], "soon");
+    assert_eq!(status, Some(0));
 }
 
 #[test]

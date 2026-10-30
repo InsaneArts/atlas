@@ -6,12 +6,21 @@ import SwiftUI
 struct ViewerHostContent: View {
   /// What the window shows.
   let state: ViewerState
+  /// Whether a newly shown pane plays its arrival; off while the initial reference is laid out.
+  var animatesArrivals = true
+  /// Whether this host exercises the reduced-motion policy.
+  var reduceMotion = false
+  /// Observes the layout under test without depending on accessibility services.
+  var frameReport: LayoutFrameReport?
 
   /// The window's content, its pictures painted flat.
   var body: some View {
-    ViewerView(state: state, send: { _ in }, newest: { "" }, input: { EmptyView() }) { live in
+    ViewerView(state: state, send: { _ in }, input: { EmptyView() }) { live in
       (PictureColour(rawValue: live.picture.id) ?? .stage).color
     }
+    .environment(\.animatesArrivals, animatesArrivals)
+    .environment(\.motionReductionOverride, reduceMotion)
+    .environment(\.layoutFrameReport, frameReport)
     .frame(width: PreviewStates.viewerSize.width, height: PreviewStates.viewerSize.height)
   }
 }

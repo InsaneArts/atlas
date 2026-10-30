@@ -2,23 +2,36 @@
 //! This is a resumable transaction, not a watcher or an account clone.
 pub mod discovery;
 mod files;
+mod installs;
+mod list;
 mod model;
+
+pub(crate) use model::Phase;
+mod one_off;
 pub mod profile;
+mod reply;
 mod runner;
 mod state;
 #[cfg(test)]
 mod tests;
+mod undo;
 mod worker;
 
 use crate::{
-    client::Client,
+    client::{Client, Run},
     config::parse_toml,
-    error::{Error, Result},
+    control::Ownership,
+    error::{Code, Error, Result},
+    task::{self, Claims},
     transport::{OutputError, run_output},
 };
 use files::*;
 use fs2::FileExt;
+pub(crate) use installs::HELD_DAYS;
+pub use list::list;
 use model::*;
+pub(crate) use one_off::{install_app, install_states, installed_app, remove_app};
+pub(crate) use reply::{InstallState, KeptReason, Outcome, Removal, RunningFrom, SideEffect};
 pub use runner::NO_PROFILE;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
@@ -29,6 +42,9 @@ use std::{
     path::{Path, PathBuf},
     time::Duration,
 };
+#[cfg(test)]
+pub(crate) use undo::PlanPhase;
+pub(crate) use undo::{PlanState, Undone, plan_states, undo_plan};
 pub use worker::worker;
 
 const MAX_FILE: u64 = 128 * 1024 * 1024;
@@ -55,7 +71,7 @@ pub(super) struct Selection {
 }
 
 fn problem(message: impl Into<String>) -> Error {
-    Error::new("environment", message)
+    Error::new(Code::Environment, message)
 }
 
 /// Identity and search-path variables the helper runner owns.
@@ -97,7 +113,7 @@ pub(super) fn selectable_variable(name: &str) -> bool {
 /// Freeze the selected bytes, then preview or apply the resulting plan.
 pub async fn sync(client: &Client, manifest: &Path, apply_now: bool) -> Result<Value> {
     let manifest = fs::canonicalize(manifest)
-        .map_err(|error| Error::new("io", format!("{}: {error}", manifest.display())))?;
+        .map_err(|error| Error::new(Code::Io, format!("{}: {error}", manifest.display())))?;
     let selection: Manifest = parse_toml(&read_limited(&manifest, MAX_MANIFEST)?, &manifest)?;
     freeze(client, &manifest, selection.files, apply_now).await
 }
@@ -116,11 +132,24 @@ pub(super) async fn freeze(
     client.identity().await?;
 
     let helper = helper_name(client.config.helper_uid)?;
-    prune(client, &helper).await;
+    freeze_as(client, &helper, manifest, selections, apply_now).await
+}
 
-    let id = crate::control::token();
+/// [`freeze`] for the helper account `helper`, once the helper is verified.
+async fn freeze_as(
+    client: &Client,
+    helper: &str,
+    manifest: &Path,
+    selections: Vec<Selection>,
+    apply_now: bool,
+) -> Result<Value> {
+    prune(client, helper).await;
+
+    let id = crate::files::token();
     let stage = stage_path(client, &id)?;
-    create_stage(&stage, &helper)?;
+    // Held while the preview is made, so no other command sweeps the stage
+    // as a preview cut short before its plan is written.
+    let lock = create_locked_stage(&stage, helper)?;
 
     let result = async {
         let mut files = Vec::new();
@@ -146,7 +175,7 @@ pub(super) async fn freeze(
 
             let source = stage.join(format!("payload-{index}"));
             atomic_write(&source, &bytes, 0o600)?;
-            allow_helper(&source, &helper, false)?;
+            allow_helper(&source, helper, false)?;
 
             files.push(Payload {
                 source,
@@ -158,7 +187,7 @@ pub(super) async fn freeze(
 
         let mut result = dispatch(
             client,
-            &helper,
+            helper,
             &stage,
             Request::Preview {
                 id: id.clone(),
@@ -185,6 +214,7 @@ pub(super) async fn freeze(
             &serde_json::to_vec_pretty(&plan)?,
             0o600,
         )?;
+        claim_plan(client, &id);
 
         result["retainedPlan"] = json!(stage);
         atomic_write(
@@ -197,8 +227,11 @@ pub(super) async fn freeze(
     }
     .await;
 
-    match previewed(result, &id, &stage) {
-        Ok(result) if apply_now && result["ok"] == true => apply_frozen(client, &helper, &id).await,
+    let result = previewed(result, &id, &stage);
+    // The apply takes the plan's lock itself.
+    drop(lock);
+    match result {
+        Ok(result) if apply_now && result["ok"] == true => apply_frozen(client, helper, &id).await,
         result => result,
     }
 }
@@ -214,14 +247,16 @@ fn previewed(result: Result<Value>, id: &str, stage: &Path) -> Result<Value> {
     retained(result, id, stage)
 }
 
-/// Whether `stage` holds a frozen plan.
+/// Whether `stage` holds a frozen plan, or may: one that cannot be looked
+/// for counts as there, so it is never removed for want of a plan.
 fn planned(stage: &Path) -> bool {
-    stage.join("plan.json").exists()
+    stage.join("plan.json").try_exists().unwrap_or(true)
 }
 
 /// Apply or resume the same immutable snapshot. Original source files are not read.
 pub async fn apply(client: &Client, plan_id: &str) -> Result<Value> {
     let helper = helper_name(client.config.helper_uid)?;
+    tidy(client);
     apply_frozen(client, &helper, plan_id).await
 }
 
@@ -242,6 +277,9 @@ async fn apply_frozen(client: &Client, helper: &str, plan_id: &str) -> Result<Va
         ));
     }
 
+    // Claimed again for a plan another task previewed, before the helper
+    // is asked.
+    claim_plan(client, plan_id);
     let result = dispatch(client, helper, &stage, Request::Apply { plan }).await;
     // Discarded while still locked, so nothing else can start on it.
     if settled(&result, "applied") {
@@ -252,16 +290,25 @@ async fn apply_frozen(client: &Client, helper: &str, plan_id: &str) -> Result<Va
     operation(retained(result, plan_id, &stage), "apply")
 }
 
+/// Note that the command's task made plan `plan_id`. A claim that cannot
+/// be written changes nothing: the transaction list still finds the plan.
+fn claim_plan(client: &Client, plan_id: &str) {
+    if let Some(id) = crate::files::Token::parse(plan_id) {
+        let _ = Claims::of(client).claim(&task::Owned::Plan { id }, task::State::Made);
+    }
+}
+
 /// Preview rollback by default; restore only this transaction's unchanged files.
 pub async fn rollback(client: &Client, transaction_id: &str, apply: bool) -> Result<Value> {
     let stage = stage_path(client, transaction_id)?;
     let helper = helper_name(client.config.helper_uid)?;
+    tidy(client);
     let created = directory(&stage, false)?.is_none();
-    if created {
-        create_stage(&stage, &helper)?;
-    }
-
-    let lock = lock_stage(&stage)?;
+    let lock = if created {
+        create_locked_stage(&stage, &helper)?
+    } else {
+        lock_stage(&stage)?
+    };
     let result = dispatch(
         client,
         &helper,
@@ -300,13 +347,25 @@ fn operation(mut result: Result<Value>, name: &str) -> Result<Value> {
     result
 }
 
+/// What a request folder that may change the helper is named with: one
+/// left behind holds a step whose outcome is not known yet.
+const CHANGE: &str = "request-";
+/// What a read-only request folder is named with: one left behind (its
+/// command killed mid-read) holds nothing to recover.
+const READ: &str = "read-";
+
 /// Whether `stage` holds a retained request: a step whose outcome is not
-/// known yet, kept as evidence until it is.
+/// known yet, kept as evidence until it is. A folder or entry that cannot
+/// be read may hold one, so it counts as holding one.
 fn requests(stage: &Path) -> bool {
-    fs::read_dir(stage).is_ok_and(|entries| {
-        entries
-            .flatten()
-            .any(|entry| entry.file_name().to_string_lossy().starts_with("request-"))
+    let Ok(entries) = fs::read_dir(stage) else {
+        return true;
+    };
+
+    entries.into_iter().any(|entry| {
+        entry.map_or(true, |entry| {
+            entry.file_name().to_string_lossy().starts_with(CHANGE)
+        })
     })
 }
 
@@ -345,27 +404,106 @@ pub fn leftovers(shared: &Path) -> Vec<PathBuf> {
         .collect()
 }
 
-/// Remove a frozen plan the helper no longer needs.
+/// What a folder being removed is first renamed to, so no command ever sees
+/// it half removed; one left behind holds nothing anyone needs.
+const DISCARDED: &str = ".environment-discarded-";
+
+/// What a stage is made under before it is locked and moved into place, so
+/// no command sees it unlocked. A sweep never looks at it.
+const STAGING: &str = ".environment-staging-";
+
+/// Remove a frozen plan the helper no longer needs, called under its lock:
+/// it is moved to a discarded name first, so its own name is gone at once
+/// and nothing is left there half removed. Where it cannot be moved it is
+/// removed where it is.
 fn discard(stage: &Path) {
-    let _ = fs::remove_dir_all(stage);
+    let discarded = stage
+        .parent()
+        .map(|parent| parent.join(format!("{DISCARDED}{}", crate::files::token())));
+    match discarded {
+        Some(discarded) if fs::rename(stage, &discarded).is_ok() => {
+            let _ = fs::remove_dir_all(discarded);
+        }
+        _ => {
+            let _ = fs::remove_dir_all(stage);
+        }
+    }
+}
+
+/// Remove what a [`discard`] cut short left under a discarded name: Atlas's
+/// own real folders, which no command uses once renamed.
+fn clear_discarded(shared: &Path) {
+    let Ok(entries) = fs::read_dir(shared) else {
+        return;
+    };
+
+    for entry in entries.flatten() {
+        let ours = entry.file_name().to_string_lossy().starts_with(DISCARDED)
+            && fs::symlink_metadata(entry.path()).is_ok_and(|metadata| {
+                metadata.file_type().is_dir() && metadata.uid() == nix::unistd::getuid().as_raw()
+            });
+        if ours {
+            let _ = fs::remove_dir_all(entry.path());
+        }
+    }
 }
 
 /// How long a frozen plan is kept before the helper is asked whether it is
 /// still needed.
 const UNUSED: Duration = Duration::from_secs(7 * 24 * 60 * 60);
 
-/// Remove frozen plans older than UNUSED that the helper never started (it
-/// answers that nothing was copied with their ID), and command folders
-/// older than UNUSED. Plans applied or undone completely were removed when
-/// that finished; one with a retained request (a step whose outcome is
-/// unknown), one the helper started, or one it cannot answer for, stays.
+/// How old a plan folder with no plan and no request whose outcome is
+/// unknown must be before it is taken for a preview cut short rather than
+/// one still being made. A preview holds its folder's lock while it runs,
+/// and none takes this long.
+const STARTING: Duration = Duration::from_secs(10 * 60);
+
+/// Remove what earlier environment commands left behind that nothing can
+/// use: [`prune_runs`], [`sweep`] and [`clear_discarded`].
+fn tidy(client: &Client) {
+    if let Some(shared) = client.config.identity_probe.parent() {
+        prune_runs(shared);
+        sweep(shared);
+        clear_discarded(shared);
+    }
+}
+
+/// Remove previews cut short, a killed command's: plan folders older than
+/// [`STARTING`] with no plan and no request whose outcome is unknown, whose
+/// lock nothing holds. They hold only copies of the selected files, which
+/// nothing can apply.
+fn sweep(shared: &Path) {
+    for (_, stage) in stale(shared, STARTING) {
+        // Looked at first, so a folder that is kept is never touched, then
+        // again under the folder's own lock, which a preview being made holds.
+        if !abandoned(&stage) {
+            continue;
+        }
+        let Ok(lock) = lock_stage(&stage) else {
+            continue;
+        };
+        if abandoned(&stage) {
+            discard(&stage);
+        }
+
+        drop(lock);
+    }
+}
+
+/// [`tidy`], then remove frozen plans older than UNUSED that the helper
+/// never started (it answers that nothing was copied with their ID). Plans
+/// applied or undone completely were removed when that finished; one with a
+/// retained request (a step whose outcome is unknown), one the helper
+/// started, or one it cannot answer for, stays. A plan removed is settled
+/// gone wherever a task claimed it.
 async fn prune(client: &Client, helper: &str) {
     let Some(shared) = client.config.identity_probe.parent() else {
         return;
     };
 
-    prune_runs(shared);
+    tidy(client);
 
+    let mut removed = Vec::new();
     for (id, stage) in stale(shared, UNUSED) {
         // Everything below happens under the plan's own lock; a plan in use
         // is skipped.
@@ -393,10 +531,16 @@ async fn prune(client: &Client, helper: &str) {
             .is_ok_and(|answer| answer["ok"] == false && answer["error"] == worker::MISSING);
         if never && !requests(&stage) {
             discard(&stage);
+            if fs::symlink_metadata(&stage).is_err()
+                && let Some(id) = crate::files::Token::parse(&id)
+            {
+                removed.push(task::Owned::Plan { id });
+            }
         }
 
         drop(lock);
     }
+    task::settle_gone(client, &removed);
 }
 
 /// Remove the folders of commands run older than UNUSED. A command kept
@@ -441,6 +585,13 @@ fn older(shared: &Path, prefix: &str, age: Duration) -> Vec<(String, PathBuf)> {
         .collect()
 }
 
+/// Whether `stage` is a preview cut short: copies of the selected files but
+/// no plan, so nothing can apply it, and no request whose outcome is
+/// unknown, so the helper has nothing to recover from it.
+fn abandoned(stage: &Path) -> bool {
+    !planned(stage) && !requests(stage)
+}
+
 /// Whether the helper may be asked about the plan in `stage`: a readable
 /// plan for this ID and helper, with no request whose outcome is unknown.
 fn prunable(stage: &Path, id: &str, uid: u32) -> bool {
@@ -458,14 +609,10 @@ fn prunable(stage: &Path, id: &str, uid: u32) -> bool {
 pub async fn run(client: &Client, argv: Vec<String>, timeout: Duration) -> Result<Value> {
     runner::validate_argv(&argv)?;
 
-    let id = crate::control::token();
+    let id = crate::files::token();
     let stage = stage_path(client, &id)?.with_file_name(format!("environment-run-{id}"));
     let helper = helper_name(client.config.helper_uid)?;
-
-    if let Some(shared) = stage.parent() {
-        prune_runs(shared);
-    }
-
+    tidy(client);
     create_stage(&stage, &helper)?;
 
     let request = Request::Run { argv };
@@ -509,8 +656,8 @@ fn refused(reply: Value, request: &str) -> Result<Value> {
         Some(error) => Err(Error::new(
             error["code"]
                 .as_str()
-                .and_then(crate::error::code)
-                .unwrap_or("environment"),
+                .and_then(crate::error::Code::parse)
+                .unwrap_or(Code::Environment),
             error["error"]
                 .as_str()
                 .unwrap_or("The helper environment refused"),
@@ -587,6 +734,39 @@ fn create_stage(stage: &Path, helper: &str) -> Result<()> {
     shared
 }
 
+/// Make a private folder the helper may read at `stage`, holding its lock.
+/// It is made and locked under a name no sweep looks at, then moved into
+/// place, so no other command ever finds it unlocked.
+fn create_locked_stage(stage: &Path, helper: &str) -> Result<fs::File> {
+    create_locked_stage_with(stage, helper, |_| {})
+}
+
+/// [`create_locked_stage`], calling `made` with the folder once it is made
+/// and before it is locked.
+fn create_locked_stage_with(
+    stage: &Path,
+    helper: &str,
+    made: impl FnOnce(&Path),
+) -> Result<fs::File> {
+    let parent = stage
+        .parent()
+        .ok_or_else(|| problem("Missing shared directory"))?;
+    let staging = parent.join(format!("{STAGING}{}", crate::files::token()));
+    create_stage(&staging, helper)?;
+    made(&staging);
+
+    let placed = lock_stage(&staging).and_then(|lock| {
+        fs::rename(&staging, stage)
+            .map(|()| lock)
+            .map_err(|error| Error::writing(stage, error))
+    });
+    if placed.is_err() {
+        let _ = fs::remove_dir_all(&staging);
+    }
+
+    placed
+}
+
 fn lock_stage(stage: &Path) -> Result<fs::File> {
     let directory = directory(stage, false)?.ok_or_else(|| problem("Frozen plan is missing"))?;
     installation_parent(&directory)?;
@@ -598,21 +778,51 @@ fn lock_stage(stage: &Path) -> Result<fs::File> {
     let lock = open_regular(&stage.join("controller.lock"), true)?
         .ok_or_else(|| problem("Plan lock is missing"))?;
     validate_private(&lock, false)?;
-    lock.try_lock_exclusive()
+
+    // A listing looks at the lock for an instant, and a process being
+    // spawned elsewhere briefly holds every open file of its parent: a lock
+    // held that briefly is waited out; a command using the plan holds it
+    // far longer.
+    crate::files::lock_within(&lock, crate::files::Lock::Exclusive, STAGE_PATIENCE)
         .map_err(|_| problem("This environment plan is already running"))?;
 
     Ok(lock)
 }
+
+/// How long a plan's lock that looks held is tried again.
+const STAGE_PATIENCE: Duration = Duration::from_millis(250);
 
 /// [`dispatch_within`] the usual time a helper command is given.
 async fn dispatch(client: &Client, helper: &str, stage: &Path, request: Request) -> Result<Value> {
     dispatch_within(client, helper, stage, request, crate::client::RUN_TIMEOUT).await
 }
 
+/// [`dispatch`] under control the caller already holds, as a cleanup or an
+/// install does from start to end: taking it again from the same process
+/// would answer busy.
+async fn dispatch_owned(
+    client: &Client,
+    ownership: &Ownership,
+    helper: &str,
+    stage: &Path,
+    request: Request,
+) -> Result<Value> {
+    dispatch_as(
+        client,
+        Some(ownership),
+        helper,
+        stage,
+        request,
+        crate::client::RUN_TIMEOUT,
+    )
+    .await
+}
+
 /// Each invocation gets immutable arguments and a fresh session pin. Mutating
 /// requests and their binary remain available whenever the reply is uncertain;
-/// a request that was never sent leaves nothing behind. The worker is
-/// stopped after `timeout`.
+/// a request that was never sent leaves nothing behind. A request that only
+/// reads takes no control and leaves nothing pending. The worker is stopped
+/// after `timeout`.
 async fn dispatch_within(
     client: &Client,
     helper: &str,
@@ -620,19 +830,38 @@ async fn dispatch_within(
     request: Request,
     timeout: Duration,
 ) -> Result<Value> {
-    let mutating = matches!(
-        &request,
-        Request::Apply { .. } | Request::Rollback { apply: true, .. } | Request::Run { .. }
-    );
+    dispatch_as(client, None, helper, stage, request, timeout).await
+}
+
+/// [`dispatch_within`], a change running under `held` when the caller
+/// already holds control, and under control taken here otherwise.
+async fn dispatch_as(
+    client: &Client,
+    held: Option<&Ownership>,
+    helper: &str,
+    stage: &Path,
+    request: Request,
+    timeout: Duration,
+) -> Result<Value> {
+    let mutating = request.changes_helper();
     let raw_output = matches!(&request, Request::Run { .. });
+    // A preview only reads in the helper: like any other inspection it
+    // takes no control and records nothing pending, so a lost reply leaves
+    // no recovery behind. A change reads the helper under control, so a
+    // wait for it never leaves the packet expecting a helper that has since
+    // restarted.
+    let taken = (mutating && held.is_none())
+        .then(|| client.controller.acquire(false))
+        .transpose()?;
+    let ownership = held.filter(|_| mutating).or(taken.as_ref());
     let packet = Packet {
         version: 1,
         expected: Identity::from_epoch(&client.identity().await?.epoch),
         request,
     };
 
-    let ownership = client.controller.acquire(false)?;
-    let name = format!("request-{}", crate::control::token());
+    let kind = if mutating { CHANGE } else { READ };
+    let name = format!("{kind}{}", crate::files::token());
     let invocation = stage.join(&name);
     create_stage(&invocation, helper)?;
 
@@ -644,27 +873,44 @@ async fn dispatch_within(
         }
     };
 
-    let result = async {
-        // A process exit does not acknowledge the environment mutation.
-        let generation = client.controller.quarantine()?;
-        let result = match client.run_owned_within(&ownership, argv, timeout).await {
-            Ok(reply) if reply["ok"] == false => Err(crate::transport::refusal(&reply)),
-            Ok(reply) if raw_output => refused(reply, &name),
-            Ok(reply) => decode_reply(&reply, mutating, &name),
-            Err(error) => Err(error),
-        };
-
-        if !delivery_uncertain(&result) {
-            client.controller.clear_if(&generation)?;
-        }
-
-        result
-    }
-    .await;
+    let result = match ownership {
+        None => client
+            .run(argv, Run::inspect().within(timeout))
+            .await
+            .and_then(|reply| decode_reply(&reply, false, &name)),
+        Some(ownership) => change(client, ownership, argv, timeout, raw_output, &name).await,
+    };
 
     if !delivery_uncertain(&result) {
         // A complete child reply means its immutable request is no longer in use.
         let _ = fs::remove_dir_all(&invocation);
+    }
+
+    result
+}
+
+/// Run the worker request `name` that changes the helper, under control the
+/// caller holds. It stays pending until a reply shows what it did; `raw_output`
+/// passes a command's own output through.
+async fn change(
+    client: &Client,
+    ownership: &Ownership,
+    argv: Vec<String>,
+    timeout: Duration,
+    raw_output: bool,
+    name: &str,
+) -> Result<Value> {
+    // A process exit does not acknowledge the environment mutation.
+    let generation = client.controller.quarantine()?;
+    let result = match client.run_owned_within(ownership, argv, timeout).await {
+        Ok(reply) if reply["ok"] == false => Err(crate::transport::refusal(&reply)),
+        Ok(reply) if raw_output => refused(reply, name),
+        Ok(reply) => decode_reply(&reply, true, name),
+        Err(error) => Err(error),
+    };
+
+    if !delivery_uncertain(&result) {
+        client.controller.clear_if(&generation)?;
     }
 
     result

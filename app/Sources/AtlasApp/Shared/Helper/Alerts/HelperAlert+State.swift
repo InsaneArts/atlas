@@ -15,11 +15,13 @@ extension HelperAlert {
   ///   - progress: Where its command stands.
   ///   - askedByPerson: Whether the person asked for it, so its way out is Cancel; false for the Recover alert Atlas
   ///     raises by itself, whose way out is Not Now.
+  ///   - onConsole: Whether this process's graphical session currently owns the console.
   /// - Returns: The alert.
   func state(
     overview: ViewerStatus.Overview,
     progress: AlertProgress,
-    askedByPerson: Bool = false
+    askedByPerson: Bool = false,
+    onConsole: Bool = false
   ) -> AlertCardState<AlertChoice> {
     switch self {
     case .recover:
@@ -35,17 +37,7 @@ extension HelperAlert {
         )
       )
     case .switchToHelper:
-      Self.plain(
-        HelperWords.switchTitle,
-        progress.note ?? HelperWords.switchMessage,
-        HelperWords.switchButton,
-        cancel: HelperWords.cancel,
-        phase: progress.phase(
-          running: HelperWords.switching,
-          done: HelperWords.switchTitle,
-          doneMessage: HelperWords.switchMessage
-        )
-      )
+      Self.switchState(progress: progress, onConsole: onConsole)
     case .logOut:
       Self.destructive(
         HelperWords.logOutTitle,
@@ -69,6 +61,26 @@ extension HelperAlert {
         )
       )
     }
+  }
+
+  /// Off-console, a switch alert offers only Cancel, including Return, rather than a lock.
+  private static func switchState(progress: AlertProgress, onConsole: Bool) -> AlertCardState<AlertChoice> {
+    var state = plain(
+      HelperWords.switchTitle,
+      progress.note ?? HelperWords.switchMessage,
+      HelperWords.switchButton,
+      cancel: HelperWords.cancel,
+      phase: progress.phase(
+        running: HelperWords.switching,
+        done: HelperWords.switchTitle,
+        doneMessage: HelperWords.switchMessage
+      )
+    )
+    if !onConsole {
+      state.message = SessionConsole.refusal
+      state.buttons = [AlertCardButton(id: .cancel, title: HelperWords.cancel, role: .safeCancel)]
+    }
+    return state
   }
 
   /// Why recovery helps now: an unfinished action, the helper's input stopped, or, asked for otherwise, what it does.

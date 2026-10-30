@@ -1,6 +1,6 @@
 import SwiftUI
 
-/// The helper's screen as one picture between the stage and the corner: the Screen tab's fitted picture and
+/// The helper's screen as one picture between the stage and the corner: the Screen pane's fitted picture and
 /// the mini screen carry one geometry identity, so leaving the Screen for Activity or Apps shrinks the
 /// picture into the corner and coming back grows it out, on ``Motion/zoom``. Both draw the window's one live
 /// slot, so the side that arrives comes whole at the other's place and the side that leaves fades under or
@@ -12,7 +12,7 @@ struct ScreenZoom: ViewModifier {
 
   /// The namespace the picture moves in, the window's.
   let namespace: Namespace.ID
-  @Environment(\.accessibilityReduceMotion) private var reduceMotion
+  @Environment(\.motionReduced) private var reduceMotion
 
   /// The view, carrying the screen's identity unless Reduce Motion is on.
   func body(content: Content) -> some View {
@@ -29,12 +29,12 @@ struct ScreenZoom: ViewModifier {
   /// scrolls, and fades as any pane), and Reduce Motion is off.
   ///
   /// - Parameters:
-  ///   - old: The tab left.
-  ///   - new: The tab shown.
-  ///   - screen: What the Screen tab shows.
+  ///   - old: The place left.
+  ///   - new: The place shown.
+  ///   - screen: What the Screen pane shows.
   ///   - reduceMotion: Whether the Reduce Motion setting is on.
   /// - Returns: Whether the picture moves.
-  static func zooms(from old: ViewerTab, to new: ViewerTab, screen: ViewerScreenState, reduceMotion: Bool) -> Bool {
+  static func zooms(from old: ViewerPlace, to new: ViewerPlace, screen: ViewerScreenState, reduceMotion: Bool) -> Bool {
     guard !reduceMotion, screen.picture != nil, screen.actualSize == nil else { return false }
     return (old == .screen && new.keepsScreenInCorner) || (new == .screen && old.keepsScreenInCorner)
   }
@@ -45,7 +45,7 @@ struct ScreenZoom: ViewModifier {
   /// - Parameter zooms: Whether the picture moves.
   /// - Returns: The animation, or nil.
   static func animation(zooms: Bool) -> Animation? {
-    zooms ? Motion.zoom : nil
+    Motion.layout(Motion.zoom, reduceMotion: !zooms)
   }
 
   /// How opaque the stage's picture or the mini screen draws at either end of its transition: the side arriving comes

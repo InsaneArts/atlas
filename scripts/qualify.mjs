@@ -142,6 +142,12 @@ async function cli(args, timeout = 60000) {
     throw Object.assign(new Error(reply.error || `${args[0]} failed`), {
       uncertain: reply.uncertain === true,
     });
+  // A signal that stopped Atlas gives 128 plus its number, even after a
+  // reply that finished within the grace.
+  if (typeof failed?.code === 'number' && failed.code > 128)
+    throw Object.assign(new Error(`${args[0]}: stopped by a signal (exit ${failed.code})`), {
+      uncertain: reply.uncertain === true,
+    });
   if ('exitCode' in reply && (reply.exitCode !== 0 || reply.timedOut || reply.signal))
     throw new Error(`${args.join(' ').slice(0, 60)} exited ${reply.exitCode}`);
   if (mutating) await requireSettled(args[0]);
@@ -408,10 +414,10 @@ async function workCycle(cycle) {
     // The gate is re-checked immediately before every destructive key.
     const edited = await attempt('edit', async () => {
       for (const args of [
-        ['key', 'cmd+a'],
-        ['key', 'backspace'],
-        ['type', line],
-        ['key', 'cmd+s'],
+        ['key', '--app', 'TextEdit', 'cmd+a'],
+        ['key', '--app', 'TextEdit', 'backspace'],
+        ['type', '--app', 'TextEdit', line],
+        ['key', '--app', 'TextEdit', 'cmd+s'],
       ]) {
         await front();
         await cli(args);
@@ -504,7 +510,7 @@ try {
       // Close only the proven-front fixture, confirm it is gone, then delete.
       try {
         await focusNotes();
-        await cli(['key', 'cmd+w']);
+        await cli(['key', '--app', 'TextEdit', 'cmd+w']);
         await pause(800);
         const { windows = [] } = await cli(['windows', '--app', 'TextEdit']);
         cleanup.closed = !windows.some((window) => window.title === title);

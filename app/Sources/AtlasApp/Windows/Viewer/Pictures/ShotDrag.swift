@@ -2,7 +2,7 @@ import AtlasService
 import Foundation
 import UniformTypeIdentifiers
 
-/// A screenshot dragged out of the Screenshots tab: the item the system carries, which reads the picture as taken
+/// A screenshot dragged out of the Screenshots pane: the item the system carries, which reads the picture as taken
 /// only once it is dropped, as PNG data and as a file for the Finder. The file is written to one folder of the app's
 /// own under the temporary folder, emptied at the next drag and when the app quits, so drags leave nothing behind.
 enum ShotDrag {

@@ -38,7 +38,7 @@ struct SymbolTile: View {
       .foregroundStyle(foreground)
       .frame(width: side, height: side)
       .background(
-        RoundedRectangle(cornerRadius: Radius.extraSmall)
+        RoundedRectangle(cornerRadius: Radius.extraSmall, style: .continuous)
           .fill(fill)
       )
       .accessibilityHidden(true)
@@ -79,17 +79,11 @@ struct SymbolTile: View {
   /// The tile's side.
   private var side: CGFloat {
     switch size {
-    case .small: Layout.smallSide
+    case .small: SymbolTileLayout.smallSide
     case .regular: IconSize.mPlus
     case .large: IconSize.l
     }
   }
-}
-
-/// The tile's own measures.
-private enum Layout {
-  /// 22: a small tile, Activity's.
-  static let smallSide: CGFloat = 22
 }
 
 #if DEBUG

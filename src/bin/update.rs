@@ -1,5 +1,10 @@
 //! App replacement and handover to the newly installed executable.
-use atlas::{client::Client, config::Config, error::Result, ui::progress::Spinner};
+use atlas::{
+    client::Client,
+    config::Config,
+    error::{Code, Result},
+    ui::progress::Spinner,
+};
 use serde_json::{Value, json};
 
 /// The configuration, or None when Atlas is not set up here yet. A file
@@ -7,7 +12,7 @@ use serde_json::{Value, json};
 fn set_up(config: &std::path::Path) -> Result<Option<Config>> {
     match Config::load(config) {
         Ok(loaded) => Ok(Some(loaded)),
-        Err(error) if error.code == "config" => Ok(None),
+        Err(error) if error.code == Code::Config => Ok(None),
         Err(error) => Err(error),
     }
 }

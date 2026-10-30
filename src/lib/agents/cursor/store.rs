@@ -415,9 +415,10 @@ fn validate(record: &Record) -> Result<()> {
                 .components()
                 .all(|part| matches!(part, Component::Normal(_)))
             || entry.mode & !0o777 != 0
-            || entry.digest.as_ref().is_some_and(|digest| {
-                digest.len() != 64 || !digest.bytes().all(|b| b.is_ascii_hexdigit())
-            })
+            || entry
+                .digest
+                .as_ref()
+                .is_some_and(|digest| !crate::name::lower_hex(digest, 64))
         {
             return Err(problem(
                 "Cursor's Atlas ownership record contains an invalid path or file",
@@ -627,7 +628,7 @@ fn directory(path: &Path, create: bool, private: bool) -> Result<()> {
 }
 
 fn read_file(path: &Path) -> Result<Vec<u8>> {
-    let file = crate::digest::open_regular(path)
+    let file = crate::files::open_plain(path)
         .ok_or_else(|| problem(format!("Could not read regular file {}", path.display())))?;
     let mut bytes = Vec::new();
     file.take(MAX_FILE + 1).read_to_end(&mut bytes)?;
@@ -699,16 +700,11 @@ fn sync_directory(path: &Path) -> Result<()> {
 /// Publish only into an absent name; another process's empty directory is
 /// still its own and must not be replaced.
 #[cfg(target_os = "macos")]
-#[allow(unsafe_code)] // FFI: macOS renamex_np(RENAME_EXCL) has no safe nix binding.
 fn rename_exclusive(from: &Path, to: &Path) -> Result<()> {
     use std::{ffi::CString, os::unix::ffi::OsStrExt};
     let from = CString::new(from.as_os_str().as_bytes()).map_err(|e| problem(e.to_string()))?;
     let to = CString::new(to.as_os_str().as_bytes()).map_err(|e| problem(e.to_string()))?;
-    // SAFETY: both paths are live NUL-terminated C strings. RENAME_EXCL
-    // renames the entry or fails without replacing an existing destination.
-    if unsafe { libc::renamex_np(from.as_ptr(), to.as_ptr(), libc::RENAME_EXCL) } != 0 {
-        return Err(std::io::Error::last_os_error().into());
-    }
+    crate::fs_move::rename_path(&from, &to, crate::fs_move::Replace::Never)?;
     Ok(())
 }
 

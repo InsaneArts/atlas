@@ -87,7 +87,9 @@ public struct StatusReading: Equatable, Sendable {
   /// - Returns: The service's reason, unless this viewer's control says more.
   public func reason(holdingControl: Bool) -> Reason {
     let mode = status.overview.mode
-    if mode.isControlled(byThisViewer: holdingControl) { return .yourControl }
+    if mode.isControlled(byThisViewer: holdingControl) {
+      return status.overview.commandRuns ? .yourControlBesideCommand : .yourControl
+    }
     if mode == .controlling { return .inUseElsewhere }
     // Idle says what an agent did last, as the line beside the status does, not the service's reason.
     if status.overview.state == .idle { return newestAgentAction.map(Reason.lastAction) ?? .nothingHappening }

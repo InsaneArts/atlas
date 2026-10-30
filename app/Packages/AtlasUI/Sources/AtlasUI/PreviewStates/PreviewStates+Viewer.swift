@@ -4,11 +4,9 @@
   extension PreviewStates {
     /// The standard size for main window samples, so renders compare at the same dimensions.
     public static let viewerSize = CGSize(width: 1440, height: 900)
-    /// 860: the least width the main window shrinks to, where its top row takes its narrowest layout.
-    public static let viewerNarrowest: CGFloat = 860
 
-    /// Every main window sample, in the order the previews list them: each top-row state, each alert and each empty
-    /// message, then each tab's pane.
+    /// Every main window sample, in the order the previews list them: each of the helper's states, each alert and each
+    /// empty message, then each list's pane, then the host sessions' states.
     @MainActor public static var viewer: [PreviewState<ViewerState>] {
       [
         PreviewState(name: "Working", value: viewerWorking),
@@ -18,8 +16,7 @@
         PreviewState(name: "Stopped", value: viewerStopped),
         PreviewState(name: "In use elsewhere", value: viewerInUseElsewhere),
         PreviewState(name: "Paused", value: viewerPaused),
-        PreviewState(name: "Details", value: viewerDetails),
-        PreviewState(name: "Details, some checks not passing", value: viewerDetailsChecks),
+        PreviewState(name: "Helper needs setup", value: viewerHelperNeedsSetup),
         PreviewState(name: "Not ready", value: viewerNotReady),
         PreviewState(name: "Logged out", value: viewerLoggedOut),
         PreviewState(name: "Connecting", value: viewerConnecting),
@@ -34,32 +31,87 @@
         PreviewState(name: "Activity", value: viewerActivity),
         PreviewState(name: "Activity, nothing yet", value: viewerActivityEmpty),
         PreviewState(name: "Activity, paused", value: viewerActivityPaused),
+        PreviewState(name: "Activity, a moment opened", value: viewerActivityOpened),
+        PreviewState(name: "Activity, problems", value: viewerActivityProblems),
+        PreviewState(name: "Activity, days before", value: viewerActivityDays),
+        PreviewState(name: "Activity, many moments", value: viewerActivityMany),
         PreviewState(name: "Apps", value: viewerApps),
         PreviewState(name: "Apps, paused", value: viewerAppsPaused),
+        PreviewState(name: "Apps, one session", value: viewerAppsOneSession),
+        PreviewState(name: "Apps, one session, none yet", value: viewerAppsOneSessionEmpty),
+        PreviewState(name: "Apps, a copy", value: viewerAppsCopy),
+        PreviewState(name: "Apps, hidden", value: viewerAppsHidden),
+        PreviewState(name: "Apps, many", value: viewerAppsMany),
         PreviewState(name: "Show on screen", value: viewerShowOnScreen),
         PreviewState(name: "Show on screen, at the right edge", value: viewerShowOnScreenRightEdge),
         PreviewState(name: "Screenshots", value: viewerShots),
         PreviewState(name: "A screenshot, large", value: viewerShotLarge),
         PreviewState(name: "Screenshots, none yet", value: viewerShotsEmpty),
+        PreviewState(name: "Sessions", value: viewerSessions),
+        PreviewState(name: "Sessions, one ended", value: viewerSessionsEnded),
+        PreviewState(name: "Activity by session", value: viewerActivityBySession),
+        PreviewState(name: "Activity, needs you", value: viewerActivityNeedsYou),
+        PreviewState(name: "Activity, one session", value: viewerActivityOneSession),
+        PreviewState(name: "Session chosen", value: viewerSessionChosen),
+        PreviewState(name: "Clean up", value: viewerCleanUp),
+        PreviewState(name: "Session cleaned up", value: viewerSessionCleanedUp),
+        PreviewState(name: "Focus changed", value: viewerFocusChanged),
+        PreviewState(name: "Stopped, jobs left", value: viewerStoppedJobsLeft),
+        PreviewState(name: "You have control, a command runs", value: viewerControlCommandRuns),
+        PreviewState(name: "You have control, a job may run", value: viewerControlJobRuns),
+        PreviewState(name: "Activity, one session, nothing yet", value: viewerActivityOneSessionEmpty),
+        PreviewState(name: "Screenshots, one session", value: viewerShotsOneSession),
+        PreviewState(name: "Screenshots, one session, none yet", value: viewerShotsOneSessionEmpty),
+        PreviewState(name: "Session cleaning up", value: viewerSessionCleaningUp),
+        PreviewState(name: "Session ended", value: viewerSessionEnded),
+        PreviewState(name: "Sidebar by state", value: viewerSidebarByState),
+        PreviewState(name: "Sidebar, Ended folded", value: viewerSidebarEndedFolded),
+        PreviewState(name: "Sidebar, search open", value: viewerSidebarSearch),
+        PreviewState(name: "Sidebar hidden", value: viewerSidebarHidden),
       ]
     }
 
-    /// The tabs, one of them selected.
+    /// Take Control, as offered, with its hand.
     ///
-    /// - Parameter selected: The tab shown.
-    /// - Returns: The tabs.
-    static func viewerTabs(_ selected: ViewerTab = .screen) -> CapsuleTabsState<ViewerTab> {
-      CapsuleTabsState(
-        tabs: [
-          CapsuleTab(id: .screen, title: "Screen", symbol: .display, help: "Screen (⌘1)"),
-          CapsuleTab(id: .activity, title: "Activity", symbol: .list, help: "Activity (⌘2)"),
-          CapsuleTab(id: .apps, title: "Apps", symbol: .windows, help: "Apps (⌘3)"),
-          CapsuleTab(id: .screenshots, title: "Screenshots", symbol: .photos, help: "Screenshots (⌘4)"),
-        ],
-        selected: selected,
-        label: "View"
+    /// - Parameter isEnabled: Whether it can be taken now.
+    /// - Returns: The button.
+    static func viewerTakeControl(isEnabled: Bool) -> ViewerControlButton {
+      ViewerControlButton(
+        title: "Take Control",
+        symbol: .handRaised,
+        isEnabled: isEnabled,
+        help: "Take Control (⌃⇧⎋)",
+        event: .takeControl,
+        labels: viewerMainLabels
       )
     }
+
+    /// Give Back, in the accent, while this window holds control.
+    static let viewerGiveBack = ViewerControlButton(
+      title: "Give Back",
+      look: .accent,
+      isEnabled: true,
+      help: "Give Back Control (⌃⇧⎋)",
+      event: .giveBack,
+      labels: viewerMainLabels
+    )
+
+    /// Recover…, while the helper needs the person.
+    static let viewerRecover = ViewerControlButton(
+      title: "Recover…",
+      isEnabled: true,
+      help: "Check the helper and start its mouse and keyboard again",
+      event: .askRecover,
+      labels: viewerMainLabels
+    )
+
+    /// Every label the main capsule takes in turn, as the presenter lists them.
+    static let viewerMainLabels = [
+      ViewerControlLabel("Take Control", symbol: .handRaised),
+      ViewerControlLabel("Connecting…", symbol: .handRaised),
+      ViewerControlLabel("Give Back"),
+      ViewerControlLabel("Recover…"),
+    ]
 
     /// The pause button.
     ///
@@ -71,64 +123,25 @@
         : ViewerToggle(isOn: false, label: "Pause Picture", help: "Pause Picture (⇧⌘P)")
     }
 
-    /// The Details button.
-    ///
-    /// - Parameter shown: Whether Details shows.
-    /// - Returns: The toggle.
-    static func viewerDetailsToggle(shown: Bool = false) -> ViewerToggle {
-      shown
-        ? ViewerToggle(isOn: true, label: "Hide Details", help: "Hide Details (⌥⌘I)")
-        : ViewerToggle(isOn: false, label: "Show Details", help: "Show Details (⌥⌘I)")
-    }
-
-    /// Take Control, as offered.
-    ///
-    /// - Parameter isEnabled: Whether it can be taken now.
-    /// - Returns: The button.
-    static func viewerTakeControl(isEnabled: Bool) -> ViewerControlButton {
-      ViewerControlButton(
-        title: "Take Control",
-        isEnabled: isEnabled,
-        help: "Take Control (⌃⇧⎋)",
-        event: .takeControl,
-        titles: viewerControlTitles
-      )
-    }
-
-    /// Every title the white capsule can show, which it keeps the widest of.
-    static let viewerControlTitles = ["Take Control", "Give Back", "Connecting…", "Recover…"]
-
-    /// The top row's buttons.
+    /// The footer's buttons.
     ///
     /// - Parameters:
-    ///   - keys: Keys; hidden by default.
-    ///   - agent: Stop or Resume.
-    ///   - control: The white capsule; nil hides it.
+    ///   - agent: Stop or Resume; neither by default.
+    ///   - control: The main capsule; nil hides it.
     ///   - paused: Whether the picture is paused.
     ///   - showsPause: Whether there is a picture to pause.
-    ///   - refusals: Take Control's refusals counted.
-    ///   - details: Whether Details shows.
-    ///   - showsMore: Whether there is a picture for ⋯ to act on.
     /// - Returns: The buttons.
-    static func viewerActions(
-      keys: ViewerKeysButton = .hidden,
+    static func viewerControls(
       agent: ViewerAgentButton? = nil,
       control: ViewerControlButton?,
       paused: Bool = false,
-      showsPause: Bool = true,
-      refusals: Int = 0,
-      details: Bool = false,
-      showsMore: Bool = true
-    ) -> ViewerTopActions {
-      ViewerTopActions(
+      showsPause: Bool = true
+    ) -> ViewerFooterControls {
+      ViewerFooterControls(
         pause: showsPause ? viewerPause(paused: paused) : nil,
-        keys: keys,
         agent: agent,
         agentHelp: agentHelp(agent),
-        control: control,
-        refusals: refusals,
-        more: showsMore ? ViewerToggle(isOn: false, label: "More", help: "More") : nil,
-        details: viewerDetailsToggle(shown: details)
+        control: control
       )
     }
 
@@ -144,30 +157,129 @@
       }
     }
 
-    /// The top row.
+    /// The footer's line while it says the helper's state.
     ///
     /// - Parameters:
-    ///   - status: The status.
-    ///   - actions: The buttons.
-    ///   - tab: The tab shown.
-    ///   - unseen: What Activity holds unseen.
-    ///   - isInControl: Whether this window holds control.
-    /// - Returns: The top row.
-    static func viewerTop(
-      _ status: StatusSummary,
-      _ actions: ViewerTopActions,
-      tab: ViewerTab = .screen,
+    ///   - label: The state's word.
+    ///   - words: Its line.
+    /// - Returns: The line.
+    static func viewerStateLine(_ label: String, _ words: String) -> ViewerLatestLine {
+      ViewerLatestLine(id: "state-\(label)", words: words)
+    }
+
+    /// The footer's line while this window holds control.
+    ///
+    /// - Parameter words: What control's line says.
+    /// - Returns: The line.
+    static func viewerControlLine(_ words: String = "The agent waits") -> ViewerLatestLine {
+      ViewerLatestLine(id: "control", words: words, tone: .link)
+    }
+
+    /// The Library's rows, one of them chosen while its list shows, each with how many its list holds once read.
+    ///
+    /// - Parameters:
+    ///   - place: The place shown; the Screen by default, which chooses none.
+    ///   - unseen: What Activity holds unseen; nothing by default.
+    ///   - counts: How many each list holds, by its place; none read by default.
+    /// - Returns: The rows.
+    static func viewerLibrary(
+      _ place: ViewerPlace = .screen,
       unseen: ViewerUnseen = .none,
-      isInControl: Bool = false
-    ) -> ViewerTopRowState {
-      ViewerTopRowState(
-        status: status,
-        tabs: viewerTabs(tab),
-        activityUnseen: unseen,
-        actions: actions,
-        isInControl: isInControl,
-        isFullScreen: false
+      counts: [ViewerPlace: Int] = [:]
+    ) -> [ViewerLibraryRow] {
+      let rows = [
+        ViewerLibraryRow(
+          place: .activity,
+          title: "Activity",
+          help: "Activity (⌘2)",
+          unseen: unseen,
+          isChosen: place == .activity
+        ),
+        ViewerLibraryRow(
+          place: .screenshots,
+          title: "Screenshots",
+          help: "Screenshots (⌘3)",
+          isChosen: place == .screenshots
+        ),
+        ViewerLibraryRow(place: .apps, title: "Apps", help: "Apps (⌘4)", isChosen: place == .apps),
+      ]
+      return rows.map { row in
+        var counted = row
+        counted.count = counts[row.place]
+        return counted
+      }
+    }
+
+    /// The sidebar while no host session is listed: All sessions alone.
+    static let viewerNoSessions = ViewerSessionsState(icons: [], liveCount: 0, groups: [])
+
+    /// The helper's line while two of its checks do not pass.
+    static let viewerHelperSetup = ViewerHelperLine(
+      tone: .attention,
+      words: "Helper needs setup · 2 checks",
+      help: viewerHelperHelp(
+        ready: [
+          "Mouse and keyboard: Not ready. Recover… starts them again.", "Screen Recording: Not allowed",
+          "1 more check passes",
+        ]
+      ),
+      menu: viewerHelperMenu(logsOut: true)
+    )
+
+    /// The helper's line while it needs the person to recover it.
+    ///
+    /// - Parameter alertUp: Whether the recovery alert is up, rather than set aside with Not Now.
+    /// - Returns: The line.
+    static func viewerHelperNeedsYou(alertUp: Bool) -> ViewerHelperLine {
+      ViewerHelperLine(
+        tone: .attention,
+        words: "Helper needs you",
+        help: viewerHelperHelp(),
+        menu: viewerHelperMenu(recovers: true, alertUp: alertUp)
       )
+    }
+
+    /// The sidebar.
+    ///
+    /// - Parameters:
+    ///   - sessions: The sessions; none listed by default.
+    ///   - place: The place shown, whose Library row is chosen; the Screen by default.
+    ///   - unseen: What Activity holds unseen; nothing by default.
+    ///   - helper: The helper's health.
+    /// - Returns: The sidebar.
+    static func viewerSidebar(
+      _ sessions: ViewerSessionsState = viewerNoSessions,
+      place: ViewerPlace = .screen,
+      unseen: ViewerUnseen = .none,
+      helper: ViewerHelperLine
+    ) -> ViewerSidebarState {
+      ViewerSidebarState(sessions: sessions, library: viewerLibrary(place, unseen: unseen), helper: helper)
+    }
+
+    /// What a right click on the picture offers while this window holds no control.
+    ///
+    /// - Parameters:
+    ///   - paused: Whether the picture is paused.
+    ///   - actualSize: Whether the screen draws at actual size.
+    /// - Returns: The menu's sections.
+    static func viewerScreenMenu(paused: Bool = false, actualSize: Bool = false) -> [ViewerMenuSection] {
+      [
+        ViewerMenuSection([
+          ViewerMenuItem("Copy Picture", command: .copyPicture),
+          ViewerMenuItem("Save Picture…", command: .savePicture),
+        ]),
+        ViewerMenuSection([
+          ViewerMenuItem("Actual Size", command: .toggleActualSize, isOn: actualSize),
+          ViewerMenuItem(paused ? "Resume Picture" : "Pause Picture", command: .togglePause),
+          ViewerMenuItem(
+            "Picture Updates",
+            children: [
+              ViewerMenuItem("Live", command: .chooseRate(index: 0), isOn: true),
+              ViewerMenuItem("Every 5 Seconds", command: .chooseRate(index: 1)),
+            ]
+          ),
+        ]),
+      ]
     }
   }
 #endif

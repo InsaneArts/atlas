@@ -12,8 +12,7 @@ extension StatusReading {
       let reason = status.overview.reason ?? Words.connecting
       return reason.hasSuffix(".") ? String(reason.dropLast()) : reason
     }
-    let first = newest.text.prefix(1)
-    let action = first.uppercased() + newest.text.dropFirst()
+    let action = Words.leadingCapital(newest.text)
     return withAge && !newest.when.isEmpty ? "\(action) · \(newest.when)" : action
   }
 
@@ -23,8 +22,23 @@ extension StatusReading {
     newestAgentAction.map { Words.idleLine(last: $0.text, ago: $0.when) } ?? Words.readyLine
   }
 
-  /// Why the helper needs the person, beside Needs you: input Recover starts again, else an unfinished action.
+  /// Why the helper needs the person, beside Needs you: input Recover starts again, else an unfinished action, which
+  /// recovery waits to settle while a command an agent started still runs.
   var needsYouLine: String {
-    inputStopped ? Words.inputStoppedLine : Words.unfinishedLine
+    if inputStopped { return Words.inputStoppedLine }
+    return status.overview.commandRuns ? Words.unfinishedBesideCommandLine : Words.unfinishedLine
+  }
+
+  /// Whose action may not have finished, by its host, while sessions show and the helper needs the person; nil while
+  /// none is named, and while input stopped, which is the helper's, not a session's, and has its own line.
+  var causerLine: String? {
+    guard !inputStopped, let causer else { return nil }
+    return Words.unfinishedBy(verb: causer.uncertainVerb, host: Words.hostName(causer))
+  }
+
+  /// What holding control means for agents, beside You have control: they wait, unless a command one started still
+  /// runs.
+  var controlLine: String {
+    status.overview.commandRuns ? Words.controlBesideCommandLine : Words.controlLine
   }
 }

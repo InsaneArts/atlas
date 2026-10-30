@@ -2,20 +2,23 @@
 //! the serialized event engine awaits the next step of a gesture.
 use super::{
     events::Engine,
+    focus::{self, Need},
     lease::{Gate, Who},
     session_info,
+    windows::Bounds,
 };
 use crate::{
-    actions,
-    error::{Error, Holder, Result},
+    actions::{self, Action, Expect},
+    error::{Code, Error, Holder, Result},
     session::{Display, InputEpoch},
 };
 use serde::Deserialize;
 use serde_json::{Value, json};
 use std::{
+    collections::BTreeSet,
     path::PathBuf,
     sync::{Arc, RwLock},
-    time::Duration,
+    time::{Duration, Instant},
 };
 use tokio::{
     io::{AsyncRead, AsyncReadExt, AsyncWriteExt},
@@ -28,6 +31,19 @@ use tokio::{
 /// Twice the controller's 32 KiB action limit, leaving room for the owner,
 /// epoch and JSON re-encoding around any batch the controller accepts.
 const MAX_REQUEST: usize = 64 * 1024;
+
+/// What this service can do beyond plain input, as its hello lists it:
+/// authenticated shutdown, the person's Stop, and checking an agent's
+/// target app, with the Dock covering where it takes clicks, and the window
+/// and field it names.
+const CAPABILITIES: [&str; 6] = [
+    crate::session::SHUTDOWN,
+    crate::session::HOLD,
+    crate::session::FOCUS_APP,
+    crate::session::FOCUS_DOCK,
+    crate::session::FOCUS_WINDOW,
+    crate::session::FOCUS_FIELD,
+];
 
 struct Service {
     engine: Mutex<Engine>,
@@ -91,7 +107,7 @@ fn started_from() -> (Option<String>, Option<Executable>) {
         return (None, None);
     };
 
-    let Some((file, metadata)) = crate::digest::open_regular(&path)
+    let Some((file, metadata)) = crate::files::open_plain(&path)
         .and_then(|file| file.metadata().ok().map(|metadata| (file, metadata)))
     else {
         return (None, None);
@@ -117,7 +133,7 @@ impl Service {
         self.epoch
             .read()
             .map(|value| value.clone())
-            .map_err(|_| Error::new("native", "Input identity failed"))
+            .map_err(|_| Error::new(Code::Native, "Input identity failed"))
     }
 
     fn check(&self) -> Result<()> {
@@ -125,7 +141,7 @@ impl Service {
             || !Engine::trusted()
         {
             return Err(Error::new(
-                "identity",
+                Code::Identity,
                 "The input session or permission changed; release control",
             ));
         }
@@ -160,7 +176,7 @@ impl Service {
                 "version": env!("CARGO_PKG_VERSION"),
                 "build": self.build,
                 "replaced": self.replaced(),
-                "capabilities": ["shutdown", "hold"],
+                "capabilities": CAPABILITIES,
                 "accessibility": Engine::trusted(),
                 "ready": self.check().is_ok(),
                 "enforcedEpoch": self.epoch()?,
@@ -177,14 +193,14 @@ impl Service {
             // socket never honours a request meant for its predecessor.
             if request["pid"].as_u64() != Some(std::process::id().into()) {
                 return Err(Error::new(
-                    "identity",
+                    Code::Identity,
                     "Shutdown names a different input service process",
                 ));
             }
 
             if self.gate.active()? {
                 return Err(Error::new(
-                    "busy",
+                    Code::Busy,
                     "The input service has an active controller",
                 ));
             }
@@ -195,14 +211,14 @@ impl Service {
             let mut engine = self.engine.lock().await;
             if self.gate.active()? {
                 return Err(Error::new(
-                    "busy",
+                    Code::Busy,
                     "The input service has an active controller",
                 ));
             }
 
             if let Err(error) = engine.release() {
                 return Err(Error::new(
-                    "uncertain",
+                    Code::Uncertain,
                     format!("Held input could not be released: {}", error.error),
                 )
                 .uncertain());
@@ -237,7 +253,7 @@ impl Service {
             // restart: agents stay stopped until it can be removed.
             if !on && kept.is_err() {
                 return Err(Error::new(
-                    "native",
+                    Code::Native,
                     "Agents could not be resumed: the helper could not clear the stop",
                 ));
             }
@@ -258,7 +274,7 @@ impl Service {
             let current = InputEpoch::from_proof(&session_info()?, std::process::id())?;
             if expected != current || !Engine::trusted() {
                 return Err(Error::new(
-                    "identity",
+                    Code::Identity,
                     "Recovery requires the current hidden session and permission",
                 ));
             }
@@ -273,7 +289,8 @@ impl Service {
             *self
                 .epoch
                 .write()
-                .map_err(|_| Error::new("native", "Input identity failed"))? = engine.epoch.clone();
+                .map_err(|_| Error::new(Code::Native, "Input identity failed"))? =
+                engine.epoch.clone();
 
             rebound?;
             return Ok(json!({ "ok": true, "released": true }));
@@ -290,7 +307,7 @@ impl Service {
         let epoch = self.epoch()?;
         if expected != epoch {
             return Err(Error::new(
-                "session-changed",
+                Code::SessionChanged,
                 "Input coordinates belong to a different session or display",
             ));
         }
@@ -302,7 +319,7 @@ impl Service {
                 // An agent finding the person in control is told to wait.
                 let agent = request["person"] != true;
                 let error = Error::new(
-                    "busy",
+                    Code::Busy,
                     if agent && holder == Holder::Person {
                         crate::error::PERSON_HAS_CONTROL
                     } else {
@@ -325,7 +342,7 @@ impl Service {
         }
 
         if operation != Operation::Input {
-            return Err(Error::new("input", "Unknown native operation"));
+            return Err(Error::new(Code::Input, "Unknown native operation"));
         }
 
         let grant = self.gate.grant(owner)?;
@@ -337,70 +354,209 @@ impl Service {
                 scale: 1.0,
             },
         )?;
+        // Refused before anything is sent: an expectation this build cannot
+        // check is never ignored.
+        let expect = Expect::from_request(&request["expect"])?;
 
         let mut engine = self.engine.lock().await;
 
         drop(grant.authorize()?);
         engine.grant = Some(grant);
 
-        for (performed, action) in actions.into_iter().enumerate() {
-            let before = engine.posted;
-
-            if let Err(error) = engine.perform(action).await {
-                let _ = self.gate.revoke();
-
-                // An action that posted some of its events before failing
-                // (a few typed characters, one click of two) had part of
-                // its effect, and nobody can say which part.
-                let partial = engine.posted > before;
-                let cleanup = engine.release();
-
-                let mut reply = json!(error);
-                reply["performed"] = json!(performed);
-                reply["partial"] = json!(partial);
-
-                // A viewer's cancel is the person's doing, watching what
-                // landed; a stop (the helper hidden) or any other break
-                // mid-action leaves that unknown.
-                let unknown = partial && error.code != "cancelled";
-                reply["uncertain"] = json!(cleanup.is_err() || unknown || error.uncertain);
-
-                if let Err(error) = cleanup {
-                    reply["cleanupError"] = json!(error.error);
-                }
-
-                return Ok(reply);
-            }
-        }
+        let field = match run(&mut *engine, &self.gate, actions, expect.as_ref()).await {
+            Ok(field) => field,
+            Err(reply) => return Ok(reply),
+        };
 
         // The app the input landed in, for an agent's activity log (only
         // when asked, so a person's own control pays nothing): the owner of
-        // the frontmost ordinary window, read once the engine is free.
+        // the frontmost ordinary window and its bundle identifier, read once
+        // the engine is free.
         drop(engine);
-        let app = if request["app"] == true {
-            tokio::task::spawn_blocking(frontmost_app)
-                .await
-                .ok()
-                .flatten()
+        let landed = if request["app"] == true {
+            tokio::task::spawn_blocking(|| {
+                frontmost_app().map(|(app, pid)| (app, super::apps::bundle_id(pid)))
+            })
+            .await
+            .ok()
+            .flatten()
         } else {
             None
         };
+        let (app, bundle_id) = landed.map_or((None, None), |(app, id)| (Some(app), id));
 
-        Ok(json!({
+        let mut reply = json!({
             "ok": true,
             "performed": request["actions"].as_array().map(Vec::len),
             "app": app,
-        }))
+            "bundleId": bundle_id,
+        });
+        // Echoed, so the controller knows each action was checked.
+        if let Some(expect) = expect {
+            reply["expect"] = json!(expect);
+        }
+        // The role of the field it named, so an agent's activity may name
+        // the field by the name it gave: never the field's own text.
+        if let Some(role) = field {
+            reply["field"] = json!({ "role": role });
+        }
+
+        Ok(reply)
     }
 }
 
-/// The name of the app owning the frontmost ordinary window, if any.
-fn frontmost_app() -> Option<String> {
+/// What the input loop needs of the event engine; tests stand in for it.
+trait Perform {
+    /// Refuse unless `expect` holds for `need` now, before anything is
+    /// posted, taking at most `budget` to tell; once it does, the role of
+    /// the field it names, when it names one.
+    async fn require(
+        &mut self,
+        expect: &Expect,
+        need: Need,
+        budget: Duration,
+    ) -> Result<Option<&'static str>>;
+    /// Carry out one action, posting its events.
+    async fn perform(&mut self, action: Action) -> Result<()>;
+    /// Events posted so far.
+    fn posted(&self) -> u64;
+    /// Let go of every key and button still held.
+    fn release(&mut self) -> Result<()>;
+}
+
+impl Perform for Engine {
+    /// The reads block, so they run on a blocking thread; the engine stays
+    /// locked by the caller meanwhile, so nothing posts in between.
+    async fn require(
+        &mut self,
+        expect: &Expect,
+        need: Need,
+        budget: Duration,
+    ) -> Result<Option<&'static str>> {
+        let display = Bounds::display(self.epoch.width, self.epoch.height);
+        let deadline = Instant::now() + budget;
+        let expect = expect.clone();
+        tokio::task::spawn_blocking(move || focus::check(&expect, need, &display, deadline))
+            .await
+            .unwrap_or_else(|_| Err(focus::unreadable()))
+    }
+
+    async fn perform(&mut self, action: Action) -> Result<()> {
+        Engine::perform(self, action).await
+    }
+
+    fn posted(&self) -> u64 {
+        self.posted
+    }
+
+    fn release(&mut self) -> Result<()> {
+        Engine::release(self)
+    }
+}
+
+/// Carry out `actions` in order on `engine`, which the caller holds
+/// locked, each checked against `expect` just before it starts: a key
+/// after the batch's first against the app alone, since an earlier key
+/// (tab, return, cmd+w) may move the window or field on purpose. On the
+/// first failure, revoke `gate`, release what is held and return the
+/// failure reply: what was performed, whether the failing action had posted
+/// anything, and whether the outcome is unknown. Once all are done, the
+/// role of the field `expect` names, when every check of it found the same.
+async fn run(
+    engine: &mut impl Perform,
+    gate: &Gate,
+    actions: Vec<Action>,
+    expect: Option<&Expect>,
+) -> std::result::Result<Option<&'static str>, Value> {
+    let mut budget = focus::CHECK_BUDGET;
+    let later = expect.map(Expect::app_only);
+    let mut pressed = false;
+    let mut roles = BTreeSet::new();
+
+    for (performed, action) in actions.into_iter().enumerate() {
+        let before = engine.posted();
+        let key = matches!(action, Action::Key { .. });
+        let expected = if key && pressed {
+            later.as_ref()
+        } else {
+            expect
+        };
+        pressed |= key;
+        let checked = match expected {
+            Some(expected) => {
+                require_within(engine, expected, Need::of(&action), &mut budget).await
+            }
+            None => Ok(None),
+        };
+        let step = match checked {
+            Ok(role) => {
+                roles.extend(role);
+                engine.perform(action).await
+            }
+            Err(error) => Err(error),
+        };
+
+        if let Err(error) = step {
+            let _ = gate.revoke();
+            return Err(failed(engine, error, performed, before));
+        }
+    }
+
+    let mut roles = roles.into_iter();
+    Ok(match (roles.next(), roles.next()) {
+        (Some(role), None) => Some(role),
+        _ => None,
+    })
+}
+
+/// [`Perform::require`], spending what it takes of `budget`: the time one
+/// request may spend checking in all.
+async fn require_within(
+    engine: &mut impl Perform,
+    expect: &Expect,
+    need: Need,
+    budget: &mut Duration,
+) -> Result<Option<&'static str>> {
+    let started = Instant::now();
+    let outcome = engine.require(expect, need, *budget).await;
+    *budget = budget.saturating_sub(started.elapsed());
+    outcome
+}
+
+/// The reply for an action that failed with `error` once `performed`
+/// actions had finished and `before` events had been posted, after
+/// releasing what is held.
+fn failed(engine: &mut impl Perform, error: Error, performed: usize, before: u64) -> Value {
+    // An action that posted some of its events before failing (a few typed
+    // characters, one click of two) had part of its effect, and nobody can
+    // say which part. A refused one posted nothing.
+    let partial = engine.posted() > before;
+    let cleanup = engine.release();
+
+    let mut reply = json!(error);
+    reply["performed"] = json!(performed);
+    reply["partial"] = json!(partial);
+
+    // A viewer's cancel is the person's doing, watching what landed; a stop
+    // (the helper hidden) or any other break mid-action leaves that unknown.
+    let unknown = partial && error.code != Code::Cancelled;
+    reply["uncertain"] = json!(cleanup.is_err() || unknown || error.uncertain);
+
+    if let Err(error) = cleanup {
+        reply["cleanupError"] = json!(error.error);
+    }
+
+    reply
+}
+
+/// The name and process of the app owning the frontmost ordinary window,
+/// if any.
+fn frontmost_app() -> Option<(String, i64)> {
     super::windows::windows()
         .ok()?
         .into_iter()
         .find(|window| window.layer == 0)
-        .and_then(|window| window.owner)
+        .and_then(|window| Some((window.owner?, window.pid)))
 }
 
 /// How often the service looks for its desktop, and how many looks in a
@@ -414,12 +570,16 @@ pub async fn serve(uid: u32, controller_uid: u32, socket: PathBuf) -> Result<()>
 
     if controller_uid == 0 {
         return Err(Error::new(
-            "identity",
+            Code::Identity,
             "The input service must run in a distinct helper account",
         ));
     }
 
     let mut engine = Engine::new(uid)?;
+    // Until this process has listed the window server's windows, asking
+    // Accessibility which app has keyboard focus fails at once, so the first
+    // checked keys would be refused. Listing them only reads; nothing is posted.
+    let _ = super::windows::windows();
     let (listener, _endpoint) = super::endpoint::bind(
         &socket,
         uid,
@@ -512,7 +672,7 @@ pub async fn serve(uid: u32, controller_uid: u32, socket: PathBuf) -> Result<()>
                     // Nothing was dispatched: say so, rather than hang up in
                     // a way the controller must treat as uncertain.
                     super::endpoint::turn_away(stream, &json!(Error::new(
-                        "busy",
+                        Code::Busy,
                         "The input service is serving too many connections; try again",
                     )));
                     continue;
@@ -592,15 +752,319 @@ async fn reply(stream: &mut UnixStream, result: Result<Value>) -> Result<()> {
 
     tokio::time::timeout(Duration::from_secs(1), stream.write_all(&bytes))
         .await
-        .map_err(|_| Error::new("transport", "Native reply timed out"))??;
+        .map_err(|_| Error::new(Code::Transport, "Native reply timed out"))??;
 
     Ok(())
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{MAX_REQUEST, admitted, read_request};
-    use tokio::{io::AsyncWriteExt, net::UnixStream};
+    use super::{
+        Action, CAPABILITIES, Duration, Error, Expect, Gate, MAX_REQUEST, Need, Perform, Result,
+        admitted, read_request, run,
+    };
+    use crate::error::Code;
+    use serde_json::{Value, json};
+    use std::sync::{Arc, Weak};
+    use tokio::{io::AsyncWriteExt, net::UnixStream, sync::Mutex};
+
+    /// What a stand-in engine does at one action.
+    #[derive(Clone, Copy, PartialEq)]
+    enum Step {
+        Post,
+        Refuse,
+        /// Post one event, then fail.
+        Break,
+    }
+
+    /// An engine that logs each check and post, and does at each action
+    /// what its script says. It holds a handle to the lock it lives in, to
+    /// see that the lock is held whenever it is asked anything.
+    struct Stand {
+        script: Vec<Step>,
+        log: Vec<String>,
+        /// What each check was asked to find.
+        asked: Vec<Expect>,
+        /// The role each check of a field finds it of, a text field's past
+        /// the list.
+        roles: Vec<&'static str>,
+        posted: u64,
+        releases: usize,
+        lock: Weak<Mutex<Stand>>,
+    }
+
+    impl Stand {
+        fn locked(script: &[Step]) -> Arc<Mutex<Self>> {
+            Arc::new_cyclic(|lock| {
+                Mutex::new(Self {
+                    script: script.to_vec(),
+                    log: Vec::new(),
+                    asked: Vec::new(),
+                    roles: Vec::new(),
+                    posted: 0,
+                    releases: 0,
+                    lock: lock.clone(),
+                })
+            })
+        }
+
+        fn assert_locked(&self) {
+            let lock = self.lock.upgrade().unwrap();
+            assert!(lock.try_lock().is_err(), "asked outside the engine lock");
+        }
+
+        /// How many lines of the log start with `what`.
+        fn logged(&self, what: &str) -> usize {
+            self.log
+                .iter()
+                .filter(|line| line.starts_with(what))
+                .count()
+        }
+    }
+
+    impl Perform for Stand {
+        async fn require(
+            &mut self,
+            expect: &Expect,
+            _: Need,
+            _: Duration,
+        ) -> Result<Option<&'static str>> {
+            self.assert_locked();
+            self.asked.push(expect.clone());
+            let index = self.logged("check");
+            self.log.push(format!("check {index}"));
+            if self.script.get(index) == Some(&Step::Refuse) {
+                return Err(
+                    Error::new(Code::FocusChanged, "Calculator has keyboard focus")
+                        .with("reason", "app")
+                        .with("found", json!({"app": "Calculator", "pid": 812})),
+                );
+            }
+            Ok(expect
+                .field()
+                .map(|_| self.roles.get(index).copied().unwrap_or("AXTextField")))
+        }
+
+        async fn perform(&mut self, _: Action) -> Result<()> {
+            self.assert_locked();
+            let index = self.logged("post");
+            self.log.push(format!("post {index}"));
+            self.posted += 1;
+            match self.script.get(index) {
+                Some(Step::Break) => Err(Error::new(Code::Identity, "The session changed")),
+                _ => Ok(()),
+            }
+        }
+
+        fn posted(&self) -> u64 {
+            self.posted
+        }
+
+        fn release(&mut self) -> Result<()> {
+            self.releases += 1;
+            Ok(())
+        }
+    }
+
+    fn keys(count: usize) -> Vec<Action> {
+        (0..count)
+            .map(|_| serde_json::from_value(json!({"type": "key", "key": "a"})).unwrap())
+            .collect()
+    }
+
+    /// Run `count` key actions on a stand-in following `script`, under
+    /// its lock, with or without an expectation.
+    async fn ran(
+        script: &[Step],
+        count: usize,
+        expect: Option<Expect>,
+    ) -> (
+        std::result::Result<Option<&'static str>, Value>,
+        Arc<Mutex<Stand>>,
+    ) {
+        let stand = Stand::locked(script);
+        let gate = Arc::new(Gate::default());
+        let outcome = {
+            let mut engine = stand.lock().await;
+            run(&mut *engine, &gate, keys(count), expect.as_ref()).await
+        };
+        (outcome, stand)
+    }
+
+    fn app() -> Option<Expect> {
+        Some(Expect::new(812).unwrap())
+    }
+
+    #[tokio::test]
+    async fn the_target_is_checked_under_the_engine_lock_just_before_each_action() {
+        let (outcome, stand) = ran(&[Step::Post, Step::Post], 2, app()).await;
+        assert!(outcome.is_ok());
+        assert_eq!(
+            stand.lock().await.log,
+            ["check 0", "post 0", "check 1", "post 1"]
+        );
+    }
+
+    #[tokio::test]
+    async fn a_mismatch_posts_nothing_and_is_not_uncertain() {
+        let (outcome, stand) = ran(&[Step::Refuse], 2, app()).await;
+        let reply = outcome.unwrap_err();
+        assert_eq!(reply["code"], "focus-changed");
+        assert_eq!(reply["reason"], "app");
+        assert_eq!(reply["found"], json!({"app": "Calculator", "pid": 812}));
+        assert_eq!(reply["performed"], 0);
+        assert_eq!(reply["partial"], false);
+        assert_eq!(reply["uncertain"], false);
+
+        let stand = stand.lock().await;
+        assert_eq!(stand.log, ["check 0"], "nothing was performed");
+        assert_eq!(stand.posted, 0);
+        assert_eq!(stand.releases, 1, "what was held is released");
+    }
+
+    #[tokio::test]
+    async fn a_mismatch_after_earlier_actions_says_how_many_were_sent() {
+        let (outcome, stand) = ran(&[Step::Post, Step::Post, Step::Refuse], 4, app()).await;
+        let reply = outcome.unwrap_err();
+        assert_eq!(reply["code"], "focus-changed");
+        assert_eq!(reply["performed"], 2);
+        assert_eq!(reply["partial"], false);
+        assert_eq!(reply["uncertain"], false);
+        assert_eq!(stand.lock().await.posted, 2);
+    }
+
+    #[tokio::test]
+    async fn an_action_that_fails_partway_stays_uncertain() {
+        let (outcome, _) = ran(&[Step::Break], 2, app()).await;
+        let reply = outcome.unwrap_err();
+        assert_eq!(reply["code"], "identity");
+        assert_eq!(reply["performed"], 0);
+        assert_eq!(reply["partial"], true);
+        assert_eq!(reply["uncertain"], true);
+    }
+
+    /// Run `actions` on a stand-in that posts each, expecting `expect`.
+    async fn ran_actions(actions: Vec<Value>, expect: &Expect) -> Arc<Mutex<Stand>> {
+        let stand = Stand::locked(&[]);
+        let gate = Arc::new(Gate::default());
+        let actions = actions
+            .into_iter()
+            .map(|action| serde_json::from_value(action).unwrap())
+            .collect();
+        {
+            let mut engine = stand.lock().await;
+            run(&mut *engine, &gate, actions, Some(expect))
+                .await
+                .unwrap();
+        }
+        stand
+    }
+
+    /// The window and field each check was asked for.
+    fn asked_for(stand: &Stand) -> Vec<(Option<i64>, Option<String>)> {
+        stand
+            .asked
+            .iter()
+            .map(|expect| (expect.window(), expect.field().map(str::to_owned)))
+            .collect()
+    }
+
+    #[tokio::test]
+    async fn keys_are_checked_once_before_the_first_key() {
+        let expect = Expect::new(812)
+            .unwrap()
+            .in_window(4120)
+            .unwrap()
+            .in_field("Email")
+            .unwrap();
+        let key = |key: &str| json!({"type": "key", "key": key});
+        let stand = ran_actions(vec![key("tab"), key("a"), key("return")], &expect).await;
+        let stand = stand.lock().await;
+        assert_eq!(
+            asked_for(&stand),
+            [
+                (Some(4120), Some("Email".to_owned())),
+                (None, None),
+                (None, None)
+            ],
+            "the app before every key, the window and field before the first"
+        );
+        assert!(stand.asked.iter().all(|asked| asked.pid() == 812));
+    }
+
+    #[tokio::test]
+    async fn text_is_checked_whole_before_every_part() {
+        let expect = Expect::new(812).unwrap().in_field("Email").unwrap();
+        let part = |text: &str| json!({"type": "type", "text": text});
+        let stand = ran_actions(vec![part("sam@"), part("example"), part(".com")], &expect).await;
+        assert_eq!(
+            asked_for(&*stand.lock().await),
+            vec![(None, Some("Email".to_owned())); 3]
+        );
+    }
+
+    /// Type `parts` on a stand-in whose checks find the field of each of
+    /// `roles` in turn, expecting the field named Email.
+    async fn typed_into(parts: &[&str], roles: &[&'static str]) -> Option<&'static str> {
+        let stand = Stand::locked(&[]);
+        stand.lock().await.roles = roles.to_vec();
+        let gate = Arc::new(Gate::default());
+        let expect = Expect::new(812).unwrap().in_field("Email").unwrap();
+        let actions = parts
+            .iter()
+            .map(|text| serde_json::from_value(json!({"type": "type", "text": text})).unwrap())
+            .collect();
+        let mut engine = stand.lock().await;
+        run(&mut *engine, &gate, actions, Some(&expect))
+            .await
+            .unwrap()
+    }
+
+    #[tokio::test]
+    async fn typing_into_a_named_field_says_the_role_every_check_found_it_of() {
+        assert_eq!(
+            typed_into(&["sam@", "example"], &["AXSearchField", "AXSearchField"]).await,
+            Some("AXSearchField")
+        );
+        assert_eq!(
+            typed_into(&["sam@", "example"], &["AXTextField", "AXTextArea"]).await,
+            None,
+            "checks that disagree name no role"
+        );
+
+        let (unnamed, _) = ran(&[Step::Post], 1, app()).await;
+        assert_eq!(unnamed.unwrap(), None, "a check of no field says none");
+        let (refused, _) = ran(
+            &[Step::Refuse],
+            1,
+            Some(Expect::new(812).unwrap().in_field("Email").unwrap()),
+        )
+        .await;
+        assert!(refused.is_err(), "a refusal is a reply of its own");
+    }
+
+    #[tokio::test]
+    async fn input_without_an_expectation_is_never_checked() {
+        let (outcome, stand) = ran(&[Step::Refuse, Step::Refuse], 2, None).await;
+        assert!(outcome.is_ok());
+        assert_eq!(stand.lock().await.log, ["post 0", "post 1"]);
+    }
+
+    #[test]
+    fn the_input_service_offers_the_target_check() {
+        assert!(CAPABILITIES.contains(&crate::session::FOCUS_APP));
+        assert!(CAPABILITIES.contains(&crate::session::FOCUS_DOCK));
+        assert_eq!(crate::session::FOCUS_APP, "focus-app");
+        assert_eq!(crate::session::FOCUS_DOCK, "focus-dock");
+    }
+
+    #[test]
+    fn the_input_service_offers_the_window_and_field_checks() {
+        assert!(CAPABILITIES.contains(&crate::session::FOCUS_WINDOW));
+        assert!(CAPABILITIES.contains(&crate::session::FOCUS_FIELD));
+        assert_eq!(crate::session::FOCUS_WINDOW, "focus-window");
+        assert_eq!(crate::session::FOCUS_FIELD, "focus-field");
+    }
 
     /// Only the controller is answered: a process in the helper's own
     /// account, where the apps under test run, is turned away.

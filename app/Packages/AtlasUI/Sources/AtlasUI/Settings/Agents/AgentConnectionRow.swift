@@ -13,7 +13,10 @@ struct AgentConnectionRow: View {
   let disconnect: @MainActor () -> Void
   /// Shows the file its problem is in.
   let showFile: @MainActor () -> Void
-  @Environment(\.accessibilityReduceMotion) private var reduceMotion
+  @Environment(\.motionReduced) private var reduceMotion
+
+  /// 0.5: how small Connected's check and word start as they pop in.
+  private static let arrivalScale: CGFloat = 0.5
 
   /// What it draws, from its state.
   var body: some View {
@@ -80,7 +83,7 @@ struct AgentConnectionRow: View {
     Button(action: connect) {
       WorkingLabel(title: "Connect", isWorking: isWorking, workingTitle: "Connecting…")
     }
-    .buttonStyle(.capsule(.glass, size: .mini, isWorking: isWorking))
+    .buttonStyle(.capsule(.secondary, size: .mini, isWorking: isWorking))
   }
 
   /// The agent's icon: its installed app's icon or its bundled original logo.
@@ -94,7 +97,7 @@ struct AgentConnectionRow: View {
 
   /// How Connected's check and word pop in: from small as they fade in.
   private var arrival: AnyTransition {
-    AnyTransition.scale(scale: Layout.arrival)
+    AnyTransition.scale(scale: Self.arrivalScale)
       .combined(with: .opacity)
   }
 
@@ -118,10 +121,4 @@ struct AgentConnectionRow: View {
   private var isConnected: Bool {
     agent.connection == .connected || agent.connection == .configured
   }
-}
-
-/// The row's own measures.
-private enum Layout {
-  /// 0.5: how small Connected's check and word start as they pop in.
-  static let arrival: CGFloat = 0.5
 }

@@ -1,10 +1,11 @@
 import SwiftUI
 
-/// How far a pane's scrolling content keeps clear of the small screen in the stage's corner, at the end it sits at,
-/// so the last rows can be scrolled out from under it. None while there is no small screen.
+/// Where the small screen floats over the card's lists: the end of the list it covers and the band it takes there, its
+/// height and its inset on both sides of it (``ViewerLayout/pipRoom(_:)``). None while there is no small screen.
+/// ``CardScroll`` keeps that band as room at the content's end, so the list's last or first row scrolls clear of it.
 struct MiniClearance: Equatable, Sendable {
-  /// The content's ends the small screen covers: the bottom, the top, or neither.
+  /// The list's ends the small screen covers: the bottom, the top, or neither.
   var edges: Edge.Set = []
-  /// How much room each of them keeps.
+  /// The band it takes at each of them.
   var length: CGFloat = .zero
 }

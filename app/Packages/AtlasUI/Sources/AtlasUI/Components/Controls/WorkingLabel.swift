@@ -12,9 +12,9 @@ struct WorkingLabel: View {
   var isWorking = false
   /// What VoiceOver says while the action runs, such as "Connecting…"; nil says the title.
   var workingTitle: String?
-  /// The spinner's arc colour: the accent on glass, white on the accent.
+  /// The spinner's arc colour: the accent on a quiet fill, white on the accent.
   var arc = Color.accent
-  /// The spinner's track colour, under its arc: a faint white by default, which a white button needs darker.
+  /// The spinner's track colour, under its arc: a fine edge (``Color/strokeStrong``) by default.
   var track = Color.strokeStrong
 
   /// What it draws, from its state.

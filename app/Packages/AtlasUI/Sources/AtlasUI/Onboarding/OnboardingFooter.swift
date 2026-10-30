@@ -13,7 +13,7 @@ struct OnboardingFooter: View {
   /// Receives the buttons' events.
   let send: @MainActor (OnboardingEvent) -> Void
   @Environment(\.mainActionInFooter) private var mainActionInFooter
-  @Environment(\.accessibilityReduceMotion) private var reduceMotion
+  @Environment(\.motionReduced) private var reduceMotion
 
   /// Back, the track and the main action, the track centred between the two sides.
   var body: some View {

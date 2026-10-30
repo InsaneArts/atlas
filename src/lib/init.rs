@@ -5,7 +5,7 @@
 use crate::{
     client::Client,
     config::{self, Config},
-    error::{Error, Result},
+    error::{Code, Error, Result},
     setup::{
         self,
         configuration::{proposed, replace_config, write_config},
@@ -31,7 +31,7 @@ use std::{
 const PATIENCE: Duration = Duration::from_secs(30 * 60);
 
 fn problem(message: impl Into<String>) -> Error {
-    Error::new("init", message)
+    Error::new(Code::Init, message)
 }
 
 /// A command that must succeed and talks to the person itself (sudo and
@@ -740,8 +740,15 @@ fn finish(done_steps: &mut Vec<Value>, settings: &Path) -> Result<()> {
         // Setup is already done; this step can only be skipped, never fail it.
         let connected = {
             let _spinner = Spinner::new("Connecting…");
-            crate::agents::change_these(&found, false, app, false)
-                .unwrap_or_else(|error| json!({"ok": false, "error": error.error}))
+            crate::agents::change_these(
+                &found,
+                crate::agents::Covering {
+                    every_agent: false,
+                    app,
+                },
+                crate::agents::Change::Connect,
+            )
+            .unwrap_or_else(|error| json!({"ok": false, "error": error.error}))
         };
         if connected["ok"] == true {
             done(
@@ -804,7 +811,7 @@ fn offer_lock(name: &str, uid: u32) -> Result<()> {
                     &format!("click Switch User and choose {name}"),
                 );
             }
-            Err(error) if error.code == "not-ready" => return Err(error),
+            Err(error) if error.code == Code::NotReady => return Err(error),
             Err(error) => skipped("Screen not locked", &error.error),
         }
     } else {
@@ -1562,13 +1569,13 @@ mod tests {
 
     #[test]
     fn replacing_a_job_keeps_its_executor_claim_after_the_caller_dies() {
-        if !crate::transaction_test::isolated(
+        if !crate::test_support::isolated(
             "init::tests::replacing_a_job_keeps_its_executor_claim_after_the_caller_dies",
         ) {
             return;
         }
         for mode in ["retire", "install", "restore"] {
-            crate::transaction_test::interrupted_executor(
+            crate::test_support::interrupted_executor(
                 "init::tests::a_job_installation_test_caller",
                 mode,
             );
@@ -1577,13 +1584,13 @@ mod tests {
 
     #[test]
     fn preparing_and_installing_a_helper_excludes_teardown_after_the_caller_dies() {
-        if !crate::transaction_test::isolated(
+        if !crate::test_support::isolated(
             "init::tests::preparing_and_installing_a_helper_excludes_teardown_after_the_caller_dies",
         ) {
             return;
         }
         for mode in ["prepare", "fresh-install"] {
-            crate::transaction_test::interrupted_executor(
+            crate::test_support::interrupted_executor(
                 "init::tests::a_job_installation_test_caller",
                 mode,
             );
@@ -1593,10 +1600,10 @@ mod tests {
     /// A subprocess entry point; all effects stay in its explicit temporary directory.
     #[tokio::test]
     async fn a_job_installation_test_caller() {
-        let Some(directory) = crate::transaction_test::directory() else {
+        let Some(directory) = crate::test_support::directory() else {
             return;
         };
-        let client = crate::transaction_test::client(&directory);
+        let client = crate::test_support::client(&directory);
         let helper = setup::Account {
             uid: 7001,
             name: "helper".into(),
@@ -1624,7 +1631,7 @@ mod tests {
                     | ("prepare", Request::Prepare { .. })
             );
             if pause {
-                crate::transaction_test::pause_executor(&directory);
+                crate::test_support::pause_executor(&directory);
             }
             if mode == "restore" && matches!(request, Request::Install { .. }) {
                 return Err(problem("installation was refused"));
@@ -1641,13 +1648,13 @@ mod tests {
 
     #[test]
     fn installation_acknowledgements_settle_only_their_own_setup_mutations() {
-        if !crate::transaction_test::isolated(
+        if !crate::test_support::isolated(
             "init::tests::installation_acknowledgements_settle_only_their_own_setup_mutations",
         ) {
             return;
         }
         let directory = tempfile::tempdir().unwrap();
-        let client = crate::transaction_test::client(directory.path());
+        let client = crate::test_support::client(directory.path());
         let controller = &client.controller;
         let other = controller.quarantine().unwrap();
         drop(other);

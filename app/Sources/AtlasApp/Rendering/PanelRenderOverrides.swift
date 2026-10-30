@@ -12,8 +12,10 @@ import AtlasUI
 /// - `ATLAS_RENDER_PAUSED=1` pauses the picture.
 /// - `ATLAS_RENDER_ALERT` (`recover`, `switch`, `logOut` or `logOutAnyway`) draws the alert window instead,
 ///   `ATLAS_RENDER_BUSY=1` draws it while its command runs, and `ATLAS_RENDER_ALERT_PHASE=done` once it worked.
+///   `ATLAS_RENDER_ALERT_ON_CONSOLE=1` draws the switch confirmation as asked from the console session.
 /// - `ATLAS_RENDER_NOTICE` (`setUp` or `runningAgain`) draws one of the helper's notices instead.
-/// - `ATLAS_RENDER_REDUCE_TRANSPARENCY=1` draws the panel as Reduce Transparency does, its glass opaque.
+/// - `ATLAS_RENDER_SESSIONS` (`one`, `two`, `waiting`, `needsYou` or `more`) shows that many agents at work, each in
+///   its own host session (``PanelRenderSessions``), in place of the live sessions and rows.
 /// - `ATLAS_RENDER_PREVIEW=1` shows a set-up Mac: the helper's names and display, three recent actions, Open at Login
 ///   and, in a debug build, the sample screen when the live one gives none.
 struct PanelRenderOverrides: Equatable, Sendable {
@@ -29,6 +31,8 @@ struct PanelRenderOverrides: Equatable, Sendable {
   var paused: Bool
   /// The alert window's alert to draw instead of the panel; nil draws the panel.
   var alert: HelperAlert?
+  /// Whether the rendered alert was asked from the console session, so Switch can offer its confirmation.
+  var alertOnConsole: Bool
   /// Whether the alert's command runs.
   var busy: Bool
   /// Whether the alert's command worked, so it holds on its done title.
@@ -37,8 +41,8 @@ struct PanelRenderOverrides: Equatable, Sendable {
   var notice: NoticeRender?
   /// Whether a set-up Mac's facts fill in what the live service lacks.
   var showsEverything: Bool
-  /// Whether the panel is drawn as under Reduce Transparency.
-  var reducesTransparency: Bool
+  /// The host sessions to show in place of the live ones; nil keeps them.
+  var sessions: PanelRenderSessions?
 
   /// Reads the overrides from an environment.
   ///
@@ -62,11 +66,12 @@ struct PanelRenderOverrides: Equatable, Sendable {
       case "logOutAnyway": .logOutAnyway
       default: nil
       }
+    alertOnConsole = environment["ATLAS_RENDER_ALERT_ON_CONSOLE"] == "1"
     busy = environment["ATLAS_RENDER_BUSY"] == "1"
     done = environment["ATLAS_RENDER_ALERT_PHASE"] == "done"
     notice = environment["ATLAS_RENDER_NOTICE"].flatMap(NoticeRender.init(rawValue:))
     showsEverything = environment["ATLAS_RENDER_PREVIEW"] == "1"
-    reducesTransparency = environment["ATLAS_RENDER_REDUCE_TRANSPARENCY"] == "1"
+    sessions = environment["ATLAS_RENDER_SESSIONS"].flatMap(PanelRenderSessions.init(rawValue:))
   }
 
   /// The alert window's alert to draw, as its controller would hold it, over the panel's overview; nil draws the
@@ -78,6 +83,7 @@ struct PanelRenderOverrides: Equatable, Sendable {
     alert.map { alert in
       AlertSnapshot(
         alert: alert,
+        isOnConsole: alertOnConsole,
         running: busy,
         failure: message.map(Words.sentence),
         done: done,
@@ -97,7 +103,13 @@ struct PanelRenderOverrides: Equatable, Sendable {
       shown.status.overview.accountName = "Atlas"
       shown.status.overview.display = ViewerStatus.Size(width: 2560, height: 1440)
       shown.status.overview.activity = Self.recent(working: mode == .agent)
+      #if DEBUG
+        if let key = AppIconKey(bundleId: Self.opie) { shown.icons[key.text] = SampleAppIcons.icons[Self.opie] }
+      #endif
       shown.opensAtLogin = OpenAtLogin.State(isAvailable: true, isEnabled: true)
+    }
+    if let sessions {
+      shown.status.overview = sessions.applied(to: shown.status.overview)
     }
     if let mode {
       shown.status.overview.mode = mode
@@ -117,18 +129,37 @@ struct PanelRenderOverrides: Equatable, Sendable {
     return shown
   }
 
-  /// Three actions an agent took in Opie, newest first: a few seconds ago while it works, else two minutes ago, so a
-  /// set-up Mac's Idle offers no Stop.
+  /// Opie's bundle identifier, as the samples know it.
+  private static let opie = "com.insanearts.opie"
+
+  /// Three actions, newest first, as the panel's samples have them: an agent's in Opie, Atlas recovering the helper,
+  /// and the person's own click, a few seconds ago while it works, else two minutes ago, so a set-up Mac's Idle
+  /// offers no Stop.
   ///
   /// - Parameter working: Whether the agent works now.
   /// - Returns: The actions.
   private static func recent(working: Bool) -> [ViewerStatus.Activity] {
     let ages: [Double] = working ? [2, 9, 31] : [120, 129, 151]
-    let said = [
-      working ? "turning Show Center off in Opie" : "turned Show Center off", "clicked Ring in Opie", "opened Opie",
+    return [
+      ViewerStatus.Activity(
+        operation: "input",
+        ok: true,
+        ageSeconds: ages[0],
+        says: working ? "turning Show Center off in Opie" : "turned Show Center off",
+        app: "Opie",
+        bundleId: Self.opie
+      ),
+      ViewerStatus.Activity(operation: "restart", ok: true, ageSeconds: ages[1], says: "recovered the helper"),
+      ViewerStatus.Activity(
+        operation: "input",
+        ok: true,
+        actor: "viewer",
+        ageSeconds: ages[2],
+        says: "clicked in Opie",
+        app: "Opie",
+        bundleId: Self.opie
+      ),
     ]
-    return zip(said, ages)
-      .map { ViewerStatus.Activity(operation: "input", ok: true, ageSeconds: $1, says: $0) }
   }
 
   /// The state the service gives a mode (`src/lib/overview.rs`, `kind()`), for renders only: the app itself always

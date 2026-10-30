@@ -17,8 +17,10 @@ public enum SymbolName: String, CaseIterable, Sendable {
   case keyboard
   /// More.
   case more = "ellipsis"
-  /// Details, the inspector.
-  case sidebar = "sidebar.right"
+  /// The sidebar at the window's leading edge, shown or hidden.
+  case sidebarLeft = "sidebar.left"
+  /// All sessions, while no session is live to stack its icon on the row.
+  case allSessions = "square.stack"
   /// Expand the small screen.
   case expand = "arrow.up.left.and.arrow.down.right"
   /// A search field.
@@ -37,6 +39,10 @@ public enum SymbolName: String, CaseIterable, Sendable {
   case folder
   /// A click.
   case click = "cursorarrow.click"
+  /// A pointer action, on an Activity step's disc.
+  case pointer = "cursorarrow"
+  /// Text typed, on an Activity step's disc.
+  case typing = "character.cursor.ibeam"
   /// A scroll.
   case scroll = "arrow.up.and.down"
   /// A screenshot.
@@ -47,7 +53,7 @@ public enum SymbolName: String, CaseIterable, Sendable {
   case terminal
   /// Something the person did.
   case person = "person.fill"
-  /// Control given back.
+  /// Take Control, and control given back.
   case handRaised = "hand.raised"
   /// A problem.
   case problem = "exclamationmark.triangle.fill"
@@ -59,22 +65,24 @@ public enum SymbolName: String, CaseIterable, Sendable {
   case passed = "checkmark.circle.fill"
   /// The General settings.
   case gear = "gearshape"
-  /// The helper's screen, and the narrow Screen tab.
+  /// The helper's screen.
   case display
   /// The agents, and an update available.
   case sparkles
   /// About.
   case info = "info.circle"
-  /// The narrow Activity tab.
+  /// Activity, in the Library.
   case list = "list.bullet"
-  /// The narrow Apps tab.
+  /// Apps, in the Library.
   case windows = "macwindow.on.rectangle"
-  /// The narrow Screenshots tab.
+  /// Screenshots, in the Library.
   case photos = "photo.on.rectangle"
   /// Something locked.
   case lock
   /// A popup button's choices.
   case popup = "chevron.up.chevron.down"
+  /// A menu that opens under its button.
+  case menu = "chevron.down"
   /// Screen Recording: the area a screenshot takes.
   case screenArea = "rectangle.dashed"
   /// The drag ghost's hand, its edge.

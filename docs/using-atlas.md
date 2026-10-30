@@ -44,7 +44,14 @@ When you finish, close this app:
 atlas close --app Example
 ```
 
-This quits the app and removes any copy Atlas staged for it. Close the previous build before opening a replacement. Use the [command reference](../agents/atlas/skills/atlas/references/commands.md) for typing, key combinations, scrolling and other input options.
+This quits the app and removes any copy Atlas staged for it. Close the previous build before opening a replacement. Then undo what the task left in the helper, such as copies into it and apps installed for it:
+
+```sh
+atlas cleanup          # see what it would do
+atlas cleanup --apply
+```
+
+Cleanup quits only what runs from the task's own copies and installs, never an app opened by name, moves installed apps aside in the helper, where they are kept for 7 days before they are removed, removes its copies, and reports what it kept and why. Use the [command reference](../agents/atlas/skills/atlas/references/commands.md) for typing, key combinations, scrolling and other input options.
 
 ## Watch the helper
 
@@ -79,7 +86,7 @@ Open **Settings** to change picture behavior in **General**, check the account a
 
 Keep these limits in mind when choosing a task:
 
-- Open apps with `atlas open`. Atlas cannot click the Dock. Dragging works for window movement, sliders and text selection, but does not provide native file or item drag and drop.
+- Open apps with `atlas open`. A click on a Dock icon launches that app, so `--app` and `--pid` refuse a click, scroll or drag on the Dock. Dragging works for window movement, sliders and text selection, but does not provide native file or item drag and drop.
 - Native Save and Open panels need an authenticated Screen Sharing connection to the helper. Check `capabilities.nativeDialogs` in `doctor --verbose`; a delivered click alone does not prove a dialog accepted it.
 - Use Google Chrome or Firefox for hidden browser work, for example `atlas open --app "Google Chrome" http://localhost:3000` with your local server running. Safari and other WebKit views can remain blank without Screen Sharing. `capabilities.webContent` in `doctor --verbose` reports this constraint. Opening a URL without `--app` uses the default browser.
 - The helper has its own files and sign-ins. Atlas does not copy your credentials. Save working files in the helper's home rather than an app copy staged under `/Users/Shared/Atlas/Open`, which the helper can only read.

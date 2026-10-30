@@ -70,6 +70,7 @@ final class SettingsController {
         picture: links.picture(),
         canPause: links.canPause(),
         running: actions.running,
+        isOnConsole: actions.console.isOnConsole,
         installing: dependencies.installs.installing,
         isRemoving: dependencies.installs.isRemoving,
         version: dependencies.version

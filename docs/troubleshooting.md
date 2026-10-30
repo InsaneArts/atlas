@@ -6,7 +6,7 @@ If an operation reports `uncertain: true`, go directly to [unknown outcomes](#an
 
 ## The command is missing or uses the wrong settings
 
-If your shell says `atlas` is not found, check that Atlas.app is installed and that `~/.local/bin` is on `PATH`. Follow the [PATH instructions](getting-started.md#install-after-the-public-release). Public downloads become available when Atlas is open source; an unpublished release is not a helper failure.
+If your shell says `atlas` is not found, check that Atlas.app is installed and that `~/.local/bin` is on `PATH`. Follow the [PATH instructions](getting-started.md#install).
 
 If Atlas says it is not set up, inspect `atlas config` and any `--config` argument or `ATLAS_CONFIG` value you selected. An installed app uses `~/.config/atlas.toml`, while a development executable may use a checkout-local file. See [Configuration](configuration.md).
 
@@ -34,13 +34,43 @@ For `transport`, check whether the helper is logged in and read `doctor`. If the
 
 ## Another controller has control, or agents are stopped
 
-`busy` means another controller holds the helper, and `holder` says who: `person` when the person has control in a viewer, `agent` when another Atlas command, usually another agent's, is running. Wait for it to finish. If the person selected **Take Control**, they must use **Give Back** or **Control-Shift-Esc** before agents can take over.
+`busy` means another controller holds the helper, and `holder` says who: `person` when the person has control in a viewer, `agent` when another Atlas command, usually another agent's, is running, or a command an agent started with `run` is still running. Other agents may act while such a command runs; recovery, restart, log-out and updates answer `busy` until it ends. A suspended `atlas run` (Control-Z or `SIGSTOP`) keeps its command running and blocks recovery until it is resumed or killed. When `busy` carries `waited`, the agent's command already waited that long, up to 30 seconds by default; try again later, or pass a longer `--wait` (`--wait 0` answers at once). `busy` with `running: "command"` and no `waited` comes at once: 8 commands agents started already run, or recovery met one that runs, and a longer `--wait` does not change that. If the person selected **Take Control**, they must use **Give Back** or **Control-Shift-Esc** before agents can take over.
 
-`stopped` means the person stopped agents. Ask them what they want next; only they resume agent work. Pausing the picture is different: the helper continues working while its displayed image is paused. See [Using Atlas](using-atlas.md#take-control-or-stop-agents).
+`focus-changed` means an action given `--app`, `--pid`, `--window` or `--field` was not sent, because something else had focus or was at its point. `reason` says what:
+
+- `app`: another app had keyboard focus.
+- `point`: another app's window, the desktop, the Dock or an overlay was at the action's point.
+- `window`: another window of the app had focus, was in front of the named one or was at the point.
+- `sheet`: a sheet or dialog over the named window had focus.
+- `field`: another field or none had focus. Browsers and custom views often do not say which field has focus, so `--field` is refused there every time: use `--window` instead.
+- `disabled`: the named field was disabled.
+- `unreadable`: Atlas could not tell, often because the active app has no window. `unread` says why when the app was known: `alike`, `unlisted`, `withheld`, `cut`, `deep` or `slow`. `withheld` means the app hid its windows, as apps do while the Mac's screen is locked, so ask the person to unlock it.
+
+`found` names what was there: the app, often another agent's, the window's number and the focused element's role and name, never its value. Nothing is left uncertain. Actions before it in the same command were sent only when `performed` or, for `type`, `typed` is above 0, or `partial` is true; what was sent just before the change may have reached what took focus, and `typed` counts characters sent, not characters that reached the field.
+
+To recover, do what `next` says: take a screenshot of the app, check what any earlier part did, and click where the app shows to bring it forward, or open the app if none of it shows. Then send only what was not sent.
+
+`job` means a background job was refused or is still stopping; `reason` says why. `other-task` names the task whose job it is: stop it with `--task KEY` only to clean up after that task's session was lost. After `unobserved`, Atlas could not read the job's processes and sent nothing; try again. After `identity` or `other-account`, nothing was signalled: the process is no longer the one Atlas started, or part of it runs as another account. Tell the person, and never end it another way. `still-stopping` means Atlas keeps stopping it; `atlas job list` shows when it has ended. A job whose first process is gone ends `leader-gone`: Atlas signals nothing of it and lists what still runs in `left`, in the job's group or out of it. A process a job starts that calls `setsid` leaves its group and its session, so Atlas never stops it and may not list it. When the person's Stop, a log-out or an uninstall says some jobs could not be stopped, their processes no longer matched them, could not be seen, or their records could not be read, and nothing was signalled; `atlas job list --all` shows them.
+
+Cleanup checks the copies of collected files before anything else. When the newest copy of a file is missing or changed, or a collection's receipt is gone, every later step that would remove, roll back or uninstall something in the helper is `blocked` with `output-not-kept`, and background jobs are still stopped. Collect the file again, then run cleanup again.
+
+`collect` means a file was not collected; `reason` says why, and nothing in the helper changed. Give a path relative to the helper's home (your own shell turns `~` into your home), allow a larger file with `--max-size`, wait until whatever writes a `changing` file is done, and archive a folder with `ditto -c -k` before collecting it. `on-console` means the helper came on screen during the collection, and nothing more was read. Files under `collected` in the reply were kept.
+
+`stopped` means the person stopped agents. Their Stop also ends background jobs. Ask them what they want next; only they resume agent work. Pausing the picture is different: the helper continues working while its displayed image is paused. See [Using Atlas](using-atlas.md#take-control-or-stop-agents).
+
+## Several agents at once
+
+Several agents can use one helper. Their input and other changes take turns, one at a time; programs agents start with `atlas run` (up to 8) keep running beside them. Between one agent's commands another may bring its own window forward, so agents pass `--app NAME` to `type`, `key`, `scroll`, `drag` and coordinate `click`: Atlas then sends nothing and answers `focus-changed` when another app would get the input. `--app` checks the app, not the window; in an app two agents share, `--window NUMBER` checks the window too. Agents close only what they opened. Subagents share their parent's session, so each one beside its siblings runs every command, cleanup included, with its own `ATLAS_TASK=NAME`.
+
+An unknown outcome blocks every agent until it is recovered. Only an agent that owns every unknown action, or you, should run `atlas restart`. The `uncertain` refusal says so with `yours: true`, and names the other sessions in `causedBy`; an agent never restarts over `yours: false` or a step that says to wait.
+
+## An agent's host stopped an Atlas command
+
+Agent hosts stop shell commands that run past their time limit (see [Agent connections](agents.md#several-agents-and-time-limits)). When Atlas is stopped with TERM, HUP or INT, it lets the step under way finish for up to 3 seconds and exits with 128 plus the signal's number. A failure it prints then has the code `interrupted`; a command that finished in time prints its ordinary result with that same exit status. What finished stands, so read the result rather than the exit status alone, and do not repeat it. A step still going then, such as a long `run`, stays unknown and needs `atlas restart`. A forced kill gives Atlas no chance to settle, so a change under way stays unknown: Pi kills at once at its limit, and Codex kills a command still running when its turn ends. Claude Code instead moves a command to the background at its limit, where it keeps running. Either way the agent whose command was stopped runs `atlas doctor` and restarts only when its step says every unknown action is its own: a stopped command may have been only waiting.
 
 ## An action's outcome is unknown
 
-An uncertain result means the action may or may not have happened. Do not repeat it or remove its pending-action files.
+An uncertain result means the action may or may not have happened. Do not repeat it or remove its pending-action files. Until it is recovered, `doctor` reports `ready: false`, with a last step that says to run `atlas restart` when the action was the asking session's own, or to wait or tell the person when it may be another's.
 
 1. Stop sending changes. Keep the error and command that produced it.
 2. If the helper can answer, take a screenshot and inspect it. If it is logged out or needs a person to approve a permission, complete that prerequisite first.
@@ -55,7 +85,7 @@ Native Save and Open panels require an authenticated Screen Sharing connection t
 
 Use Google Chrome or Firefox for a web app in the hidden helper. Safari and other WebKit views can remain blank without Screen Sharing. Pass `--app` when opening a URL so the default browser does not decide the result. `capabilities.webContent` in `doctor --verbose` explains this constraint; it is not proof that the page loaded. See [practical limits](using-atlas.md#settings-and-practical-limits).
 
-If a named click fails, run `atlas elements --app NAME` and check its role and label. A hidden or ambiguous element is refused. When a name matches nothing or several elements, the error's `candidates` lists up to five with their role, name and click point. When the scan was incomplete, its `scan` says why. Use fresh screenshot coordinates only after inspecting the target.
+If a named click fails, run `atlas elements --app NAME` and check its role and label. A hidden or ambiguous element is refused. When a name matches nothing or several elements, the error's `candidates` lists up to five with their role, name and click point. When the scan was incomplete, its `scan` says why. `withheld` among its reasons means the app handed back itself instead of its windows, as macOS apps do while the Mac's screen is locked: the list then holds only the menu bar, so ask the person to unlock the Mac. Use fresh screenshot coordinates only after inspecting the target.
 
 ## The picture is stale or a viewer pane fails
 
@@ -81,7 +111,7 @@ Tool availability and helper readiness are separate. Check both before changing 
 
 ## Update or uninstall did not finish
 
-For an update, keep its failure message and check whether the failure was downloading, verifying or moving the helper to the new app. An unpublished public release needs no local repair. A failed handover has a resumable update record: fix the named cause and follow the instruction to run `atlas update` again. Do not bypass signature checks.
+For an update, keep its failure message and check whether the failure was downloading, verifying or moving the helper to the new app. A failed handover has a resumable update record: fix the named cause and follow the instruction to run `atlas update` again. Do not bypass signature checks.
 
 For uninstall, read what was removed and what stayed. Atlas stops before deleting a helper account it cannot identify or confirm as logged out. Settings that cannot be loaded can leave the helper job in place. Agent-host disconnection can also fail independently and appear in warnings.
 

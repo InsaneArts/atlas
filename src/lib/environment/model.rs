@@ -1,5 +1,5 @@
 //! Versioned, private records. File contents live in separate bounded blobs.
-use super::*;
+use super::{reply::FileReport, *};
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -13,7 +13,7 @@ pub(super) struct Identity {
 }
 
 impl Identity {
-    pub fn from_epoch(epoch: &crate::session::Epoch) -> Self {
+    pub(super) fn from_epoch(epoch: &crate::session::Epoch) -> Self {
         Self {
             uid: epoch.uid,
             capture_pid: epoch.capture_pid,
@@ -24,7 +24,7 @@ impl Identity {
         }
     }
 
-    pub fn from_proof(proof: &Value) -> Result<Self> {
+    pub(super) fn from_proof(proof: &Value) -> Result<Self> {
         let epoch = crate::session::InputEpoch::from_proof(proof, 1)?;
         Ok(Self {
             uid: epoch.uid,
@@ -52,10 +52,53 @@ pub(super) struct Packet {
 #[derive(Serialize, Deserialize)]
 #[serde(tag = "operation", rename_all = "camelCase", deny_unknown_fields)]
 pub(super) enum Request {
-    Preview { id: String, files: Vec<Payload> },
-    Apply { plan: Plan },
-    Rollback { id: String, apply: bool },
-    Run { argv: Vec<String> },
+    Preview {
+        id: String,
+        files: Vec<Payload>,
+    },
+    Apply {
+        plan: Plan,
+    },
+    Rollback {
+        id: String,
+        apply: bool,
+    },
+    Run {
+        argv: Vec<String>,
+    },
+    Transactions {
+        all: bool,
+        ids: Vec<String>,
+    },
+    InstallApp {
+        id: String,
+        source: PathBuf,
+        name: String,
+    },
+    RemoveApp {
+        id: String,
+    },
+    Installs {
+        ids: Vec<String>,
+    },
+}
+
+impl Request {
+    /// Whether the worker may change the helper for this request. Every
+    /// other request only reads, so it takes no control and leaves nothing
+    /// pending; a new request must say which it is.
+    pub(super) fn changes_helper(&self) -> bool {
+        match self {
+            Request::Preview { .. } | Request::Transactions { .. } | Request::Installs { .. } => {
+                false
+            }
+            Request::Rollback { apply, .. } => *apply,
+            Request::Apply { .. }
+            | Request::Run { .. }
+            | Request::InstallApp { .. }
+            | Request::RemoveApp { .. } => true,
+        }
+    }
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
@@ -69,7 +112,7 @@ pub(super) struct Payload {
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
-pub(super) struct Node {
+pub(crate) struct Node {
     pub device: u64,
     pub inode: u64,
 }
@@ -98,7 +141,7 @@ impl PartialEq for Fingerprint {
 }
 
 impl Fingerprint {
-    pub fn same_contents_and_metadata(&self, other: &Self) -> bool {
+    pub(super) fn same_contents_and_metadata(&self, other: &Self) -> bool {
         let Self {
             node: _,
             sha256,
@@ -162,7 +205,7 @@ pub(super) struct PlannedFile {
 /// What a plan does to one destination, stored by its lowercase name.
 #[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "lowercase")]
-pub(super) enum Operation {
+pub(crate) enum Operation {
     Create,
     Update,
     Permissions,
@@ -194,7 +237,7 @@ pub(super) struct Progress {
 
 #[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
-pub(super) enum Phase {
+pub(crate) enum Phase {
     Applying,
     Applied,
     RollingBack,
@@ -214,11 +257,7 @@ pub(super) struct Transaction {
 }
 
 pub(super) fn validate_id(id: &str) -> Result<()> {
-    if id.len() != 48
-        || !id
-            .bytes()
-            .all(|b| b.is_ascii_hexdigit() && !b.is_ascii_uppercase())
-    {
+    if !crate::name::lower_hex(id, 48) {
         return Err(problem(
             "Expected a 48-character lowercase plan ID, the planId a preview (atlas \
              environment MANIFEST) printed",
@@ -233,15 +272,13 @@ pub(super) fn decode<T: serde::de::DeserializeOwned>(bytes: &[u8]) -> Result<T> 
     serde_json::from_slice(bytes).map_err(|_| problem("Invalid environment record or schema"))
 }
 
-pub(super) fn file_report(plan: &Plan) -> Vec<Value> {
+pub(super) fn file_report(plan: &Plan) -> Vec<FileReport> {
     plan.files
         .iter()
-        .map(|file| {
-            json!({
-                "target": file.payload.target,
-                "operation": file.operation,
-                "legacyPrevious": matches!(file.previous, Some(Entry::Legacy(_))),
-            })
+        .map(|file| FileReport {
+            target: file.payload.target.clone(),
+            operation: file.operation.into(),
+            legacy_previous: matches!(file.previous, Some(Entry::Legacy(_))),
         })
         .collect()
 }

@@ -62,6 +62,7 @@ struct HelperCommandsAlertTests {
     let held = ReleaseSignal()
     commands.whileRunning { _ in await held.wait() }
     let actions = HelperActions(
+      console: SessionConsole(read: { true }),
       commands: commands,
       service: service,
       barrier: ControlBarrier(service: service, clock: ManualClock())

@@ -20,6 +20,13 @@ public struct ActivityItem: Equatable, Sendable, Identifiable {
 
   /// Whether it worked.
   public var ok: Bool { row.ok }
+  /// Whether it failed: it did not work, and was not refused before anything was sent, as when another app was in
+  /// front, which is no problem.
+  public var failed: Bool { row.outcome == .failed }
   /// Seconds ago, when known.
   public var age: Double? { row.ageSeconds }
+  /// The key of the host session it came from; nil for the person's own and for commands no host named.
+  public var session: String? { row.session }
+  /// The key of the host session an agent's action came from: Terminal's empty key for one no host named.
+  public var sessionKey: String { row.sessionKey }
 }

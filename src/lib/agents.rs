@@ -5,7 +5,8 @@
 use crate::{
     client::Client,
     config::Config,
-    error::{Error, Result},
+    error::{Code, Error, Result},
+    host_session::{Asker, HostSession, Recovery, brief},
 };
 use serde_json::{Value, json};
 use std::{
@@ -39,7 +40,7 @@ const ASK: Duration = Duration::from_secs(10);
 const CHANGE: Duration = Duration::from_secs(120);
 
 fn problem(message: impl Into<String>) -> Error {
-    Error::new("agents", message)
+    Error::new(Code::Agents, message)
 }
 
 /// The agents Atlas can connect, and their command-line tools.
@@ -230,7 +231,7 @@ impl Agent {
                 Presence::Installed(String::from_utf8_lossy(&output.stdout).trim().to_owned())
             }
             // Installed, but it did not answer in time.
-            Err(error) if error.code == "agents" => Presence::Silent(error.error),
+            Err(error) if error.code == Code::Agents => Presence::Silent(error.error),
             _ => Presence::Missing,
         }
     }
@@ -287,7 +288,7 @@ impl Agent {
 
         let output = match exec(self, list, ASK) {
             Ok(output) => output,
-            Err(error) if error.code == "agents" => return Err(error.error),
+            Err(error) if error.code == Code::Agents => return Err(error.error),
             Err(_) => return Ok(None),
         };
 
@@ -332,7 +333,7 @@ impl Agent {
 
         match exec(self, &["plugin", "marketplace", "list", "--json"], ASK) {
             Ok(output) => Ok(self.source_in(&output.stdout).or(recorded)),
-            Err(error) if error.code == "agents" => Err(error.error),
+            Err(error) if error.code == Code::Agents => Err(error.error),
             Err(_) => Ok(recorded),
         }
     }
@@ -585,24 +586,43 @@ fn probe(agent: Agent) -> Value {
     }
 }
 
-/// Connect (or `remove` from) the chosen agents, or every installed one.
-/// Only a marketplace named atlas that is Atlas's own is replaced or
-/// removed; an agent whose is someone else's is refused when connecting and
-/// left alone when removing.
-pub fn change(chosen: &[Agent], remove: bool) -> Result<Value> {
-    // The Claude app comes along when no agent was named: it has no
-    // command line of its own to choose it by.
-    let app = chosen.is_empty() && crate::claude_app::installed();
-    let all = chosen.is_empty();
-    change_these(chosen, all, app, remove)
+/// Whether a change connects Atlas or disconnects it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Change {
+    Connect,
+    Disconnect,
 }
 
-/// [`change`] for exactly `chosen` (every installed agent when `all`) and
-/// the Claude app when `app`.
-pub fn change_these(chosen: &[Agent], all: bool, app: bool, remove: bool) -> Result<Value> {
+/// What a change covers beside the agents it names.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct Covering {
+    /// Every installed agent, whichever are named.
+    pub every_agent: bool,
+    /// The Claude app.
+    pub app: bool,
+}
+
+/// Make `change` for the chosen agents, or every installed one. Only a
+/// marketplace named atlas that is Atlas's own is replaced or removed; an
+/// agent whose is someone else's is refused when connecting and left alone
+/// when disconnecting.
+pub fn change(chosen: &[Agent], change: Change) -> Result<Value> {
+    // The Claude app comes along when no agent was named: it has no
+    // command line of its own to choose it by.
+    let covering = Covering {
+        every_agent: chosen.is_empty(),
+        app: chosen.is_empty() && crate::claude_app::installed(),
+    };
+    change_these(chosen, covering, change)
+}
+
+/// [`change`] for exactly `chosen` and what `covering` adds.
+pub fn change_these(chosen: &[Agent], covering: Covering, change: Change) -> Result<Value> {
+    let remove = change == Change::Disconnect;
+    let Covering { every_agent, app } = covering;
     let marketplace = if remove { None } else { Some(marketplace()?) };
 
-    let present: Vec<(Agent, Presence)> = if all {
+    let present: Vec<(Agent, Presence)> = if every_agent {
         Agent::ALL
             .into_iter()
             .map(|agent| (agent, agent.presence_for_change(remove)))
@@ -794,13 +814,10 @@ pub fn refresh() -> Value {
     json!({"agents": refreshed})
 }
 
-/// The session brief while an earlier action's outcome is unknown: it may
-/// be another agent's, so the person hears of it before any restart.
-const UNKNOWN_OUTCOME: &str = "an earlier action's outcome is unknown. Take a screenshot and tell \
-the person before running atlas restart.";
-
 /// One line for an agent's session start: local, bounded, never failing.
-pub async fn brief(config_path: &Path) -> String {
+/// For host `session`, it says what that session left in the helper, and
+/// lets it recover an unknown action that is all its own.
+pub async fn brief(config_path: &Path, session: Option<&HostSession>) -> String {
     let version = crate::VERSION;
 
     let Ok(config) = Config::load(config_path) else {
@@ -813,12 +830,9 @@ pub async fn brief(config_path: &Path) -> String {
         return format!("Atlas {version}: run atlas doctor before using it.");
     };
 
-    if client
-        .controller
-        .pending()
-        .is_ok_and(|pending| !pending.is_empty())
-    {
-        return format!("Atlas {version}: {UNKNOWN_OUTCOME}");
+    let causes = client.controller.pending_causes().unwrap_or_default();
+    if let Some(recovery) = Recovery::of(&causes, Asker::Agent(session.map(HostSession::key))) {
+        return format!("Atlas {version}: {}", recovery.step());
     }
 
     let Ok(status) = tokio::time::timeout(Duration::from_millis(1500), client.status()).await
@@ -834,10 +848,15 @@ pub async fn brief(config_path: &Path) -> String {
 
     let ready = crate::capability::doctor(status, config.helper_uid)["ready"] == true;
     if ready {
-        format!(
+        let mut line = format!(
             "Atlas {version}: ready. After any change a person could see, check it in the \
              hidden helper with the atlas skill before saying it works."
-        )
+        );
+        if let Some(left) = session.and_then(|session| brief::leftovers(&client, session)) {
+            line.push(' ');
+            line.push_str(&left);
+        }
+        line
     } else {
         format!("Atlas {version}: not ready; run atlas doctor and tell the person what it says.")
     }
@@ -1190,13 +1209,6 @@ mod tests {
             crate::agent::skill(),
             "regenerate with: atlas agent-guide --skill"
         );
-    }
-
-    #[test]
-    fn a_session_with_an_unknown_outcome_is_told_to_ask_before_recovering() {
-        assert!(UNKNOWN_OUTCOME.contains("Take a screenshot"));
-        assert!(UNKNOWN_OUTCOME.contains("tell the person before running atlas restart"));
-        assert!(!UNKNOWN_OUTCOME.contains("restart first"));
     }
 
     /// Every error code the CLI can report is explained to the agent.

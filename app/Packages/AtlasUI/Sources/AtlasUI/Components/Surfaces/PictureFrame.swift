@@ -41,7 +41,7 @@ struct PictureFrame: View {
 
   /// The frame's shape.
   private var shape: RoundedRectangle {
-    RoundedRectangle(cornerRadius: size == .regular ? Radius.large : Radius.medium)
+    RoundedRectangle(cornerRadius: size == .regular ? Radius.large : Radius.medium, style: .continuous)
   }
 }
 

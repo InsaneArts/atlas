@@ -7,7 +7,7 @@ use crate::{
     client::Client,
     config::{self, Config},
     control::{Controller, Ownership},
-    error::{Error, Result},
+    error::{Code, Error, Result},
     onboarding::as_root::{self, Target, Via},
     setup::{
         self,
@@ -26,7 +26,7 @@ use std::{
 };
 
 fn problem(message: impl Into<String>) -> Error {
-    Error::new("uninstall", message)
+    Error::new(Code::Uninstall, message)
 }
 
 /// Remove `path` only if it is a link to the app's executable (or the app's
@@ -471,6 +471,24 @@ impl Teardown for Live<'_> {
         }
         self.exclusion = Some(settle(client, &mut self.warnings).await?);
 
+        // Background jobs are stopped first, so none outlives Atlas in the
+        // helper. One that could not be stopped is said, never a failure.
+        let jobs =
+            crate::jobs::stop_every(client, crate::daemon::protocol::StopReason::Stopped).await;
+        let mut said = json!({});
+        jobs.say(&mut said);
+        if jobs.asked > 0 {
+            done(
+                "Background jobs",
+                &format!("stopped {}", said["jobsStopped"].as_u64().unwrap_or(0)),
+            );
+        }
+        for warning in said["warnings"].as_array().into_iter().flatten() {
+            if let Some(warning) = warning.as_str() {
+                self.warnings.push(warning.to_owned());
+            }
+        }
+
         Ok(())
     }
 
@@ -655,7 +673,7 @@ fn survey(config_path: &Path) -> Result<Found> {
     // Settings that exist but do not load name no helper, so its job stays.
     let (client, unloaded) = match Config::load(config_path) {
         Ok(config) => (Some(Client::new(config)?), None),
-        Err(error) if error.code == "config-invalid" => (None, Some(error.error)),
+        Err(error) if error.code == Code::ConfigInvalid => (None, Some(error.error)),
         Err(_) => (None, None),
     };
 
@@ -910,7 +928,7 @@ async fn log_out_helper(
         let came = match way {
             Way::Ask | Way::Force => match client.logout_held(ownership, way == Way::Force).await {
                 Ok(reply) if reply["loggedOut"] == true => Came::Gone,
-                Err(error) if error.code == "logout-held" => Came::Held,
+                Err(error) if error.code == Code::LogoutHeld => Came::Held,
                 _ => Came::Stayed,
             },
             Way::Root => {
@@ -972,7 +990,7 @@ fn unrecorded_message(name: &str) -> String {
 /// Uninstall's refusal when the helper stays logged in.
 fn still_logged_in() -> Error {
     Error::new(
-        "logout",
+        Code::Logout,
         "The helper is still logged in, so Atlas stopped before removing anything. Log it out \
          (atlas logout), then run atlas uninstall again.",
     )
@@ -1162,7 +1180,7 @@ fn disconnect(
     warnings: &mut Vec<String>,
 ) -> Result<()> {
     // An error here means no agent is installed, so there is nothing to remove.
-    if let Ok(reply) = crate::agents::change(&[], true) {
+    if let Ok(reply) = crate::agents::change(&[], crate::agents::Change::Disconnect) {
         let changed = reply["agents"]
             .as_array()
             .into_iter()
@@ -1305,7 +1323,7 @@ fn shown(name: &str) -> &str {
 fn trash(app: &Path, leftovers: &[PathBuf], removed: &mut Vec<Value>) -> Result<()> {
     let trash = config::home()?
         .join(".Trash")
-        .join(format!("Atlas-{}.app", crate::control::token()));
+        .join(format!("Atlas-{}.app", crate::files::token()));
 
     fs::rename(app, &trash).map_err(|_| {
         problem(format!(
@@ -1491,12 +1509,12 @@ fn handed_over(shared_command: &Path) -> Vec<PathBuf> {
 mod tests {
     #[test]
     fn removing_a_secondary_opener_keeps_control_and_pending_work_after_interruption() {
-        if !crate::transaction_test::isolated(
+        if !crate::test_support::isolated(
             "uninstall::tests::removing_a_secondary_opener_keeps_control_and_pending_work_after_interruption",
         ) {
             return;
         }
-        let directory = crate::transaction_test::interrupted_executor(
+        let directory = crate::test_support::interrupted_executor(
             "uninstall::tests::an_opener_removal_test_caller",
             "opener",
         );
@@ -1530,34 +1548,28 @@ mod tests {
     /// A separate caller with an executor that removes only a temporary opener.
     #[test]
     fn an_opener_removal_test_caller() {
-        let Some(directory) = crate::transaction_test::directory() else {
+        let Some(directory) = crate::test_support::directory() else {
             return;
         };
         let controller = Controller::at(7001, &directory.join("state"));
         let _ = forget_opener(&controller, || {
-            crate::transaction_test::pause_executor(&directory);
+            crate::test_support::pause_executor(&directory);
             Ok(json!({"ok": true, "removed": true}))
         });
     }
 
     #[test]
     fn input_shutdown_stays_pending_when_its_caller_dies_after_dispatch() {
-        use std::{
-            process::{Command, Stdio},
-            time::Duration,
-        };
+        use std::{process::Stdio, time::Duration};
         let directory = tempfile::tempdir().unwrap();
-        let mut caller = Command::new(std::env::current_exe().unwrap())
-            .args([
-                "--exact",
-                "uninstall::tests::an_input_shutdown_test_caller",
-                "--nocapture",
-            ])
-            .env("ATLAS_MUTATION_TEST_DIRECTORY", directory.path())
-            .stdout(Stdio::null())
-            .stderr(Stdio::null())
-            .spawn()
-            .unwrap();
+        let mut caller =
+            crate::test_support::rerun("uninstall::tests::an_input_shutdown_test_caller")
+                .arg("--nocapture")
+                .env("ATLAS_MUTATION_TEST_DIRECTORY", directory.path())
+                .stdout(Stdio::null())
+                .stderr(Stdio::null())
+                .spawn()
+                .unwrap();
         for _ in 0..500 {
             if directory.path().join("dispatched").exists() || caller.try_wait().unwrap().is_some()
             {
@@ -1581,7 +1593,7 @@ mod tests {
     /// A shutdown dispatch stand-in that deliberately never acknowledges completion.
     #[tokio::test]
     async fn an_input_shutdown_test_caller() {
-        let Some(directory) = crate::transaction_test::directory() else {
+        let Some(directory) = crate::test_support::directory() else {
             return;
         };
         let controller = Controller::at(7001, &directory.join("state"));
@@ -1626,7 +1638,7 @@ mod tests {
     }
     #[test]
     fn interrupted_retirement_keeps_every_unacknowledged_mutation_pending() {
-        if !crate::transaction_test::isolated(
+        if !crate::test_support::isolated(
             "uninstall::tests::interrupted_retirement_keeps_every_unacknowledged_mutation_pending",
         ) {
             return;
@@ -1872,7 +1884,7 @@ mod tests {
 
     #[test]
     fn a_helper_held_while_its_caches_go_stays_held() {
-        if !crate::transaction_test::isolated(
+        if !crate::test_support::isolated(
             "uninstall::tests::a_helper_held_while_its_caches_go_stays_held",
         ) {
             return;
@@ -2265,18 +2277,21 @@ mod tests {
 
     #[tokio::test]
     async fn unsupported_or_vanished_input_still_reaches_verified_logout_and_teardown() {
-        if !crate::transaction_test::isolated(
+        if !crate::test_support::isolated(
             "uninstall::tests::unsupported_or_vanished_input_still_reaches_verified_logout_and_teardown",
         ) {
             return;
         }
         for outcome in [
             Err(crate::error::Error::new(
-                "input",
+                Code::Input,
                 "Unknown native operation",
             )),
-            Err(crate::error::Error::new("io", "No such file or directory")),
-            Err(crate::error::Error::new("uncertain", "Shutdown reply lost").uncertain()),
+            Err(crate::error::Error::new(
+                Code::Io,
+                "No such file or directory",
+            )),
+            Err(crate::error::Error::new(Code::Uncertain, "Shutdown reply lost").uncertain()),
         ] {
             let dir = tempfile::tempdir().unwrap();
             let uncertain = outcome.as_ref().is_err_and(|error| error.uncertain);
@@ -2312,7 +2327,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let mut script = Script::new(dir.path(), &[false, false]);
         script.shutdown = Some(Err(crate::error::Error::new(
-            "input",
+            Code::Input,
             "Unknown native operation",
         )));
         assert_eq!(
@@ -2384,7 +2399,7 @@ mod tests {
 
     #[tokio::test]
     async fn no_other_controller_takes_the_helper_until_the_caches_are_gone() {
-        if !crate::transaction_test::isolated(
+        if !crate::test_support::isolated(
             "uninstall::tests::no_other_controller_takes_the_helper_until_the_caches_are_gone",
         ) {
             return;

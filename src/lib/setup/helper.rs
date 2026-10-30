@@ -6,7 +6,7 @@ use super::account_with_uid;
 use crate::{
     acl::Acl,
     digest::file_sha256,
-    error::{Error, Result},
+    error::{Code, Error, Result},
 };
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
@@ -97,7 +97,7 @@ impl Request {
 }
 
 fn problem(message: impl Into<String>) -> Error {
-    Error::new("setup", message)
+    Error::new(Code::Setup, message)
 }
 
 /// A refusal that changed nothing, as the worker reports it: `unchanged`
@@ -231,6 +231,17 @@ impl Layout {
 
     pub fn daemon(&self) -> PathBuf {
         self.root().join(DAEMON)
+    }
+
+    /// The input service's socket, which the configuration names.
+    pub fn input_socket(&self) -> PathBuf {
+        self.root().join(INPUT).join("input.sock")
+    }
+
+    /// The input service's saved stop, beside its socket: present while the
+    /// person has stopped agents.
+    pub fn stop_marker(&self) -> PathBuf {
+        self.input_socket().with_extension("stopped")
     }
 
     /// The managed daemon's socket.
@@ -1359,7 +1370,7 @@ mod tests {
         };
         fs::create_dir_all(layout.home.join("Library/LaunchAgents")).unwrap();
         // A label launchd has never seen: inspection is real and read-only.
-        let label = format!("dev.atlas.test.{}", &crate::control::token()[..12]);
+        let label = format!("dev.atlas.test.{}", &crate::files::token()[..12]);
 
         (dir, layout, label)
     }

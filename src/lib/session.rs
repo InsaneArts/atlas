@@ -1,7 +1,7 @@
 //! What the helper's status proves about its session: the display and the
 //! processes an action is tied to (its [`Epoch`]), whether the helper is the
 //! hidden graphical login it must be, and the doctor report built from it.
-use crate::error::{Error, Result};
+use crate::error::{Code, Error, Result};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use std::time::Duration;
@@ -87,7 +87,7 @@ impl InputEpoch {
     pub fn from_proof(proof: &Value, process_id: u32) -> Result<Self> {
         let invalid = || {
             Error::new(
-                "identity",
+                Code::Identity,
                 "A hidden graphical session with valid geometry is required",
             )
         };
@@ -138,7 +138,7 @@ pub fn validate_uid(uid: u32) -> Result<()> {
 pub(crate) fn validate_target_uid(uid: u32, controller_uid: u32) -> Result<()> {
     if uid < FIRST_USER_UID || uid == controller_uid {
         return Err(Error::new(
-            "identity",
+            Code::Identity,
             "Target must be a distinct helper account with UID >= 501",
         ));
     }
@@ -154,17 +154,28 @@ pub fn require_hidden(value: &Value, uid: u32) -> Result<Session> {
         // A shell that may not reach the helper says so: it is not down.
         if value["code"] == "blocked" {
             return Err(Error::new(
-                "blocked",
+                Code::Blocked,
                 value["error"]
                     .as_str()
                     .unwrap_or("This shell may not connect to the helper"),
             ));
         }
 
+        // A helper turning callers away while it serves others is up, not
+        // silent: the caller may try again.
+        if value["code"] == "busy" {
+            return Err(Error::new(
+                Code::Busy,
+                value["error"]
+                    .as_str()
+                    .unwrap_or("The helper is serving too many requests; try again"),
+            ));
+        }
+
         // A socket served by the wrong account stays an identity violation.
         if value["code"] == "identity" {
             return Err(Error::new(
-                "identity",
+                Code::Identity,
                 value["error"]
                     .as_str()
                     .unwrap_or("The helper socket belongs to another account"),
@@ -172,7 +183,7 @@ pub fn require_hidden(value: &Value, uid: u32) -> Result<Session> {
         }
 
         return Err(Error::new(
-            "transport",
+            Code::Transport,
             "The helper is not answering. Run atlas doctor.",
         ));
     }
@@ -182,14 +193,14 @@ pub fn require_hidden(value: &Value, uid: u32) -> Result<Session> {
         .is_some_and(|other| other != u64::from(uid))
     {
         return Err(Error::new(
-            "identity",
+            Code::Identity,
             "A different account answered than the configured helper. Run atlas doctor.",
         ));
     }
 
     if value["session"]["onConsole"] == true || value["sessionProof"]["onConsole"] == true {
         return Err(Error::new(
-            "on-console",
+            Code::OnConsole,
             "The helper is on screen right now. Atlas works only while it is in the \
              background: switch back to your own account.",
         ));
@@ -197,7 +208,7 @@ pub fn require_hidden(value: &Value, uid: u32) -> Result<Session> {
 
     let invalid = || {
         Error::new(
-            "identity",
+            Code::Identity,
             "The helper's session could not be verified. Run atlas doctor.",
         )
     };
@@ -310,6 +321,34 @@ pub fn input_build_current(status: &Value) -> bool {
     native["build"].is_string()
         && native["build"] == status["installedBuild"]
         && native["replaced"] != true
+}
+
+/// The input-service capability to shut down when its controller asks.
+pub const SHUTDOWN: &str = "shutdown";
+
+/// The input-service capability to keep the person's Stop of agents.
+pub const HOLD: &str = "hold";
+
+/// The input-service capability that checks an agent's target app.
+pub const FOCUS_APP: &str = "focus-app";
+
+/// The input-service capability whose point check counts the Dock as
+/// covering where it takes clicks. A service without it lets a click on a
+/// Dock icon through.
+pub const FOCUS_DOCK: &str = "focus-dock";
+
+/// The input-service capability that checks the window an agent names. A
+/// service without it would refuse the expectation, never ignore it.
+pub const FOCUS_WINDOW: &str = "focus-window";
+
+/// The input-service capability that checks the field an agent names.
+pub const FOCUS_FIELD: &str = "focus-field";
+
+/// Whether an input service's hello lists `name` among its capabilities.
+pub fn has_capability(native: &Value, name: &str) -> bool {
+    native["capabilities"]
+        .as_array()
+        .is_some_and(|capabilities| capabilities.iter().any(|capability| capability == name))
 }
 
 /// [`input_settled`], and running the installed build.
@@ -544,9 +583,13 @@ impl Absence {
 }
 
 /// Whether `status` is a helper that did not answer, which this side may
-/// explain: not refused by this shell, and not answered by another account.
+/// explain: not refused by this shell, not answered by another account, and
+/// not a helper too busy to serve one more caller.
 pub fn silent(status: &Value) -> bool {
-    status["ok"] != true && status["code"] != "blocked" && status["code"] != "identity"
+    status["ok"] != true
+        && !["blocked", "identity", "busy"]
+            .iter()
+            .any(|code| status["code"] == *code)
 }
 
 /// Why the silent helper `uid` is down, if this side can tell. It asks
@@ -859,7 +902,7 @@ fn blockers(classified: &[(Window, Kind)], listed: &[Process]) -> Vec<Blocker> {
 }
 
 /// The loginwindow processes in a process list.
-fn windows_in(listed: &[Process]) -> Vec<Window> {
+fn loginwindows_in(listed: &[Process]) -> Vec<Window> {
     listed
         .iter()
         .filter(|process| process.command.ends_with("/loginwindow"))
@@ -940,7 +983,13 @@ pub fn sessions(helper: Option<u32>) -> Option<Sessions> {
     let listed = processes()?;
     let me = nix::unistd::getuid().as_raw();
     let accounts = |uid| record(uid, Some(uid) == helper);
-    let logins = classify(&windows_in(&listed), accounts, me, helper, console_owner());
+    let logins = classify(
+        &loginwindows_in(&listed),
+        accounts,
+        me,
+        helper,
+        console_owner(),
+    );
     let blockers = blockers(&logins, &listed);
 
     Some(Sessions { logins, blockers })
@@ -995,7 +1044,7 @@ pub fn stale(uid: u32) -> Option<bool> {
 }
 
 fn stale_in(listed: &[Process], uid: u32) -> bool {
-    windows_in(listed)
+    loginwindows_in(listed)
         .iter()
         .any(|window| window.uid == uid && window.age > STALE_AFTER)
         && runs_as(listed, uid, "/Dock")
@@ -1072,12 +1121,24 @@ fn running_for(elapsed: &str) -> Option<std::time::Duration> {
 #[cfg(test)]
 mod tests {
     use super::{
-        Absence, Blocker, Kind, LOGGED_OUT, Process, Record, Window, blockers, classify,
-        desktop_up_in, diagnose, gone_twice, input_build_current, logged_out_in, parse_processes,
-        record_with, require_hidden, running_for, silent, stale_in, validate_target_uid,
+        Absence, Blocker, FOCUS_APP, Kind, LOGGED_OUT, Process, Record, Window, blockers, classify,
+        desktop_up_in, diagnose, gone_twice, has_capability, input_build_current, logged_out_in,
+        parse_processes, record_with, require_hidden, running_for, silent, stale_in,
+        validate_target_uid,
     };
+    use crate::error::Code;
     use serde_json::json;
     use std::time::Duration;
+
+    #[test]
+    fn a_service_lists_only_the_capabilities_it_names() {
+        let native = json!({"capabilities": ["shutdown", "focus-app"]});
+        assert!(has_capability(&native, "shutdown"));
+        assert!(has_capability(&native, FOCUS_APP));
+        assert!(!has_capability(&native, "hold"));
+        assert!(!has_capability(&json!({}), "hold"));
+        assert!(!has_capability(&json!({"capabilities": "hold"}), "hold"));
+    }
 
     fn listed_processes(listing: &str) -> Vec<Process> {
         parse_processes(listing).expect("valid process list")
@@ -1090,7 +1151,7 @@ mod tests {
         ));
         assert!(silent(&json!({"ok": false, "code": "transport"})));
 
-        for code in ["blocked", "identity"] {
+        for code in ["blocked", "identity", "busy"] {
             assert!(!silent(&json!({"ok": false, "code": code})), "{code}");
         }
 
@@ -1178,6 +1239,22 @@ mod tests {
         assert!(gone.get("account").is_none());
     }
 
+    /// A helper too busy for one more caller is busy, never "not answering",
+    /// so nobody is sent to restart a helper that is up.
+    #[test]
+    fn a_helper_turning_callers_away_is_busy_not_silent() {
+        let status = json!({"ok": false, "code": "busy", "error": "The helper is serving too many requests; try again"});
+        let uid = nix::unistd::getuid().as_raw() + 1;
+        let error = require_hidden(&status, uid.max(501)).unwrap_err();
+        assert_eq!(
+            (error.code, error.error.as_str()),
+            (
+                Code::Busy,
+                "The helper is serving too many requests; try again"
+            )
+        );
+    }
+
     /// A shell that may not reach the helper is told so, never that the
     /// helper stopped or that setup must run again.
     #[test]
@@ -1187,7 +1264,7 @@ mod tests {
         let error = require_hidden(&status, uid.max(501)).unwrap_err();
         assert_eq!(
             (error.code, error.error.as_str()),
-            ("blocked", "This shell may not connect")
+            (Code::Blocked, "This shell may not connect")
         );
 
         let report = diagnose(status, uid.max(501));
@@ -1426,7 +1503,7 @@ mod tests {
         let record = record_with(503, false, found, |_| panic!("searched every directory"));
         assert!(record.exists());
 
-        let failed = Err(crate::error::Error::new("setup", "The lookup failed"));
+        let failed = Err(crate::error::Error::new(Code::Setup, "The lookup failed"));
         let record = record_with(503, false, failed, |_| panic!("searched every directory"));
         assert!(
             record.exists(),

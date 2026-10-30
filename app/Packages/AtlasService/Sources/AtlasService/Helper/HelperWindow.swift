@@ -13,6 +13,8 @@ public struct HelperWindow: Decodable, Equatable, Sendable, Identifiable {
   public var width: Double
   /// The window's height, in points.
   public var height: Double
+  /// The window's place among every app's windows, front to back, from 0; nil when the service gives none.
+  public var order: Int?
 
   /// Creates a window.
   ///
@@ -23,19 +25,29 @@ public struct HelperWindow: Decodable, Equatable, Sendable, Identifiable {
   ///   - y: Its top edge, in points.
   ///   - width: Its width, in points.
   ///   - height: Its height, in points.
-  public init(id: Int, title: String? = nil, x: Double = 0, y: Double = 0, width: Double = 0, height: Double = 0) {
+  ///   - order: Its place among every app's windows, front to back.
+  public init(
+    id: Int,
+    title: String? = nil,
+    x: Double = 0,
+    y: Double = 0,
+    width: Double = 0,
+    height: Double = 0,
+    order: Int? = nil
+  ) {
     self.id = id
     self.title = title
     self.x = x
     self.y = y
     self.width = width
     self.height = height
+    self.order = order
   }
 
   /// The fields of one `windows` row.
   enum CodingKeys: String, CodingKey {
     /// Each field by the name the service writes.
-    case id, title, x, y, width, height
+    case id, title, x, y, width, height, order
   }
 
   /// Decodes a window, keeping a safe default for anything missing or of the wrong type.
@@ -51,5 +63,7 @@ public struct HelperWindow: Decodable, Equatable, Sendable, Identifiable {
     y = number(.y)
     width = number(.width)
     height = number(.height)
+    order = (try? container.decodeIfPresent(Int.self, forKey: .order))
+      .flatMap { $0 >= 0 ? $0 : nil }
   }
 }

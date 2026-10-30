@@ -27,7 +27,8 @@ extension PanelPresenter {
   }
 
   /// The one main action for the state, never shown greyed: Give Back in control; Recover… while the helper needs
-  /// the person or isn't ready and recovering would help, or else Open Settings, which shows what the helper needs;
+  /// the person or isn't ready and recovering would help, or else Open Settings, which shows what the helper needs, and
+  /// Open Atlas while recovery waits for a command an agent started;
   /// Switch to the Helper… while logged out, waiting only while a switch runs; and otherwise Open Atlas, which works in
   /// every state, connecting and stopped included, as the main window has a stage of its own for each. Recover… opens
   /// its alert even while a recovery runs from another window, and the alert shows it running.
@@ -40,6 +41,9 @@ extension PanelPresenter {
     switch mode.kind {
     case .control:
       return PanelMainButton(title: PanelWords.giveBack, help: PanelWords.giveBackHelp, event: .giveBack)
+    case .needsYou where snapshot.status.overview.commandRuns:
+      // Recovery waits for a command an agent started to end, as the main window says.
+      return PanelMainButton(title: PanelWords.openAtlas, help: PanelWords.openAtlasHelp, event: .openAtlas)
     case .needsYou, .notReady:
       guard snapshot.status.overview.recoveryHelps else {
         return PanelMainButton(title: PanelWords.openSettings, help: PanelWords.openSettingsHelp, event: .openSettings)
@@ -48,7 +52,7 @@ extension PanelPresenter {
     case .loggedOut:
       return PanelMainButton(
         title: HelperWords.switchItem,
-        isEnabled: !snapshot.running.contains(.switchToHelper),
+        isEnabled: snapshot.isOnConsole && !snapshot.running.contains(.switchToHelper),
         help: HelperWords.switchHelp,
         event: .askSwitch
       )

@@ -1,8 +1,8 @@
 import SwiftUI
 
-/// A screenshot large over the whole window, top row included: a deep shade that takes every click, closing it, and
+/// A screenshot large over the whole window, sidebar and card included: a deep shade that takes every click, closing it, and
 /// fades over 0.2 seconds with nothing blurred under it, the picture zoomed from its tile to the centre between Previous
-/// and Next, and one glass bar at the window's foot with its time and size, Copy, Show in Finder and Close. Closing
+/// and Next, and one solid bar at the window's foot with its time and size, Copy, Show in Finder and Close. Closing
 /// zooms the picture back to its tile. Under Reduce Motion the picture fades in and out in place.
 struct LargeShotLayer: View {
   /// The screenshot shown large; nil shows none.
@@ -11,7 +11,7 @@ struct LargeShotLayer: View {
   let zoom: Namespace.ID
   /// Receives what the person does.
   let send: @MainActor (ViewerEvent) -> Void
-  @Environment(\.accessibilityReduceMotion) private var reduceMotion
+  @Environment(\.motionReduced) private var reduceMotion
 
   /// The shade, the picture and its buttons, over the window.
   var body: some View {
@@ -52,7 +52,7 @@ struct LargeShotLayer: View {
         // resizes them from the tile's to the centre's, rather than moving a picture already full size.
         PictureTile(picture: shot.picture, radius: Radius.large)
           .background(
-            RoundedRectangle(cornerRadius: Radius.large)
+            RoundedRectangle(cornerRadius: Radius.large, style: .continuous)
               .filledOutline(Color.letterbox, border: Color.strokeStrong)
               .elevation(.modal)
           )
@@ -64,6 +64,7 @@ struct LargeShotLayer: View {
           .transition(.opacity)
       }
     }
+    .modifier(ScreenshotFocus(enabled: shot != nil, takesFocus: true, target: .large))
     .animation(Motion.animation(Motion.zoom, reduceMotion: reduceMotion, reduced: Motion.reduced), value: shot == nil)
   }
 
@@ -97,7 +98,7 @@ struct LargeShotLayer: View {
     .animation(ViewerLayout.shotFade, value: shot == nil)
   }
 
-  /// A round glass button stepping to the screenshot before or after.
+  /// A round button stepping to the screenshot before or after, solid and dark over the scrim.
   ///
   /// - Parameters:
   ///   - symbol: Its chevron.
@@ -116,7 +117,9 @@ struct LargeShotLayer: View {
     Button(action: action) {
       Image(systemName: symbol.rawValue)
     }
-    .buttonStyle(.capsule(.glass, size: .regular, outline: .circle))
+    // Solid and dark with a light chevron in either appearance, as every control over a picture is, so it reads over
+    // the scrim and beside the screenshot alike.
+    .buttonStyle(.capsule(.overPicture, size: .regular, outline: .circle))
     .disabled(!enabled)
     .help(help)
     .accessibilityLabel(label)

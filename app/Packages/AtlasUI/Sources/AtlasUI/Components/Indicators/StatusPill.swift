@@ -10,7 +10,7 @@ struct StatusPill: View {
 
   /// What it draws, from its state.
   var body: some View {
-    HStack(spacing: Layout.gap) {
+    HStack(spacing: StatusPillLayout.gap) {
       Circle()
         .fill(Self.foreground(tone))
         .frame(width: IconSize.xxs, height: IconSize.xxs)
@@ -20,7 +20,7 @@ struct StatusPill: View {
         .lineLimit(1)
     }
     .padding(.horizontal, Spacing.s)
-    .frame(height: Layout.height)
+    .frame(height: StatusPillLayout.height)
     .background(
       Capsule()
         .fill(Self.background(tone))
@@ -62,14 +62,6 @@ struct StatusPill: View {
     case .quiet: .fillControl
     }
   }
-}
-
-/// The pill's own measures.
-private enum Layout {
-  /// 20: the pill's height.
-  static let height: CGFloat = 20
-  /// 5: between the dot and the word.
-  static let gap: CGFloat = 5
 }
 
 #if DEBUG

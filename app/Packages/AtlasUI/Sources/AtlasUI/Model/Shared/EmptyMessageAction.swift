@@ -2,7 +2,7 @@
 public struct EmptyMessageAction: Equatable, Sendable {
   /// The button's word, such as "Recover…".
   public var title: String
-  /// Whether it is the one thing to do next, drawn white; else it is drawn as glass.
+  /// Whether it is the one thing to do next, drawn white; else it is drawn as a secondary button.
   public var isPrimary: Bool
 
   /// Creates an empty message's button.

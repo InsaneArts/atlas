@@ -11,7 +11,7 @@ struct AlertCardMessage: View {
   let reserving: String
   /// Why its command was refused; nil until it was.
   let refusal: String?
-  @Environment(\.accessibilityReduceMotion) private var reduceMotion
+  @Environment(\.motionReduced) private var reduceMotion
 
   /// The component drawn from its current state.
   var body: some View {
@@ -45,7 +45,7 @@ struct AlertCardMessage: View {
   private func words(_ text: String) -> some View {
     Text(text)
       .textStyle(.caption)
-      .foregroundStyle(Color.textOnGlass)
+      .foregroundStyle(Color.textOnModal)
       .multilineTextAlignment(.center)
       .fixedSize(horizontal: false, vertical: true)
   }

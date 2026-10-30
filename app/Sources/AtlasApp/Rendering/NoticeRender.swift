@@ -37,7 +37,7 @@ enum NoticeRender: String, CaseIterable, Sendable {
   ///   - appearance: The appearance to draw it in.
   /// - Returns: Whether the PNG was written.
   func draw(to path: String, appearance: NSAppearance?) -> Bool {
-    let alert = NoticeAlert.make(title: title, message: message, switchBack: switchBack)
+    let alert = NoticeAlert.make(title: title, message: message, switchBack: switchBack, onConsole: true)
     alert.window.appearance = appearance
     alert.layout()
     guard let appearance, let frame = alert.window.contentView?.superview,

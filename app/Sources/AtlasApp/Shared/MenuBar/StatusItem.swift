@@ -171,6 +171,14 @@ final class StatusItem {
     CATransaction.commit()
   }
 
+  /// Holds the button highlighted while the panel it opens shows, so the system draws its capsule behind the orbit as
+  /// it does behind an open menu's item, and lets it go once the panel closes.
+  ///
+  /// - Parameter isOpen: Whether the panel shows.
+  func showsPanel(_ isOpen: Bool) {
+    button?.highlight(isOpen)
+  }
+
   /// Lays the badge out for the look shown now: on the button's image, on whole pixels of its display, in the menu
   /// bar's appearance. Only a change of badge moves it, so laying the same one out again adds no animation.
   func showBadge() {

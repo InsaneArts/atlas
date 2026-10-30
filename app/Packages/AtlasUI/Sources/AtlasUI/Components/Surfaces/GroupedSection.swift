@@ -33,7 +33,7 @@ struct GroupedSection<Items: RandomAccessCollection, Row: View>: View where Item
 
   /// The name, the group and the notes.
   var body: some View {
-    VStack(alignment: .leading, spacing: Layout.gap) {
+    VStack(alignment: .leading, spacing: Spacing.sPlus) {
       if !title.isEmpty {
         GroupLabel(text: title)
           .padding(.horizontal, Spacing.m)
@@ -45,12 +45,6 @@ struct GroupedSection<Items: RandomAccessCollection, Row: View>: View where Item
       }
     }
   }
-}
-
-/// A section's own measures.
-private enum Layout {
-  /// 10: between the name, the group and each note.
-  static let gap = Spacing.sPlus
 }
 
 #if DEBUG

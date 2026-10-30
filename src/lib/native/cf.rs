@@ -1,8 +1,10 @@
 //! Typed access to the dictionaries CoreGraphics returns. Records are made
 //! only from the documented CoreGraphics collections fetched here (or from
 //! typed CF values), and every element's type is checked at run time.
-// FFI boundary: casts resting on CoreGraphics' documented collection types.
-#![allow(unsafe_code)]
+#![allow(
+    unsafe_code,
+    reason = "FFI: casts resting on CoreGraphics' documented collection types"
+)]
 pub use objc2_core_foundation::{
     CFArray, CFBoolean, CFDictionary, CFNumber, CFRetained, CFString, CFType, Type,
 };

@@ -1,5 +1,6 @@
 import AtlasService
 import AtlasUI
+import Foundation
 
 /// What the panel's controller holds, as one plain value for ``PanelPresenter``.
 struct PanelSnapshot {
@@ -19,8 +20,14 @@ struct PanelSnapshot {
   var holdingControl = false
   /// The helper's commands running now, from any window, so the buttons and items that start one wait.
   var running: Set<HelperActions.Command> = []
+  /// Whether this process's graphical session is on this Mac's console.
+  var isOnConsole = false
   /// Stop and Resume requests unanswered from any window, so Resume waits.
   var agentRequests = 0
   /// Where Open at Login stands; nil when unknown, as in a render.
   var opensAtLogin: OpenAtLogin.State?
+  /// The time it was taken, which a session's age counts to.
+  var date = Date()
+  /// The icons found for Recent's apps, by their key's text (``AppIconKey/text``).
+  var icons: [String: IconImage] = [:]
 }

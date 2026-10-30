@@ -35,7 +35,18 @@ it was found, `path` (the helper's PATH, `.local/bin` included) or
 `environment` (a profile). `signIn: unknown` means look at the app before
 assuming you are signed in.
 
+### Installing an app
+
+To test installing an app, or an app that must run from Applications,
+`atlas install-app /path/App.app` copies it into the helper's
+`~/Applications`, never over an app already there, and prints its `path`;
+then `atlas open --app NAME`. `atlas cleanup --apply` moves it aside in
+the helper when you are done (`held` gives its path; it is removed 7 days
+later), unless it changed meanwhile (`kept`). Settings and data the app
+wrote in the helper stay. An app you put there any other way is not moved
+for you.
+
 ### Finder windows
 
-Atlas never quits Finder: close Finder windows you opened with
-`atlas key cmd+w`.
+Atlas never quits Finder: close each Finder window you opened with
+`atlas key --app Finder --window N cmd+w`, `N` from `atlas windows`.

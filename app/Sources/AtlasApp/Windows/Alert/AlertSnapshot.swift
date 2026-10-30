@@ -4,6 +4,8 @@ import AtlasService
 struct AlertSnapshot {
   /// Which alert shows.
   var alert: HelperAlert
+  /// Whether this process's session is on this Mac's console.
+  var isOnConsole = false
   /// Whether its command runs now, so its buttons wait.
   var running = false
   /// Why its command did not run, shown in place of its sentence until it is pressed again; nil for none.

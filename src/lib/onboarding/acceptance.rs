@@ -199,7 +199,7 @@ fn accepted_at(path: &Path, pairing: &Pairing) -> bool {
         {
             return None;
         }
-        let mut file = crate::helper_info::open_plain(path)?;
+        let mut file = crate::files::open_plain(path)?;
         let metadata = file.metadata().ok()?;
         if !metadata.is_file()
             || metadata.uid() != pairing.helper_uid
@@ -505,7 +505,7 @@ mod tests {
     }
     fn pairing() -> Pairing {
         Pairing {
-            ticket: "a".repeat(crate::control::TOKEN_BYTES * 2),
+            ticket: "a".repeat(crate::files::TOKEN_BYTES * 2),
             controller_uid: nix::unistd::getuid().as_raw(),
             controller_name: "requester".into(),
             helper_uid: 7001,
@@ -548,12 +548,8 @@ mod tests {
         }
     }
     fn worker(dir: &Path, stage: &str) -> Child {
-        Command::new(std::env::current_exe().unwrap())
-            .args([
-                "--exact",
-                "onboarding::acceptance::tests::an_acceptance_test_worker",
-                "--nocapture",
-            ])
+        crate::test_support::rerun("onboarding::acceptance::tests::an_acceptance_test_worker")
+            .arg("--nocapture")
             .env("ATLAS_ACCEPTANCE_TEST_DIRECTORY", dir)
             .env("ATLAS_ACCEPTANCE_TEST_STAGE", stage)
             .stdin(Stdio::piped())
@@ -574,7 +570,7 @@ mod tests {
 
     #[test]
     fn interrupted_acceptance_keeps_the_requesters_claim_until_its_worker_ends() {
-        if !crate::transaction_test::isolated(
+        if !crate::test_support::isolated(
             "onboarding::acceptance::tests::interrupted_acceptance_keeps_the_requesters_claim_until_its_worker_ends",
         ) {
             return;
@@ -590,19 +586,17 @@ mod tests {
             let dir = tempfile::tempdir().unwrap();
             let controller = Controller::at(7001, &dir.path().join("requester/state"));
             let mut worker = worker(dir.path(), stage);
-            let mut requester = Command::new(std::env::current_exe().unwrap())
-                .args([
-                    "--exact",
-                    "onboarding::acceptance::tests::an_acceptance_test_requester",
-                    "--nocapture",
-                ])
-                .env("ATLAS_ACCEPTANCE_TEST_DIRECTORY", dir.path())
-                .env("ATLAS_ACCEPTANCE_TEST_PID", worker.id().to_string())
-                .stdin(Stdio::from(worker.stdout.take().unwrap()))
-                .stdout(Stdio::from(worker.stdin.take().unwrap()))
-                .stderr(Stdio::null())
-                .spawn()
-                .unwrap();
+            let mut requester = crate::test_support::rerun(
+                "onboarding::acceptance::tests::an_acceptance_test_requester",
+            )
+            .arg("--nocapture")
+            .env("ATLAS_ACCEPTANCE_TEST_DIRECTORY", dir.path())
+            .env("ATLAS_ACCEPTANCE_TEST_PID", worker.id().to_string())
+            .stdin(Stdio::from(worker.stdout.take().unwrap()))
+            .stdout(Stdio::from(worker.stdin.take().unwrap()))
+            .stderr(Stdio::null())
+            .spawn()
+            .unwrap();
             let reached = paused(dir.path());
             let before = controller.pending().unwrap();
             let _ = requester.kill();
@@ -633,7 +627,7 @@ mod tests {
 
     #[test]
     fn acceptance_excludes_competing_teardown_through_completion_and_rollback() {
-        if !crate::transaction_test::isolated(
+        if !crate::test_support::isolated(
             "onboarding::acceptance::tests::acceptance_excludes_competing_teardown_through_completion_and_rollback",
         ) {
             return;
@@ -873,7 +867,7 @@ mod tests {
 
     #[test]
     fn observing_a_matching_receipt_repairs_a_missing_helper_job_without_authorization() {
-        if !crate::transaction_test::isolated(
+        if !crate::test_support::isolated(
             "onboarding::acceptance::tests::observing_a_matching_receipt_repairs_a_missing_helper_job_without_authorization",
         ) {
             return;
@@ -884,7 +878,7 @@ mod tests {
 
     #[test]
     fn observing_a_matching_receipt_repairs_a_stopped_helper_job_without_authorization() {
-        if !crate::transaction_test::isolated(
+        if !crate::test_support::isolated(
             "onboarding::acceptance::tests::observing_a_matching_receipt_repairs_a_stopped_helper_job_without_authorization",
         ) {
             return;
@@ -895,7 +889,7 @@ mod tests {
 
     #[test]
     fn observing_a_matching_receipt_retries_when_the_helper_cannot_report_its_job() {
-        if !crate::transaction_test::isolated(
+        if !crate::test_support::isolated(
             "onboarding::acceptance::tests::observing_a_matching_receipt_retries_when_the_helper_cannot_report_its_job",
         ) {
             return;
@@ -941,7 +935,7 @@ mod tests {
 
     #[test]
     fn acceptance_refuses_a_stale_ticket_before_dispatching_setup() {
-        if !crate::transaction_test::isolated(
+        if !crate::test_support::isolated(
             "onboarding::acceptance::tests::acceptance_refuses_a_stale_ticket_before_dispatching_setup",
         ) {
             return;

@@ -91,6 +91,15 @@ pub fn count(n: usize, noun: &str) -> String {
     }
 }
 
+/// `a`, `a and b`, `a, b and c`.
+pub fn listed(parts: &[String]) -> String {
+    match parts {
+        [] => String::new(),
+        [only] => only.clone(),
+        [rest @ .., last] => format!("{} and {last}", rest.join(", ")),
+    }
+}
+
 /// Width × height, without fractional zeros: `2560 × 1440`.
 pub fn dimensions(width: f64, height: f64) -> String {
     format!("{} × {}", number(width), number(height))
@@ -115,6 +124,16 @@ pub fn duration(ms: f64) -> String {
         let seconds = (ms / 1000.0).round() as u64;
         format!("{}m {:02}s", seconds / 60, seconds % 60)
     }
+}
+
+/// Whether two names people or apps give things name the same thing:
+/// compared case-insensitively, so `textedit` and `TextEdit` (or `ÉDITEUR`
+/// and `Éditeur`) agree. App names and element names are both matched so.
+pub(crate) fn same_text(a: &str, b: &str) -> bool {
+    a == b
+        || a.chars()
+            .flat_map(char::to_lowercase)
+            .eq(b.chars().flat_map(char::to_lowercase))
 }
 
 #[cfg(test)]

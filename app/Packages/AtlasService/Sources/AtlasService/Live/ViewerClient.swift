@@ -190,14 +190,23 @@ public struct ViewerClient: ViewerService {
   /// Posts to `control/hold`.
   ///
   /// - Parameter stopped: Whether agents stop.
+  /// - Returns: The reply as a Stop's outcome; one with nothing left when the reply says nothing of it.
   /// - Throws: ``ServiceError`` when the service refuses.
-  public func setStopped(_ stopped: Bool) async throws {
+  @discardableResult
+  public func setStopped(_ stopped: Bool) async throws -> StopOutcome {
     /// The request: whether agents stop.
     struct Body: Encodable {
       /// Whether agents stop.
       let on: Bool
     }
-    _ = try await post("control/hold", Body(on: stopped))
+    let data = try await post("control/hold", Body(on: stopped))
+    guard let outcome = Self.decoded(StopOutcome.self, from: data) else {
+      // A reply that does not read says no more than that agents are held as asked.
+      var asked = StopOutcome()
+      asked.held = stopped
+      return asked
+    }
+    return outcome
   }
 
   /// Posts to `input`.

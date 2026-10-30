@@ -12,7 +12,7 @@ struct HelperReadyRow: View {
   let buttons: SettingsHelperButtons
   /// Asks to recover the helper.
   let recover: @MainActor () -> Void
-  @Environment(\.accessibilityReduceMotion) private var reduceMotion
+  @Environment(\.motionReduced) private var reduceMotion
 
   /// What it draws, from its state.
   var body: some View {
@@ -26,7 +26,7 @@ struct HelperReadyRow: View {
     ) {
       if row.offersRecover {
         Button("Recover…", action: recover)
-          .buttonStyle(.capsule(.glass, size: .mini))
+          .buttonStyle(.capsule(.secondary, size: .mini))
           .disabled(!buttons.canRecover)
           .help("Check the helper and start its mouse and keyboard again")
       }

@@ -30,10 +30,10 @@ extension ViewerClient {
 
   /// Reads `apps.json`.
   ///
-  /// - Returns: The apps, front to back, every missing field at its safe default.
+  /// - Returns: The apps, front to back, and the sessions that opened them, every missing field at its safe default.
   /// - Throws: ``ServiceError`` with the service's error, such as a 503 when it cannot reach the helper, or when it
   ///   cannot be read.
-  public func apps() async throws(ServiceError) -> [HelperApp] {
+  public func apps() async throws(ServiceError) -> HelperAppList {
     let route = base.appendingPathComponent("apps.json")
     let (data, response) = try await fetched(request(to: route), limit: Self.listLimit)
     return try await Self.decodedReply { () throws(ServiceError) in try Self.apps(data, response: response) }
@@ -47,6 +47,17 @@ extension ViewerClient {
     let route = base.appendingPathComponent("screenshots.json")
     let (data, response) = try await fetched(request(to: route), limit: Self.listLimit)
     return try await Self.decodedReply { () throws(ServiceError) in try Self.screenshots(data, response: response) }
+  }
+
+  /// Reads `sessions.json`.
+  ///
+  /// - Returns: The sessions, newest last seen first, every missing field at its safe default.
+  /// - Throws: ``ServiceError/notOffered`` when an older service answers 404; else ``ServiceError`` with the service's
+  ///   error, or when it cannot be read.
+  public func sessions() async throws(ServiceError) -> HostSessionList {
+    let route = base.appendingPathComponent("sessions.json")
+    let (data, response) = try await fetched(request(to: route), limit: Self.listLimit)
+    return try await Self.decodedReply { () throws(ServiceError) in try Self.sessions(data, response: response) }
   }
 
   /// Decodes a reply off the caller's actor.
@@ -108,11 +119,11 @@ extension ViewerClient {
   /// - Parameters:
   ///   - data: The reply's body.
   ///   - response: The reply's response.
-  /// - Returns: The apps, front to back, every missing field at its safe default.
+  /// - Returns: The apps, front to back, and the sessions that opened them, every missing field at its safe default.
   /// - Throws: ``ServiceError`` with the service's error for any reply that is not a 200, or when its body is not an
   ///   object.
-  static func apps(_ data: Data, response: HTTPURLResponse) throws(ServiceError) -> [HelperApp] {
-    try listed(HelperAppsReply.self, data, response: response, fallback: "No apps").apps
+  static func apps(_ data: Data, response: HTTPURLResponse) throws(ServiceError) -> HelperAppList {
+    try listed(HelperAppList.self, data, response: response, fallback: "No apps")
   }
 
   /// A `screenshots.json` reply read: only a 200 carries screenshots.
@@ -125,6 +136,19 @@ extension ViewerClient {
   ///   object.
   static func screenshots(_ data: Data, response: HTTPURLResponse) throws(ServiceError) -> ScreenshotList {
     try listed(ScreenshotList.self, data, response: response, fallback: "No screenshots")
+  }
+
+  /// A `sessions.json` reply read: only a 200 carries sessions, and a 404 says the service does not offer them.
+  ///
+  /// - Parameters:
+  ///   - data: The reply's body.
+  ///   - response: The reply's response.
+  /// - Returns: The sessions, every missing field at its safe default.
+  /// - Throws: ``ServiceError/notOffered`` for a 404; ``ServiceError`` with the service's error for any other reply
+  ///   that is not a 200, or when its body is not an object.
+  static func sessions(_ data: Data, response: HTTPURLResponse) throws(ServiceError) -> HostSessionList {
+    guard response.statusCode != 404 else { throw .notOffered }
+    return try listed(HostSessionList.self, data, response: response, fallback: "No sessions")
   }
 
   /// A JSON reply decoded as `type` when the service answered with a 200, else the service's error.

@@ -99,6 +99,7 @@ final class StandInParts: WindowParts {
     return AlertController(
       alert: alert,
       actions: HelperActions(
+        console: SessionConsole(read: { true }),
         commands: ScriptedCommands([:]),
         service: service,
         barrier: ControlBarrier(service: service, clock: clock)

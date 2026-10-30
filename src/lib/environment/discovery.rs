@@ -2,8 +2,8 @@
 //! or sources a shell startup file. Presence is not application compatibility.
 use super::{SHARED_BIN, helper_search_path, variable_name as variable};
 use crate::{
-    client::Client,
-    error::{Error, Result},
+    client::{Client, RUN_TIMEOUT, Run},
+    error::{Code, Error, Result},
     session::require_hidden,
     transport::{OutputError, run_output},
 };
@@ -38,6 +38,71 @@ for item do
 done
 "#;
 
+/// The two fixed scripts discovery runs in the helper. Both only test paths
+/// or look up variable names, so they take no control and leave nothing
+/// pending when their reply is lost.
+#[derive(Clone, Copy)]
+enum Probe {
+    /// Whether each path is a file or folder the helper can read, write or run.
+    Paths,
+    /// Whether each variable is defined in the helper's inherited environment.
+    Variables,
+}
+
+impl Probe {
+    fn script(self) -> &'static str {
+        match self {
+            Probe::Paths => PATH_PROBE,
+            Probe::Variables => ENV_PROBE,
+        }
+    }
+
+    /// Run this probe over `args` in the helper: one output line per
+    /// argument.
+    async fn run(self, client: &Client, args: &[String]) -> Result<Vec<String>> {
+        if args.is_empty() {
+            return Ok(Vec::new());
+        }
+
+        let mut argv = vec![
+            "/bin/sh".into(),
+            "-c".into(),
+            self.script().into(),
+            "sh".into(),
+        ];
+        argv.extend_from_slice(args);
+
+        let reply = client.run(argv, Run::inspect().within(RUN_TIMEOUT)).await?;
+        if reply["exitCode"] != 0 || reply["timedOut"] == true || !reply["signal"].is_null() {
+            return Err(Error::new(
+                Code::Environment,
+                "Helper discovery did not complete",
+            ));
+        }
+
+        let output = run_output(&reply, 16384).map_err(|error| match error {
+            OutputError::Malformed => invalid(),
+            OutputError::Oversized => {
+                Error::new(Code::Environment, "Discovery output exceeded its limit")
+            }
+        })?;
+
+        let lines = String::from_utf8(output)
+            .map_err(|_| invalid())?
+            .lines()
+            .map(str::to_owned)
+            .collect::<Vec<_>>();
+        if lines.len() != args.len() {
+            return Err(Error::new(
+                Code::Environment,
+                "Incomplete discovery probe response",
+            ));
+        }
+
+        Ok(lines)
+    }
+}
+
 /// The most of each kind one inspection may select.
 const SELECTION_LIMIT: usize = 16;
 /// Where macOS keeps its own apps that are not in /System/Applications.
@@ -45,7 +110,7 @@ const CORE_SERVICES: &str = "/System/Library/CoreServices";
 
 fn invalid() -> Error {
     Error::new(
-        "environment",
+        Code::Environment,
         "The helper's discovery answer could not be read; run atlas doctor",
     )
 }
@@ -58,7 +123,7 @@ fn selection(
     environment: &[String],
     references: &[impl AsRef<Path>],
 ) -> Result<()> {
-    let refuse = |message: String| Err(Error::new("environment", message));
+    let refuse = |message: String| Err(Error::new(Code::Environment, message));
 
     if tools.len() + apps.len() + environment.len() + references.len() == 0 {
         return refuse("Select at least one tool, app, variable or reference path".into());
@@ -154,7 +219,7 @@ impl Access {
     fn from_flags(flags: &str) -> Result<Self> {
         if !flags.starts_with('-') || flags.bytes().skip(1).any(|c| !b"fdrwx".contains(&c)) {
             return Err(Error::new(
-                "environment",
+                Code::Environment,
                 "Invalid discovery probe response",
             ));
         }
@@ -184,42 +249,6 @@ fn access(path: &Path) -> Access {
     }
 }
 
-async fn probe(client: &Client, script: &str, args: &[String]) -> Result<Vec<String>> {
-    if args.is_empty() {
-        return Ok(Vec::new());
-    }
-
-    let mut argv = vec!["/bin/sh".into(), "-c".into(), script.into(), "sh".into()];
-    argv.extend_from_slice(args);
-
-    let reply = client.run(argv).await?;
-    if reply["exitCode"] != 0 || reply["timedOut"] == true || !reply["signal"].is_null() {
-        return Err(Error::new(
-            "environment",
-            "Helper discovery did not complete",
-        ));
-    }
-
-    let output = run_output(&reply, 16384).map_err(|error| match error {
-        OutputError::Malformed => invalid(),
-        OutputError::Oversized => Error::new("environment", "Discovery output exceeded its limit"),
-    })?;
-
-    let lines = String::from_utf8(output)
-        .map_err(|_| invalid())?
-        .lines()
-        .map(str::to_owned)
-        .collect::<Vec<_>>();
-    if lines.len() != args.len() {
-        return Err(Error::new(
-            "environment",
-            "Incomplete discovery probe response",
-        ));
-    }
-
-    Ok(lines)
-}
-
 /// Inspect selected names and paths without installing, launching or signing in.
 pub async fn discover(
     client: &Client,
@@ -232,7 +261,12 @@ pub async fn discover(
 
     let status = client.status().await;
     let session = require_hidden(&status, client.config.helper_uid)?;
-    let home_unknown = || Error::new("identity", "The helper home is unknown; run atlas doctor");
+    let home_unknown = || {
+        Error::new(
+            Code::Identity,
+            "The helper home is unknown; run atlas doctor",
+        )
+    };
     let helper_home = PathBuf::from(status["user"]["home"].as_str().ok_or_else(home_unknown)?);
     if !helper_home.is_absolute() {
         return Err(home_unknown());
@@ -317,7 +351,8 @@ pub async fn discover(
         .map(|p| p.to_str().map(str::to_owned).ok_or_else(invalid))
         .collect::<Result<Vec<_>>>()?;
 
-    let observed = probe(client, PATH_PROBE, &args)
+    let observed = Probe::Paths
+        .run(client, &args)
         .await?
         .iter()
         .map(|s| Access::from_flags(s))
@@ -344,14 +379,14 @@ pub async fn discover(
         })
         .collect();
 
-    let defined = probe(client, ENV_PROBE, environment).await?;
+    let defined = Probe::Variables.run(client, environment).await?;
     if defined.iter().any(|s| s != "defined" && s != "undefined") {
         return Err(invalid());
     }
 
     if client.identity().await?.epoch != session.epoch {
         return Err(Error::new(
-            "identity",
+            Code::Identity,
             "Helper changed during discovery; repeat the inspection",
         ));
     }
@@ -394,7 +429,194 @@ pub async fn discover(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::test_support::{Helper, UID, completed};
     use std::os::unix::fs::PermissionsExt;
+
+    /// The arguments a probe was given, after its fixed script.
+    fn arguments(request: &Value) -> &[Value] {
+        &request["argv"].as_array().unwrap()[4..]
+    }
+
+    /// Answer a probe as a helper where every path is a runnable file and
+    /// every variable is defined.
+    fn found(request: &Value) -> Option<Value> {
+        let line = if request["argv"][2] == PATH_PROBE {
+            "-frx\n"
+        } else {
+            "defined\n"
+        };
+
+        Some(completed(&line.repeat(arguments(request).len())))
+    }
+
+    /// Discover one tool, one variable and one reference path.
+    async fn discovered(client: &Client) -> Result<Value> {
+        discover(
+            client,
+            &["cat".into()],
+            &[],
+            &["HOME".into()],
+            &[PathBuf::from("/Users/Shared")],
+        )
+        .await
+    }
+
+    #[tokio::test]
+    async fn discovery_works_while_another_controller_holds_the_lock() {
+        let directory = tempfile::tempdir().unwrap();
+        let (client, helper) = Helper::client(directory.path(), UID);
+        let _held = client.controller.acquire(false).unwrap();
+
+        let report = helper.serve(discovered(&client), found).await.unwrap();
+        assert_eq!(report["ok"], true);
+        assert_eq!(report["selections"][0]["available"], true);
+        assert_eq!(report["environment"][0]["helperInheritedDefined"], true);
+        assert!(client.controller.pending().unwrap().is_empty());
+    }
+
+    #[tokio::test]
+    async fn discovery_works_while_an_earlier_outcome_is_unknown() {
+        let directory = tempfile::tempdir().unwrap();
+        let (client, helper) = Helper::client(directory.path(), UID);
+        let unknown = client.controller.quarantine().unwrap();
+        let generation = unknown.generation().to_owned();
+        drop(unknown);
+
+        let report = helper.serve(discovered(&client), found).await.unwrap();
+        assert_eq!(report["ok"], true);
+        assert_eq!(client.controller.pending().unwrap(), [generation]);
+    }
+
+    #[tokio::test]
+    async fn a_lost_discovery_reply_leaves_no_marker() {
+        let directory = tempfile::tempdir().unwrap();
+        let (client, helper) = Helper::client(directory.path(), UID);
+
+        let error = helper
+            .serve(discovered(&client), |_| None)
+            .await
+            .unwrap_err();
+        assert!(!error.uncertain, "{error:?}");
+        assert!(client.controller.pending().unwrap().is_empty());
+        assert!(client.controller.acquire(false).is_ok());
+    }
+
+    #[tokio::test]
+    async fn a_discovery_probe_that_times_out_leaves_no_marker() {
+        let directory = tempfile::tempdir().unwrap();
+        let (client, helper) = Helper::client(directory.path(), UID);
+        let timed_out =
+            json!({"ok": true, "exitCode": null, "timedOut": true, "signal": "SIGKILL"});
+
+        let error = helper
+            .serve(discovered(&client), |_| Some(timed_out.clone()))
+            .await
+            .unwrap_err();
+        assert_eq!(error.code, "environment");
+        assert!(!error.uncertain);
+        assert!(client.controller.pending().unwrap().is_empty());
+    }
+
+    #[tokio::test]
+    async fn a_helper_that_changes_during_discovery_still_fails_it() {
+        let directory = tempfile::tempdir().unwrap();
+        let (client, helper) = Helper::client(directory.path(), UID);
+        let helper = helper.moving_after(1);
+
+        let error = helper.serve(discovered(&client), found).await.unwrap_err();
+        assert_eq!(error.code, "identity");
+        assert_eq!(
+            error.error,
+            "Helper changed during discovery; repeat the inspection"
+        );
+        assert!(client.controller.pending().unwrap().is_empty());
+    }
+
+    #[tokio::test]
+    async fn bad_discovery_output_still_fails_it() {
+        let directory = tempfile::tempdir().unwrap();
+        let (client, helper) = Helper::client(directory.path(), UID);
+
+        let unknown_flag =
+            |request: &Value| Some(completed(&"-q\n".repeat(arguments(request).len())));
+        let error = helper
+            .serve(discovered(&client), unknown_flag)
+            .await
+            .unwrap_err();
+        assert_eq!(error.code, "environment");
+        assert_eq!(error.error, "Invalid discovery probe response");
+
+        let short =
+            |request: &Value| Some(completed(&"-frx\n".repeat(arguments(request).len() - 1)));
+        let error = helper.serve(discovered(&client), short).await.unwrap_err();
+        assert_eq!(error.code, "environment");
+        assert_eq!(error.error, "Incomplete discovery probe response");
+    }
+
+    #[tokio::test]
+    async fn a_helper_on_screen_refuses_discovery_with_its_own_code() {
+        let directory = tempfile::tempdir().unwrap();
+        let (client, helper) = Helper::client(directory.path(), UID);
+        let on_screen = json!({"ok": false, "code": "on-console",
+            "error": "The helper is on screen", "uncertain": false});
+
+        let error = helper
+            .serve(discovered(&client), |_| Some(on_screen.clone()))
+            .await
+            .unwrap_err();
+        assert_eq!(error.code, "on-console");
+        assert!(!error.uncertain);
+    }
+
+    #[tokio::test]
+    async fn discovery_writes_no_activity_row() {
+        let directory = tempfile::tempdir().unwrap();
+        let (client, helper) = Helper::client(directory.path(), UID);
+
+        helper.serve(discovered(&client), found).await.unwrap();
+        assert!(
+            !client
+                .config
+                .output_dir
+                .join(crate::activity_log::FILE)
+                .exists()
+        );
+    }
+
+    #[tokio::test]
+    async fn discovery_runs_only_its_two_fixed_scripts() {
+        let directory = tempfile::tempdir().unwrap();
+        let (client, helper) = Helper::client(directory.path(), UID);
+        let mut heard = Vec::new();
+
+        helper
+            .serve(discovered(&client), |request| {
+                heard.push(request.clone());
+                found(request)
+            })
+            .await
+            .unwrap();
+
+        let [paths, variables] = heard.as_slice() else {
+            panic!("discovery runs one path probe and one variable probe: {heard:?}");
+        };
+        for (request, script) in [(paths, PATH_PROBE), (variables, ENV_PROBE)] {
+            let fixed = &request["argv"].as_array().unwrap()[..4];
+            assert_eq!(
+                fixed,
+                [json!("/bin/sh"), json!("-c"), json!(script), json!("sh")]
+            );
+        }
+
+        let paths = arguments(paths);
+        assert!(
+            paths[..paths.len() - 1]
+                .iter()
+                .all(|path| { path.as_str().is_some_and(|path| path.ends_with("/cat")) })
+        );
+        assert_eq!(paths.last().unwrap(), "/Users/Shared");
+        assert_eq!(arguments(variables), [json!("HOME")]);
+    }
 
     #[test]
     fn inspection_does_not_execute_a_selected_program() {

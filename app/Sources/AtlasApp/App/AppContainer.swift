@@ -26,6 +26,9 @@ final class AppContainer {
   let settingsPreferences: SettingsPreferences
   /// Opens and closes every window.
   let coordinator: WindowCoordinator
+  /// The app's one icon repository and disk store, shared by the panel and every main window, including reopened
+  /// windows. It owns the concurrency limit, coalesced requests and bounded decoded cache.
+  let appIcons: AppIcons
   /// The helper's own commands, which the panel and the main window share, so one of each runs at a time; made at
   /// launch.
   private(set) var actions: HelperActions?
@@ -52,6 +55,7 @@ final class AppContainer {
     let viewerPreferences = ViewerPreferences.stored(in: UserDefaults.standard)
     self.viewerPreferences = viewerPreferences
     settingsPreferences = .stored(in: UserDefaults.standard)
+    appIcons = .live(home: FileManager.default.homeDirectoryForCurrentUser)
     coordinator = WindowCoordinator(windows: .live, viewerPreferences: viewerPreferences)
     coordinator.parts = self
   }

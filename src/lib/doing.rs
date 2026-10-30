@@ -2,7 +2,7 @@
 //! surface says it: a verb, the app it acted in and the control it named.
 //! Typed text, argv, coordinates, output, file names and window titles are
 //! never kept.
-use serde_json::{Map, Value, json};
+use crate::{activity_log::Row, error::Code};
 
 /// The most characters an app name or element label keeps.
 const NAME_LIMIT: usize = 40;
@@ -10,6 +10,16 @@ const NAME_LIMIT: usize = 40;
 const CHORD_LIMIT: usize = 3;
 /// How many characters of a random token tell one command's rows apart.
 const COMMAND_ID: usize = 12;
+/// The most characters a bundle identifier keeps; a longer one is no
+/// identifier.
+const BUNDLE_ID_LIMIT: usize = 155;
+/// The signs of the modifiers a key press's label shows before its key,
+/// each a keycap of its own.
+const MODIFIER_SIGNS: [char; 4] = ['⌃', '⌥', '⇧', '⌘'];
+/// fn's sign in a label: a word, set apart from the key it holds.
+const FN_SIGN: &str = "fn";
+/// Keys whose name is two words, kept as one keycap.
+const TWO_WORD_KEYS: [&str; 2] = ["Page Up", "Page Down"];
 /// Roles whose name is a control's own caption, such as a button's title.
 /// Others may show a document's data: menu items name windows and recent
 /// files, tabs and radio buttons name pages, pop-ups name folders.
@@ -19,6 +29,11 @@ const CONTROL_ROLES: [&str; 4] = [
     "AXMenuBarItem",
     "AXDisclosureTriangle",
 ];
+/// Roles of a field whose name is its own caption, such as "Email" or
+/// "Search": a typed row names the field by it once the helper confirmed
+/// the text went there. A text area's name may be a document's, and so is
+/// left out, as is every other role.
+pub(crate) const FIELD_ROLES: [&str; 3] = ["AXTextField", "AXSearchField", "AXComboBox"];
 /// Verbs worded as their operation is.
 const PLAIN_VERBS: [&str; 2] = ["run", "screenshot"];
 /// Modifier names as `atlas key` takes them, in the order macOS menus show
@@ -42,19 +57,23 @@ pub struct Doing {
     /// Whether the label names what was asked for whatever happened (a
     /// shortcut), not a name that matched something (a control's caption).
     asked: bool,
+    /// The field text was meant for, by its name; a row names it only once
+    /// the helper confirmed the text went to a field of [`FIELD_ROLES`].
+    field: Option<String>,
     command: String,
 }
 
 impl Doing {
     /// A command doing `verb`, naming nothing yet.
     pub fn new(verb: &'static str) -> Self {
-        let mut command = crate::control::token();
+        let mut command = crate::files::token();
         command.truncate(COMMAND_ID);
         Self {
             verb,
             app: None,
             label: None,
             asked: false,
+            field: None,
             command,
         }
     }
@@ -70,6 +89,15 @@ impl Doing {
         self.label = label
             .map(str::trim)
             .filter(|label| !label.is_empty())
+            .map(bounded);
+        self
+    }
+
+    /// The field it typed into, by the name the helper checks it has.
+    pub fn field(mut self, field: Option<&str>) -> Self {
+        self.field = field
+            .map(str::trim)
+            .filter(|field| !field.is_empty())
             .map(bounded);
         self
     }
@@ -122,17 +150,36 @@ impl Doing {
         }
     }
 
-    /// The row's fields for these facts. A control is named only when the
-    /// action worked: a name that matched nothing may be anything. A
-    /// shortcut is named either way.
-    pub fn fields(&self, row: &mut Map<String, Value>, ok: bool) {
-        row.insert("verb".into(), json!(self.verb));
-        row.insert("command".into(), json!(self.command));
+    /// What it does, as rows name it: "click", "type", "screenshot".
+    pub fn verb(&self) -> &'static str {
+        self.verb
+    }
+
+    /// The safe app name this command keeps, when it names one.
+    pub(crate) fn app_name(&self) -> Option<&str> {
+        self.app.as_deref()
+    }
+
+    /// Fill in `row`'s fields for these facts. A control is named only
+    /// when the action worked: a name that matched nothing may be
+    /// anything. A shortcut is named either way. The field typed text went
+    /// to is named only when it worked and the helper, checking that field
+    /// had keyboard focus, found it of `field_role`, one of [`FIELD_ROLES`].
+    pub fn fill(&self, row: &mut Row, ok: bool, field_role: Option<&str>) {
+        row.verb = Some(self.verb.to_owned());
+        row.command = Some(self.command.clone());
         if let Some(app) = &self.app {
-            row.insert("app".into(), json!(app));
+            row.app = Some(app.clone());
         }
         if let Some(label) = self.label.as_ref().filter(|_| ok || self.asked) {
-            row.insert("label".into(), json!(label));
+            row.label = Some(label.clone());
+        }
+        if ok
+            && self.verb == "type"
+            && let Some(field) = &self.field
+            && field_role.is_some_and(|role| FIELD_ROLES.contains(&role))
+        {
+            row.label = Some(field.clone());
         }
     }
 }
@@ -155,6 +202,55 @@ fn app_name(app: &str) -> Option<&str> {
     };
 
     (!name.is_empty()).then_some(name)
+}
+
+/// `text` as an app's bundle identifier (`com.apple.TextEdit`), when it is
+/// one: 1 to [`BUNDLE_ID_LIMIT`] letters, digits, dots and hyphens, with
+/// no empty part. Anything else, free text or a path, is none.
+pub(crate) fn bundle_id(text: &str) -> Option<String> {
+    let identifier = !text.is_empty()
+        && text.len() <= BUNDLE_ID_LIMIT
+        && text
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'-'))
+        && text.split('.').all(|part| !part.is_empty());
+
+    identifier.then(|| text.to_owned())
+}
+
+/// A key press's label (`⇧⌘Z ⌃⇥`, `fn F5`, `Page Up`) as keycaps, one list
+/// per chord: each modifier's sign, then its key.
+pub fn chords(label: &str) -> Vec<Vec<String>> {
+    let mut words = label.split(' ').filter(|word| !word.is_empty()).peekable();
+    let mut chords = Vec::new();
+
+    while let Some(word) = words.next() {
+        let mut caps = Vec::new();
+        let mut word = word.to_owned();
+        if word == FN_SIGN {
+            caps.push(word);
+            let Some(next) = words.next() else {
+                chords.push(caps);
+                break;
+            };
+            word = next.to_owned();
+        }
+        if let Some(next) = words.peek()
+            && TWO_WORD_KEYS.contains(&format!("{word} {next}").as_str())
+        {
+            word = format!("{word} {next}");
+            words.next();
+        }
+
+        let key = word.trim_start_matches(MODIFIER_SIGNS);
+        caps.extend(word[..word.len() - key.len()].chars().map(String::from));
+        if !key.is_empty() {
+            caps.push(key.to_owned());
+        }
+        chords.push(caps);
+    }
+
+    chords
 }
 
 /// At most [`NAME_LIMIT`] characters, cut with an ellipsis.
@@ -251,14 +347,14 @@ fn key_name(key: &str) -> String {
 
 /// What a recorded row did, after who did it ("clicked Save in TextEdit"),
 /// or what could not be done.
-pub fn says(row: &Value) -> String {
-    if row["started"] == true && row["ok"].is_null() {
+pub fn says(row: &Row) -> String {
+    if row.under_way() {
         return doing(row);
     }
 
-    let ok = row["ok"] == true;
-    let app = row["app"].as_str();
-    let label = row["label"].as_str();
+    let ok = row.worked();
+    let app = row.app.as_deref();
+    let label = row.label.as_deref();
     let within = |text: &str| match app {
         Some(app) => format!("{text} in {app}"),
         None => text.to_owned(),
@@ -268,7 +364,7 @@ pub fn says(row: &Value) -> String {
         None => within(verb),
     };
 
-    let (done, failed) = match row["verb"].as_str() {
+    let (done, failed) = match row.verb.as_deref() {
         Some(verb @ ("click" | "double-click" | "right-click")) => {
             let past = match verb {
                 "click" => "clicked",
@@ -277,11 +373,17 @@ pub fn says(row: &Value) -> String {
             };
             (on_label(past), format!("couldn't {}", on_label(verb)))
         }
-        Some("type") => (
-            app.map_or("typed text".into(), |app| format!("typed in {app}")),
-            within("couldn't type"),
-        ),
-        Some("key") => match (label, row["actionCount"].as_u64()) {
+        Some("type") => match label {
+            Some(field) => (
+                within(&format!("typed into {field}")),
+                within(&format!("couldn't type into {field}")),
+            ),
+            None => (
+                app.map_or("typed text".into(), |app| format!("typed in {app}")),
+                within("couldn't type"),
+            ),
+        },
+        Some("key") => match (label, row.action_count) {
             (Some(label), _) => (
                 within(&format!("pressed {label}")),
                 within(&format!("couldn't press {label}")),
@@ -304,29 +406,90 @@ pub fn says(row: &Value) -> String {
             Some(app) => (format!("closed {app}"), format!("couldn't close {app}")),
             None => ("closed the apps".into(), "couldn't close the apps".into()),
         },
+        Some("install") => match app {
+            Some(app) => (
+                format!("installed {app}"),
+                format!("couldn't install {app}"),
+            ),
+            None => ("installed an app".into(), "couldn't install an app".into()),
+        },
+        Some("cleanup") => (
+            "cleaned up the task's work".into(),
+            "couldn't clean up the task's work".into(),
+        ),
+        Some("job-start") => (
+            "started a background job".into(),
+            "couldn't start a background job".into(),
+        ),
+        Some("job-stop") => (
+            "stopped a background job".into(),
+            "couldn't stop a background job".into(),
+        ),
+        Some("collect") => match row.count {
+            Some(count) if count > 0 => (
+                format!(
+                    "collected {}",
+                    crate::ui::text::count(count as usize, "file")
+                ),
+                format!(
+                    "collected {}, not all asked for",
+                    crate::ui::text::count(count as usize, "file")
+                ),
+            ),
+            _ => ("collected no files".into(), "couldn't collect files".into()),
+        },
         // Verbs worded as their operation is, and rows that say only that
         // (from older builds, raw commands, or verbs this build lacks).
         verb => {
             let plain = verb.filter(|verb| PLAIN_VERBS.contains(verb));
             operation(
-                plain.or(row["operation"].as_str()),
-                row["actionCount"].as_u64(),
+                plain.or(row.operation.as_ref().map(|op| op.as_str())),
+                row.action_count,
             )
         }
     };
 
-    if ok { done } else { failed }
+    if ok {
+        done
+    } else if row.coded(Code::FocusChanged) {
+        not_sent(row, &failed)
+    } else {
+        failed
+    }
+}
+
+/// What a command refused because another app came to the front did not
+/// do, as a skip rather than a failure: "didn't type in Notes", or
+/// "stopped typing in Notes" when part of its text was sent first.
+fn not_sent(row: &Row, failed: &str) -> String {
+    if row.partial == Some(true) && row.verb.as_deref() == Some("type") {
+        return match row.app.as_deref() {
+            Some(app) => format!("stopped typing in {app}"),
+            None => "stopped typing".into(),
+        };
+    }
+
+    match failed.strip_prefix("couldn't ") {
+        Some(rest) => format!("didn't {rest}"),
+        None => failed.to_owned(),
+    }
 }
 
 /// What a command is doing while it runs: "opening TextEdit…".
-fn doing(row: &Value) -> String {
-    let app = row["app"].as_str();
-    match (row["verb"].as_str(), app) {
+fn doing(row: &Row) -> String {
+    let app = row.app.as_deref();
+    match (row.verb.as_deref(), app) {
         (Some("open"), Some(app)) => format!("opening {app}…"),
         (Some("open"), None) => "opening a file…".into(),
         (Some("open-link"), _) => "opening a link…".into(),
         (Some("close"), Some(app)) => format!("closing {app}…"),
         (Some("close"), None) => "closing the apps…".into(),
+        (Some("install"), Some(app)) => format!("installing {app}…"),
+        (Some("install"), None) => "installing an app…".into(),
+        (Some("cleanup"), _) => "cleaning up…".into(),
+        (Some("job-start"), _) => "starting a background job…".into(),
+        (Some("job-stop"), _) => "stopping a background job…".into(),
+        (Some("collect"), _) => "collecting files…".into(),
         _ => "running a command…".into(),
     }
 }
@@ -383,13 +546,22 @@ pub fn capitalized(text: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::activity_log::Op;
+    use serde_json::{Value, json};
 
-    fn row(doing: &Doing, ok: bool) -> Value {
-        let mut row = Map::new();
-        row.insert("operation".into(), json!("input"));
-        row.insert("ok".into(), json!(ok));
-        doing.fields(&mut row, ok);
-        Value::Object(row)
+    fn row(doing: &Doing, ok: bool) -> Row {
+        let mut row = Row {
+            operation: Some(Op::Input),
+            ok: Some(ok),
+            ..Row::default()
+        };
+        doing.fill(&mut row, ok, None);
+        row
+    }
+
+    /// `value` as a logged row.
+    fn read(value: Value) -> Row {
+        Row::parse(&value).unwrap()
     }
 
     fn said(doing: &Doing) -> (String, String) {
@@ -446,8 +618,8 @@ mod tests {
     fn a_command_under_way_says_what_it_is_doing() {
         let started = |doing: &Doing| {
             let mut row = row(doing, true);
-            row["ok"] = Value::Null;
-            row["started"] = json!(true);
+            row.ok = None;
+            row.started = Some(true);
             says(&row)
         };
 
@@ -461,6 +633,27 @@ mod tests {
         );
         assert_eq!(started(&Doing::new("close")), "closing the apps…");
         assert_eq!(started(&Doing::new("run")), "running a command…");
+        assert_eq!(
+            started(&Doing::new("install").app(Some("Probe"))),
+            "installing Probe…"
+        );
+        assert_eq!(started(&Doing::new("cleanup")), "cleaning up…");
+    }
+
+    #[test]
+    fn an_install_row_names_its_app_and_a_cleanup_row_names_no_file() {
+        let pair = |done: &str, failed: &str| (done.to_owned(), failed.to_owned());
+        assert_eq!(
+            said(&Doing::new("install").app(Some("/tmp/Secret/Probe.app"))),
+            pair("installed Probe", "couldn't install Probe")
+        );
+        assert_eq!(
+            said(&Doing::new("cleanup")),
+            pair(
+                "cleaned up the task's work",
+                "couldn't clean up the task's work"
+            )
+        );
     }
 
     #[test]
@@ -493,7 +686,7 @@ mod tests {
         let keys = |keys: &[&str]| {
             let keys = keys.iter().map(|k| (*k).to_owned()).collect::<Vec<_>>();
             let mut row = row(&Doing::keys(&keys), true);
-            row["actionCount"] = json!(keys.len());
+            row.action_count = Some(keys.len() as u64);
             says(&row)
         };
 
@@ -525,7 +718,7 @@ mod tests {
         );
 
         let mut failed = row(&Doing::keys(&["cmd+s".into()]), false);
-        failed["actionCount"] = json!(1);
+        failed.action_count = Some(1);
         assert_eq!(says(&failed), "couldn't press ⌘S");
     }
 
@@ -560,16 +753,32 @@ mod tests {
         assert_eq!(doing.label, None, "a blank label is no label");
 
         let fields = row(&doing, true);
-        let keys = fields.as_object().unwrap().keys().collect::<Vec<_>>();
-        assert_eq!(keys, ["app", "command", "ok", "operation", "verb"]);
-        assert_eq!(fields["command"].as_str().unwrap().len(), COMMAND_ID);
+        let written = serde_json::to_value(&fields).unwrap();
+        let keys = written.as_object().unwrap().keys().collect::<Vec<_>>();
+        assert_eq!(
+            keys,
+            [
+                "actionCount",
+                "actor",
+                "app",
+                "at",
+                "command",
+                "elapsedMs",
+                "ok",
+                "operation",
+                "verb"
+            ]
+        );
+        assert_eq!(fields.command.unwrap().len(), COMMAND_ID);
         assert_ne!(Doing::new("type").command, Doing::new("type").command);
     }
 
     #[test]
     fn rows_without_a_verb_read_by_their_operation_as_atlas_app_words_them() {
         let old = |operation: &str, count: Option<u64>, ok: bool| {
-            says(&json!({"operation": operation, "ok": ok, "actionCount": count}))
+            says(&read(
+                json!({"operation": operation, "ok": ok, "actionCount": count}),
+            ))
         };
 
         assert_eq!(old("input", Some(3), true), "sent 3 actions");
@@ -583,10 +792,228 @@ mod tests {
         assert_eq!(old("newop", None, true), "did something in the helper");
         assert_eq!(old("newop", None, false), "couldn't finish an action");
         assert_eq!(
-            says(&json!({"operation": "run", "ok": true, "verb": "someday"})),
+            says(&read(
+                json!({"operation": "run", "ok": true, "verb": "someday"})
+            )),
             "ran a command",
             "a verb this build lacks reads by its operation"
         );
         assert_eq!(capitalized("clicked Save"), "Clicked Save");
+    }
+
+    #[test]
+    fn a_focus_refusal_says_what_it_did_not_do() {
+        let refused = |verb: &str, label: Option<&str>, partial: bool| {
+            says(&read(
+                json!({"operation": "input", "ok": false, "code": "focus-changed",
+                "verb": verb, "app": "Notes", "label": label, "partial": partial}),
+            ))
+        };
+
+        assert_eq!(refused("type", None, false), "didn't type in Notes");
+        assert_eq!(refused("type", None, true), "stopped typing in Notes");
+        assert_eq!(refused("click", None, false), "didn't click in Notes");
+        assert_eq!(
+            refused("key", Some("⌘S"), false),
+            "didn't press ⌘S in Notes"
+        );
+        assert_eq!(
+            refused("key", Some("⌘S"), true),
+            "didn't press ⌘S in Notes",
+            "only typing can stop part way"
+        );
+        assert_eq!(
+            says(&read(
+                json!({"operation": "input", "ok": false, "code": "busy",
+                "verb": "type", "app": "Notes"})
+            )),
+            "couldn't type in Notes",
+            "other refusals still say what could not be done"
+        );
+    }
+
+    #[test]
+    fn a_bundle_id_is_kept_only_when_it_is_an_identifier() {
+        for kept in ["com.apple.TextEdit", "test.atlas.install-probe", "Opie"] {
+            assert_eq!(bundle_id(kept).as_deref(), Some(kept), "{kept}");
+        }
+        let long = format!("com.{}", "x".repeat(BUNDLE_ID_LIMIT));
+        for refused in [
+            "",
+            "com.apple Text",
+            "/Applications/Opie.app",
+            "com/apple",
+            "com..apple",
+            ".com.apple",
+            "com.apple.",
+            "com.apple_text",
+            "com.äpple",
+            long.as_str(),
+        ] {
+            assert_eq!(bundle_id(refused), None, "{refused}");
+        }
+        let longest = "x".repeat(BUNDLE_ID_LIMIT);
+        assert_eq!(bundle_id(&longest), Some(longest.clone()));
+    }
+
+    #[test]
+    fn a_key_rows_chords_split_into_caps_and_page_up_stays_one_key() {
+        let caps = |label: &str| chords(label);
+        assert_eq!(caps("⌘S"), [["⌘", "S"]]);
+        assert_eq!(caps("⇧⌘Z ⌃⇥"), vec![vec!["⇧", "⌘", "Z"], vec!["⌃", "⇥"]]);
+        assert_eq!(caps("⌘+"), [["⌘", "+"]]);
+        assert_eq!(caps("Page Up"), [["Page Up"]]);
+        assert_eq!(
+            caps("↓ Page Down Return"),
+            [vec!["↓"], vec!["Page Down"], vec!["Return"]]
+        );
+        assert_eq!(caps("fn F5"), [["fn", "F5"]]);
+        assert_eq!(caps("fn ⌘S"), [["fn", "⌘", "S"]]);
+        assert_eq!(caps("Escape"), [["Escape"]]);
+        assert!(caps("").is_empty());
+
+        let pressed = |keys: &[&str]| {
+            let keys = keys.iter().map(|k| (*k).to_owned()).collect::<Vec<_>>();
+            chords(&row(&Doing::keys(&keys), true).label.unwrap())
+        };
+        assert_eq!(
+            pressed(&["cmd+shift+z", "pageup"]),
+            vec![vec!["⇧", "⌘", "Z"], vec!["Page Up"]]
+        );
+        assert_eq!(pressed(&["fn+f5"]), [["fn", "F5"]]);
+    }
+
+    /// A typed row's label and words, once its text went to a field the
+    /// helper found of `role`, as `ok` says.
+    fn typed_into(doing: &Doing, ok: bool, role: Option<&str>) -> (Option<String>, String) {
+        let mut row = Row {
+            operation: Some(Op::Input),
+            ok: Some(ok),
+            ..Row::default()
+        };
+        doing.fill(&mut row, ok, role);
+        let words = says(&row);
+        (row.label, words)
+    }
+
+    #[test]
+    fn a_typed_row_names_its_field_only_when_the_field_was_checked_and_is_a_text_field() {
+        let email = Doing::new("type").app(Some("Notes")).field(Some(" Email "));
+        let named = |role: &str| typed_into(&email, true, Some(role));
+        for role in FIELD_ROLES {
+            assert_eq!(
+                named(role),
+                (
+                    Some("Email".to_owned()),
+                    "typed into Email in Notes".to_owned()
+                ),
+                "{role}"
+            );
+        }
+        assert_eq!(
+            typed_into(
+                &Doing::new("type").field(Some("Search")),
+                true,
+                Some("AXSearchField")
+            )
+            .1,
+            "typed into Search"
+        );
+
+        let unnamed = (None, "typed in Notes".to_owned());
+        assert_eq!(
+            typed_into(&email, true, None),
+            unnamed,
+            "a field the helper did not check is not named"
+        );
+        assert_eq!(
+            typed_into(&email, false, Some("AXTextField")),
+            (None, "couldn't type in Notes".to_owned()),
+            "nor one text did not reach"
+        );
+        assert_eq!(
+            typed_into(
+                &Doing::new("type").app(Some("Notes")),
+                true,
+                Some("AXTextField")
+            ),
+            unnamed,
+            "nor one the command did not name"
+        );
+        assert_eq!(
+            typed_into(
+                &Doing::new("type").field(Some("  ")),
+                true,
+                Some("AXTextField")
+            )
+            .0,
+            None,
+            "a blank name is no name"
+        );
+        let long = "x".repeat(100);
+        let bounded = typed_into(
+            &Doing::new("type").field(Some(&long)),
+            true,
+            Some("AXTextField"),
+        );
+        assert_eq!(bounded.0.unwrap().chars().count(), NAME_LIMIT);
+    }
+
+    #[test]
+    fn a_text_areas_name_is_never_kept() {
+        let body = Doing::new("type").app(Some("Notes")).field(Some("Body"));
+        for role in [
+            "AXTextArea",
+            "AXSecureTextField",
+            "AXStaticText",
+            "AXWebArea",
+            "AXButton",
+            "",
+        ] {
+            assert_eq!(
+                typed_into(&body, true, Some(role)),
+                (None, "typed in Notes".to_owned()),
+                "{role}"
+            );
+        }
+        let tab = Doing::keys(&["tab".into()]).field(Some("Email"));
+        assert_eq!(
+            typed_into(&tab, true, Some("AXTextField")).0.as_deref(),
+            Some("Tab"),
+            "only typed text names its field; a key names its keys"
+        );
+    }
+
+    #[test]
+    fn background_jobs_and_collections_are_said_plainly() {
+        let row = |verb: &str, ok: bool| read(json!({"verb": verb, "ok": ok, "operation": "job"}));
+        assert_eq!(says(&row("job-start", true)), "started a background job");
+        assert_eq!(
+            says(&row("job-start", false)),
+            "couldn't start a background job"
+        );
+        assert_eq!(says(&row("job-stop", true)), "stopped a background job");
+        assert_eq!(
+            says(&row("job-stop", false)),
+            "couldn't stop a background job"
+        );
+        assert_eq!(
+            says(&read(
+                json!({"verb": "collect", "ok": true, "count": 2, "operation": "collect"})
+            )),
+            "collected 2 files"
+        );
+        assert_eq!(
+            says(&read(
+                json!({"verb": "collect", "ok": false, "count": 0, "operation": "collect"})
+            )),
+            "couldn't collect files"
+        );
+        assert_eq!(
+            says(&read(
+                json!({"verb": "collect", "started": true, "ok": null, "operation": "collect"})
+            )),
+            "collecting files…"
+        );
     }
 }

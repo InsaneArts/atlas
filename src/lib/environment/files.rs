@@ -4,6 +4,7 @@ use super::{
     model::{Fingerprint, Node},
     problem,
 };
+use crate::fs_move::{Replace, rename_within};
 use base64::{Engine, engine::general_purpose::STANDARD};
 use nix::{
     errno::Errno,
@@ -166,7 +167,7 @@ fn attribute_name(name: &[u8]) -> Result<CString> {
 /// The most extended-attribute data (names and values) kept for one file.
 const MAX_ATTRIBUTES: usize = 16 * 1024;
 
-#[allow(unsafe_code)] // FFI: bounded extended-attribute reads.
+#[allow(unsafe_code, reason = "FFI: bounded extended-attribute reads")]
 fn attributes(file: &fs::File) -> Result<std::collections::BTreeMap<String, String>> {
     // Sizes are read first so the limit holds before anything is allocated,
     // and each read must return exactly that size: a short read (as resource
@@ -276,7 +277,7 @@ pub(super) fn owned_attributes(
 /// with, so new contents never take it over from the file they replace.
 pub(super) const QUARANTINE: &str = "com.apple.quarantine";
 
-#[allow(unsafe_code)] // FFI: extended-attribute writes by descriptor.
+#[allow(unsafe_code, reason = "FFI: extended-attribute writes by descriptor")]
 pub(super) fn restore_attributes(
     path: &Path,
     expected: &std::collections::BTreeMap<String, String>,
@@ -609,25 +610,13 @@ pub(super) fn discard_partial(path: &Path) -> Result<()> {
 }
 
 /// Rename `from` to `to` inside `parent`; `exclusive` refuses an existing `to`.
-#[allow(unsafe_code)] // FFI: libc's renameatx_np has no safe wrapper.
 fn rename_at(parent: &fs::File, from: &CStr, to: &CStr, exclusive: bool) -> Result<()> {
-    // SAFETY: a live directory descriptor and two NUL-terminated single
-    // components; RENAME_EXCL makes the rename refuse an existing target.
-    let status = unsafe {
-        libc::renameatx_np(
-            parent.as_raw_fd(),
-            from.as_ptr(),
-            parent.as_raw_fd(),
-            to.as_ptr(),
-            if exclusive { libc::RENAME_EXCL } else { 0 },
-        )
+    let replace = if exclusive {
+        Replace::Never
+    } else {
+        Replace::Allowed
     };
-
-    if status != 0 {
-        return Err(std::io::Error::last_os_error().into());
-    }
-
-    Ok(())
+    Ok(rename_within(parent, from, to, replace)?)
 }
 
 /// Move a recorded prepared inode into place. No-replace is atomic for creates.
@@ -793,9 +782,10 @@ fn descriptor_acl(file: &fs::File) -> Result<bool> {
 /// The helper's short name, as an ACL entry names it. Resolved once per
 /// operation and passed to every allow_helper of it.
 pub(super) fn helper_name(uid: u32) -> Result<String> {
-    let identity = Command::new("/usr/bin/id")
-        .args(["-un", &uid.to_string()])
-        .output()?;
+    let identity = crate::bounded::output(
+        Command::new("/usr/bin/id").args(["-un", &uid.to_string()]),
+        crate::bounded::LOOKUP,
+    )?;
     let name =
         String::from_utf8(identity.stdout).map_err(|_| problem("Invalid helper short name"))?;
     let name = name.trim();
@@ -825,10 +815,12 @@ pub(super) fn allow_helper(path: &Path, helper: &str, executable: bool) -> Resul
         "read,readattr,readsecurity"
     };
 
-    let output = Command::new("/bin/chmod")
-        .args(["+a", &format!("user:{helper} allow {rights}")])
-        .arg(path)
-        .output()?;
+    let output = crate::bounded::output(
+        Command::new("/bin/chmod")
+            .args(["+a", &format!("user:{helper} allow {rights}")])
+            .arg(path),
+        crate::bounded::FILE,
+    )?;
     if !output.status.success() {
         let reason = String::from_utf8_lossy(&output.stderr);
         let reason = reason.trim();

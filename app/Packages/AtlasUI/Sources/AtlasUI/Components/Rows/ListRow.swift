@@ -1,8 +1,8 @@
 import SwiftUI
 
 /// The one row every list draws: something leading, a medium title over a secondary detail, and something
-/// trailing, at the height its window uses. In a ``GroupedList`` it draws the separator above it, inset to
-/// where its title starts. A row with a radio is a choice: the whole row picks it, the radio is its only
+/// trailing, at the height its window uses. In a ``GroupedList`` it draws the separator above it, from where its
+/// title starts to its trailing inset, so the line never meets the group's edge. A row with a radio is a choice: the whole row picks it, the radio is its only
 /// mark, and the row's fill answers the pointer.
 struct ListRow: View {
   /// What leads the row.
@@ -53,7 +53,7 @@ struct ListRow: View {
     case check(CheckState, String)
     /// A switch, which calls the row's action when flipped.
     case toggle(isOn: Bool)
-    /// A glass button with its title, which calls the row's action.
+    /// A secondary button with its title, which calls the row's action.
     case button(String)
     /// A radio: the row is a choice, and the whole row calls its action.
     case radio(isOn: Bool)
@@ -106,7 +106,7 @@ struct ListRow: View {
     var verticalInset: CGFloat {
       switch self {
       case .regular: Spacing.sPlus
-      case .compact: Layout.compactVerticalInset
+      case .compact: ListRowLayout.compactVerticalInset
       case .dense, .tight, .checklist: Spacing.xs
       }
     }
@@ -124,9 +124,9 @@ struct ListRow: View {
     /// The row's least height.
     var height: CGFloat {
       switch self {
-      case .regular: Layout.regularHeight
+      case .regular: ListRowLayout.regularHeight
       case .compact, .checklist: ControlHeight.xl
-      case .dense: Layout.denseHeight
+      case .dense: ListRowLayout.denseHeight
       case .tight: ControlHeight.mPlus
       }
     }
@@ -282,16 +282,6 @@ struct ListRow: View {
     case .none, .tile, .image, .mark, .picture, .letter: return .medium
     }
   }
-}
-
-/// A row's own measures for content and separators.
-private enum Layout {
-  /// 7: above and below a Settings row's content.
-  static let compactVerticalInset: CGFloat = 7
-  /// 48: a setup list's row.
-  static let regularHeight: CGFloat = 48
-  /// 38: an Activity row.
-  static let denseHeight: CGFloat = 38
 }
 
 #if DEBUG

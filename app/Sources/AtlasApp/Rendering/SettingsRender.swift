@@ -43,18 +43,20 @@
       Array(zip(files, PreviewStates.settings.map(\.value)))
     }
 
-    /// Draws every Settings state to PNGs in `directory`, at Retina scale (``PNG/scale``), each at its window's size;
-    /// with `ATLAS_RENDER_REDUCE_TRANSPARENCY=1`, as Reduce Transparency draws them, the alerts' glass opaque.
+    /// Draws every Settings state to PNGs in `directory`, at Retina scale (``PNG/scale``), each at its window's size.
     ///
-    /// - Parameter directory: Where the PNGs go.
+    /// - Parameters:
+    ///   - directory: Where the PNGs go.
+    ///   - appearance: The appearance to draw them in, light or dark.
     /// - Returns: Whether every state was drawn.
-    static func draw(to directory: String) -> Bool {
+    static func draw(to directory: String, appearance: NSAppearance?) -> Bool {
       let folder = URL(fileURLWithPath: directory)
       // A folder that cannot be made fails the writes below, which report it.
       try? FileManager.default
         .createDirectory(at: folder, withIntermediateDirectories: true)
-      let reduceTransparency = ProcessInfo.processInfo.environment["ATLAS_RENDER_REDUCE_TRANSPARENCY"] == "1"
-      let standard = renders.map { draw($0.file, $0.state, to: folder, reduceTransparency: reduceTransparency) }
+      let standard = renders.map {
+        draw($0.file, $0.state, to: folder, appearance: appearance)
+      }
       let narrow = PreviewStates.settingsAboutSamples
         .enumerated()
         .map { index, sample in
@@ -62,7 +64,7 @@
             "about-narrow-\(index + 1)",
             sample.value,
             to: folder,
-            reduceTransparency: reduceTransparency,
+            appearance: appearance,
             width: PreviewStates.settingsNarrowWidth
           )
         }
@@ -77,21 +79,21 @@
     ///   - file: The PNG's name, without its extension.
     ///   - state: The state.
     ///   - folder: Where the PNG goes.
-    ///   - reduceTransparency: Whether to draw it as under Reduce Transparency; not by default.
+    ///   - appearance: The appearance to draw it in, light or dark.
     ///   - width: The window's width; the standard Settings width by default.
     /// - Returns: Whether it was drawn.
     static func draw(
       _ file: String,
       _ state: SettingsState,
       to folder: URL,
-      reduceTransparency: Bool = false,
+      appearance: NSAppearance?,
       width: CGFloat = SettingsLayout.width
     ) -> Bool {
       PNG.write(
-        view(state) { _ in }
-          .environment(\._accessibilityReduceTransparency, reduceTransparency),
+        view(state) { _ in },
         size: size(of: state, width: width),
-        to: folder.appendingPathComponent("\(file).png")
+        to: folder.appendingPathComponent("\(file).png"),
+        appearance: appearance
       )
     }
 

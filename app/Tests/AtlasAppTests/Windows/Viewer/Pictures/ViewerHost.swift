@@ -13,11 +13,25 @@ final class ViewerHost {
   private let window: NSWindow
   /// The hosted content.
   private let hosting: NSHostingView<ViewerHostContent>
+  private let reduceMotion: Bool
+  private var frameReport: LayoutFrameReport?
+  /// The latest real layout frames reported by named elements.
+  private(set) var frames: [String: CGRect] = [:]
 
   /// Hosts `state`, laid out once, with nothing to move from.
   ///
-  /// - Parameter state: What the window shows first.
-  init(_ state: ViewerState) {
+  /// - Parameters:
+  ///   - state: What the window shows first.
+  ///   - animatesArrivals: Whether the first pane plays its arrival; false for a settled reference.
+  ///   - reduceMotion: Whether layout must settle without movement.
+  ///   - appearance: The window's appearance; nil follows the Mac.
+  init(
+    _ state: ViewerState,
+    animatesArrivals: Bool = true,
+    reduceMotion: Bool = false,
+    appearance: NSAppearance? = nil
+  ) {
+    self.reduceMotion = reduceMotion
     window = NSWindow(
       contentRect: NSRect(origin: .zero, size: PreviewStates.viewerSize),
       styleMask: [.borderless],
@@ -25,7 +39,17 @@ final class ViewerHost {
       defer: false
     )
     window.isReleasedWhenClosed = false
-    hosting = NSHostingView(rootView: ViewerHostContent(state: state))
+    window.appearance = appearance
+    hosting = NSHostingView(
+      rootView: ViewerHostContent(state: state, animatesArrivals: animatesArrivals, reduceMotion: reduceMotion)
+    )
+    frameReport = LayoutFrameReport { [weak self] id, frame in self?.frames[id] = frame }
+    hosting.rootView = ViewerHostContent(
+      state: state,
+      animatesArrivals: animatesArrivals,
+      reduceMotion: reduceMotion,
+      frameReport: frameReport
+    )
     hosting.frame = NSRect(origin: .zero, size: PreviewStates.viewerSize)
     window.contentView = hosting
     hosting.layoutSubtreeIfNeeded()
@@ -35,7 +59,35 @@ final class ViewerHost {
   ///
   /// - Parameter state: What the window shows now.
   func show(_ state: ViewerState) {
-    hosting.rootView = ViewerHostContent(state: state)
+    hosting.rootView = ViewerHostContent(
+      state: state,
+      reduceMotion: reduceMotion,
+      frameReport: frameReport
+    )
+    hosting.layoutSubtreeIfNeeded()
+  }
+
+  /// Advances the real SwiftUI renderer while animation time remains explicitly held by the test.
+  func render() {
+    hosting.needsLayout = true
+    hosting.layoutSubtreeIfNeeded()
+    hosting._renderForTest(interval: ViewerMotionPose.tick)
+    hosting._renderForTest(interval: .zero)
+    hosting.layoutSubtreeIfNeeded()
+  }
+
+  /// Presents the test window only for opt-in native focus and scrolling checks run in the hidden helper.
+  func presentNativeWindow() {
+    window.makeKeyAndOrderFront(nil)
+  }
+
+  /// Closes the window a native helper check presented.
+  func closeNativeWindow() {
+    window.close()
+  }
+
+  /// Lays the window out again as it stands, as after a turn of the run loop.
+  func layOut() {
     hosting.layoutSubtreeIfNeeded()
   }
 
@@ -68,15 +120,8 @@ final class ViewerHost {
     }
   }
 
-  /// 60 ms: the latest a frame may be drawn after a change and still be read as its first; a busy Mac can let an
-  /// animation run on for longer before the frame is drawn.
-  static let firstFrameWithin: Duration = .milliseconds(60)
-  /// 8: how many fresh windows a first-frame read tries before it takes the last frame it drew.
-  static let firstFrameTries = 8
-
   /// Which picture is drawn at each of `points` in the first frame after the window goes from `first` to `next`:
-  /// each try hosts `first` in a fresh window, shows `next` and reads one frame, and a frame drawn later than
-  /// ``firstFrameWithin`` is not the first, so it tries again, as often as ``firstFrameTries``.
+  /// animation time is held at zero, regardless of how long layout or drawing takes.
   ///
   /// - Parameters:
   ///   - first: What the window shows before the change.
@@ -87,16 +132,53 @@ final class ViewerHost {
   static func firstFrame(from first: ViewerState, to next: ViewerState, at points: [CGPoint]) throws
     -> [PictureColour?]
   {
-    let clock = ContinuousClock()
-    var colours: [PictureColour?] = []
-    for _ in 0..<firstFrameTries {
-      let host = ViewerHost(first)
-      let started = clock.now
-      host.show(next)
-      colours = try host.colours(at: points)
-      if clock.now - started <= firstFrameWithin { return colours }
+    try firstFrame(from: first, to: next) { try $0.colours(at: points) }
+  }
+
+  /// What `read` finds with the real animations held at their first frame.
+  ///
+  /// - Parameters:
+  ///   - first: What the window shows before the change.
+  ///   - next: What it shows after.
+  ///   - animatesArrivals: Whether the first pane plays its arrival; false for a settled reference.
+  ///   - read: Reads the frame.
+  /// - Returns: What `read` found.
+  /// - Throws: What `read` throws.
+  static func firstFrame<Found>(
+    from first: ViewerState,
+    to next: ViewerState,
+    animatesArrivals: Bool = true,
+    read: (ViewerHost) throws -> Found
+  ) throws -> Found {
+    let previous = Motion.Pose.moment
+    Motion.Pose.hold(at: -5)
+    defer { Motion.Pose.hold(at: previous) }
+    let host = ViewerHost(first, animatesArrivals: animatesArrivals)
+    host.render()
+    Motion.Pose.hold(at: .zero)
+    host.render()
+    host.show(next)
+    host.render()
+    return try read(host)
+  }
+
+  /// How bright this frame draws each of `points`, from 0 for black to 1 for white, all read from one frame.
+  ///
+  /// - Parameter points: The points, in the window's points from its top left.
+  /// - Returns: Each point's brightness.
+  /// - Throws: When nothing was drawn.
+  func brightness(at points: [CGPoint]) throws -> [CGFloat] {
+    let bitmap = try #require(hosting.bitmapImageRepForCachingDisplay(in: hosting.bounds))
+    hosting.cacheDisplay(in: hosting.bounds, to: bitmap)
+    let sampled = try #require(bitmap.converting(to: .sRGB, renderingIntent: .default))
+    let scale = CGFloat(bitmap.pixelsWide) / hosting.bounds.width
+    return try points.map { point in
+      let colour = try #require(
+        sampled.colorAt(x: Int(point.x * scale), y: Int(point.y * scale))?
+          .usingColorSpace(.sRGB)
+      )
+      return colour.brightnessComponent
     }
-    return colours
   }
 
   /// What this frame draws in `rect`, as raw pixels, for comparing one frame with another.
@@ -110,10 +192,31 @@ final class ViewerHost {
     return try #require(bitmap.tiffRepresentation)
   }
 
-  /// The scroll views AppKit holds for the content's lists, front to back as the view tree lists them.
+  /// The scroll views AppKit holds for the stage's lists, front to back as the view tree lists them: those in the card,
+  /// past the sidebar, whose sessions scroll too.
   var scrollViews: [NSScrollView] {
     Self.scrollViews(in: hosting)
+      .filter { $0.convert($0.bounds, to: hosting).minX >= Self.cardEdge }
   }
+
+  /// The scroll views AppKit holds in the sidebar, whose sessions scroll in their own room.
+  var sidebarScrollViews: [NSScrollView] {
+    Self.scrollViews(in: hosting)
+      .filter { $0.convert($0.bounds, to: hosting).minX < Self.cardEdge }
+  }
+
+  /// Where `view` stands, in the window's points from its top left.
+  ///
+  /// - Parameter view: A view in the window.
+  /// - Returns: Its frame.
+  func frameFromTop(of view: NSView) -> CGRect {
+    let frame = view.convert(view.bounds, to: hosting)
+    guard !hosting.isFlipped else { return frame }
+    return CGRect(x: frame.minX, y: hosting.bounds.height - frame.maxY, width: frame.width, height: frame.height)
+  }
+
+  /// 236: where the card starts, past the sidebar, whose own inset keeps the two apart.
+  static let cardEdge: CGFloat = 236
 
   /// The scroll views under `view`.
   ///

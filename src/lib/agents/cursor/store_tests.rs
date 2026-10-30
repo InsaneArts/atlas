@@ -194,7 +194,7 @@ fn cursor_refresh_and_default_removal_include_an_owned_copy_without_the_host() {
             snapshot(&Store::new(&root).target).unwrap(),
             expected.entries
         );
-        let removed = crate::agents::change(&[], true).unwrap();
+        let removed = crate::agents::change(&[], crate::agents::Change::Disconnect).unwrap();
         let cursor = removed["agents"]
             .as_array()
             .unwrap()
@@ -221,11 +221,7 @@ fn cursor_refresh_and_default_removal_include_an_owned_copy_without_the_host() {
     }
     // Keep HOME and process-wide discovery isolated without changing this
     // parallel test runner's environment or invoking any installed host.
-    let result = std::process::Command::new(std::env::current_exe().unwrap())
-        .args([
-            "--exact",
-            "agents::cursor::store::tests::cursor_refresh_and_default_removal_include_an_owned_copy_without_the_host",
-        ])
+    let result = crate::test_support::rerun("agents::cursor::store::tests::cursor_refresh_and_default_removal_include_an_owned_copy_without_the_host")
         .env_clear()
         .env(CHILD, "1")
         .env("HOME", fixture._directory.path())

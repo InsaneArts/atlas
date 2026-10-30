@@ -28,7 +28,7 @@ struct HelperAccountRow: View {
       .accessibilityElement(children: .combine)
       StatusPill(label: account.status.label, tone: account.status.tone)
       Button("Switch to the Helper…") { send(.askSwitch) }
-        .buttonStyle(.capsule(.glass, size: .mini))
+        .buttonStyle(.capsule(.secondary, size: .mini))
         .disabled(!buttons.canSwitch)
         .help(buttons.switchHelp)
     }

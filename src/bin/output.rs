@@ -1,113 +1,13 @@
 //! Result presentation, output streams and process result classification.
-use super::cli::{AgentsCommand, Command, EnvironmentCommand};
 use atlas::{
-    error::{Error, Holder},
+    error::{Code, Error, Holder},
     ui::{
         Format, hints,
         render::{self, View},
-        text,
     },
 };
 use serde_json::{Value, json};
 use std::io::Write;
-
-/// How a command's result reads for a person.
-pub(super) fn view(command: &Command) -> View {
-    let at = |x: f64, y: f64| format!("{}, {}", text::number(x), text::number(y));
-
-    match command {
-        Command::Doctor {
-            login_timing: true, ..
-        } => View::LoginTiming,
-        Command::Doctor { verbose, .. } => View::Doctor { verbose: *verbose },
-        Command::Status => View::Status,
-        Command::Config => View::Config,
-        Command::Screenshot { .. } => View::Capture,
-        Command::Apps { .. } => View::Apps,
-        Command::Windows { .. } => View::Windows,
-        Command::Elements { .. } => View::Elements,
-        Command::Readiness { .. } => View::Readiness,
-        Command::Click {
-            x: Some(x),
-            y: Some(y),
-            ..
-        } => View::Action(format!("Clicked at {}", at(*x, *y))),
-        Command::Click { .. } => View::Action("Clicked".into()),
-        Command::Move { x, y } => View::Action(format!("Moved the pointer to {}", at(*x, *y))),
-        Command::Drag {
-            from_x,
-            from_y,
-            to_x,
-            to_y,
-            ..
-        } => View::Action(format!(
-            "Dragged from {} to {}",
-            at(*from_x, *from_y),
-            at(*to_x, *to_y)
-        )),
-        Command::Scroll { x, y, .. } => View::Action(format!("Scrolled at {}", at(*x, *y))),
-        Command::Key { keys } => View::Action(format!("Pressed {}", keys.join(" "))),
-        Command::Input { .. } => View::Action("Performed the actions".into()),
-        Command::Type { .. } => View::Type,
-        Command::Run { .. }
-        | Command::Environment {
-            command: Some(EnvironmentCommand::Run { .. }),
-            ..
-        } => View::Run,
-        Command::Environment {
-            command:
-                None
-                | Some(
-                    EnvironmentCommand::Apply { .. }
-                    | EnvironmentCommand::Rollback { .. }
-                    | EnvironmentCommand::Profile { .. },
-                ),
-            ..
-        } => View::Environment,
-        Command::Close { .. } => View::Close,
-        Command::Environment {
-            command: Some(EnvironmentCommand::Discover { .. }),
-            ..
-        } => View::Discover,
-        Command::Setup {
-            apply: false,
-            rollback: false,
-            ..
-        } => View::SetupPreview,
-        Command::Open { app, targets, .. } => View::Open(
-            app.iter()
-                .chain(targets)
-                .cloned()
-                .collect::<Vec<_>>()
-                .join(", "),
-        ),
-        Command::Wait { gone, .. } => View::Wait { gone: *gone },
-        Command::Restart => View::Restart,
-        Command::Stop => View::Action("Stopped the agent".into()),
-        Command::Resume => View::Action("Resumed the agent".into()),
-        Command::Logout { .. } => View::Logout,
-        Command::StartInput => View::StartInput,
-        Command::Install => View::Install,
-        Command::Agents {
-            action: Some(AgentsCommand::Install { .. } | AgentsCommand::Remove { .. }),
-        } => View::AgentsChange,
-        Command::Agents {
-            action: Some(AgentsCommand::Project { .. } | AgentsCommand::Forget { .. }),
-        } => View::AgentsProject,
-        Command::Agents { .. } => View::Agents,
-        Command::Switch { .. } => View::Switch,
-        Command::Update { check: true, .. } => View::Generic,
-        Command::Update { .. } => View::Update,
-        Command::Uninstall { .. } => View::Uninstall,
-        Command::Menubar { login: Some(_), .. } => View::Login,
-        Command::Init
-        | Command::Monitor { .. }
-        | Command::Watch { .. }
-        | Command::Mcp { .. }
-        | Command::Menubar { .. } => View::Quiet,
-        _ => View::Generic,
-    }
-}
 
 /// Write a result: JSON for programs, its view for a person. A failure for
 /// programs says what to do next when `advised`. A reader that went away
@@ -162,7 +62,8 @@ pub(super) fn failure(error: &Error, advised: bool) -> Value {
 }
 
 /// Add `next` to a failed result (`ok: false` with a code) that has none,
-/// as [`hints::step`] says.
+/// as [`hints::step`] says, or for a focus refusal [`hints::focus_advice`]
+/// from what was in the way and what the result says was sent before it.
 fn advise(value: &mut Value) {
     if value["ok"] != false || value.get("next").is_some() {
         return;
@@ -172,8 +73,10 @@ fn advise(value: &mut Value) {
         return;
     };
 
-    let holder = value["holder"].as_str().and_then(Holder::parse);
-    let next = hints::step(code, holder, value["uncertain"] == true);
+    let next = hints::focus_advice(value).unwrap_or_else(|| {
+        let holder = value["holder"].as_str().and_then(Holder::parse);
+        hints::step(Code::parse(code), holder, value["uncertain"] == true).to_owned()
+    });
     value["next"] = json!(next);
 }
 
@@ -199,7 +102,7 @@ mod tests {
 
     #[test]
     fn every_failure_for_programs_says_what_to_do_next() {
-        for code in atlas::error::CODES {
+        for code in Code::ALL {
             let error = Error::new(code, "It failed");
             assert_eq!(
                 failure(&error, true)["next"],
@@ -208,16 +111,35 @@ mod tests {
             );
         }
 
-        let uncertain = Error::new("transport", "No reply").uncertain();
+        let uncertain = Error::new(Code::Transport, "No reply").uncertain();
         assert_eq!(failure(&uncertain, true)["next"], hints::UNCERTAIN);
 
-        let held = Error::new("busy", "Wait").held_by(Holder::Person);
+        let held = Error::new(Code::Busy, "Wait").held_by(Holder::Person);
         assert_eq!(
             failure(&held, true)["next"],
-            hints::next("busy", Some(Holder::Person))
+            hints::next(Code::Busy, Some(Holder::Person))
         );
 
-        let said = Error::new("elements", "Incomplete").with("next", "Try again.");
+        let waited = Error::new(Code::Busy, "Kept")
+            .held_by(Holder::Agent)
+            .with("waited", 30)
+            .with("next", hints::WAITED);
+        assert_eq!(
+            failure(&waited, true)["next"],
+            hints::WAITED,
+            "a wait already made is kept"
+        );
+
+        let yours = Error::new(Code::Uncertain, "Unknown")
+            .with("yours", true)
+            .with("next", hints::UNKNOWN_OWN);
+        assert_eq!(
+            failure(&yours, true)["next"],
+            hints::UNKNOWN_OWN,
+            "an unknown action of this session's own keeps its step"
+        );
+
+        let said = Error::new(Code::Elements, "Incomplete").with("next", "Try again.");
         assert_eq!(
             failure(&said, true)["next"],
             "Try again.",
@@ -226,7 +148,7 @@ mod tests {
 
         let mut result = json!({"ok": false, "code": "wait-failed", "uncertain": false});
         advise(&mut result);
-        assert_eq!(result["next"], hints::next("wait-failed", None));
+        assert_eq!(result["next"], hints::next(Code::WaitFailed, None));
 
         let mut typed = json!({"ok": false, "code": "busy", "holder": "agent", "uncertain": true});
         advise(&mut typed);
@@ -237,27 +159,27 @@ mod tests {
         for (mut waiting, code, holder) in [
             (
                 json!({"ok": false, "code": "stopped", "uncertain": true}),
-                "stopped",
+                Code::Stopped,
                 None,
             ),
             (
                 json!({"ok": false, "code": "cancelled", "uncertain": true}),
-                "cancelled",
+                Code::Cancelled,
                 None,
             ),
             (
                 json!({"ok": false, "code": "busy", "holder": "person", "uncertain": true}),
-                "busy",
+                Code::Busy,
                 Some(Holder::Person),
             ),
         ] {
             advise(&mut waiting);
             assert_eq!(waiting["next"], hints::next(code, holder), "{code}");
         }
-        let stopped = Error::new("stopped", "Stopped").uncertain();
+        let stopped = Error::new(Code::Stopped, "Stopped").uncertain();
         assert_eq!(
             failure(&stopped, true)["next"],
-            hints::next("stopped", None)
+            hints::next(Code::Stopped, None)
         );
 
         for mut untouched in [
@@ -271,9 +193,87 @@ mod tests {
         }
     }
 
+    /// A focus refusal says earlier actions were sent only when the result
+    /// counts some, and asks for the app first when what was in front could
+    /// not be read.
+    #[test]
+    fn a_focus_refusal_is_advised_by_what_was_sent_before_it() {
+        let refusal = |fields: Value| {
+            let mut value = json!({"ok": false, "code": "focus-changed", "uncertain": false});
+            value
+                .as_object_mut()
+                .unwrap()
+                .extend(fields.as_object().unwrap().clone());
+            advise(&mut value);
+            value["next"].clone()
+        };
+
+        for (fields, sent, in_the_way) in [
+            (
+                json!({"reason": "app", "performed": 0, "partial": false}),
+                false,
+                hints::InTheWay::App,
+            ),
+            (json!({"reason": "point"}), false, hints::InTheWay::App),
+            (
+                json!({"reason": "unreadable", "performed": 0}),
+                false,
+                hints::InTheWay::Unknown(hints::Unsure::Front),
+            ),
+            (
+                json!({"reason": "app", "performed": 2}),
+                true,
+                hints::InTheWay::App,
+            ),
+            (
+                json!({"reason": "app", "typed": 48, "partial": true}),
+                true,
+                hints::InTheWay::App,
+            ),
+            (
+                json!({"reason": "point", "typed": 0, "partial": true}),
+                true,
+                hints::InTheWay::App,
+            ),
+            (
+                json!({"reason": "unreadable", "performed": 1}),
+                true,
+                hints::InTheWay::Unknown(hints::Unsure::Front),
+            ),
+            (
+                json!({"reason": "sheet", "performed": 0}),
+                false,
+                hints::InTheWay::Sheet,
+            ),
+            (
+                json!({"reason": "field", "typed": 16, "partial": true}),
+                true,
+                hints::InTheWay::Field,
+            ),
+            (
+                json!({"reason": "window", "performed": 0}),
+                false,
+                hints::InTheWay::Window,
+            ),
+        ] {
+            assert_eq!(
+                refusal(fields.clone()),
+                hints::focus_changed(sent, in_the_way),
+                "{fields}"
+            );
+        }
+
+        let error = Error::new(Code::FocusChanged, "Calculator has keyboard focus")
+            .with("reason", "unreadable");
+        assert_eq!(
+            failure(&error, true)["next"],
+            hints::focus_changed(false, hints::InTheWay::Unknown(hints::Unsure::Front))
+        );
+    }
+
     #[test]
     fn a_failure_another_atlas_process_reads_has_no_next_step() {
-        let error = Error::new("transport", "No reply");
+        let error = Error::new(Code::Transport, "No reply");
         assert!(failure(&error, false).get("next").is_none());
         assert_eq!(failure(&error, false), json!(error));
     }
