@@ -14,7 +14,7 @@
   <a href="Cargo.toml"><img alt="Rust" src="https://img.shields.io/badge/rust-edition%202024-orange"></a>
 </p>
 
-[![You ask Claude Code for a release checklist in Notes; it makes it on Atlas's hidden desktop while your Mac stays yours, Atlas's menu bar panel shows it live, then Atlas opens on the screenshot](assets/demo.webp)](https://atlas.insanearts.io)
+[![You ask Claude Code to cut the countdown off demo.mov and title it Atlas 1.0; it edits the movie in iMovie on Atlas's hidden desktop while your Mac stays yours, Atlas's menu bar panel shows it live, then Atlas opens on the screenshot](assets/demo.webp)](https://atlas.insanearts.io)
 
 ## Install
 
