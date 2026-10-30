@@ -4,7 +4,7 @@
 //! same way.
 use super::{
     input::click,
-    target::{Target, resolved_instance, target_pid},
+    target::{Target, target_expect, target_pid},
     windows::pointer_view,
 };
 use crate::{
@@ -524,9 +524,8 @@ pub async fn click_element(
 
     let ownership = client.controller.acquire_beside_commands()?;
     let verified = client.verify().await?;
-    let instance = resolved_instance(client, target_pid(client, &verified, target)).await?;
-    let expect = Expect::from_instance(instance)?;
-    let pid = i64::from(instance.pid);
+    let expect = target_expect(client, &verified, target).await?;
+    let pid = expect.pid();
     let scanned = app_elements(client, &verified, pid).await?;
     let epoch = verified.session().epoch.clone();
     if scanned.incomplete {

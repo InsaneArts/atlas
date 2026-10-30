@@ -97,8 +97,6 @@ pub struct Client {
     /// A local stand-in's socket peer, separate from its reported helper UID.
     #[cfg(test)]
     pub(crate) input_peer_uid: Option<u32>,
-    #[cfg(test)]
-    pub(crate) process_lookup: Option<Arc<dyn crate::test_support::ProcessLookup>>,
     pub controller: Controller,
     pub actor: Actor,
     /// What the command acting through this client does, for the log.
@@ -137,8 +135,6 @@ impl Client {
             },
             #[cfg(test)]
             input_peer_uid: None,
-            #[cfg(test)]
-            process_lookup: None,
             installed: BuildCache::default(),
             actor: Actor::Agent,
             doing: None,

@@ -83,8 +83,9 @@ fn task_of(makes: bool, host: Option<&HostSession>, name: Option<&OsStr>) -> Res
 fn windows_info(dock: bool) -> Result<Value> {
     use atlas::native::{ax, windows};
 
-    let windows = windows::windows()?;
-    let mut info = json!({ "ok": true, "windows": windows });
+    let (windows, starts) =
+        atlas::native::processes::snapshot(windows::windows, |window| window.pid)?;
+    let mut info = json!({ "ok": true, "windows": windows, "starts": starts });
     if dock {
         info["dock"] = json!(ax::dock(&windows, ax::DOCK_TIMEOUT));
     }

@@ -16,12 +16,6 @@ use std::{
 /// The helper account test clients are configured for.
 pub(crate) const UID: u32 = 7001;
 
-/// Process observations supplied to controller-resolution tests.
-pub(crate) trait ProcessLookup: Send + Sync {
-    fn instances(&self, uid: u32) -> crate::error::Result<Vec<crate::process::Instance>>;
-    fn start(&self, pid: i32) -> crate::error::Result<crate::process::Start>;
-}
-
 /// This test binary, told to run only the test named `test`, exactly.
 pub(crate) fn rerun(test: &str) -> Command {
     let mut command = Command::new(std::env::current_exe().unwrap());

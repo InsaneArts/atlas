@@ -100,7 +100,7 @@ const FIELD_MAX: usize = 256;
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct Expect {
     pid: i32,
-    /// The kernel start time pinned when the controller resolved the app.
+    /// The kernel start time read in the helper snapshot that resolved the app.
     #[serde(skip_serializing_if = "Option::is_none")]
     start: Option<crate::process::Start>,
     /// The window's number, as the window list gives it.

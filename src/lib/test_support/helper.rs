@@ -23,22 +23,6 @@ const SESSION: u64 = 42;
 /// The longest a test may take to finish against the stand-in.
 const LIMIT: Duration = Duration::from_secs(15);
 
-/// Local processes standing in for apps in the distinct helper account.
-struct LocalProcesses;
-
-impl super::ProcessLookup for LocalProcesses {
-    fn instances(&self, _uid: u32) -> crate::error::Result<Vec<crate::process::Instance>> {
-        Ok(crate::process::of_user(nix::unistd::geteuid().as_raw())?
-            .into_iter()
-            .map(|info| info.instance)
-            .collect())
-    }
-
-    fn start(&self, pid: i32) -> crate::error::Result<crate::process::Start> {
-        crate::process::start(pid)
-    }
-}
-
 /// A run in the helper that exited with `code` after printing `output`.
 pub(crate) fn exited(code: u8, output: &str) -> Value {
     json!({"ok": true, "exitCode": code, "timedOut": false, "signal": null,
@@ -74,7 +58,6 @@ impl Helper {
         client.config.helper_uid = uid;
         client.transport.peer_uid = nix::unistd::getuid().as_raw();
         client.input_peer_uid = Some(nix::unistd::getuid().as_raw());
-        client.process_lookup = Some(std::sync::Arc::new(LocalProcesses));
 
         let helper = Self {
             listener: UnixListener::bind(&client.transport.path).unwrap(),

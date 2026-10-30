@@ -188,29 +188,38 @@ async fn named_typing_pins_the_resolved_instance_across_every_native_batch() {
         test_support::{Helper, UID, completed},
     };
 
-    let pid = i64::from(std::process::id());
-    let start = crate::process::start(pid as i32).unwrap();
-    for target in [Target::Name("Editor".into()), Target::Pid(pid)] {
+    let pid = i64::from(i32::MAX);
+    let start = [123, 456];
+    for (target, window, windowless) in [
+        (Some(Target::Name("Editor".into())), None, false),
+        (Some(Target::Pid(pid)), None, false),
+        (Some(Target::Name("Editor".into())), None, true),
+        (None, Some(42), false),
+        (Some(Target::Name("Editor".into())), Some(42), false),
+        (Some(Target::Pid(pid)), Some(42), false),
+    ] {
         let dir = tempfile::Builder::new().tempdir_in("/tmp").unwrap();
         let (client, helper) = Helper::client(dir.path(), UID);
         let listener = UnixListener::bind(&client.config.input_socket).unwrap();
-        let expected = Expected::new(Some(target), None, None).unwrap().unwrap();
+        let expected = Expected::new(target, window, None).unwrap().unwrap();
         let text = "x".repeat(150);
         let mut caller = Box::pin(helper.serve(
             type_text(&client, &text, Some(&expected)),
             |request| {
                 if request["op"] == "apps" {
-                    Some(json!({"ok":true,"apps":[{"pid":pid,"name":"Editor"}]}))
+                    Some(json!({"ok":true,"starts":{pid.to_string():start},"apps":[{"pid":pid,"name":"Editor","active":true}]}))
                 } else {
                     assert_eq!(request["argv"][1], "windows-info");
-                    Some(completed(&json!({"ok":true,"windows":[{
+                    let mut snapshot = json!({"ok":true,"starts":{pid.to_string():start},"windows":[{
                     "number":42,"pid":pid,"owner":"Editor","title":null,"layer":0,"alpha":1.0,
                     "bounds":{"x":0,"y":0,"width":100,"height":100}
-                }]}).to_string()))
+                }]});
+                    if windowless { snapshot["windows"] = json!([]); }
+                    Some(completed(&snapshot.to_string()))
                 }
             },
         ));
-        let mut status = verified_status(&[SHUTDOWN, HOLD, FOCUS_APP, FOCUS_DOCK]);
+        let mut status = verified_status(&[SHUTDOWN, HOLD, FOCUS_APP, FOCUS_DOCK, FOCUS_WINDOW]);
         status["inputService"]["session"]["uid"] = json!(UID);
         let native = &status["inputService"];
         let mut hello = dispatched(&mut caller, &listener, "hello").await;
@@ -221,7 +230,11 @@ async fn named_typing_pins_the_resolved_instance_across_every_native_batch() {
             let mut acquire = dispatched(&mut caller, &listener, "acquire").await;
             answer(&mut acquire, json!({"ok":true})).await;
             let (mut input, request) = received(&mut caller, &listener, "input").await;
-            assert_eq!(request["expect"], json!({"pid":pid,"start":start}));
+            let mut pin = json!({"pid":pid,"start":start});
+            if let Some(window) = window {
+                pin["window"] = json!(window);
+            }
+            assert_eq!(request["expect"], pin);
             let decoded = Expect::from_request(&request["expect"]).unwrap().unwrap();
             assert_eq!(decoded.app_only().instance(), decoded.instance());
             answer(
@@ -233,8 +246,81 @@ async fn named_typing_pins_the_resolved_instance_across_every_native_batch() {
             answer(&mut release, json!({"ok":true})).await;
         }
         assert_eq!(
-            caller.await.unwrap(),
+            tokio::time::timeout(Duration::from_secs(2), caller)
+                .await
+                .unwrap()
+                .unwrap(),
             json!({"ok":true,"typed":150,"batches":3})
+        );
+        assert!(client.controller.pending().unwrap().is_empty());
+    }
+}
+
+#[tokio::test]
+async fn named_clicks_carry_the_helper_identity_even_when_the_controller_cannot_read_the_process() {
+    use crate::{
+        actions::Button,
+        agent::{Target, click_element},
+        select::ElementFilter,
+        test_support::{Helper, UID, completed},
+    };
+    let pid = i64::from(i32::MAX);
+    let start = [123, 456];
+    for target in [Target::Name("Editor".into()), Target::Pid(pid)] {
+        let dir = tempfile::Builder::new().tempdir_in("/tmp").unwrap();
+        let (client, helper) = Helper::client(dir.path(), UID);
+        let listener = UnixListener::bind(&client.config.input_socket).unwrap();
+        let filter = ElementFilter {
+            name: Some("Save".into()),
+            ..ElementFilter::default()
+        };
+        let mut caller = Box::pin(helper.serve(
+            click_element(&client, &target, &filter, Button::Left, 1, &[]),
+            |request| {
+                if request["op"] == "apps" {
+                    return Some(json!({"ok":true,"apps":[{"pid":pid,"name":"Editor"}],"starts":{pid.to_string():start}}));
+                }
+                let output = match request["argv"][1].as_str() {
+                    Some("windows-info") => json!({"ok":true,"starts":{pid.to_string():if request["argv"][2] == "--dock" { [124,456] } else { start }},"windows":[{
+                        "number":42,"pid":pid,"owner":"Editor","title":null,"layer":0,"alpha":1.0,
+                        "bounds":{"x":10,"y":20,"width":80,"height":60}}]}),
+                    Some("elements-info") => json!({"ok":true,"truncated":false,"elements":[{
+                        "index":0,"depth":0,"role":"AXButton","title":"Save","enabled":true,
+                        "frame":{"x":20,"y":30,"width":20,"height":20},
+                        "window":{"x":10,"y":20,"width":80,"height":60}}]}),
+                    other => panic!("unexpected helper read: {other:?}"),
+                };
+                Some(completed(&output.to_string()))
+            },
+        ));
+        let mut status = verified_status(&[SHUTDOWN, HOLD, FOCUS_APP, FOCUS_DOCK, FOCUS_WINDOW]);
+        status["inputService"]["session"]["uid"] = json!(UID);
+        let native = &status["inputService"];
+        for _ in 0..3 {
+            let mut hello = dispatched(&mut caller, &listener, "hello").await;
+            answer(&mut hello, native.clone()).await;
+        }
+        let mut acquire = dispatched(&mut caller, &listener, "acquire").await;
+        answer(&mut acquire, json!({"ok":true})).await;
+        let (mut input, request) = received(&mut caller, &listener, "input").await;
+        assert_eq!(
+            request["expect"],
+            json!({"pid":pid,"start":start,"window":42})
+        );
+        assert_eq!(request["actions"].as_array().unwrap().len(), 1);
+        answer(
+            &mut input,
+            json!({"ok":true,"performed":1,"expect":request["expect"]}),
+        )
+        .await;
+        let mut release = dispatched(&mut caller, &listener, "release").await;
+        answer(&mut release, json!({"ok":true})).await;
+        assert_eq!(
+            tokio::time::timeout(Duration::from_secs(2), caller)
+                .await
+                .unwrap()
+                .unwrap()["ok"],
+            true
         );
         assert!(client.controller.pending().unwrap().is_empty());
     }
@@ -3218,6 +3304,35 @@ fn a_truly_empty_list_is_an_empty_list() {
     let listed = json!({"ok": true, "apps": [{"pid": 812, "name": null, "bundleId": null,
         "executable": "/x", "active": true, "hidden": false, "policy": "regular"}]});
     assert_eq!(app_list(listed.clone()).unwrap(), listed);
+}
+
+#[tokio::test]
+async fn process_identities_stay_internal_to_app_resolution_in_current_and_older_sessions() {
+    use crate::test_support::{Helper, UID};
+    for older in [false, true] {
+        let dir = tempfile::tempdir().unwrap();
+        let (client, helper) = Helper::client(dir.path(), UID);
+        let helper = if older { helper.older() } else { helper };
+        let reply =
+            json!({"ok":true,"apps":[{"pid":812,"name":"Editor"}],"starts":{"812":[123,456]}});
+        let internal = helper
+            .serve(
+                async {
+                    let verified = client.verify().await?;
+                    client.apps_in(&verified).await
+                },
+                |_| Some(reply.clone()),
+            )
+            .await
+            .unwrap();
+        assert_eq!(internal["starts"], reply["starts"]);
+        let public = helper
+            .serve(client.apps(), |_| Some(reply.clone()))
+            .await
+            .unwrap();
+        assert!(public.get("starts").is_none());
+        assert_eq!(public["apps"], reply["apps"]);
+    }
 }
 
 #[tokio::test]

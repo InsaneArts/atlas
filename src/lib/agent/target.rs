@@ -1,59 +1,36 @@
 //! Which process a command about an app is for: a process ID, or a name
 //! found among the helper's windows and running apps.
-use super::windows::verified_window_list;
+use super::windows::verified_window_snapshot;
 use crate::{
+    actions::Expect,
     client::{Client, Verified},
     error::{Code, Error, Result},
-    native::windows::{MENU_LAYER, Window},
-    process::{self, Instance},
+    native::windows::{MENU_LAYER, Shown, Window},
+    process::{Instance, Start},
     ui::text::same_text,
 };
 use serde_json::Value;
-use std::future::Future;
+use std::collections::BTreeMap;
 
-/// Bind a resolution to the process instances observed before its helper
-/// snapshots. A process absent then, or replaced before the final check,
-/// cannot inherit the resolved app's identity. Each lookup runs once.
-pub(super) async fn resolved_instance(
-    client: &Client,
-    resolution: impl Future<Output = Result<i64>>,
-) -> Result<Instance> {
-    let instances = instances(client)?;
-    let pid = resolution.await?;
-    let instance = instances
-        .into_iter()
-        .find(|instance| i64::from(instance.pid) == pid)
-        .ok_or_else(changed_process)?;
-    if started(client, instance.pid).map_err(|_| changed_process())? != instance.start {
-        return Err(changed_process());
-    }
-    Ok(instance)
-}
-
-fn instances(client: &Client) -> Result<Vec<Instance>> {
-    #[cfg(test)]
-    if let Some(lookup) = &client.process_lookup {
-        return lookup.instances(client.config.helper_uid);
-    }
-    Ok(process::of_user(client.config.helper_uid)?
-        .into_iter()
-        .map(|info| info.instance)
-        .collect())
-}
-
-fn started(_client: &Client, pid: i32) -> Result<process::Start> {
-    #[cfg(test)]
-    if let Some(lookup) = &_client.process_lookup {
-        return lookup.start(pid);
-    }
-    process::start(pid)
-}
-
-fn changed_process() -> Error {
-    Error::new(
-        Code::Elements,
-        "The app's process changed while it was being resolved; look again",
-    )
+/// Bind the target to the identity read with its helper snapshot. Older
+/// helpers omit identities: the input service then pins at admission.
+/// A current snapshot without this PID must never adopt its replacement.
+pub(super) fn snapshot_expect(pid: i64, starts: Option<&BTreeMap<i64, Start>>) -> Result<Expect> {
+    let expect = Expect::new(pid)?;
+    let Some(starts) = starts else {
+        return Ok(expect);
+    };
+    let start = starts
+        .get(&pid)
+        .copied()
+        .filter(|start| start[0] > 0 && start[1] < 1_000_000)
+        .ok_or_else(|| {
+            Error::new(
+                Code::Elements,
+                "The app's process changed while it was being resolved; look again",
+            )
+        })?;
+    Expect::from_instance(Instance::new(pid as i32, start))
 }
 
 /// An app's identity from the helper's app list, when every process of
@@ -143,30 +120,53 @@ pub(super) async fn target_pid(
     verified: &Verified,
     target: &Target,
 ) -> Result<i64> {
-    let listed = match target {
-        Target::Pid(_) => Vec::new(),
-        Target::Name(_) => verified_window_list(client, verified).await?,
-    };
-    target_pid_among(client, verified, target, &listed).await
+    Ok(target_expect(client, verified, target).await?.pid())
 }
 
-/// [`target_pid`] with the helper's windows `listed` already read; a
-/// process ID needs none of them.
-pub(super) async fn target_pid_among(
+/// Resolve input and named clicks through the same helper snapshot.
+pub(super) async fn target_expect(
     client: &Client,
     verified: &Verified,
     target: &Target,
-    listed: &[Window],
-) -> Result<i64> {
+) -> Result<Expect> {
+    let listed = match target {
+        Target::Pid(_) => None,
+        Target::Name(_) => Some(verified_window_snapshot(client, verified).await?),
+    };
+    target_among(client, verified, target, listed.as_ref()).await
+}
+
+/// Resolve with an already-read window snapshot when available.
+pub(super) async fn target_among(
+    client: &Client,
+    verified: &Verified,
+    target: &Target,
+    listed: Option<&Shown>,
+) -> Result<Expect> {
+    if let Target::Name(name) = target
+        && let Some(listed) = listed
+    {
+        let pids = app_pids(&listed.windows, name);
+        if !pids.is_empty() {
+            return snapshot_expect(one_pid(name, &pids)?, listed.starts.as_ref());
+        }
+    }
+
+    let apps = client.apps_in(verified).await?;
+    let starts: Option<BTreeMap<i64, Start>> = apps
+        .get("starts")
+        .map(|value| serde_json::from_value(value.clone()))
+        .transpose()
+        .map_err(|_| {
+            Error::new(
+                Code::Protocol,
+                "The helper's process identities were malformed",
+            )
+        })?;
+    let rows = apps["apps"].as_array().expect("validated app list");
     let name = match target {
         Target::Pid(pid) => {
-            let apps = client.apps_in(verified).await?;
-            let running = apps["apps"]
-                .as_array()
-                .into_iter()
-                .flatten()
-                .any(|app| app["pid"] == *pid);
-            if !running {
+            if !rows.iter().any(|app| app["pid"] == *pid) {
                 return Err(Error::new(
                     Code::Elements,
                     format!(
@@ -174,32 +174,18 @@ pub(super) async fn target_pid_among(
                     ),
                 ));
             }
-
-            return Ok(*pid);
+            return snapshot_expect(*pid, starts.as_ref());
         }
         Target::Name(name) => name,
     };
-
-    let pids = app_pids(listed, name);
-    if !pids.is_empty() {
-        return one_pid(name, &pids);
-    }
-
-    let apps = client.apps_in(verified).await?;
-    let named: Vec<&Value> = apps["apps"]
-        .as_array()
-        .into_iter()
-        .flatten()
-        .filter(|app| app_named(app, name))
-        .collect();
+    let named: Vec<&Value> = rows.iter().filter(|app| app_named(app, name)).collect();
     if let Some(pid) = named
         .iter()
         .find(|app| app["active"] == true)
         .and_then(|app| app["pid"].as_i64())
     {
-        return Ok(pid);
+        return snapshot_expect(pid, starts.as_ref());
     }
-
     Err(Error::new(
         Code::Elements,
         if named.is_empty() {

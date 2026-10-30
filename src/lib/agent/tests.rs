@@ -16,200 +16,57 @@ use crate::{
 use serde_json::{Value, json};
 use std::{collections::BTreeMap, path::Path, time::Duration};
 
-struct ResolutionProcess {
-    original: crate::process::Instance,
-    after: Option<crate::process::Start>,
-    captures: std::sync::atomic::AtomicUsize,
-    snapshots: std::sync::atomic::AtomicUsize,
-    checks: std::sync::atomic::AtomicUsize,
+#[test]
+fn helper_identity_resolves_even_when_the_process_is_unavailable_to_the_controller() {
+    let pid = i64::from(i32::MAX);
+    let start = [123, 456];
+    let starts = BTreeMap::from([(pid, start)]);
+    let expect = snapshot_expect(pid, Some(&starts)).unwrap();
+    assert_eq!(
+        serde_json::to_value(&expect).unwrap(),
+        json!({"pid":pid,"start":start})
+    );
+    assert_eq!(expect.app_only().instance(), expect.instance());
 }
 
-impl ResolutionProcess {
-    fn new(replaced: bool, gone: bool) -> Self {
-        let original = crate::process::Instance::current().unwrap();
-        let mut after = original.start;
-        if replaced {
-            after[0] += 1;
-        }
-        Self {
-            original,
-            after: (!gone).then_some(after),
-            captures: 0.into(),
-            snapshots: 0.into(),
-            checks: 0.into(),
-        }
-    }
-
-    fn snapshot(&self) {
-        use std::sync::atomic::Ordering::SeqCst;
-        assert_eq!(
-            self.captures.load(SeqCst),
-            1,
-            "capture precedes the snapshot"
-        );
-        assert_eq!(self.checks.load(SeqCst), 0, "recheck follows the snapshot");
-        assert_eq!(self.snapshots.fetch_add(1, SeqCst), 0);
-    }
-
-    fn checked_once(&self) {
-        use std::sync::atomic::Ordering::SeqCst;
-        assert_eq!(self.captures.load(SeqCst), 1);
-        assert_eq!(self.snapshots.load(SeqCst), 1);
-        assert_eq!(self.checks.load(SeqCst), 1);
+#[test]
+fn a_current_snapshot_without_the_process_identity_refuses_instead_of_adopting_it() {
+    for starts in [
+        BTreeMap::new(),
+        BTreeMap::from([(812, [0, 1])]),
+        BTreeMap::from([(812, [123, 1_000_000])]),
+    ] {
+        let error = snapshot_expect(812, Some(&starts)).unwrap_err();
+        assert_eq!(error.code, Code::Elements);
+        assert!(!error.uncertain);
     }
 }
 
-impl crate::test_support::ProcessLookup for ResolutionProcess {
-    fn instances(&self, uid: u32) -> Result<Vec<crate::process::Instance>> {
-        use std::sync::atomic::Ordering::SeqCst;
-        assert_eq!(uid, crate::test_support::UID);
-        assert_eq!(self.captures.fetch_add(1, SeqCst), 0);
-        assert_eq!(self.snapshots.load(SeqCst), 0);
-        Ok(vec![self.original])
-    }
-
-    fn start(&self, pid: i32) -> Result<crate::process::Start> {
-        use std::sync::atomic::Ordering::SeqCst;
-        assert_eq!(pid, self.original.pid);
-        assert_eq!(self.snapshots.load(SeqCst), 1);
-        assert_eq!(self.checks.fetch_add(1, SeqCst), 0);
-        self.after
-            .ok_or_else(|| Error::new(Code::State, "The process exited"))
-    }
+#[test]
+fn an_older_snapshot_leaves_the_instance_for_the_input_service_to_pin() {
+    let expect = snapshot_expect(812, None).unwrap();
+    assert_eq!(serde_json::to_value(&expect).unwrap(), json!({"pid":812}));
+    assert_eq!(expect.instance(), None);
 }
 
-#[tokio::test]
-async fn resolution_brackets_the_snapshot_and_carries_only_the_original_instance() {
-    for (replaced, gone) in [(false, false), (true, false), (false, true)] {
-        let directory = tempfile::tempdir().unwrap();
-        let mut client = crate::test_support::client(directory.path());
-        let process = std::sync::Arc::new(ResolutionProcess::new(replaced, gone));
-        client.process_lookup = Some(process.clone());
-        let resolved = resolved_instance(&client, async {
-            process.snapshot();
-            Ok(i64::from(process.original.pid))
+#[test]
+fn window_snapshot_identities_are_read_but_never_appear_in_the_public_window_rows() {
+    let reply = crate::test_support::completed(
+        &json!({
+            "ok":true,"starts":{"812":[123,456]},"windows":[window(42,812,"Editor",0)]
         })
-        .await;
-        if replaced || gone {
-            let error = resolved.unwrap_err();
-            assert_eq!(error.code, Code::Elements);
-            assert!(!error.uncertain);
-        } else {
-            let instance = resolved.unwrap();
-            assert_eq!(instance, process.original);
-            let expect = Expect::from_instance(instance).unwrap();
-            assert_eq!(expect.instance(), Some(process.original));
-            assert_eq!(expect.app_only().instance(), Some(process.original));
-        }
-        process.checked_once();
-    }
-}
-
-#[tokio::test]
-async fn a_process_missing_before_the_snapshot_cannot_be_pinned_after_it() {
-    let directory = tempfile::tempdir().unwrap();
-    let mut client = crate::test_support::client(directory.path());
-    let process = std::sync::Arc::new(ResolutionProcess::new(false, false));
-    client.process_lookup = Some(process.clone());
-    let error = resolved_instance(&client, async {
-        process.snapshot();
-        Ok(i64::from(process.original.pid) + 1)
-    })
-    .await
-    .unwrap_err();
-    assert_eq!(error.code, Code::Elements);
-    assert_eq!(process.checks.load(std::sync::atomic::Ordering::SeqCst), 0);
-}
-
-/// Reply with the original app's snapshot, then expose its replacement to
-/// the kernel lookup. Empty windows exercise the active-app fallback.
-fn replaced_app_reads<'a>(
-    process: &'a ResolutionProcess,
-    windowless: bool,
-) -> impl FnMut(&Value) -> Option<Value> + 'a {
-    move |request| {
-        use crate::test_support::completed;
-        let pid = process.original.pid;
-        if request["op"] == "apps" {
-            let apps = json!({"ok":true,"apps":[{"pid":pid,"name":"Editor","active":true}]});
-            process.snapshot();
-            return Some(apps);
-        }
-        assert_eq!(
-            request["argv"][1], "windows-info",
-            "refuse before scanning or input"
-        );
-        let windows = if windowless {
-            Vec::new()
-        } else {
-            vec![window(42, i64::from(pid), "Editor", 0)]
-        };
-        let reply = completed(&json!({"ok":true,"windows":windows}).to_string());
-        if !windowless {
-            process.snapshot();
-        }
-        Some(reply)
-    }
-}
-
-#[tokio::test]
-async fn input_refuses_a_pid_replaced_between_the_resolution_snapshot_and_pin() {
-    use crate::test_support::{Helper, UID};
-
-    let pid = i64::from(std::process::id());
-    for (target, number, windowless) in [
-        (Some(Target::Name("Editor".into())), None, false),
-        (Some(Target::Pid(pid)), None, false),
-        (Some(Target::Name("Editor".into())), None, true),
-        (None, Some(42), false),
-        (Some(Target::Name("Editor".into())), Some(42), false),
-    ] {
-        let directory = tempfile::tempdir().unwrap();
-        let (mut client, helper) = Helper::client(directory.path(), UID);
-        let process = std::sync::Arc::new(ResolutionProcess::new(true, false));
-        client.process_lookup = Some(process.clone());
-        let expected = Expected::new(target, number, None).unwrap().unwrap();
-        let error = helper
-            .serve(
-                act(&client, Some(&expected), &json!([{"type":"key","key":"a"}])),
-                replaced_app_reads(&process, windowless),
-            )
-            .await
-            .unwrap_err();
-        assert_eq!(error.code, Code::Elements, "{error}");
-        assert!(error.error.contains("process changed"), "{error}");
-        assert!(!error.uncertain);
-        process.checked_once();
-        assert!(client.controller.pending().unwrap().is_empty());
-    }
-}
-
-#[tokio::test]
-async fn named_click_refuses_a_pid_replaced_between_the_resolution_snapshot_and_pin() {
-    use crate::test_support::{Helper, UID};
-
-    for (target, windowless) in [
-        (Target::Name("Editor".into()), false),
-        (Target::Pid(i64::from(std::process::id())), false),
-        (Target::Name("Editor".into()), true),
-    ] {
-        let directory = tempfile::tempdir().unwrap();
-        let (mut client, helper) = Helper::client(directory.path(), UID);
-        let process = std::sync::Arc::new(ResolutionProcess::new(true, false));
-        client.process_lookup = Some(process.clone());
-        let error = helper
-            .serve(
-                click_element(&client, &target, &named("Save"), Button::Left, 1, &[]),
-                replaced_app_reads(&process, windowless),
-            )
-            .await
-            .unwrap_err();
-        assert_eq!(error.code, Code::Elements, "{error}");
-        assert!(error.error.contains("process changed"), "{error}");
-        assert!(!error.uncertain);
-        process.checked_once();
-        assert!(client.controller.pending().unwrap().is_empty());
-    }
+        .to_string(),
+    );
+    let snapshot = crate::native::windows::from_probe(&reply).unwrap();
+    let expect = snapshot_expect(snapshot.windows[0].pid, snapshot.starts.as_ref()).unwrap();
+    assert_eq!(
+        serde_json::to_value(expect).unwrap(),
+        json!({"pid":812,"start":[123,456]})
+    );
+    let public = json!({"ok":true,"windows":snapshot.windows});
+    assert!(public.get("starts").is_none());
+    assert!(public["windows"][0].get("start").is_none());
+    assert!(public["windows"][0].get("starts").is_none());
 }
 
 /// The stand-in helper's answer to a read: TextEdit (812) with one
@@ -476,8 +333,10 @@ fn two_apps(lists: &std::cell::Cell<usize>) -> impl FnMut(&Value) -> Option<Valu
         use crate::test_support::completed;
 
         if request["op"] == "apps" {
-            return Some(json!({"ok": true, "apps": [
-                {"pid": std::process::id(), "name": "TextEdit"}, {"pid": 900, "name": "Calculator"}]}));
+            return Some(
+                json!({"ok": true, "starts": {"812":[123,456],"900":[124,0]}, "apps": [
+                {"pid": 812, "name": "TextEdit"}, {"pid": 900, "name": "Calculator"}]}),
+            );
         }
         assert_eq!(request["argv"][1], "windows-info", "nothing else is read");
         lists.set(lists.get() + 1);
@@ -486,8 +345,8 @@ fn two_apps(lists: &std::cell::Cell<usize>) -> impl FnMut(&Value) -> Option<Valu
             "owner": owner, "title": null, "layer": 0, "alpha": 1.0,
             "bounds": {"x": 0, "y": 0, "width": 100, "height": 100}})
         };
-        let listed = json!({"ok": true, "windows": [
-            window(4120, i64::from(std::process::id()), "TextEdit"), window(339, 900, "Calculator")]});
+        let listed = json!({"ok": true, "starts": {"812":[123,456],"900":[124,0]}, "windows": [
+            window(4120, 812, "TextEdit"), window(339, 900, "Calculator")]});
         Some(completed(&listed.to_string()))
     }
 }
@@ -521,13 +380,13 @@ async fn an_expectation_is_resolved_in_the_helper_with_one_window_list() {
     let (alone, lists) = resolved(Expected::new(None, Some(4120), field()).unwrap()).await;
     assert_eq!(
         serde_json::to_value(alone.unwrap()).unwrap(),
-        json!({"pid": std::process::id(), "start": crate::process::start(std::process::id() as i32).unwrap(), "window": 4120, "field": "Email"}),
+        json!({"pid": 812, "start": [123, 456], "window": 4120, "field": "Email"}),
         "the window names its app"
     );
     assert_eq!(lists, 1);
 
     let (both, lists) = resolved(Expected::new(textedit(), Some(4120), None).unwrap()).await;
-    assert_eq!(both.unwrap().pid(), i64::from(std::process::id()));
+    assert_eq!(both.unwrap().pid(), 812);
     assert_eq!(lists, 1, "the app is found in the same list");
 
     let calculator = Some(Target::Name("Calculator".into()));
@@ -544,7 +403,7 @@ async fn an_expectation_is_resolved_in_the_helper_with_one_window_list() {
     let (app, _) = resolved(Expected::new(textedit(), None, field()).unwrap()).await;
     assert_eq!(
         serde_json::to_value(app.unwrap()).unwrap(),
-        json!({"pid": std::process::id(), "start": crate::process::start(std::process::id() as i32).unwrap(), "field": "Email"})
+        json!({"pid": 812, "start": [123, 456], "field": "Email"})
     );
 }
 
