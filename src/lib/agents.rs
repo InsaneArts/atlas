@@ -15,6 +15,7 @@ use std::{
     time::Duration,
 };
 
+mod cached;
 mod cursor;
 mod opencode;
 mod pi;
@@ -205,18 +206,6 @@ impl Agent {
                 argv(&["plugin", "remove", PLUGIN]),
                 argv(&["plugin", "marketplace", "remove", NAME]),
             ],
-            Agent::Pi | Agent::Opencode | Agent::Cursor => vec![],
-        }
-    }
-
-    /// The argv that bring its copy of the plugin up to date.
-    fn update(self) -> Vec<Vec<String>> {
-        match self {
-            Agent::Claude => vec![
-                argv(&["plugin", "marketplace", "update", NAME]),
-                argv(&["plugin", "update", PLUGIN]),
-            ],
-            Agent::Codex => vec![argv(&["plugin", "add", PLUGIN])],
             Agent::Pi | Agent::Opencode | Agent::Cursor => vec![],
         }
     }
@@ -717,14 +706,7 @@ fn connect_agent(
     marketplace: &Path,
     source: &std::result::Result<Option<Source>, String>,
 ) -> Result<Removal> {
-    let steps = agent.connecting(marketplace, source.as_ref().ok().and_then(Option::as_ref))?;
-
-    steps
-        .iter()
-        .map(|argv| run(agent, argv))
-        .find(Result::is_err)
-        .unwrap_or(Ok(()))
-        .map(|()| Removal::Changed)
+    cached::connect(agent, marketplace, source, cached::Mode::Install)
 }
 
 /// What removing the plugin from an agent did.
@@ -801,11 +783,14 @@ pub fn refresh() -> Value {
                 marketplace()
                     .and_then(|source| cursor::change(Some(&source)))
                     .err()
+            } else if matches!(agent, Agent::Claude | Agent::Codex) {
+                marketplace()
+                    .and_then(|path| {
+                        cached::connect(agent, &path, &agent.source(), cached::Mode::Refresh)
+                    })
+                    .err()
             } else {
-                agent
-                    .update()
-                    .iter()
-                    .find_map(|argv| run(agent, argv).err())
+                None
             };
             json!({"agent": agent.name(), "ok": failed.is_none(), "error": failed.map(|e| e.error)})
         })
