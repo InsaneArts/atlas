@@ -26,8 +26,8 @@ struct PictureTreatment: ViewModifier {
   /// - Returns: The saturation, 1 for all of it.
   nonisolated static func saturation(for look: PictureLook) -> Double {
     switch look {
-    case .dimmed: Layout.dimSaturation
-    case .paused: Layout.pausedSaturation
+    case .dimmed: PictureTreatmentLayout.dimSaturation
+    case .paused: PictureTreatmentLayout.pausedSaturation
     case .live, .inControl: 1
     }
   }
@@ -38,23 +38,11 @@ struct PictureTreatment: ViewModifier {
   /// - Returns: The black's opacity, 0 for none.
   nonisolated static func shade(for look: PictureLook) -> Double {
     switch look {
-    case .dimmed: Layout.dimShade
-    case .paused: Layout.pausedShade
+    case .dimmed: PictureTreatmentLayout.dimShade
+    case .paused: PictureTreatmentLayout.pausedShade
     case .live, .inControl: 0
     }
   }
-}
-
-/// The treatment's own measures for dimmed and paused pictures.
-private enum Layout {
-  /// 0.55: how much colour a dimmed picture keeps.
-  static let dimSaturation = 0.55
-  /// 0.4: the black over a dimmed picture, which leaves it at 0.6 brightness.
-  static let dimShade = 0.4
-  /// 0.5: how much colour a paused picture keeps.
-  static let pausedSaturation = 0.5
-  /// 0.3: the black over a paused picture, which leaves it at 0.7 brightness.
-  static let pausedShade = 0.3
 }
 
 #if DEBUG

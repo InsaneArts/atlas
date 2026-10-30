@@ -11,7 +11,10 @@ struct SuccessIcon: View {
   /// Whether the icon has settled into place.
   @State private var hasArrived = false
   @Environment(\.animatesArrivals) private var animatesArrivals
-  @Environment(\.accessibilityReduceMotion) private var reduceMotion
+  @Environment(\.motionReduced) private var reduceMotion
+
+  /// 0.92: the size the icon settles from.
+  private static let arrivingScale: CGFloat = 0.92
 
   /// The icon, settling.
   var body: some View {
@@ -30,7 +33,7 @@ struct SuccessIcon: View {
   /// The icon's scale: 92% until it settles; whole under Reduce Motion, where it only fades.
   private var iconScale: CGFloat {
     guard !isSettled, !reduceMotion else { return 1 }
-    return Layout.arrivingScale
+    return Self.arrivingScale
   }
 
   /// Plays the moment once, as the icon arrives: it settles on ``Motion/settle``. A render plays nothing.
@@ -41,12 +44,6 @@ struct SuccessIcon: View {
     }
     played()
   }
-}
-
-/// The success moment's measures.
-private enum Layout {
-  /// 0.92: the size the icon settles from.
-  static let arrivingScale: CGFloat = 0.92
 }
 
 #if DEBUG

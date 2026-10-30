@@ -6,8 +6,8 @@ import SwiftUI
 /// faint whole oval instead.
 struct OrbitRing: View {
   /// Where along the oval the bright quarter starts, a fraction of one turn.
-  @State private var phase = Layout.start
-  @Environment(\.accessibilityReduceMotion) private var reduceMotion
+  @State private var phase = OrbitRingLayout.start
+  @Environment(\.motionReduced) private var reduceMotion
   @Environment(\.animatesArrivals) private var animatesArrivals
 
   /// The travelling quarter, or the still faint oval.
@@ -17,7 +17,7 @@ struct OrbitRing: View {
         Ellipse()
           .stroke(Color.strokeHighlight, lineWidth: Stroke.emphasis)
       } else {
-        TracingArc(phase: phase, arc: Layout.arc)
+        TracingArc(phase: phase, arc: OrbitRingLayout.arc)
           .stroke(
             Color.textPrimary
               .opacity(Opacity.muted),
@@ -25,7 +25,7 @@ struct OrbitRing: View {
           )
       }
     }
-    .padding(-Layout.reach)
+    .padding(-OrbitRingLayout.reach)
     .appearsAfterDelay()
     .accessibilityHidden(true)
     .onAppear(perform: trace)
@@ -41,20 +41,10 @@ struct OrbitRing: View {
   private func trace() {
     var still = Transaction()
     still.disablesAnimations = true
-    withTransaction(still) { phase = Layout.start }
+    withTransaction(still) { phase = OrbitRingLayout.start }
     guard !isStill else { return }
-    withAnimation(Motion.trace) { phase = Layout.start + 1 }
+    withAnimation(Motion.trace) { phase = OrbitRingLayout.start + 1 }
   }
-}
-
-/// The ring's own measures.
-private enum Layout {
-  /// 14: how far outside the mark's box the oval lies.
-  static let reach = Spacing.mPlus
-  /// A quarter of the oval shines.
-  static let arc = 0.25
-  /// 0.625: where the quarter starts, so at rest it sits centred over the mark's top.
-  static let start = 0.625
 }
 
 #if DEBUG

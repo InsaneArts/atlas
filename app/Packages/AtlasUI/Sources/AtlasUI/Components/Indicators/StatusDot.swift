@@ -20,14 +20,14 @@ struct StatusDot: View {
   /// How large a dot or a breathing dot is.
   var size = Size.regular
   @State private var dim = false
-  @Environment(\.accessibilityReduceMotion) private var reduceMotion
+  @Environment(\.motionReduced) private var reduceMotion
 
   /// The mark at its side, glowing or breathing as its tone asks.
   var body: some View {
     shape
       .frame(width: side, height: side)
-      .shadow(color: glows ? tone.color : .clear, radius: Layout.glow)
-      .opacity(breathes && dim ? Layout.dimmed : 1)
+      .shadow(color: glows ? tone.color : .clear, radius: StatusDotLayout.glow)
+      .opacity(breathes && dim ? StatusDotLayout.dimmed : 1)
       .onAppear(perform: breathe)
       .onChange(of: breathes) { breathe() }
       .onChange(of: reduceMotion) { breathe() }
@@ -38,7 +38,7 @@ struct StatusDot: View {
   @ViewBuilder private var shape: some View {
     switch mark {
     case .square:
-      RoundedRectangle(cornerRadius: Layout.squareCorner, style: .continuous)
+      RoundedRectangle(cornerRadius: StatusDotLayout.squareCorner, style: .continuous)
         .fill(tone.color)
     case .dot, .pulsing, .small:
       Circle()
@@ -60,10 +60,10 @@ struct StatusDot: View {
   /// The mark's side.
   private var side: CGFloat {
     switch (mark, size) {
-    case (.square, _): Layout.square
+    case (.square, _): StatusDotLayout.square
     case (.small, _), (_, .small): IconSize.xxs
-    case (_, .regular): Layout.regular
-    case (_, .large): Layout.large
+    case (_, .regular): StatusDotLayout.regular
+    case (_, .large): StatusDotLayout.large
     }
   }
 
@@ -75,23 +75,6 @@ struct StatusDot: View {
     }
     withAnimation(Motion.pulse) { dim = true }
   }
-}
-
-/// The marks' own measures for status dots and squares.
-private enum Layout {
-  /// 7: a status dot.
-  static let regular: CGFloat = 7
-  /// 8: a status dot beside a heading.
-  static let large: CGFloat = 8
-  /// 8: the stopped square.
-  static let square: CGFloat = 8
-  /// 2: the square's corners, softened as the system's stop buttons are.
-  static let squareCorner: CGFloat = 2
-  /// 4: the glow around a dot, half an equivalent 8-point CSS blur, since a shadow's radius spreads about
-  /// twice as far.
-  static let glow: CGFloat = 4
-  /// 0.35: the low point of a breath.
-  static let dimmed = 0.35
 }
 
 #if DEBUG

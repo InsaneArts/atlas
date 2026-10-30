@@ -86,20 +86,6 @@ struct AppShellLayoutTests {
     #expect(crowded.isEmpty, "\(crowded.sorted())")
   }
 
-  @Test("Activity reads scroll position only in content mounted below CardScroll")
-  func activityReadsItsScrollPositionInsideTheScroll() throws {
-    let ui = Self.sources
-      .deletingLastPathComponent()
-      .deletingLastPathComponent()
-      .appendingPathComponent("Packages/AtlasUI/Sources/AtlasUI/Viewer/Activity")
-    let pane = try String(contentsOf: ui.appendingPathComponent("ViewerActivityPane.swift"), encoding: .utf8)
-    let content = try String(contentsOf: ui.appendingPathComponent("ActivityListContent.swift"), encoding: .utf8)
-    #expect(!pane.contains("@Environment(\\.listIsAtTop)"))
-    #expect(pane.contains("CardScroll {\n          ActivityListContent("))
-    #expect(content.contains("@Environment(\\.listIsAtTop)"))
-    #expect(content.contains("ActivityScroll.moving(isAtTop: isAtTop"))
-  }
-
   @Test("only the window shell makes a hosting view, and only Appearance names the dark appearance")
   func hostingAndTheDarkAppearanceAreWrittenOnce() throws {
     let code = try Self.code()

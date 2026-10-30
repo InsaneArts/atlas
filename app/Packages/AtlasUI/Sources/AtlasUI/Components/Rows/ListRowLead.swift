@@ -43,14 +43,14 @@ struct ListRowLead: View {
         .transition(Motion.transition(Self.landing(state, swapsAtOnce: swapsAtOnce), reduceMotion: reduceMotion))
     case .pending:
       Circle()
-        .strokeBorder(Color.strokeControl, lineWidth: Layout.ring)
+        .strokeBorder(Color.strokeControl, lineWidth: ListRowLeadLayout.ring)
         .frame(width: ListRow.leadWidth(lead), height: ListRow.leadWidth(lead))
         .accessibilityHidden(true)
     }
   }
 
   /// How a check's new mark takes the old one's place: popping in from small as it fades in; or, where marks swap at
-  /// once, a spinner fading in with no scale, a result popping in from ``Layout/landingScale``, and the old mark only
+  /// once, a spinner fading in with no scale, a result popping in from ``ListRowLeadLayout/landingScale``, and the old mark only
   /// fading out.
   ///
   /// - Parameters:
@@ -58,19 +58,11 @@ struct ListRowLead: View {
   ///   - swapsAtOnce: Whether marks swap at once here.
   /// - Returns: The transition.
   static func landing(_ state: CheckState, swapsAtOnce: Bool) -> AnyTransition {
-    let popping = AnyTransition.scale(scale: swapsAtOnce ? Layout.landingScale : Layout.markArrival)
-      .combined(with: .opacity)
+    let popping = AnyTransition.scale(
+      scale: swapsAtOnce ? ListRowLeadLayout.landingScale : ListRowLeadLayout.markArrival
+    )
+    .combined(with: .opacity)
     guard swapsAtOnce else { return popping }
     return .asymmetric(insertion: state == .busy ? .opacity : popping, removal: .opacity)
   }
-}
-
-/// A lead's own measures.
-private enum Layout {
-  /// 1.2: the empty ring's line.
-  static let ring: CGFloat = 1.2
-  /// 0.5: how small a check's new mark starts as it pops in.
-  static let markArrival: CGFloat = 0.5
-  /// 0.6: how small a result starts as it lands where marks swap at once.
-  static let landingScale: CGFloat = 0.6
 }

@@ -35,17 +35,12 @@ struct ActivityMark: View {
         .overlay {
           Capsule()
             .fill(Color.textTertiary)
-            .frame(width: Layout.dash, height: Stroke.regular)
+            // 6: the dash across the not-sent ring, half its 12-point side.
+            .frame(width: IconSize.xxs, height: Stroke.regular)
         }
         .frame(width: IconSize.xs, height: IconSize.xs)
     }
   }
-}
-
-/// The mark's own measures.
-private enum Layout {
-  /// 6: the dash across the not-sent ring, half its side.
-  static let dash = IconSize.xs / 2
 }
 
 #if DEBUG

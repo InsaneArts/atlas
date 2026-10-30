@@ -3,6 +3,8 @@ import SwiftUI
 /// A glyph on a tile in an app icon's place, on the icon grid so it stands the size of the real icons beside it: a
 /// quiet tile for what was done in no app, such as commands, or the person's blue mark. No edge and no shadow.
 struct IconGridTile: View {
+  /// The glyph takes half the tile's body, as a monogram's letter does.
+  private static let glyphShare: CGFloat = 0.5
   /// How the tile is coloured.
   enum Tone: Sendable {
     /// A control's fill under a secondary glyph.
@@ -22,7 +24,7 @@ struct IconGridTile: View {
   var body: some View {
     let body = side * IconGrid.bodyShare
     Image(systemName: symbol.rawValue)
-      .font(Typography.font(size: body * Layout.glyphShare, weight: .semibold))
+      .font(Typography.font(size: body * Self.glyphShare, weight: .semibold))
       .foregroundStyle(tone == .accent ? Color.onAccent : Color.textSecondary)
       .frame(width: body, height: body)
       .background(
@@ -32,10 +34,4 @@ struct IconGridTile: View {
       .frame(width: side, height: side)
       .accessibilityHidden(true)
   }
-}
-
-/// The tile's own measures.
-private enum Layout {
-  /// 0.5: the glyph against the body's side, as a monogram's letter is.
-  static let glyphShare: CGFloat = 0.5
 }

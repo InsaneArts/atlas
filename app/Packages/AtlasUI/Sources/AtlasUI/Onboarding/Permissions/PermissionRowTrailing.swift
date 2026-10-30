@@ -40,20 +40,14 @@ struct PermissionRowTrailing: View {
   /// How one standing gives way to the next: the old one shrinks out as it fades, the new one pops in.
   private static var landing: AnyTransition {
     .asymmetric(
-      insertion: .scale(scale: Layout.landingScale, anchor: .trailing)
+      insertion: .scale(scale: PermissionRowTrailingLayout.landingScale, anchor: .trailing)
         .combined(with: .opacity)
         .animation(Motion.pop),
-      removal: .scale(scale: Layout.landingScale, anchor: .trailing)
+      removal: .scale(scale: PermissionRowTrailingLayout.landingScale, anchor: .trailing)
         .combined(with: .opacity)
         .animation(Motion.leave)
     )
   }
-}
-
-/// The landing mark's measures, as ``OutcomeMark`` lands.
-private enum Layout {
-  /// 0.6: the size a standing shrinks to as it leaves, and pops in from.
-  static let landingScale: CGFloat = 0.6
 }
 
 #if DEBUG

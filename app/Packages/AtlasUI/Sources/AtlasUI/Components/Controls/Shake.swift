@@ -22,11 +22,11 @@ struct Shake: ViewModifier {
         // comes, so under Reduce Motion every step stays home.
         let swings = Self.swings(reduceMotion: reduceMotion)
         KeyframeTrack {
-          LinearKeyframe(swings[0], duration: Layout.step)
-          LinearKeyframe(swings[1], duration: Layout.step)
-          LinearKeyframe(swings[2], duration: Layout.step)
-          LinearKeyframe(swings[3], duration: Layout.step)
-          LinearKeyframe(swings[4], duration: Layout.step)
+          LinearKeyframe(swings[0], duration: ShakeLayout.step)
+          LinearKeyframe(swings[1], duration: ShakeLayout.step)
+          LinearKeyframe(swings[2], duration: ShakeLayout.step)
+          LinearKeyframe(swings[3], duration: ShakeLayout.step)
+          LinearKeyframe(swings[4], duration: ShakeLayout.step)
         }
       }
   }
@@ -37,21 +37,9 @@ struct Shake: ViewModifier {
   /// - Parameter reduceMotion: Whether the Reduce Motion setting is on.
   /// - Returns: The five offsets.
   nonisolated static func swings(reduceMotion: Bool) -> [CGFloat] {
-    guard !reduceMotion else { return Array(repeating: .zero, count: Layout.steps) }
-    return [-Layout.far, Layout.far, -Layout.near, Layout.near, .zero]
+    guard !reduceMotion else { return Array(repeating: .zero, count: ShakeLayout.steps) }
+    return [-ShakeLayout.far, ShakeLayout.far, -ShakeLayout.near, ShakeLayout.near, .zero]
   }
-}
-
-/// The shake's horizontal offsets, shrinking as the motion settles.
-private enum Layout {
-  /// 5: the first, furthest swing.
-  static let far: CGFloat = 5
-  /// 3: the second, nearer swing.
-  static let near: CGFloat = 3
-  /// 5: the shake's steps.
-  static let steps = 5
-  /// One fifth of the shake.
-  static let step = Motion.Duration.shake.seconds / Double(steps)
 }
 
 #if DEBUG

@@ -35,7 +35,7 @@ struct FieldRow: View {
       Text(label)
         .textStyle(.body)
         .foregroundStyle(isFlagged ? Color.textAttention : Color.textSecondary)
-        .frame(width: Layout.labelWidth, alignment: .leading)
+        .frame(width: FieldRowLayout.labelWidth, alignment: .leading)
       field
         .textFieldStyle(.plain)
         .textStyle(.body)
@@ -100,7 +100,7 @@ struct FieldRow: View {
       .strokeBorder(Color.strokeFocus, lineWidth: Stroke.regular)
       .background(
         RoundedRectangle(cornerRadius: Radius.small, style: .continuous)
-          .stroke(Color.accentRing, lineWidth: Layout.haloWidth)
+          .stroke(Color.accentRing, lineWidth: FieldRowLayout.haloWidth)
       )
       .padding(Spacing.xs)
       .opacity(isFocused ? 1 : 0)
@@ -117,14 +117,6 @@ struct FieldRow: View {
   nonisolated static func takesFocus(isFlagged: Bool, isOtherFieldFocused: Bool) -> Bool {
     isFlagged && !isOtherFieldFocused
   }
-}
-
-/// The field row's own measures for its label and focus ring.
-private enum Layout {
-  /// 112: the labels' column, wide enough for "Account name" so the fields line up.
-  static let labelWidth: CGFloat = 112
-  /// 3: the focus ring's soft halo, half of it outside the fine edge.
-  static let haloWidth: CGFloat = 3
 }
 
 #if DEBUG

@@ -106,7 +106,7 @@ struct ListRow: View {
     var verticalInset: CGFloat {
       switch self {
       case .regular: Spacing.sPlus
-      case .compact: Layout.compactVerticalInset
+      case .compact: ListRowLayout.compactVerticalInset
       case .dense, .tight, .checklist: Spacing.xs
       }
     }
@@ -124,9 +124,9 @@ struct ListRow: View {
     /// The row's least height.
     var height: CGFloat {
       switch self {
-      case .regular: Layout.regularHeight
+      case .regular: ListRowLayout.regularHeight
       case .compact, .checklist: ControlHeight.xl
-      case .dense: Layout.denseHeight
+      case .dense: ListRowLayout.denseHeight
       case .tight: ControlHeight.mPlus
       }
     }
@@ -282,16 +282,6 @@ struct ListRow: View {
     case .none, .tile, .image, .mark, .picture, .letter: return .medium
     }
   }
-}
-
-/// A row's own measures for content and separators.
-private enum Layout {
-  /// 7: above and below a Settings row's content.
-  static let compactVerticalInset: CGFloat = 7
-  /// 48: a setup list's row.
-  static let regularHeight: CGFloat = 48
-  /// 38: an Activity row.
-  static let denseHeight: CGFloat = 38
 }
 
 #if DEBUG

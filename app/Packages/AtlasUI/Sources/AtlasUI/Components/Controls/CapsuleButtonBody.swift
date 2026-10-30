@@ -31,7 +31,9 @@ struct CapsuleButtonBody: View {
       .foregroundStyle(style.foreground)
       .background { surface(Capsule()) }
       .contentShape(Capsule())
-      .overlay { focusRing(RoundedRectangle(cornerRadius: style.height / 2 + Layout.focusGap, style: .circular)) }
+      .overlay {
+        focusRing(RoundedRectangle(cornerRadius: style.height / 2 + CapsuleButtonBodyLayout.focusGap, style: .circular))
+      }
       .focusEffectDisabled()
       .opacity(CapsuleButtonStyle.opacity(isEnabled: isEnabled, isWorking: style.isWorking))
       .animation(CapsuleButtonStyle.pressAnimation(isPressed: configuration.isPressed), value: configuration.isPressed)
@@ -53,7 +55,7 @@ struct CapsuleButtonBody: View {
   /// look's semibold and sized from the circle's side, so it sits with room around it at either size.
   private var circleFont: Font {
     guard style.look != .glyph else { return Typography.symbol(.glyph) }
-    return Typography.font(size: style.height * Layout.symbolScale, weight: .semibold)
+    return Typography.font(size: style.height * CapsuleButtonBodyLayout.symbolScale, weight: .semibold)
   }
 
   /// The keyboard focus ring: the focus colour just outside the outline, in its shape, while the button has focus.
@@ -64,7 +66,7 @@ struct CapsuleButtonBody: View {
     if isFocused {
       shape
         .strokeBorder(Color.strokeFocus, lineWidth: Stroke.regular)
-        .padding(-Layout.focusGap)
+        .padding(-CapsuleButtonBodyLayout.focusGap)
         .allowsHitTesting(false)
     }
   }
@@ -88,12 +90,4 @@ struct CapsuleButtonBody: View {
       isEnabled: isEnabled
     )
   }
-}
-
-/// The body's own measures.
-private enum Layout {
-  /// 2: how far outside the outline the focus ring sits, so it reads as a ring rather than an edge.
-  static let focusGap = Spacing.half
-  /// 0.38: a circle's symbol against its side, so it sits with room around it at either size.
-  static let symbolScale: CGFloat = 0.38
 }

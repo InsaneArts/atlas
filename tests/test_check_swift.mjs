@@ -10,9 +10,34 @@ import path from 'node:path';
 import test from 'node:test';
 import { fileURLToPath } from 'node:url';
 import { packages, steps, summaryLine } from '../scripts/check-swift.mjs';
+import { violations as typeViolations } from '../scripts/check-swift-types.mjs';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const fixtures = path.join(root, 'tests/check-swift');
+
+test('one Swift type per file permits nested types and extensions but rejects a separate Layout', () => {
+  const source = [
+    '// struct Ignored {}',
+    'struct Badge { enum Kind {} }',
+    'extension Badge { struct Words {} }',
+    'private enum Layout {}',
+    '#if DEBUG',
+    'struct Sample {}',
+    '#endif',
+  ].join('\n');
+  assert.deepEqual(typeViolations(source), [
+    { line: 4, rule: 'types', message: "one type per file: move Layout out of Badge's file" },
+    { line: 6, rule: 'types', message: "one type per file: move Sample out of Badge's file" },
+  ]);
+  assert.deepEqual(typeViolations('enum Layout { static let name = "struct Fake {}" }'), []);
+});
+
+test('all maintained Swift sources declare at most one top-level type', () => {
+  const result = spawnSync(process.execPath, [path.join(root, 'scripts/check-swift-types.mjs')], {
+    encoding: 'utf8',
+  });
+  assert.equal(result.status, 0, result.stdout + result.stderr);
+});
 
 // Runs one checker on `folder` under `base`.
 function check(checker, folder, { base = path.join(fixtures, checker), list = false } = {}) {

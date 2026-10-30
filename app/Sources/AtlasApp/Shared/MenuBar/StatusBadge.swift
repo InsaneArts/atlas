@@ -42,7 +42,7 @@ final class StatusBadge {
   /// animates them, with no implicit animation.
   init() {
     layer.isHidden = true
-    layer.zPosition = Layout.above
+    layer.zPosition = StatusBadgeLayout.above
     layer.actions = Self.still
     layer.lineWidth = StatusGlyph.ringStroke
   }
@@ -149,7 +149,7 @@ final class StatusBadge {
     guard breathing else { return }
     layer.removeAnimation(forKey: Self.breathKey)
     guard motion == .all else { return }
-    run(Self.crossfade("opacity", from: now.opacity, to: Float(Layout.whole)), forKey: Self.settleKey)
+    run(Self.crossfade("opacity", from: now.opacity, to: Float(StatusBadgeLayout.whole)), forKey: Self.settleKey)
   }
 
   /// Adds a state change's animation in a transaction of its own, which calls ``finished`` when it ends.
@@ -176,8 +176,8 @@ final class StatusBadge {
     pop.mass = spring.mass
     pop.stiffness = spring.stiffness
     pop.damping = spring.damping
-    pop.fromValue = Layout.nothing
-    pop.toValue = Layout.whole
+    pop.fromValue = StatusBadgeLayout.nothing
+    pop.toValue = StatusBadgeLayout.whole
     pop.duration = pop.settlingDuration
     return pop
   }
@@ -205,7 +205,7 @@ final class StatusBadge {
   static func breath() -> CABasicAnimation {
     let breath = CABasicAnimation(keyPath: "opacity")
     breath.fromValue = 1
-    breath.toValue = Layout.breathLow
+    breath.toValue = StatusBadgeLayout.breathLow
     breath.duration = Motion.Duration.breathe.seconds / 2
     breath.autoreverses = true
     breath.repeatCount = .infinity
@@ -236,16 +236,4 @@ final class StatusBadge {
     "position": NSNull(),
     "bounds": NSNull(),
   ]
-}
-
-/// The badge's own measures.
-private enum Layout {
-  /// 0.5: the badge's opacity at the bottom of a breath.
-  static let breathLow = 0.5
-  /// 1: above anything the button draws in its own layer.
-  static let above: CGFloat = 1
-  /// 0: the badge's scale as a pop starts, nothing.
-  static let nothing: CGFloat = 0
-  /// 1: the badge whole, the scale a pop lands on and the opacity the breath settles back to.
-  static let whole: CGFloat = 1
 }

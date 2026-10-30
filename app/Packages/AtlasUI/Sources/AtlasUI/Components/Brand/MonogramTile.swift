@@ -22,13 +22,13 @@ struct MonogramTile: View {
       .accessibilityHidden(true)
   }
 
-  /// The light down the tile's top: ``Color/monogramLift`` at the top edge, gone by ``Layout/liftEnd`` of the way
+  /// The light down the tile's top: ``Color/monogramLift`` at the top edge, gone by ``MonogramTileLayout/liftEnd`` of the way
   /// down, so the tint reads lit from above as an icon is.
   private var lift: LinearGradient {
     LinearGradient(
       stops: [
         Gradient.Stop(color: .monogramLift, location: .zero),
-        Gradient.Stop(color: .clear, location: Layout.liftEnd),
+        Gradient.Stop(color: .clear, location: MonogramTileLayout.liftEnd),
       ],
       startPoint: .top,
       endPoint: .bottom
@@ -41,21 +41,11 @@ struct MonogramTile: View {
   /// - Returns: The letter.
   private func letter(body: CGFloat) -> some View {
     Text(verbatim: monogram.letter)
-      .font(Typography.font(size: body * Layout.letterShare, weight: .semibold))
+      .font(Typography.font(size: body * MonogramTileLayout.letterShare, weight: .semibold))
       .foregroundStyle(Color.monogramLetter)
       .lineLimit(1)
-      .minimumScaleFactor(Layout.letterShrink)
+      .minimumScaleFactor(MonogramTileLayout.letterShrink)
   }
-}
-
-/// The tile's measures beside the icon grid's.
-private enum Layout {
-  /// 0.5: the letter's size against the body's side.
-  static let letterShare: CGFloat = 0.5
-  /// 0.6: how far down the body the light from its top reaches.
-  static let liftEnd: CGFloat = 0.6
-  /// 0.5: the most a wide letter is shrunk to stay inside the body.
-  static let letterShrink: CGFloat = 0.5
 }
 
 #if DEBUG

@@ -34,7 +34,7 @@
 
     /// The samples, on the ground.
     var body: some View {
-      VStack(spacing: Layout.lineGap) {
+      VStack(spacing: StatusLineSamplesLayout.lineGap) {
         switch kind {
         case .kinds:
           StatusLine(kind: .working, text: Self.sentence(.working))
@@ -52,9 +52,4 @@
     }
   }
 
-  /// Spacing that separates status samples for comparison.
-  private enum Layout {
-    /// 18: between two status lines, a 4-point gap and each line's 14 above it.
-    static let lineGap: CGFloat = 18
-  }
 #endif

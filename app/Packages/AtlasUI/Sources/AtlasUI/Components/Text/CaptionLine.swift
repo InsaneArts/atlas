@@ -12,18 +12,12 @@ struct CaptionLine: View {
   var body: some View {
     HStack(spacing: Spacing.xsPlus) {
       if let icon {
-        SessionIcon(icon: icon, side: Layout.icon)
+        SessionIcon(icon: icon, side: IconSize.xsPlus)
       }
       Text(text)
         .truncationMode(.tail)
     }
   }
-}
-
-/// The caption's own measures.
-private enum Layout {
-  /// 14: the session's icon before the words.
-  static let icon = IconSize.xsPlus
 }
 
 #if DEBUG

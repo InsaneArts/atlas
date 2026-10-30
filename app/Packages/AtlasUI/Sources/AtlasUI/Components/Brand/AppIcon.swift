@@ -46,16 +46,9 @@ public struct AppIcon: View {
   /// - Parameter tile: The visible tile's side, in points.
   /// - Returns: The canvas's size, square.
   nonisolated static func canvas(tile: CGFloat) -> CGSize {
-    let side = tile * Layout.canvasRatio
+    let side = tile * AppIconLayout.canvasRatio
     return CGSize(width: side, height: side)
   }
-}
-
-/// The icon file's own measures.
-private enum Layout {
-  /// 1024 / 824: the canvas against its visible tile, from `app/Resources/AppIcon.icns`, whose 1024-point canvas
-  /// holds an 824-point tile.
-  static let canvasRatio: CGFloat = 1024 / 824
 }
 
 #if DEBUG

@@ -23,10 +23,10 @@ struct HeroDisc: View {
     ZStack {
       Circle()
         .fill(kind == .success ? Color.success : Color.attentionFill)
-        .scaleEffect(isSettled || reduceMotion ? 1 : Layout.arrivingScale)
+        .scaleEffect(isSettled || reduceMotion ? 1 : HeroDiscLayout.arrivingScale)
       mark
     }
-    .frame(width: Layout.side, height: Layout.side)
+    .frame(width: HeroDiscLayout.side, height: HeroDiscLayout.side)
     .onAppear(perform: arrive)
     .accessibilityHidden(true)
   }
@@ -39,13 +39,13 @@ struct HeroDisc: View {
         .trim(from: 0, to: isSettled ? 1 : 0)
         .stroke(
           Color.onSuccess,
-          style: StrokeStyle(lineWidth: Layout.checkWidth, lineCap: .round, lineJoin: .round)
+          style: StrokeStyle(lineWidth: HeroDiscLayout.checkWidth, lineCap: .round, lineJoin: .round)
         )
-        .frame(width: Layout.check, height: Layout.check)
+        .frame(width: HeroDiscLayout.check, height: HeroDiscLayout.check)
         .animation(Motion.animation(Motion.draw, reduceMotion: reduceMotion), value: hasArrived)
     case .problem:
       Image(systemName: SymbolName.exclamation.rawValue)
-        .font(Typography.font(size: Layout.check, weight: .bold))
+        .font(Typography.font(size: HeroDiscLayout.check, weight: .bold))
         .foregroundStyle(Color.attention)
     }
   }
@@ -64,18 +64,6 @@ struct HeroDisc: View {
     }
     withAnimation(Motion.pop) { hasArrived = true }
   }
-}
-
-/// The success and problem heroes' own measures.
-private enum Layout {
-  /// 56: the disc.
-  static let side: CGFloat = 56
-  /// 26: the check's frame, and the problem mark's size.
-  static let check: CGFloat = 26
-  /// 4: the check's stroke, 2 on a 12-point square drawn at 26.
-  static let checkWidth: CGFloat = 4
-  /// 0.5: where the disc pops from.
-  static let arrivingScale: CGFloat = 0.5
 }
 
 #if DEBUG

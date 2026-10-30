@@ -31,13 +31,13 @@ struct Keycap: View {
       .font(Typography.font(.caption, weight: .medium))
       .foregroundStyle(Color.textPrimary)
       .padding(.horizontal, Spacing.xs)
-      .frame(minWidth: Layout.side, minHeight: Layout.side)
+      .frame(minWidth: KeycapLayout.side, minHeight: KeycapLayout.side)
       .background(
-        RoundedRectangle(cornerRadius: Layout.radius, style: .continuous)
+        RoundedRectangle(cornerRadius: KeycapLayout.radius, style: .continuous)
           .filledOutline(Color.fillControlRaised, border: Color.strokeStrong)
       )
       .overlay(alignment: .bottom) {
-        RoundedRectangle(cornerRadius: Layout.radius, style: .continuous)
+        RoundedRectangle(cornerRadius: KeycapLayout.radius, style: .continuous)
           .strokeBorder(Color.strokeShade, lineWidth: Stroke.regular)
           .mask(alignment: .bottom) {
             Rectangle()
@@ -52,12 +52,12 @@ struct Keycap: View {
       .font(Typography.font(.caption, weight: .semibold))
       .foregroundStyle(Color.textPrimary)
       .padding(.horizontal, Spacing.xs)
-      .frame(minWidth: Layout.softSide, minHeight: Layout.softSide)
+      .frame(minWidth: KeycapLayout.softSide, minHeight: KeycapLayout.softSide)
       .background(
-        RoundedRectangle(cornerRadius: Layout.radius, style: .continuous)
+        RoundedRectangle(cornerRadius: KeycapLayout.radius, style: .continuous)
           .fill(Color.fillControlRaised)
           .background(
-            RoundedRectangle(cornerRadius: Layout.radius, style: .continuous)
+            RoundedRectangle(cornerRadius: KeycapLayout.radius, style: .continuous)
               .fill(Color.fillControlOn)
               .offset(y: Stroke.regular)
           )
@@ -73,16 +73,6 @@ struct Keycap: View {
       Text(text)
     }
   }
-}
-
-/// The keycap's own measures for its label and edge.
-private enum Layout {
-  /// 18: an edged cap's height, and its least width.
-  static let side: CGFloat = 18
-  /// 20: a soft cap's height, and its least width.
-  static let softSide: CGFloat = 20
-  /// 5: the cap's corner.
-  static let radius: CGFloat = 5
 }
 
 #if DEBUG

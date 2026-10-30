@@ -21,7 +21,7 @@ struct StateBadge: View {
           .transition(Motion.transition(arriving, reduceMotion: reduceMotion))
       }
     }
-    .frame(width: Layout.reach, height: Layout.reach)
+    .frame(width: StateBadgeLayout.reach, height: StateBadgeLayout.reach)
     .animation(Self.appearance(isShown: badge != nil, reduceMotion: reduceMotion), value: badge != nil)
     .accessibilityHidden(true)
   }
@@ -35,10 +35,10 @@ struct StateBadge: View {
       .fill(Self.fill(for: badge, ground: ground))
       .overlay {
         Circle()
-          .strokeBorder(Self.innerRing(for: badge), lineWidth: Layout.ring)
+          .strokeBorder(Self.innerRing(for: badge), lineWidth: StateBadgeLayout.ring)
       }
-      .frame(width: Layout.side, height: Layout.side)
-      .padding(Layout.ring)
+      .frame(width: StateBadgeLayout.side, height: StateBadgeLayout.side)
+      .padding(StateBadgeLayout.ring)
       .background(
         Circle()
           .fill(ground)
@@ -48,7 +48,7 @@ struct StateBadge: View {
 
   /// A badge growing in from a little under its size as it fades in, and shrinking back as it fades out.
   private var arriving: AnyTransition {
-    AnyTransition.scale(scale: Layout.arrivingScale)
+    AnyTransition.scale(scale: StateBadgeLayout.arrivingScale)
       .combined(with: .opacity)
   }
 
@@ -86,18 +86,6 @@ struct StateBadge: View {
   nonisolated static func appearance(isShown: Bool, reduceMotion: Bool) -> Animation {
     Motion.animation(isShown ? Motion.arrive : Motion.leave, reduceMotion: reduceMotion, reduced: Motion.reduced)
   }
-}
-
-/// The badge's own measures.
-private enum Layout {
-  /// 11: the dot's side.
-  static let side: CGFloat = 11
-  /// 2: the ground ring round the dot, and the waiting dot's inner ring.
-  static let ring: CGFloat = 2
-  /// 15: the badge's whole side, its dot and ground ring.
-  static let reach = side + 2 * ring
-  /// 0.8: the scale a badge grows from and shrinks to, near its size, so it reads as arriving rather than popping.
-  static let arrivingScale: CGFloat = 0.8
 }
 
 #if DEBUG

@@ -45,7 +45,7 @@ struct PictureChip<Content: View>: View {
     var gap: CGFloat {
       switch self {
       case .regular: Spacing.s
-      case .small: Layout.smallGap
+      case .small: PictureChipLayout.smallGap
       }
     }
 
@@ -56,7 +56,7 @@ struct PictureChip<Content: View>: View {
     func font(weight: Font.Weight? = nil) -> Font {
       switch self {
       case .regular: Typography.font(.callout, weight: weight)
-      case .small: Typography.font(size: Layout.smallText, weight: weight)
+      case .small: Typography.font(size: PictureChipLayout.smallText, weight: weight)
       }
     }
   }
@@ -139,44 +139,6 @@ struct PictureChip<Content: View>: View {
   private var shape: RoundedRectangle {
     RoundedRectangle(cornerRadius: size.height / 2, style: .circular)
   }
-}
-
-/// The chip's shadow, drawn only outside its outline, as CSS draws `box-shadow`: a blurred shape cut away
-/// under the chip, so nothing darkens the chip or the words on it.
-private struct ChipShadow: View {
-  /// The chip's outline.
-  let shape: RoundedRectangle
-
-  var body: some View {
-    shape
-      .fill(Color.dropShadowFaint)
-      .blur(radius: Layout.shadowRadius)
-      .offset(y: Layout.shadowDrop)
-      .mask {
-        Rectangle()
-          .padding(-Layout.shadowRoom)
-          .overlay {
-            shape
-              .blendMode(.destinationOut)
-          }
-          .compositingGroup()
-      }
-      .allowsHitTesting(false)
-  }
-}
-
-/// The chip's own measures for its floating shadow.
-private enum Layout {
-  /// 11.5: the small chip's words, between the scale's caption and callout.
-  static let smallText: CGFloat = 11.5
-  /// 7: between the small chip's parts.
-  static let smallGap: CGFloat = 7
-  /// 7: the shadow's blur, half the equivalent 14-point CSS blur.
-  static let shadowRadius: CGFloat = 7
-  /// 4: how far the shadow falls.
-  static let shadowDrop: CGFloat = 4
-  /// 24: how far past the chip its shadow may spread, more than its blur and drop together.
-  static let shadowRoom = Spacing.xxl
 }
 
 #if DEBUG

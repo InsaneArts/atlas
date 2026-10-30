@@ -92,9 +92,9 @@ struct EmptyMessage: View {
     Image(systemName: symbol.rawValue)
       .font(Typography.font(size: IconSize.m))
       .foregroundStyle(Color.textSecondary)
-      .frame(width: Layout.symbolTile, height: Layout.symbolTile)
+      .frame(width: EmptyMessageLayout.symbolTile, height: EmptyMessageLayout.symbolTile)
       .background(
-        RoundedRectangle(cornerRadius: Layout.symbolTileRadius, style: .continuous)
+        RoundedRectangle(cornerRadius: EmptyMessageLayout.symbolTileRadius, style: .continuous)
           .fill(Color.fillControl)
       )
       .accessibilityHidden(true)
@@ -121,8 +121,8 @@ struct EmptyMessage: View {
   /// The orbit's height.
   private var orbit: CGFloat {
     switch size {
-    case .regular, .stage: Layout.orbit
-    case .small: Layout.smallOrbit
+    case .regular, .stage: EmptyMessageLayout.orbit
+    case .small: EmptyMessageLayout.smallOrbit
     }
   }
 
@@ -131,7 +131,7 @@ struct EmptyMessage: View {
     switch size {
     case .regular: Spacing.mPlus
     case .small: Spacing.m
-    case .stage: Layout.stageGap
+    case .stage: EmptyMessageLayout.stageGap
     }
   }
 
@@ -164,9 +164,9 @@ struct EmptyMessage: View {
   /// The widest the sentence runs before it wraps.
   private var width: CGFloat {
     switch size {
-    case .regular: Layout.width
-    case .small: Layout.smallWidth
-    case .stage: Layout.stageWidth
+    case .regular: EmptyMessageLayout.width
+    case .small: EmptyMessageLayout.smallWidth
+    case .stage: EmptyMessageLayout.stageWidth
     }
   }
 
@@ -182,26 +182,6 @@ struct EmptyMessage: View {
     case .small: Radius.medium
     }
   }
-}
-
-/// The message's own measures for compact windows and the waiting stage.
-private enum Layout {
-  /// 30: the orbit's height in the main window; only an empty message draws an orbit this large.
-  static let orbit: CGFloat = 30
-  /// 26: the orbit's height in a small window.
-  static let smallOrbit: CGFloat = 26
-  /// 380: the widest the sentence runs in the main window.
-  static let width: CGFloat = 380
-  /// 360: the widest it runs in a small window.
-  static let smallWidth: CGFloat = 360
-  /// 340: the widest the line runs on the stage.
-  static let stageWidth: CGFloat = 340
-  /// 18: under the mark and over the button on the stage.
-  static let stageGap: CGFloat = 18
-  /// 52: a pane's symbol tile on the stage.
-  static let symbolTile: CGFloat = 52
-  /// 14: its corner.
-  static let symbolTileRadius: CGFloat = 14
 }
 
 #if DEBUG

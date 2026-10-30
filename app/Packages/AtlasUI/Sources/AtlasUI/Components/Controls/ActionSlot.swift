@@ -5,9 +5,11 @@ import SwiftUI
 /// animation (``ActionSlotRow``), so the controls beside it slide to close the gap as the slot goes from
 /// nothing to its width and back. Under Reduce Motion it only fades.
 struct ActionSlot: ViewModifier {
+  /// Close to full size so the control reads as arriving rather than popping.
+  private static let arrivingScale: CGFloat = 0.94
   /// Whether the action applies, so the control shows.
   let isShown: Bool
-  @Environment(\.accessibilityReduceMotion) private var reduceMotion
+  @Environment(\.motionReduced) private var reduceMotion
 
   /// The control while it applies, nothing otherwise.
   ///
@@ -22,7 +24,7 @@ struct ActionSlot: ViewModifier {
 
   /// The control growing from its leading edge as it fades in, and shrinking back as it fades out.
   private var growing: AnyTransition {
-    AnyTransition.scale(scale: Layout.scale, anchor: .leading)
+    AnyTransition.scale(scale: Self.arrivingScale, anchor: .leading)
       .combined(with: .opacity)
   }
 
@@ -36,13 +38,6 @@ struct ActionSlot: ViewModifier {
   nonisolated static func animation(isShown: Bool, reduceMotion: Bool) -> Animation {
     Motion.animation(isShown ? Motion.arrive : Motion.leave, reduceMotion: reduceMotion, reduced: Motion.reduced)
   }
-}
-
-/// The slot's own measures.
-private enum Layout {
-  /// 0.94: the scale a control grows from and shrinks to, close to its own size, so it reads as arriving rather
-  /// than popping.
-  static let scale: CGFloat = 0.94
 }
 
 #if DEBUG
