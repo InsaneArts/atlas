@@ -21,6 +21,8 @@ struct Fake {
     bounds: Vec<Duration>,
     owners: HashMap<usize, i64>,
     after_write: Option<fn(&mut Fake)>,
+    on_ask: Option<fn(&mut Fake, usize, &'static str)>,
+    observed_window: Rc<Cell<usize>>,
 }
 
 impl Fake {
@@ -52,6 +54,8 @@ impl Fake {
             bounds: Vec::new(),
             owners: HashMap::new(),
             after_write: None,
+            on_ask: None,
+            observed_window: Rc::new(Cell::new(WINDOW)),
         };
         fake.lists.insert((APP, "AXWindows"), vec![WINDOW]);
         fake.lists.insert((WINDOW, "AXChildren"), vec![FIELD]);
@@ -114,6 +118,9 @@ impl Ask for &mut Fake {
     }
     fn ask(&mut self, element: &usize, name: &'static str) -> Answer<usize> {
         assert_ne!(name, "AXValue");
+        if let Some(on_ask) = self.on_ask {
+            on_ask(self, *element, name);
+        }
         self.now.set(self.now.get() + self.delay);
         self.answers
             .get(&(*element, name))
@@ -246,6 +253,81 @@ fn a_unique_window_is_raised_and_given_key_focus_once() {
         ]
     );
     assert!(fake.bounds.iter().all(|timeout| *timeout <= REQUEST));
+}
+
+#[test]
+fn windows_swapping_positions_during_resolution_refuse_before_any_write() {
+    let mut fake = Fake::new();
+    fake.window(3);
+    fake.answers
+        .insert((3, "AXPosition"), Answer::Point(600.0, 30.0));
+    let mut other = fake.windows[0].clone();
+    other.number = 43;
+    other.bounds.x = 600.0;
+    fake.windows.push(other);
+    fake.lists.insert((APP, "AXWindows"), vec![WINDOW, 3]);
+    fake.on_ask = Some(|fake, element, name| {
+        if element == WINDOW && name == "AXPosition" {
+            fake.answers
+                .insert((WINDOW, "AXPosition"), Answer::Point(600.0, 30.0));
+            fake.answers
+                .insert((3, "AXPosition"), Answer::Point(10.0, 30.0));
+            fake.windows[0].bounds.x = 600.0;
+            fake.windows[1].bounds.x = 10.0;
+            fake.on_ask = None;
+        }
+    });
+    assert_eq!(
+        fake.run(&named()).unwrap_err().details["unread"],
+        "unlisted"
+    );
+    assert!(fake.writes.is_empty());
+}
+
+#[test]
+fn unrelated_lookalike_windows_do_not_block_a_unique_target() {
+    for ready in [false, true] {
+        let mut fake = Fake::new();
+        for (element, number) in [(3, 43), (4, 44)] {
+            fake.window(element);
+            fake.answers
+                .insert((element, "AXPosition"), Answer::Point(600.0, 30.0));
+            let mut other = fake.windows[0].clone();
+            other.number = number;
+            other.bounds.x = 600.0;
+            fake.windows.push(other);
+        }
+        fake.lists.insert((APP, "AXWindows"), vec![3, 4, WINDOW]);
+        let deadline = fake.now.get() + Duration::from_millis(450);
+        prepare(
+            &mut fake,
+            &named(),
+            Need::Keys,
+            deadline,
+            &|| Ok(()),
+            &mut |_| ready,
+        )
+        .unwrap();
+        assert_eq!(fake.writes.len(), if ready { 0 } else { 4 });
+    }
+}
+
+#[test]
+fn a_main_window_missing_from_other_references_is_admitted_for_app_input() {
+    for sheet in [false, true] {
+        let mut fake = Fake::new();
+        fake.lists.insert((APP, "AXWindows"), vec![]);
+        fake.answers.remove(&(APP, "AXFocusedWindow"));
+        fake.answers
+            .insert((APP, "AXMainWindow"), Answer::Element(WINDOW));
+        if sheet {
+            fake.sheet(3, WINDOW);
+        } else {
+            fake.answers.insert((WINDOW, "AXModal"), Answer::Flag(true));
+        }
+        reason(fake.run(&Expect::new(812).unwrap()), "sheet");
+        assert!(fake.writes.is_empty());
+    }
 }
 
 #[test]
@@ -839,20 +921,32 @@ fn field_readiness_is_polled_after_a_confirmed_focus_request() {
         }
     })
     .unwrap();
-    assert_eq!(observations, 2);
+    assert_eq!(observations, 3);
     assert_eq!(role, Some("AXTextField"));
 }
 
 #[test]
 fn application_admission_requires_a_live_process_owned_by_the_helper() {
+    let info = process_info(812, [100, 200]);
     assert_eq!(
         application_with(812, 502, |pid| {
             assert_eq!(pid, 812);
-            Some((502, false))
+            Some(info.clone())
         }),
-        Some(812)
+        Some(info.instance)
     );
-    for facts in [None, Some((501, false)), Some((502, true))] {
+    for facts in [
+        None,
+        Some(Info {
+            uid: 501,
+            ..info.clone()
+        }),
+        Some(Info {
+            zombie: true,
+            ..info.clone()
+        }),
+        Some(process_info(813, [100, 200])),
+    ] {
         assert_eq!(application_with(812, 502, |_| facts), None);
     }
     for pid in [0, -1, i64::MAX] {
@@ -949,7 +1043,7 @@ fn a_numbered_sheet_reachable_only_through_children_resolves_before_keyboard_pre
 }
 
 #[test]
-fn a_child_only_sheet_button_accepts_its_exact_sheet_or_parent_expectation() {
+fn a_child_only_sheet_button_requires_its_exact_sheet_expectation() {
     for (separate, requested) in [(true, 43), (true, 42), (false, 42)] {
         let mut fake = Fake::new();
         child_only_sheet(&mut fake);
@@ -964,15 +1058,20 @@ fn a_child_only_sheet_button_accepts_its_exact_sheet_or_parent_expectation() {
         } else {
             (100.0, 150.0)
         };
-        let target = prepare(
+        let result = prepare(
             &mut fake,
             &expect,
             Need::Point(point.0, point.1),
             deadline,
             &|| Ok(()),
             &mut |_| false,
-        )
-        .unwrap();
+        );
+        if requested == 42 {
+            reason(result.map(|_| ()), "sheet");
+            assert!(fake.writes.is_empty());
+            continue;
+        }
+        let target = result.unwrap();
         assert_eq!(target.window, Some(3));
         let listed = target.reader.ask.windows.clone();
         let mut verified = 0;
@@ -993,7 +1092,7 @@ fn a_child_only_sheet_button_accepts_its_exact_sheet_or_parent_expectation() {
             Ok(None)
         })
         .unwrap();
-        assert_eq!(verified, 1);
+        assert_eq!(verified, 2);
         assert!(!fake.writes.contains(&(WINDOW, Write::Raise)));
     }
 }
@@ -1079,7 +1178,7 @@ fn a_sheet_omitted_from_ax_windows_can_be_targeted_by_its_own_number() {
 }
 
 #[test]
-fn a_sheet_button_click_accepts_the_sheet_or_its_proven_parent_window() {
+fn a_sheet_button_click_requires_the_sheet_number_and_refuses_a_parent_expectation() {
     for (separate, requested) in [(true, 43), (true, 42), (false, 42)] {
         let mut fake = Fake::new();
         listed_sheet(&mut fake);
@@ -1088,15 +1187,20 @@ fn a_sheet_button_click_accepts_the_sheet_or_its_proven_parent_window() {
         }
         let expect = Expect::new(812).unwrap().in_window(requested).unwrap();
         let deadline = fake.now.get() + Duration::from_millis(450);
-        let target = prepare(
+        let result = prepare(
             &mut fake,
             &expect,
             Need::Point(100.0, 150.0),
             deadline,
             &|| Ok(()),
             &mut |_| false,
-        )
-        .unwrap();
+        );
+        if requested == 42 {
+            reason(result.map(|_| ()), "sheet");
+            assert!(fake.writes.is_empty());
+            continue;
+        }
+        let target = result.unwrap();
         assert_eq!(target.window, Some(3));
         let number = Some(if separate { 43 } else { 42 });
         assert_eq!(target.number, number);
@@ -1113,11 +1217,12 @@ fn a_sheet_button_click_accepts_the_sheet_or_its_proven_parent_window() {
 fn a_sheet_that_moves_or_closes_during_button_preparation_prevents_the_click() {
     for closes in [true, false] {
         let mut fake = Fake::new();
-        fake.sheet(3, WINDOW);
+        listed_sheet(&mut fake);
+        let expect = Expect::new(812).unwrap().in_window(43).unwrap();
         let deadline = fake.now.get() + Duration::from_millis(450);
         let target = prepare(
             &mut fake,
-            &named(),
+            &expect,
             Need::Point(100.0, 150.0),
             deadline,
             &|| Ok(()),
@@ -1135,7 +1240,7 @@ fn a_sheet_that_moves_or_closes_during_button_preparation_prevents_the_click() {
         }
         let mut verified = false;
         assert!(
-            settle(target, &named(), deadline, &|| Ok(()), |_, _| {
+            settle(target, &expect, deadline, &|| Ok(()), |_, _| {
                 verified = true;
                 Ok(None)
             })
@@ -1174,4 +1279,221 @@ fn cyclic_or_conflicting_sheet_parents_refuse_before_writing() {
         assert!(fake.run(&named()).is_err());
         assert!(fake.writes.is_empty());
     }
+}
+
+#[test]
+fn a_sheet_over_a_previously_selected_document_point_never_receives_the_click() {
+    for separate in [true, false] {
+        let mut fake = Fake::new();
+        listed_sheet(&mut fake);
+        if !separate {
+            fake.windows.remove(0);
+        }
+        let deadline = fake.now.get() + Duration::from_millis(450);
+        let result = prepare(
+            &mut fake,
+            &named(),
+            Need::Point(100.0, 150.0),
+            deadline,
+            &|| Ok(()),
+            &mut |_| false,
+        );
+        reason(result.map(|_| ()), "sheet");
+        assert!(fake.writes.is_empty());
+    }
+}
+
+#[test]
+fn a_later_admission_scan_cannot_reuse_an_earlier_window_proof() {
+    let mut fake = Fake::new();
+    fake.window(5);
+    fake.answers
+        .insert((5, "AXTitle"), Answer::Text("Other document".into()));
+    let observed = fake.observed_window.clone();
+    let deadline = fake.now.get() + Duration::from_millis(450);
+    let target = prepare(
+        &mut fake,
+        &named(),
+        Need::Keys,
+        deadline,
+        &|| Ok(()),
+        &mut |_| true,
+    )
+    .unwrap();
+    target.reader.ask.on_ask = Some(|fake, element, name| {
+        if element == APP && name == "AXFocusedWindow" && fake.observed_window.get() == 0 {
+            fake.observed_window.set(5);
+            fake.answers
+                .insert((APP, "AXFocusedWindow"), Answer::Element(5));
+        }
+    });
+    let mut verified = 0;
+    let result = settle(target, &named(), deadline, &|| Ok(()), |_, _| {
+        verified += 1;
+        if observed.get() == WINDOW {
+            observed.set(0);
+            Ok(None)
+        } else {
+            Err(refused("window", "Another document has focus"))
+        }
+    });
+    reason(result.map(|_| ()), "window");
+    assert_eq!(verified, 2);
+    assert!(fake.writes.is_empty());
+}
+
+#[test]
+fn app_only_admission_refuses_a_sheet_focused_after_the_initial_document_read() {
+    for selected in [None, Some(42)] {
+        let mut fake = Fake::new();
+        fake.window(5);
+        fake.answers
+            .insert((5, "AXTitle"), Answer::Text("Other document".into()));
+        fake.lists.insert((APP, "AXWindows"), vec![WINDOW, 5]);
+        fake.on_ask = Some(|fake, element, name| {
+            if element == APP && name == "AXFocusedWindow" {
+                if fake.observed_window.replace(5) == WINDOW {
+                    // The initial read still returns A; the next scan sees B's sheet.
+                    fake.sheet(3, 5);
+                } else {
+                    fake.answers
+                        .insert((APP, "AXFocusedWindow"), Answer::Element(3));
+                    fake.answers
+                        .insert((APP, "AXFocusedUIElement"), Answer::Element(3));
+                }
+            }
+        });
+        let expect = match selected {
+            Some(number) => Expect::new(812).unwrap().in_window(number).unwrap(),
+            None => Expect::new(812).unwrap(),
+        };
+        let deadline = fake.now.get() + Duration::from_millis(450);
+        let result = prepare(
+            &mut fake,
+            &expect,
+            Need::Keys,
+            deadline,
+            &|| Ok(()),
+            &mut |_| false,
+        );
+        if selected.is_some() {
+            result.unwrap();
+            assert!(fake.writes.contains(&(WINDOW, Write::Raise)));
+        } else {
+            reason(result.map(|_| ()), "sheet");
+            assert!(fake.writes.is_empty());
+        }
+    }
+}
+
+fn process_info(pid: i32, start: crate::process::Start) -> Info {
+    Info {
+        instance: Instance::new(pid, start),
+        ppid: 1,
+        pgid: pid,
+        uid: 502,
+        ruid: 502,
+        svuid: 502,
+        zombie: false,
+        stopped: false,
+        name: "Editor".into(),
+    }
+}
+
+#[test]
+fn a_reused_pid_cannot_prepare_or_verify_the_replacement_app() {
+    for replaced_before_preparation in [true, false] {
+        let mut fake = Fake::new();
+        let target = application_with(812, 502, |_| Some(process_info(812, [100, 200]))).unwrap();
+        let current = Cell::new(Some(target));
+        let replacement =
+            application_with(812, 502, |_| Some(process_info(812, [101, 200]))).unwrap();
+        let guard = || same_application(target, current.get());
+        if replaced_before_preparation {
+            current.set(Some(replacement));
+        }
+        let deadline = fake.now.get() + Duration::from_millis(450);
+        let mut verified = false;
+        let prepared = prepare(
+            &mut fake,
+            &named(),
+            Need::Keys,
+            deadline,
+            &guard,
+            &mut |_| {
+                current.set(Some(replacement));
+                true
+            },
+        );
+        let result = prepared.and_then(|prepared| {
+            settle(prepared, &named(), deadline, &guard, |_, _| {
+                verified = true;
+                Ok(None)
+            })
+        });
+        reason(result.map(|_| ()), "app");
+        assert!(!verified);
+        assert!(fake.writes.is_empty());
+    }
+}
+
+#[test]
+fn replacing_the_process_during_final_verification_invalidates_the_result() {
+    let mut fake = Fake::new();
+    let target = application_with(812, 502, |_| Some(process_info(812, [100, 200]))).unwrap();
+    let current = Cell::new(Some(target));
+    let deadline = fake.now.get() + Duration::from_millis(450);
+    let guard = || same_application(target, current.get());
+    let prepared = prepare(
+        &mut fake,
+        &named(),
+        Need::Keys,
+        deadline,
+        &guard,
+        &mut |_| true,
+    )
+    .unwrap();
+    let result = settle(prepared, &named(), deadline, &guard, |_, _| {
+        current.set(Some(Instance::new(812, [100, 201])));
+        Ok(None)
+    });
+    reason(result.map(|_| ()), "app");
+    assert!(fake.writes.is_empty());
+    for current in [None, Some(Instance::new(813, target.start))] {
+        reason(same_application(target, current), "app");
+    }
+    same_application(target, Some(target)).unwrap();
+}
+
+#[test]
+fn the_native_target_retains_and_rechecks_the_kernel_start_time() {
+    let pid = std::process::id() as i32;
+    let target = application(pid.into()).unwrap();
+    assert_eq!(target, crate::process::info(pid).unwrap().unwrap().instance);
+    check_application(Some(target)).unwrap();
+    check_application(None).unwrap();
+    let stale = Instance::new(pid, [target.start[0], (target.start[1] + 1) % 1_000_000]);
+    reason(check_application(Some(stale)), "app");
+}
+
+#[test]
+fn a_controller_pinned_instance_is_not_replaced_at_native_admission() {
+    let pid = std::process::id() as i32;
+    let current = application(pid.into()).unwrap();
+    let stale = [current.start[0], current.start[1] ^ 1];
+    let expect = Expect::from_request(&serde_json::json!({"pid":pid,"start":stale}))
+        .unwrap()
+        .unwrap();
+    let error = target_application(&expect).unwrap_err();
+    assert_eq!(error.code, Code::FocusChanged);
+    assert_eq!(error.details["reason"], "app");
+    let expect = Expect::from_request(&serde_json::json!({"pid":pid,"start":current.start}))
+        .unwrap()
+        .unwrap();
+    assert_eq!(target_application(&expect).unwrap(), current);
+    assert_eq!(target_application(&expect.app_only()).unwrap(), current);
+    assert_eq!(
+        target_application(&Expect::new(pid.into()).unwrap()).unwrap(),
+        current
+    );
 }

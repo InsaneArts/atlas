@@ -541,7 +541,13 @@ impl Service {
             .start(async move {
                 drop(grant.authorize()?);
                 engine.grant = Some(grant);
-                Ok::<_, Error>(run(&mut *engine, &gate, actions, expected.as_ref()).await)
+                engine.target = expected
+                    .as_ref()
+                    .map(super::ax::target_application)
+                    .transpose()?;
+                let result = run(&mut *engine, &gate, actions, expected.as_ref()).await;
+                engine.target = None;
+                Ok::<_, Error>(result)
             })
             .await?;
         let result = outcome.await.map_err(|_| worker_failed())?;
@@ -633,25 +639,26 @@ impl Perform for Engine {
         let expect = expect.clone();
         self.check()?;
         let guard = self.preparation_guard();
-        let result = preparation_worker(move || {
-            if prepare {
-                focus::prepare(&expect, need, &display, deadline, guard)
-            } else {
-                focus::check(&expect, need, &display, deadline)
-            }
-        })
-        .await;
-        let after = self.check().and_then(|()| {
-            drop(self.grant.as_ref().ok_or_else(worker_failed)?.authorize()?);
-            Ok(())
-        });
-        match result {
-            Err(error) if error.uncertain => Err(error),
-            result => {
-                after?;
-                result
-            }
-        }
+        checked_preparation(
+            move || {
+                if prepare {
+                    focus::prepare(&expect, need, &display, deadline, guard)
+                } else {
+                    guard()?;
+                    let result = focus::check(&expect, need, &display, deadline);
+                    guard()?;
+                    result
+                }
+            },
+            || {
+                self.check().and_then(|()| {
+                    super::ax::check_application(self.target)?;
+                    drop(self.grant.as_ref().ok_or_else(worker_failed)?.authorize()?);
+                    Ok(())
+                })
+            },
+        )
+        .await
     }
 
     async fn perform(&mut self, action: Action) -> Result<()> {
@@ -677,6 +684,23 @@ async fn preparation_worker<T: Send + 'static>(
     tokio::task::spawn_blocking(work)
         .await
         .unwrap_or_else(|_| Err(worker_failed()))
+}
+
+async fn checked_preparation<T: Send + 'static>(
+    work: impl FnOnce() -> Result<T> + Send + 'static,
+    after: impl FnOnce() -> Result<()>,
+) -> Result<T> {
+    let result = preparation_worker(work).await;
+    let after = after();
+    match result {
+        Err(error) if error.uncertain || matches!(error.code, Code::Stopped | Code::Cancelled) => {
+            Err(error)
+        }
+        result => {
+            after?;
+            result
+        }
+    }
 }
 
 /// Carry out `actions` in order on `engine`, which the caller holds
@@ -1485,15 +1509,22 @@ mod tests {
             let writes = self.writes.clone();
             let started = self.started.take().unwrap();
             let resume = self.resume.take().unwrap();
-            super::preparation_worker(move || {
-                drop(grant.authorize()?);
-                writes.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
-                started.send(()).unwrap();
-                resume.recv_timeout(Duration::from_secs(3)).unwrap();
-                drop(grant.authorize()?);
-                writes.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
-                Ok(None)
-            })
+            let final_grant = grant.clone();
+            super::checked_preparation(
+                move || {
+                    drop(grant.authorize()?);
+                    writes.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                    started.send(()).unwrap();
+                    resume.recv_timeout(Duration::from_secs(3)).unwrap();
+                    drop(grant.authorize()?);
+                    writes.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                    Ok(None)
+                },
+                || {
+                    drop(final_grant.authorize()?);
+                    Ok(())
+                },
+            )
             .await
         }
         async fn perform(&mut self, _: Action) -> Result<()> {
@@ -1516,6 +1547,7 @@ mod tests {
         Abort,
         Term,
         Stop,
+        Cancel,
     }
 
     /// A blocked write uses the real grant and operation registry. The
@@ -1537,11 +1569,13 @@ mod tests {
             posted: 0,
             releases: 0,
         }));
+        let observed = Arc::new(std::sync::Mutex::new(None));
         let mut requests = tokio::task::JoinSet::new();
         let request = {
             let engine = engine.clone();
             let gate = gate.clone();
             let operations = operations.clone();
+            let observed = observed.clone();
             requests.spawn(async move {
                 let mut cancel = super::Cancellation {
                     gate: gate.clone(),
@@ -1553,15 +1587,20 @@ mod tests {
                     .start(async move { run(&mut *engine, &gate, keys(1), app().as_ref()).await })
                     .await
                     .unwrap();
-                let _ = outcome.await;
+                let reply = outcome.await.unwrap();
                 cancel.armed = false;
+                *observed.lock().unwrap() = Some(reply);
             })
         };
         entered.await.unwrap();
         assert!(engine.try_lock().is_err());
-        if matches!(ending, Ending::Stop) {
-            gate.hold(true).unwrap();
-            assert!(!gate.active().unwrap(), "Stop did not wait for AX");
+        if matches!(ending, Ending::Stop | Ending::Cancel) {
+            if matches!(ending, Ending::Stop) {
+                gate.hold(true).unwrap();
+            } else {
+                gate.cancel(None).unwrap();
+            }
+            assert!(!gate.active().unwrap(), "cancellation did not wait for AX");
         } else if !shutdown {
             request.abort();
             while requests.join_next().await.is_some() {}
@@ -1581,40 +1620,42 @@ mod tests {
                 "cancelling cleanup kept the worker registered"
             );
         }
-        let cleanup = async {
-            if shutdown {
-                super::finish(&gate, &mut requests, &operations, &engine).await
-            } else {
-                super::drain_and_release(&operations, &engine, &gate).await
-            }
-        };
-        tokio::pin!(cleanup);
-        assert!(
-            tokio::time::timeout(Duration::from_millis(30), &mut cleanup)
-                .await
-                .is_err(),
-            "cleanup returned while a write was in flight"
-        );
-        assert!(!gate.active().unwrap());
-        let competing = async {
-            let _engine = engine.lock().await;
-            let who = if matches!(ending, Ending::Stop) {
-                super::Who::Person
-            } else {
-                super::Who::Agent
+        {
+            let cleanup = async {
+                if shutdown {
+                    super::finish(&gate, &mut requests, &operations, &engine).await
+                } else {
+                    super::drain_and_release(&operations, &engine, &gate).await
+                }
             };
-            gate.acquire(&"b".repeat(48), who).map(drop)
-        };
-        tokio::pin!(competing);
-        assert!(
-            tokio::time::timeout(Duration::from_millis(30), &mut competing)
-                .await
-                .is_err(),
-            "a second holder passed the blocked worker"
-        );
-        resume.send(()).unwrap();
-        let (cleaned, _) = tokio::join!(cleanup, competing);
-        cleaned.unwrap();
+            tokio::pin!(cleanup);
+            assert!(
+                tokio::time::timeout(Duration::from_millis(30), &mut cleanup)
+                    .await
+                    .is_err(),
+                "cleanup returned while a write was in flight"
+            );
+            assert!(!gate.active().unwrap());
+            let competing = async {
+                let _engine = engine.lock().await;
+                let who = if matches!(ending, Ending::Stop) {
+                    super::Who::Person
+                } else {
+                    super::Who::Agent
+                };
+                gate.acquire(&"b".repeat(48), who).map(drop)
+            };
+            tokio::pin!(competing);
+            assert!(
+                tokio::time::timeout(Duration::from_millis(30), &mut competing)
+                    .await
+                    .is_err(),
+                "a second holder passed the blocked worker"
+            );
+            resume.send(()).unwrap();
+            let (cleaned, _) = tokio::join!(cleanup, competing);
+            cleaned.unwrap();
+        }
         assert_eq!(
             writes.load(std::sync::atomic::Ordering::SeqCst),
             1,
@@ -1624,6 +1665,19 @@ mod tests {
         assert_eq!(engine.posted, 0);
         assert!(engine.releases >= 1);
         assert!(operations.tasks.lock().unwrap().is_empty());
+        if matches!(ending, Ending::Stop | Ending::Cancel) {
+            requests.join_next().await.unwrap().unwrap();
+            let reply = observed.lock().unwrap().take().unwrap().unwrap_err();
+            let (code, instruction) = if matches!(ending, Ending::Stop) {
+                (Code::Stopped, crate::error::STOPPED)
+            } else {
+                (Code::Cancelled, "Native control was stopped")
+            };
+            assert_eq!(reply["code"], json!(code));
+            assert_eq!(reply["error"], instruction);
+            assert_eq!(reply["performed"], 0);
+            assert_eq!(reply["uncertain"], false);
+        }
     }
 
     #[tokio::test]
@@ -1863,6 +1917,11 @@ mod tests {
     #[tokio::test]
     async fn stopping_during_preparation_cancels_ownership_without_waiting_for_the_engine() {
         blocked_operation(Ending::Stop).await;
+    }
+
+    #[tokio::test]
+    async fn cancelling_during_preparation_keeps_the_observed_cancellation_reply() {
+        blocked_operation(Ending::Cancel).await;
     }
 
     #[tokio::test]

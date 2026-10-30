@@ -4,7 +4,7 @@
 //! same way.
 use super::{
     input::click,
-    target::{Target, target_pid},
+    target::{Target, resolved_instance, target_pid},
     windows::pointer_view,
 };
 use crate::{
@@ -524,7 +524,9 @@ pub async fn click_element(
 
     let ownership = client.controller.acquire_beside_commands()?;
     let verified = client.verify().await?;
-    let pid = target_pid(client, &verified, target).await?;
+    let instance = resolved_instance(client, target_pid(client, &verified, target)).await?;
+    let expect = Expect::from_instance(instance)?;
+    let pid = i64::from(instance.pid);
     let scanned = app_elements(client, &verified, pid).await?;
     let epoch = verified.session().epoch.clone();
     if scanned.incomplete {
@@ -541,7 +543,7 @@ pub async fn click_element(
     // Resolve the element's owning window from a fresh list. Visibility is
     // checked after native preparation, under the same lock as the click.
     let Shown { windows, .. } = pointer_view(client).await?;
-    let check = element_check(element, &windows, pid, (x, y))?;
+    let check = element_check(element, &windows, expect, (x, y))?;
 
     // The name it was found by is kept only as a control's caption: any
     // other element's name may be a document's text, a file or a title.
@@ -566,10 +568,10 @@ pub async fn click_element(
 pub(super) fn element_check(
     element: &Element,
     windows: &[Window],
-    pid: i64,
+    expect: Expect,
     (x, y): (f64, f64),
 ) -> Result<Check> {
-    let expect = Expect::new(pid)?;
+    let pid = expect.pid();
     let expect = if element.role.as_deref() == Some("AXMenuBarItem") {
         menu_bar_window(windows, x, y)
             .ok_or_else(|| Error::new(Code::Elements, "The menu bar is no longer on screen"))?;

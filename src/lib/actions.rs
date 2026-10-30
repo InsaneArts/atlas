@@ -100,6 +100,9 @@ const FIELD_MAX: usize = 256;
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct Expect {
     pid: i32,
+    /// The kernel start time pinned when the controller resolved the app.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    start: Option<crate::process::Start>,
     /// The window's number, as the window list gives it.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     window: Option<u32>,
@@ -116,6 +119,7 @@ impl Expect {
             .filter(|pid| *pid > 0)
             .map(|pid| Self {
                 pid,
+                start: None,
                 window: None,
                 field: None,
             })
@@ -151,9 +155,9 @@ impl Expect {
     }
 
     /// A request's expectation: none when absent or null. Anything but
-    /// `{"pid": N}` naming a process, with at most a window number and a
-    /// field name, is refused, each member with its own error, so a member
-    /// this build does not know is never ignored.
+    /// `{"pid": N}` naming a process, with an optional start time, window
+    /// number and field name, is refused, each member with its own error,
+    /// so a member this build does not know is never ignored.
     pub fn from_request(value: &Value) -> Result<Option<Self>> {
         if value.is_null() {
             return Ok(None);
@@ -162,7 +166,7 @@ impl Expect {
         let members = value.as_object().ok_or_else(not_a_process)?;
         if let Some(unknown) = members
             .keys()
-            .find(|key| !["pid", "window", "field"].contains(&key.as_str()))
+            .find(|key| !["pid", "start", "window", "field"].contains(&key.as_str()))
         {
             return Err(Error::new(
                 Code::Input,
@@ -175,6 +179,20 @@ impl Expect {
             .and_then(Value::as_i64)
             .ok_or_else(not_a_process)?;
         let mut expect = Self::new(pid)?;
+        // Older controllers omit the start time. A supplied time must be exact.
+        if let Some(start) = members.get("start").filter(|value| !value.is_null()) {
+            let start: crate::process::Start =
+                serde_json::from_value(start.clone()).map_err(|_| {
+                    Error::new(Code::Input, "\"expect.start\" must be a process start time")
+                })?;
+            if start[0] == 0 || start[1] >= 1_000_000 {
+                return Err(Error::new(
+                    Code::Input,
+                    "\"expect.start\" must be a process start time",
+                ));
+            }
+            expect.start = Some(start);
+        }
         if let Some(window) = members.get("window") {
             expect = expect.in_window(window.as_i64().ok_or_else(not_a_window)?)?;
         }
@@ -188,6 +206,18 @@ impl Expect {
     /// The process the batch is for.
     pub fn pid(&self) -> i64 {
         self.pid.into()
+    }
+
+    /// Carry the instance checked while resolving the app, without rereading it.
+    pub(crate) fn from_instance(instance: crate::process::Instance) -> Result<Self> {
+        let mut expect = Self::new(i64::from(instance.pid))?;
+        expect.start = Some(instance.start);
+        Ok(expect)
+    }
+
+    pub(crate) fn instance(&self) -> Option<crate::process::Instance> {
+        self.start
+            .map(|start| crate::process::Instance::new(self.pid, start))
     }
 
     /// The window that should have keyboard focus, if one is named.
@@ -207,6 +237,7 @@ impl Expect {
     pub fn app_only(&self) -> Self {
         Self {
             pid: self.pid,
+            start: self.start,
             window: None,
             field: None,
         }
@@ -561,6 +592,39 @@ mod tests {
         assert!(Expect::new(812).is_ok());
         assert!(Expect::new(0).is_err());
         assert!(Expect::new(1 << 31).is_err());
+    }
+
+    #[test]
+    fn a_process_start_time_is_optional_but_never_silently_discarded() {
+        use serde_json::json;
+
+        for value in [json!({"pid":5}), json!({"pid":5,"start":null})] {
+            assert!(
+                Expect::from_request(&value)
+                    .unwrap()
+                    .unwrap()
+                    .instance()
+                    .is_none()
+            );
+        }
+        let value = json!({"pid":5,"start":[123,456],"window":42,"field":"Email"});
+        let expect = Expect::from_request(&value).unwrap().unwrap();
+        assert_eq!(serde_json::to_value(&expect).unwrap(), value);
+        assert_eq!(expect.app_only().instance(), expect.instance());
+        for start in [
+            json!([0, 1]),
+            json!([123, 1_000_000]),
+            json!([-1, 0]),
+            json!([123]),
+            json!("123"),
+        ] {
+            assert_eq!(
+                Expect::from_request(&json!({"pid":5,"start":start}))
+                    .unwrap_err()
+                    .code,
+                Code::Input
+            );
+        }
     }
 
     #[test]

@@ -182,6 +182,65 @@ async fn the_expectation_is_sent_only_when_asked() {
 }
 
 #[tokio::test]
+async fn named_typing_pins_the_resolved_instance_across_every_native_batch() {
+    use crate::{
+        agent::{Expected, Target, type_text},
+        test_support::{Helper, UID, completed},
+    };
+
+    let pid = i64::from(std::process::id());
+    let start = crate::process::start(pid as i32).unwrap();
+    for target in [Target::Name("Editor".into()), Target::Pid(pid)] {
+        let dir = tempfile::Builder::new().tempdir_in("/tmp").unwrap();
+        let (client, helper) = Helper::client(dir.path(), UID);
+        let listener = UnixListener::bind(&client.config.input_socket).unwrap();
+        let expected = Expected::new(Some(target), None, None).unwrap().unwrap();
+        let text = "x".repeat(150);
+        let mut caller = Box::pin(helper.serve(
+            type_text(&client, &text, Some(&expected)),
+            |request| {
+                if request["op"] == "apps" {
+                    Some(json!({"ok":true,"apps":[{"pid":pid,"name":"Editor"}]}))
+                } else {
+                    assert_eq!(request["argv"][1], "windows-info");
+                    Some(completed(&json!({"ok":true,"windows":[{
+                    "number":42,"pid":pid,"owner":"Editor","title":null,"layer":0,"alpha":1.0,
+                    "bounds":{"x":0,"y":0,"width":100,"height":100}
+                }]}).to_string()))
+                }
+            },
+        ));
+        let mut status = verified_status(&[SHUTDOWN, HOLD, FOCUS_APP, FOCUS_DOCK]);
+        status["inputService"]["session"]["uid"] = json!(UID);
+        let native = &status["inputService"];
+        let mut hello = dispatched(&mut caller, &listener, "hello").await;
+        answer(&mut hello, native.clone()).await;
+        for _ in 0..3 {
+            let mut hello = dispatched(&mut caller, &listener, "hello").await;
+            answer(&mut hello, native.clone()).await;
+            let mut acquire = dispatched(&mut caller, &listener, "acquire").await;
+            answer(&mut acquire, json!({"ok":true})).await;
+            let (mut input, request) = received(&mut caller, &listener, "input").await;
+            assert_eq!(request["expect"], json!({"pid":pid,"start":start}));
+            let decoded = Expect::from_request(&request["expect"]).unwrap().unwrap();
+            assert_eq!(decoded.app_only().instance(), decoded.instance());
+            answer(
+                &mut input,
+                json!({"ok":true,"performed":request["actions"].as_array().unwrap().len(),"expect":request["expect"]}),
+            )
+            .await;
+            let mut release = dispatched(&mut caller, &listener, "release").await;
+            answer(&mut release, json!({"ok":true})).await;
+        }
+        assert_eq!(
+            caller.await.unwrap(),
+            json!({"ok":true,"typed":150,"batches":3})
+        );
+        assert!(client.controller.pending().unwrap().is_empty());
+    }
+}
+
+#[tokio::test]
 async fn a_checked_reply_without_its_echo_is_uncertain() {
     let (_dir, client, listener, session) = native_client();
     let mut caller = Box::pin(checked_input(&client, &session, textedit()));
@@ -279,11 +338,7 @@ async fn an_older_input_service_is_refused_before_anything_is_sent() {
     // The same status goes on to the service when nothing needs the
     // check, or when the service can make it.
     let current = verified_status(&[SHUTDOWN, HOLD, FOCUS_APP, FOCUS_DOCK]);
-    for (status, check) in [
-        (&older, None),
-        (&older, textedit().map(Check::Offered)),
-        (&current, textedit().map(Check::Required)),
-    ] {
+    for (status, check) in [(&older, None), (&current, textedit().map(Check::Required))] {
         let (_, sent) = connected(status, check.clone()).await;
         assert!(sent, "{check:?}");
     }
@@ -307,16 +362,12 @@ async fn an_input_service_without_the_dock_check_receives_no_checked_input() {
     );
     assert!(!sent, "neither acquire nor input reached the service");
 
-    // A named click is judged against the Dock before it is sent, and
-    // input that needs no check goes on as before.
-    for check in [None, textedit().map(Check::Offered)] {
-        let (_, sent) = connected(&undocked, check.clone()).await;
-        assert!(sent, "{check:?}");
-    }
+    let (_, sent) = connected(&undocked, None).await;
+    assert!(sent);
 }
 
 #[test]
-fn a_named_click_is_checked_only_by_a_service_that_can() {
+fn a_required_check_is_refused_by_an_older_service() {
     let older = json!({"ok": true, "capabilities": [SHUTDOWN, HOLD]});
     let current = json!({"ok": true, "capabilities": [SHUTDOWN, HOLD, FOCUS_APP, FOCUS_DOCK]});
     let undocked = json!({"ok": true, "capabilities": [SHUTDOWN, HOLD, FOCUS_APP]});
@@ -328,19 +379,6 @@ fn a_named_click_is_checked_only_by_a_service_that_can() {
     );
     let unanswered = json!({"ok": false, "code": "transport"});
     let pid = textedit().unwrap();
-
-    assert_eq!(
-        expectation(&older, Some(Check::Offered(pid.clone()))).unwrap(),
-        None
-    );
-    assert_eq!(
-        expectation(&unanswered, Some(Check::Offered(pid.clone()))).unwrap(),
-        None
-    );
-    assert_eq!(
-        expectation(&current, Some(Check::Offered(pid.clone()))).unwrap(),
-        Some(pid.clone())
-    );
 
     assert_eq!(
         expectation(&older, Some(Check::Required(pid.clone())))

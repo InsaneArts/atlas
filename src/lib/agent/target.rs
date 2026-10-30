@@ -5,9 +5,56 @@ use crate::{
     client::{Client, Verified},
     error::{Code, Error, Result},
     native::windows::{MENU_LAYER, Window},
+    process::{self, Instance},
     ui::text::same_text,
 };
 use serde_json::Value;
+use std::future::Future;
+
+/// Bind a resolution to the process instances observed before its helper
+/// snapshots. A process absent then, or replaced before the final check,
+/// cannot inherit the resolved app's identity. Each lookup runs once.
+pub(super) async fn resolved_instance(
+    client: &Client,
+    resolution: impl Future<Output = Result<i64>>,
+) -> Result<Instance> {
+    let instances = instances(client)?;
+    let pid = resolution.await?;
+    let instance = instances
+        .into_iter()
+        .find(|instance| i64::from(instance.pid) == pid)
+        .ok_or_else(changed_process)?;
+    if started(client, instance.pid).map_err(|_| changed_process())? != instance.start {
+        return Err(changed_process());
+    }
+    Ok(instance)
+}
+
+fn instances(client: &Client) -> Result<Vec<Instance>> {
+    #[cfg(test)]
+    if let Some(lookup) = &client.process_lookup {
+        return lookup.instances(client.config.helper_uid);
+    }
+    Ok(process::of_user(client.config.helper_uid)?
+        .into_iter()
+        .map(|info| info.instance)
+        .collect())
+}
+
+fn started(_client: &Client, pid: i32) -> Result<process::Start> {
+    #[cfg(test)]
+    if let Some(lookup) = &_client.process_lookup {
+        return lookup.start(pid);
+    }
+    process::start(pid)
+}
+
+fn changed_process() -> Error {
+    Error::new(
+        Code::Elements,
+        "The app's process changed while it was being resolved; look again",
+    )
+}
 
 /// An app's identity from the helper's app list, when every process of
 /// that name agrees on its bundle. Ambiguous names never borrow an ID.

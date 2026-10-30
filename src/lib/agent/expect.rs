@@ -2,7 +2,7 @@
 //! a window and so its app, and the field with keyboard focus, found once
 //! control is held, brought forward and checked by the helper before input.
 use super::{
-    target::{Target, target_pid, target_pid_among},
+    target::{Target, resolved_instance, target_pid, target_pid_among},
     windows::verified_window_list,
 };
 use crate::{
@@ -81,24 +81,27 @@ impl Expected {
     /// describes: the app's process, or the named window's owner, refused
     /// when the window is not the named app's.
     pub(super) async fn resolve(&self, client: &Client, verified: &Verified) -> Result<Expect> {
-        let (pid, window) = match &self.place {
-            Place::App(app) => (target_pid(client, verified, app).await?, None),
-            Place::Window { number, app } => {
-                let listed = verified_window_list(client, verified).await?;
-                let owner = window_owner(&listed, *number)?;
-                if let Some(app) = app
-                    && target_pid_among(client, verified, app, &listed).await? != owner.pid
-                {
-                    return Err(other_app(owner, app));
+        let instance = resolved_instance(client, async {
+            match &self.place {
+                Place::App(app) => target_pid(client, verified, app).await,
+                Place::Window { number, app } => {
+                    let listed = verified_window_list(client, verified).await?;
+                    let owner = window_owner(&listed, *number)?;
+                    if let Some(app) = app
+                        && target_pid_among(client, verified, app, &listed).await? != owner.pid
+                    {
+                        return Err(other_app(owner, app));
+                    }
+                    Ok(owner.pid)
                 }
-                (owner.pid, Some(*number))
             }
-        };
-
-        let mut expect = Expect::new(pid)?;
-        if let Some(number) = window {
-            expect = expect.in_window(number)?;
+        })
+        .await?;
+        let mut expect = Expect::from_instance(instance)?;
+        if let Place::Window { number, .. } = &self.place {
+            expect = expect.in_window(*number)?;
         }
+
         if let Some(field) = &self.field {
             expect = expect.in_field(field)?;
         }

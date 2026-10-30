@@ -16,6 +16,202 @@ use crate::{
 use serde_json::{Value, json};
 use std::{collections::BTreeMap, path::Path, time::Duration};
 
+struct ResolutionProcess {
+    original: crate::process::Instance,
+    after: Option<crate::process::Start>,
+    captures: std::sync::atomic::AtomicUsize,
+    snapshots: std::sync::atomic::AtomicUsize,
+    checks: std::sync::atomic::AtomicUsize,
+}
+
+impl ResolutionProcess {
+    fn new(replaced: bool, gone: bool) -> Self {
+        let original = crate::process::Instance::current().unwrap();
+        let mut after = original.start;
+        if replaced {
+            after[0] += 1;
+        }
+        Self {
+            original,
+            after: (!gone).then_some(after),
+            captures: 0.into(),
+            snapshots: 0.into(),
+            checks: 0.into(),
+        }
+    }
+
+    fn snapshot(&self) {
+        use std::sync::atomic::Ordering::SeqCst;
+        assert_eq!(
+            self.captures.load(SeqCst),
+            1,
+            "capture precedes the snapshot"
+        );
+        assert_eq!(self.checks.load(SeqCst), 0, "recheck follows the snapshot");
+        assert_eq!(self.snapshots.fetch_add(1, SeqCst), 0);
+    }
+
+    fn checked_once(&self) {
+        use std::sync::atomic::Ordering::SeqCst;
+        assert_eq!(self.captures.load(SeqCst), 1);
+        assert_eq!(self.snapshots.load(SeqCst), 1);
+        assert_eq!(self.checks.load(SeqCst), 1);
+    }
+}
+
+impl crate::test_support::ProcessLookup for ResolutionProcess {
+    fn instances(&self, uid: u32) -> Result<Vec<crate::process::Instance>> {
+        use std::sync::atomic::Ordering::SeqCst;
+        assert_eq!(uid, crate::test_support::UID);
+        assert_eq!(self.captures.fetch_add(1, SeqCst), 0);
+        assert_eq!(self.snapshots.load(SeqCst), 0);
+        Ok(vec![self.original])
+    }
+
+    fn start(&self, pid: i32) -> Result<crate::process::Start> {
+        use std::sync::atomic::Ordering::SeqCst;
+        assert_eq!(pid, self.original.pid);
+        assert_eq!(self.snapshots.load(SeqCst), 1);
+        assert_eq!(self.checks.fetch_add(1, SeqCst), 0);
+        self.after
+            .ok_or_else(|| Error::new(Code::State, "The process exited"))
+    }
+}
+
+#[tokio::test]
+async fn resolution_brackets_the_snapshot_and_carries_only_the_original_instance() {
+    for (replaced, gone) in [(false, false), (true, false), (false, true)] {
+        let directory = tempfile::tempdir().unwrap();
+        let mut client = crate::test_support::client(directory.path());
+        let process = std::sync::Arc::new(ResolutionProcess::new(replaced, gone));
+        client.process_lookup = Some(process.clone());
+        let resolved = resolved_instance(&client, async {
+            process.snapshot();
+            Ok(i64::from(process.original.pid))
+        })
+        .await;
+        if replaced || gone {
+            let error = resolved.unwrap_err();
+            assert_eq!(error.code, Code::Elements);
+            assert!(!error.uncertain);
+        } else {
+            let instance = resolved.unwrap();
+            assert_eq!(instance, process.original);
+            let expect = Expect::from_instance(instance).unwrap();
+            assert_eq!(expect.instance(), Some(process.original));
+            assert_eq!(expect.app_only().instance(), Some(process.original));
+        }
+        process.checked_once();
+    }
+}
+
+#[tokio::test]
+async fn a_process_missing_before_the_snapshot_cannot_be_pinned_after_it() {
+    let directory = tempfile::tempdir().unwrap();
+    let mut client = crate::test_support::client(directory.path());
+    let process = std::sync::Arc::new(ResolutionProcess::new(false, false));
+    client.process_lookup = Some(process.clone());
+    let error = resolved_instance(&client, async {
+        process.snapshot();
+        Ok(i64::from(process.original.pid) + 1)
+    })
+    .await
+    .unwrap_err();
+    assert_eq!(error.code, Code::Elements);
+    assert_eq!(process.checks.load(std::sync::atomic::Ordering::SeqCst), 0);
+}
+
+/// Reply with the original app's snapshot, then expose its replacement to
+/// the kernel lookup. Empty windows exercise the active-app fallback.
+fn replaced_app_reads<'a>(
+    process: &'a ResolutionProcess,
+    windowless: bool,
+) -> impl FnMut(&Value) -> Option<Value> + 'a {
+    move |request| {
+        use crate::test_support::completed;
+        let pid = process.original.pid;
+        if request["op"] == "apps" {
+            let apps = json!({"ok":true,"apps":[{"pid":pid,"name":"Editor","active":true}]});
+            process.snapshot();
+            return Some(apps);
+        }
+        assert_eq!(
+            request["argv"][1], "windows-info",
+            "refuse before scanning or input"
+        );
+        let windows = if windowless {
+            Vec::new()
+        } else {
+            vec![window(42, i64::from(pid), "Editor", 0)]
+        };
+        let reply = completed(&json!({"ok":true,"windows":windows}).to_string());
+        if !windowless {
+            process.snapshot();
+        }
+        Some(reply)
+    }
+}
+
+#[tokio::test]
+async fn input_refuses_a_pid_replaced_between_the_resolution_snapshot_and_pin() {
+    use crate::test_support::{Helper, UID};
+
+    let pid = i64::from(std::process::id());
+    for (target, number, windowless) in [
+        (Some(Target::Name("Editor".into())), None, false),
+        (Some(Target::Pid(pid)), None, false),
+        (Some(Target::Name("Editor".into())), None, true),
+        (None, Some(42), false),
+        (Some(Target::Name("Editor".into())), Some(42), false),
+    ] {
+        let directory = tempfile::tempdir().unwrap();
+        let (mut client, helper) = Helper::client(directory.path(), UID);
+        let process = std::sync::Arc::new(ResolutionProcess::new(true, false));
+        client.process_lookup = Some(process.clone());
+        let expected = Expected::new(target, number, None).unwrap().unwrap();
+        let error = helper
+            .serve(
+                act(&client, Some(&expected), &json!([{"type":"key","key":"a"}])),
+                replaced_app_reads(&process, windowless),
+            )
+            .await
+            .unwrap_err();
+        assert_eq!(error.code, Code::Elements, "{error}");
+        assert!(error.error.contains("process changed"), "{error}");
+        assert!(!error.uncertain);
+        process.checked_once();
+        assert!(client.controller.pending().unwrap().is_empty());
+    }
+}
+
+#[tokio::test]
+async fn named_click_refuses_a_pid_replaced_between_the_resolution_snapshot_and_pin() {
+    use crate::test_support::{Helper, UID};
+
+    for (target, windowless) in [
+        (Target::Name("Editor".into()), false),
+        (Target::Pid(i64::from(std::process::id())), false),
+        (Target::Name("Editor".into()), true),
+    ] {
+        let directory = tempfile::tempdir().unwrap();
+        let (mut client, helper) = Helper::client(directory.path(), UID);
+        let process = std::sync::Arc::new(ResolutionProcess::new(true, false));
+        client.process_lookup = Some(process.clone());
+        let error = helper
+            .serve(
+                click_element(&client, &target, &named("Save"), Button::Left, 1, &[]),
+                replaced_app_reads(&process, windowless),
+            )
+            .await
+            .unwrap_err();
+        assert_eq!(error.code, Code::Elements, "{error}");
+        assert!(error.error.contains("process changed"), "{error}");
+        assert!(!error.uncertain);
+        process.checked_once();
+        assert!(client.controller.pending().unwrap().is_empty());
+    }
+}
+
 /// The stand-in helper's answer to a read: TextEdit (812) with one
 /// window and no elements.
 fn textedit_reads(request: &Value) -> Option<Value> {
@@ -281,7 +477,7 @@ fn two_apps(lists: &std::cell::Cell<usize>) -> impl FnMut(&Value) -> Option<Valu
 
         if request["op"] == "apps" {
             return Some(json!({"ok": true, "apps": [
-                {"pid": 812, "name": "TextEdit"}, {"pid": 900, "name": "Calculator"}]}));
+                {"pid": std::process::id(), "name": "TextEdit"}, {"pid": 900, "name": "Calculator"}]}));
         }
         assert_eq!(request["argv"][1], "windows-info", "nothing else is read");
         lists.set(lists.get() + 1);
@@ -291,7 +487,7 @@ fn two_apps(lists: &std::cell::Cell<usize>) -> impl FnMut(&Value) -> Option<Valu
             "bounds": {"x": 0, "y": 0, "width": 100, "height": 100}})
         };
         let listed = json!({"ok": true, "windows": [
-            window(4120, 812, "TextEdit"), window(339, 900, "Calculator")]});
+            window(4120, i64::from(std::process::id()), "TextEdit"), window(339, 900, "Calculator")]});
         Some(completed(&listed.to_string()))
     }
 }
@@ -325,13 +521,13 @@ async fn an_expectation_is_resolved_in_the_helper_with_one_window_list() {
     let (alone, lists) = resolved(Expected::new(None, Some(4120), field()).unwrap()).await;
     assert_eq!(
         serde_json::to_value(alone.unwrap()).unwrap(),
-        json!({"pid": 812, "window": 4120, "field": "Email"}),
+        json!({"pid": std::process::id(), "start": crate::process::start(std::process::id() as i32).unwrap(), "window": 4120, "field": "Email"}),
         "the window names its app"
     );
     assert_eq!(lists, 1);
 
     let (both, lists) = resolved(Expected::new(textedit(), Some(4120), None).unwrap()).await;
-    assert_eq!(both.unwrap().pid(), 812);
+    assert_eq!(both.unwrap().pid(), i64::from(std::process::id()));
     assert_eq!(lists, 1, "the app is found in the same list");
 
     let calculator = Some(Target::Name("Calculator".into()));
@@ -348,7 +544,7 @@ async fn an_expectation_is_resolved_in_the_helper_with_one_window_list() {
     let (app, _) = resolved(Expected::new(textedit(), None, field()).unwrap()).await;
     assert_eq!(
         serde_json::to_value(app.unwrap()).unwrap(),
-        json!({"pid": 812, "field": "Email"})
+        json!({"pid": std::process::id(), "start": crate::process::start(std::process::id() as i32).unwrap(), "field": "Email"})
     );
 }
 
@@ -2793,14 +2989,16 @@ fn a_covered_named_element_requires_its_exact_window_at_the_native_boundary() {
     target.window = Some(frame(10.0, 20.0, 300.0, 200.0));
     let own = window(42, 812, "Editor", 0);
     let cover = window(43, 900, "Other", 0);
-    let check = element_check(&target, &[cover, own], 812, (20.0, 40.0)).unwrap();
-    match check {
-        crate::client::Check::Required(expect) => {
-            assert_eq!(expect.pid(), 812);
-            assert_eq!(expect.window(), Some(42));
-        }
-        _ => panic!("a named click requires the final native check"),
-    }
+    let check = element_check(
+        &target,
+        &[cover, own],
+        Expect::new(812).unwrap(),
+        (20.0, 40.0),
+    )
+    .unwrap();
+    let crate::client::Check::Required(expect) = check;
+    assert_eq!(expect.pid(), 812);
+    assert_eq!(expect.window(), Some(42));
 }
 
 #[test]
@@ -2811,7 +3009,8 @@ fn missing_or_ambiguous_owning_windows_refuse_named_clicks() {
         vec![],
         vec![window(42, 812, "Editor", 0), window(43, 812, "Editor", 0)],
     ] {
-        let error = element_check(&target, &windows, 812, (20.0, 40.0)).unwrap_err();
+        let error =
+            element_check(&target, &windows, Expect::new(812).unwrap(), (20.0, 40.0)).unwrap_err();
         assert_eq!(error.code, Code::Elements);
     }
 }
@@ -2821,7 +3020,7 @@ fn menu_titles_and_open_items_require_the_app_without_raising_a_menu_window() {
     let mut title = shown(0, "AXMenuBarItem", Some("File"), None);
     let bar = window(2, 1, "Window Server", MENU_BAR_LAYER);
     title.window = Some(frame(10.0, 20.0, 300.0, 200.0));
-    let check = element_check(&title, &[bar], 812, (20.0, 21.0)).unwrap();
+    let check = element_check(&title, &[bar], Expect::new(812).unwrap(), (20.0, 21.0)).unwrap();
     assert!(
         matches!(check, crate::client::Check::Required(expect) if expect.window().is_none() && expect.pid() == 812)
     );
@@ -2831,7 +3030,7 @@ fn menu_titles_and_open_items_require_the_app_without_raising_a_menu_window() {
     let check = element_check(
         &item,
         &[window(3, 812, "Editor", MENU_LAYER)],
-        812,
+        Expect::new(812).unwrap(),
         (20.0, 21.0),
     )
     .unwrap();
@@ -2849,7 +3048,7 @@ async fn incomplete_or_ambiguous_element_scans_never_dispatch_input() {
             .serve(
                 click_element(
                     &client,
-                    &Target::Pid(812),
+                    &Target::Pid(i64::from(std::process::id())),
                     &named("Save"),
                     Button::Left,
                     1,
@@ -2866,6 +3065,8 @@ async fn incomplete_or_ambiguous_element_scans_never_dispatch_input() {
                             &json!({"ok":true,"elements":elements,"truncated":incomplete})
                                 .to_string(),
                         ))
+                    } else if request["op"] == "apps" {
+                        Some(json!({"ok": true, "apps": [{"pid": std::process::id(), "name": "TextEdit"}]}))
                     } else {
                         textedit_reads(request)
                     }
@@ -2903,7 +3104,8 @@ fn a_named_sheet_button_keeps_the_exact_sheet_or_parent_number_from_the_scan() {
         (frame(10.0, 20.0, 300.0, 200.0), vec![parent], 42),
     ] {
         button.window = Some(owning);
-        let check = element_check(&button, &listed, 812, (130.0, 132.0)).unwrap();
+        let check =
+            element_check(&button, &listed, Expect::new(812).unwrap(), (130.0, 132.0)).unwrap();
         assert!(
             matches!(check, crate::client::Check::Required(expect) if expect.pid() == 812 && expect.window() == Some(number))
         );

@@ -11,6 +11,7 @@ use crate::{
         focus::{FIELDS, Need},
         windows::{self, Kind, Listed, Window},
     },
+    process::{Info, Instance},
     select::ElementFilter,
 };
 use objc2_application_services::AXError;
@@ -51,13 +52,9 @@ pub(super) enum Write {
 
 impl Backend for Live {
     fn app(&mut self, pid: i64) -> Option<Self::Element> {
-        application_with(pid, nix::unistd::geteuid().as_raw(), |pid| {
-            crate::process::info(pid)
-                .ok()
-                .flatten()
-                .map(|info| (info.uid, info.zombie))
-        })
-        .and_then(ffi::application)
+        application(pid)
+            .ok()
+            .and_then(|instance| ffi::application(instance.pid))
     }
 
     fn windows(&mut self) -> Result<Vec<Window>> {
@@ -176,11 +173,44 @@ fn supports_raise(
 fn application_with(
     pid: i64,
     uid: u32,
-    describe: impl FnOnce(libc::pid_t) -> Option<(u32, bool)>,
-) -> Option<libc::pid_t> {
+    describe: impl FnOnce(libc::pid_t) -> Option<Info>,
+) -> Option<Instance> {
     let pid = libc::pid_t::try_from(pid).ok().filter(|pid| *pid > 0)?;
-    let (owner, zombie) = describe(pid)?;
-    (owner == uid && !zombie).then_some(pid)
+    let info = describe(pid)?;
+    (info.instance.pid == pid && info.uid == uid && !info.zombie).then_some(info.instance)
+}
+
+pub(crate) fn application(pid: i64) -> Result<Instance> {
+    application_with(pid, nix::unistd::geteuid().as_raw(), |pid| {
+        crate::process::info(pid).ok().flatten()
+    })
+    .ok_or_else(|| refused("app", "The target app is no longer running"))
+}
+
+pub(crate) fn check_application(target: Option<Instance>) -> Result<()> {
+    if let Some(target) = target {
+        same_application(target, application(target.pid.into()).ok())?;
+    }
+    Ok(())
+}
+
+pub(crate) fn target_application(expect: &Expect) -> Result<Instance> {
+    let target = match expect.instance() {
+        Some(instance) => instance,
+        None => application(expect.pid())?,
+    };
+    check_application(Some(target))?;
+    Ok(target)
+}
+
+fn same_application(target: Instance, current: Option<Instance>) -> Result<()> {
+    if current != Some(target) {
+        return Err(refused(
+            "app",
+            "The target app instance is no longer running",
+        ));
+    }
+    Ok(())
 }
 
 fn refused(reason: &str, message: &str) -> Error {
@@ -305,12 +335,10 @@ impl<A: Backend> Reader<A> {
     fn resolve(&mut self, app: &A::Element, pid: i64, number: i64) -> Result<A::Element> {
         let listed = self.ask.windows()?;
         self.left()?;
-        if !listed
+        let requested = listed
             .iter()
-            .any(|window| window.pid == pid && window.number == number)
-        {
-            return Err(refused("window", "The named window is not on screen"));
-        }
+            .find(|window| window.pid == pid && window.number == number)
+            .ok_or_else(|| refused("window", "The named window is not on screen"))?;
         let mut found = None;
         for WindowRef {
             element: candidate, ..
@@ -322,6 +350,16 @@ impl<A: Backend> Reader<A> {
                 return Err(Unread::Malformed.error());
             }
             let frame = window.frame.ok_or_else(|| Unread::Malformed.error())?;
+            if windows::described(
+                std::slice::from_ref(requested),
+                pid,
+                &frame,
+                window.title.as_deref(),
+                Kind::of(window.subrole.as_deref()),
+            ) == Listed::Missing
+            {
+                continue;
+            }
             match windows::described(
                 &listed,
                 pid,
@@ -339,7 +377,28 @@ impl<A: Backend> Reader<A> {
                 _ => {}
             }
         }
-        found.ok_or_else(|| Unread::Unlisted.error())
+        let found = found.ok_or_else(|| Unread::Unlisted.error())?;
+        self.identity(&found, pid, number)?;
+        Ok(found)
+    }
+
+    fn identity(&mut self, element: &A::Element, pid: i64, number: i64) -> Result<()> {
+        self.owned(element, pid)?;
+        let window = self.window(element)?;
+        let frame = window.frame.ok_or_else(|| Unread::Malformed.error())?;
+        let listed = self.ask.windows()?;
+        self.left()?;
+        match windows::described(
+            &listed,
+            pid,
+            &frame,
+            window.title.as_deref(),
+            Kind::of(window.subrole.as_deref()),
+        ) {
+            Listed::One(current) if current == number => Ok(()),
+            Listed::Several => Err(Unread::Alike.error()),
+            _ => Err(Unread::Unlisted.error()),
+        }
     }
 
     fn admit_window(
@@ -406,6 +465,9 @@ impl<A: Backend> Reader<A> {
         explicit: bool,
         point: Option<(f64, f64)>,
     ) -> Result<()> {
+        // Only an explicit selection grants the unrelated-document exemption.
+        // An app-only command follows the current keyboard destination.
+        let window = window.filter(|_| explicit);
         let refs = self.window_refs(app, pid)?;
         if let Some(window) = window {
             let attached = refs
@@ -432,12 +494,16 @@ impl<A: Backend> Reader<A> {
             }
         }
         let focused = self.reference(app, "AXFocusedWindow")?;
-        if let Some(focused) = &focused {
+        let main = self.reference(app, "AXMainWindow")?;
+        for current in [focused.as_ref(), main.as_ref()].into_iter().flatten() {
             let parent = refs
                 .iter()
-                .find(|entry| entry.element == *focused)
+                .find(|entry| entry.element == *current)
                 .and_then(|entry| entry.parent.as_ref());
-            self.admit_window(focused, parent, window, pid, explicit)?;
+            self.admit_window(current, parent, window, pid, explicit)?;
+            for sheet in self.sheets(current, pid)? {
+                self.admit_window(&sheet, Some(current), window, pid, explicit)?;
+            }
         }
         if let Some(mut element) = self.reference(app, "AXFocusedUIElement")? {
             for depth in 0..256 {
@@ -485,35 +551,6 @@ impl<A: Backend> Reader<A> {
         } else {
             Err(refused("sheet", "The point is outside the target sheet"))
         }
-    }
-
-    fn sheet_at(
-        &mut self,
-        window: &A::Element,
-        pid: i64,
-        point: (f64, f64),
-    ) -> Result<Option<A::Element>> {
-        let mut found = None;
-        for sheet in self.sheets(window, pid)? {
-            self.owned(&sheet, pid)?;
-            // Missing geometry proves nothing, including absence at this point.
-            let frame = self
-                .window(&sheet)?
-                .frame
-                .ok_or_else(|| Unread::Malformed.error())?;
-            let (x, y) = point;
-            if x >= frame.x
-                && y >= frame.y
-                && x < frame.x + frame.width
-                && y < frame.y + frame.height
-            {
-                if found.is_some() {
-                    return Err(Unread::Alike.error());
-                }
-                found = Some(sheet);
-            }
-        }
-        Ok(found)
     }
 
     fn find_field(&mut self, window: &A::Element, pid: i64, name: &str) -> Result<A::Element> {
@@ -625,7 +662,7 @@ fn prepare<A: Backend>(
     } else {
         None
     };
-    let mut window = match number {
+    let window = match number {
         Some(number) => Some(reader.resolve(&app, expect.pid(), number)?),
         None => {
             let focused = reader.reference(&app, "AXFocusedWindow")?;
@@ -635,29 +672,7 @@ fn prepare<A: Backend>(
             }
         }
     };
-    let mut raise = number.is_some() && !menu;
-    if let (Some(parent), Some(point)) = (&window, point)
-        && let Some(sheet) = reader.sheet_at(parent, expect.pid(), point)?
-    {
-        let described = reader.window(&sheet)?;
-        let listed = reader.ask.windows()?;
-        let frame = described.frame.ok_or_else(|| Unread::Malformed.error())?;
-        match windows::described(
-            &listed,
-            expect.pid(),
-            &frame,
-            described.title.as_deref(),
-            Kind::of(described.subrole.as_deref()),
-        ) {
-            Listed::One(sheet_number) => number = Some(sheet_number),
-            // The CG list may represent the sheet through its parent.
-            // Keep that exact number for point verification, but never
-            // raise the parent through its attached sheet.
-            Listed::Missing => raise = false,
-            Listed::Several => return Err(Unread::Alike.error()),
-        }
-        window = Some(sheet);
-    }
+    let raise = number.is_some() && !menu;
     if number.is_none() && expect.field().is_some() {
         let window = window
             .as_ref()
@@ -751,6 +766,9 @@ fn prepare<A: Backend>(
                 return Err(Unread::Failed.error());
             }
         }
+        if let (Some(window), Some(number)) = (&window, number) {
+            reader.identity(window, expect.pid(), number)?;
+        }
         guard()?;
         reader.bound(&element)?;
         let status = reader.ask.write(&element, operation);
@@ -826,7 +844,7 @@ fn settle<A: Backend>(
             expect.window().is_some() || target.point.is_some(),
             target.point,
         )?;
-        let result = verify(target.number, deadline);
+        let mut result = verify(target.number, deadline);
         if result.is_ok() {
             target.reader.blocking(
                 &target.app,
@@ -835,6 +853,9 @@ fn settle<A: Backend>(
                 expect.window().is_some() || target.point.is_some(),
                 target.point,
             )?;
+            // Admission is another observation. Its scan may outlive the
+            // earlier proof, so verify the destination again before returning.
+            result = verify(target.number, deadline);
         }
         guard()?;
         target.reader.left()?;

@@ -87,6 +87,8 @@ unsafe impl Send for Source {}
 pub(super) struct Engine {
     pub epoch: InputEpoch,
     pub grant: Option<Grant>,
+    /// The process resolved for this request, retained through the last post.
+    pub target: Option<crate::process::Instance>,
     journal: Option<Journal>,
     journal_dirty: bool,
     /// Events posted so far: tells an action that posted some of its
@@ -113,6 +115,7 @@ impl Engine {
         let mut engine = Self {
             epoch: InputEpoch::from_proof(&session_info()?, std::process::id())?,
             grant: None,
+            target: None,
             journal: None,
             journal_dirty: false,
             posted: 0,
@@ -148,12 +151,14 @@ impl Engine {
     pub(super) fn preparation_guard(&self) -> impl Fn() -> Result<()> + Send + 'static {
         let epoch = self.epoch.clone();
         let grant = self.grant.clone();
+        let target = self.target;
         move || {
             let grant = grant
                 .as_ref()
                 .ok_or_else(|| Error::new(Code::LeaseLost, "Input has no controller"))?;
             drop(grant.authorize()?);
             Self::check_epoch(&epoch)?;
+            super::ax::check_application(target)?;
             if !objc2_core_graphics::CGPreflightPostEventAccess() {
                 return Err(Error::new(
                     Code::Permission,
@@ -285,6 +290,7 @@ impl Engine {
 
         self.check()?;
         let _authorization = self.grant.as_ref().map(Grant::authorize).transpose()?;
+        super::ax::check_application(self.target)?;
         // Exactly the modifiers asked for: an arrow key's own numeric pad and
         // function flags would leave macOS reading function as held.
         CGEvent::set_flags(Some(&event), CGEventFlags(flags));
@@ -329,6 +335,7 @@ impl Engine {
 
     pub(super) fn release(&mut self) -> Result<()> {
         self.grant = None;
+        self.target = None;
 
         if !self.held_input() {
             return if self.journal_dirty {

@@ -20,7 +20,7 @@ mod system;
 mod text;
 mod tree;
 
-pub(crate) use bring::bring;
+pub(crate) use bring::{bring, check_application, target_application};
 pub(crate) use keyboard::{Focused, Judged, Keyboard, Unread, Within, frontmost, keyboard};
 pub use model::{Element, Frame, Limits, Snapshot};
 pub use stop::Stop;
