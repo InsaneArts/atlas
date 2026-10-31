@@ -402,7 +402,7 @@ pub(super) fn reachable(
     if has_windows || role == Ok(true) {
         Ok(())
     } else {
-        Err(error.or(role.err()))
+        Err(error.filter(|error| !ABSENT.contains(error)).or(role.err()))
     }
 }
 

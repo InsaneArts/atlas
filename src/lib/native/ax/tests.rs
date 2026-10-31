@@ -289,11 +289,14 @@ fn strings_are_cut_between_characters() {
 
 #[test]
 fn a_failed_role_read_keeps_its_error_when_the_app_has_no_windows() {
-    let error = reachable(Err(AXError::CannotComplete), false, None).unwrap_err();
-    let error = unreachable(error, true, true);
-    assert_eq!(error.code, "elements");
-    assert!(error.error.contains("not responding"));
-    assert!(error.error.contains("try again"));
+    for windows_error in [None].into_iter().chain(ABSENT.map(Some)) {
+        let error = reachable(Err(AXError::CannotComplete), false, windows_error).unwrap_err();
+        assert_eq!(error, Some(AXError::CannotComplete));
+        let error = unreachable(error, true, true);
+        assert_eq!(error.code, "elements");
+        assert!(error.error.contains("not responding"));
+        assert!(error.error.contains("try again"));
+    }
 }
 
 #[test]
