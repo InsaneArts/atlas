@@ -903,13 +903,6 @@ fn prepare<A: Backend>(
         }
         reader.left()?;
     }
-    reader.blocking(
-        &app,
-        window.as_ref(),
-        expect.pid(),
-        expect.window().is_some() || point.is_some(),
-        point,
-    )?;
     guard()?;
     Ok(Target {
         reader,

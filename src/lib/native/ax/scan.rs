@@ -183,6 +183,9 @@ impl Scan {
     pub(super) fn text(&mut self, from: Source, name: &'static str) -> Option<String> {
         let value = self.attribute(from, name)?;
         let text = value.downcast_ref::<CFString>().and_then(bounded_string);
+        if name == "AXSubrole" && text.is_none() {
+            self.failed(AXError::Failure, name);
+        }
         self.bounded(text, name)
     }
 

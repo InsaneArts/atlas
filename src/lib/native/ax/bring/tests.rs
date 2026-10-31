@@ -656,6 +656,7 @@ fn secure_field_with_slow_window_counts(
     fake.now.set(fake.now.get() + Duration::from_secs(60));
     fake.answers
         .insert((FIELD, "AXRole"), Answer::Text("AXSecureTextField".into()));
+    fake.count_errors = vec![AXError::CannotComplete; failures].into();
     let expect = named().in_field("_NS:9").unwrap();
     let deadline = fake.now.get() + Duration::from_millis(30);
     let mut observation = fake.clone();
@@ -673,8 +674,6 @@ fn secure_field_with_slow_window_counts(
     assert_eq!(target.reader.ask.focused_element.get(), FIELD);
     let writes = target.reader.ask.writes.clone();
     assert_eq!(writes.last(), Some(&(FIELD, Write::Flag("AXFocused"))));
-    target.reader.ask.count_reads = 0;
-    target.reader.ask.count_errors = vec![AXError::CannotComplete; failures].into();
     let result = settle(target, &expect, deadline, &|| Ok(()), |number, until| {
         verifications += 1;
         assert!(verifications <= 2);
@@ -696,7 +695,7 @@ fn secure_field_with_slow_window_counts(
 }
 
 #[test]
-fn a_slow_window_count_recovers_after_focus_moves_onto_a_secure_field() {
+fn the_first_slow_window_count_after_focusing_a_secure_field_recovers_without_more_writes() {
     let (fake, result, verifications) = secure_field_with_slow_window_counts(1);
     assert_eq!(result.unwrap(), Some("AXSecureTextField"));
     assert_eq!(verifications, 2);
