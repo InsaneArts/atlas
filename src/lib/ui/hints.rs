@@ -255,6 +255,9 @@ pub fn focus_changed(sent: bool, in_the_way: InTheWay) -> String {
             "{what}. Earlier actions were sent: check typed or performed and what landed, {remedy}, then send only the rest."
         );
     }
+    if in_the_way == InTheWay::Unknown(Unsure::Slow) {
+        return "The app was busy and nothing was sent. Run the same command again.".to_owned();
+    }
 
     let mut letters = remedy.chars();
     let remedy: String = letters
@@ -520,7 +523,7 @@ mod tests {
             (Some("unreadable"), Some("withheld"), "screen is locked"),
             (Some("unreadable"), Some("cut"), "too long to read whole"),
             (Some("unreadable"), Some("deep"), "deeper in your app"),
-            (Some("unreadable"), Some("slow"), "did not say in time"),
+            (Some("unreadable"), Some("slow"), "The app was busy"),
             (Some("made-up"), None, "Another app"),
             (None, None, "Another app"),
         ] {
@@ -541,11 +544,8 @@ mod tests {
 
             let nothing = focus_changed(false, in_the_way);
             assert!(!nothing.contains("Earlier actions"), "{nothing}");
-            assert!(
-                nothing.contains("nothing of the command was sent"),
-                "{nothing}"
-            );
-            assert!(nothing.contains("run it again"), "{nothing}");
+            assert!(nothing.contains("nothing"), "{nothing}");
+            assert!(nothing.contains("again"), "{nothing}");
             let remedy = nothing.split(". ").nth(1).unwrap_or_default();
             assert!(
                 remedy.starts_with(char::is_uppercase),
