@@ -93,6 +93,34 @@ struct PointerGestureTests {
     #expect(count(press(&full, at: near, now: 0.1)) == 1)
   }
 
+  @Test("movement within the view's tap threshold sends no drag before release")
+  func tapMovementWaitsForRelease() {
+    for scale in [0.5, 1.0, 2.0] {
+      var gesture = PointerGesture()
+      _ = press(&gesture, at: point, scale: scale, now: 0)
+      let wobble = DesktopPoint(x: point.x + 2 / scale, y: point.y)
+      #expect(gesture.move(.left, to: wobble, scale: scale, modifiers: []) == nil)
+      #expect(gesture.last == wobble)
+      let releasedAt = DesktopPoint(x: point.x + 3 / scale, y: point.y)
+      #expect(gesture.move(.left, to: releasedAt, scale: scale, modifiers: []) == nil)
+      #expect(phase(gesture.finish(.left, at: releasedAt, modifiers: [], now: 0.05)) == .up)
+      #expect(count(press(&gesture, at: releasedAt, scale: scale, now: 0.1)) == 2)
+    }
+  }
+
+  @Test("movement past the view's drag threshold keeps dragging even when it returns")
+  func crossingTheThresholdStartsDragging() {
+    var gesture = PointerGesture()
+    _ = press(&gesture, at: point, scale: 0.5, now: 0)
+    let wobble = DesktopPoint(x: 105, y: 200)
+    #expect(gesture.move(.left, to: wobble, scale: 0.5, modifiers: []) == nil)
+    let dragged = DesktopPoint(x: 107, y: 200)
+    #expect(phase(gesture.move(.left, to: dragged, scale: 0.5, modifiers: [])) == .move)
+    #expect(phase(gesture.move(.left, to: point, scale: 0.5, modifiers: [])) == .move)
+    #expect(phase(gesture.finish(.left, at: point, modifiers: [], now: 0.05)) == .up)
+    #expect(count(press(&gesture, at: point, scale: 0.5, now: 0.1)) == 1)
+  }
+
   @Test("another button or place starts a new click")
   func newClick() {
     var gesture = PointerGesture()
