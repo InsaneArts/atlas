@@ -1615,13 +1615,12 @@ fn the_default_listing_omits_only_groups_without_information() {
         .collect();
     assert_eq!(indices, (2..14).collect::<Vec<_>>());
     assert_eq!(listed["scanned"], 14);
-    assert_eq!(listed["matching"], 14);
+    assert_eq!(listed["matching"], 12);
     let short = listing(1, &scan, &all, 2, false);
-    assert_eq!(short["more"], 12);
+    assert_eq!(short["more"], 10);
     assert_eq!(
         short["elements"],
-        json!([]),
-        "omitted groups are not replaced by later entries"
+        json!(&listed["elements"].as_array().unwrap()[..2])
     );
     assert_eq!(
         listing(1, &scan, &all, 50, true)["elements"],
@@ -1647,6 +1646,31 @@ fn the_default_listing_omits_only_groups_without_information() {
         listing(1, &scan, &named("panel"), 50, false)["elements"][0]["index"],
         4
     );
+}
+
+#[test]
+fn empty_groups_do_not_use_the_limit_or_hide_later_controls() {
+    let scan = scanned(vec![
+        shown(0, "AXGroup", None, None),
+        shown(1, "AXButton", Some("Save"), None),
+        shown(2, "AXGroup", None, None),
+        shown(3, "AXButton", Some("Cancel"), None),
+        shown(4, "AXGroup", None, None),
+    ]);
+    for (max, indices, more) in [(0, vec![], 2), (1, vec![1], 1), (2, vec![1, 3], 0)] {
+        let listed = listing(1, &scan, &ElementFilter::default(), max, false);
+        assert_eq!(listed["matching"], 2);
+        assert_eq!(listed["more"], more);
+        assert_eq!(
+            listed["elements"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(|element| element["index"].as_u64().unwrap())
+                .collect::<Vec<_>>(),
+            indices
+        );
+    }
 }
 
 #[test]

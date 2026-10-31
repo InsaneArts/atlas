@@ -688,7 +688,8 @@ fn prepare<A: Backend>(
     reader.left()?;
     reader.owned(&app, expect.pid())?;
     if expect.field().is_some() {
-        reader.text(&app, "AXRole")?;
+        // Ignore the result because this read only wakes the browser's page tree.
+        let _ = reader.text(&app, "AXRole");
     }
     let point = match need {
         Need::Point(x, y) => Some((x, y)),

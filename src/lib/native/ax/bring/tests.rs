@@ -737,6 +737,25 @@ fn a_cold_field_is_exposed_by_reading_the_application_role_before_resolution() {
     assert_eq!(fake.writes.last(), Some(&(FIELD, Write::Flag("AXFocused"))));
 }
 
+#[test]
+fn a_failed_application_role_read_still_resolves_the_field_without_retrying() {
+    let mut fake = Fake::new();
+    fake.lists.remove(&(WINDOW, "AXChildren"));
+    fake.fail_once = Some((APP, "AXRole", AXError::CannotComplete));
+    fake.on_ask = Some(|fake, element, name| {
+        if (element, name) == (APP, "AXRole") {
+            assert!(
+                fake.lists
+                    .insert((WINDOW, "AXChildren"), vec![FIELD])
+                    .is_none()
+            );
+        }
+    });
+    fake.run(&named().in_field("Email").unwrap()).unwrap();
+    assert!(fake.fail_once.is_none());
+    assert_eq!(fake.writes.last(), Some(&(FIELD, Write::Flag("AXFocused"))));
+}
+
 fn find_bar() -> Fake {
     let mut fake = Fake::new();
     fake.lists.insert((WINDOW, "AXChildren"), vec![4, 5]);

@@ -16,7 +16,7 @@ use crate::{
     },
 };
 use objc2_application_services::{AXError, AXUIElement};
-use objc2_core_foundation::CFRetained;
+use objc2_core_foundation::{CFRetained, CFString};
 use std::{
     collections::HashSet,
     time::{Duration, Instant},
@@ -60,14 +60,18 @@ pub fn elements(pid: i32, limits: Limits) -> Result<Snapshot> {
 
     let mut scan = Scan::new(Instant::now() + limits.time);
     // Some browsers build their page tree when the application's role is read.
-    let role = scan.text(Source::Element(&app), "AXRole");
+    let role = scan.open()
+        && matches!(
+            ffi::copy(&app, &CFString::from_static_str("AXRole")),
+            Ok(Some(role)) if role.downcast_ref::<CFString>().is_some()
+        );
     let windows = scan.children(&app, "AXWindows", limits.count);
     let windows_error = scan.last_error.take();
     let windows = scan.shown(&app, windows);
 
     // An app that answers nothing at all, not even its role, is unreachable;
     // report why, not "empty".
-    if windows.is_empty() && role.is_none() {
+    if windows.is_empty() && !role {
         let error = scan.last_error.or(windows_error);
         let exists = pid > 0
             && !matches!(
