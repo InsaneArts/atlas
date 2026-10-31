@@ -162,8 +162,8 @@ pub fn assess(record: Option<&Record>, current: Option<&Generation>, at: u64) ->
     let Some(record) = record else {
         return json!({
             "state": "unknown",
-            "reason": "Native Save and Open panels are known to work only while a Screen \
-                       Sharing session is connected to the helper.",
+            "reason": "Native Save/Open has no recorded check. Panels can be inert without \
+                       authenticated Screen Sharing; use atlas run or atlas open instead.",
         });
     };
 
@@ -172,7 +172,7 @@ pub fn assess(record: Option<&Record>, current: Option<&Generation>, at: u64) ->
             "unknown",
             "The recorded observation is inconsistent and was ignored",
         )
-    } else if record.observed_at > at + SKEW {
+    } else if record.observed_at > at.saturating_add(SKEW) {
         ("unknown", "The recorded observation is dated in the future")
     } else if current != Some(&record.generation) {
         (
@@ -182,7 +182,10 @@ pub fn assess(record: Option<&Record>, current: Option<&Generation>, at: u64) ->
     } else if at.saturating_sub(record.observed_at) > FRESH.as_secs() {
         ("stale", "The observation is older than 30 minutes")
     } else if record.passed {
-        ("passed", "Native Save and Open completed with exact bytes")
+        (
+            "passed",
+            "Native Save and Open completed with exact bytes at the recorded time; this is not a connection check",
+        )
     } else {
         (
             "failed",
@@ -200,13 +203,9 @@ pub fn assess(record: Option<&Record>, current: Option<&Generation>, at: u64) ->
     })
 }
 
-/// What doctor says of web content. WebKit stops drawing a page whose
-/// window macOS reports as not visible, which is every window of a hidden
-/// login; a page then shows blank and has no accessibility elements. Chrome
-/// and Firefox keep drawing there.
-const WEB_CONTENT: &str = "Google Chrome and Firefox draw web pages in the helper. Safari and \
-                           other WebKit views are known to draw only while a Screen Sharing \
-                           session is connected to the helper; otherwise they stay blank.";
+/// Static guidance, not a test of the page or remote connection.
+const WEB_CONTENT: &str = "Safari/WebKit can stay blank without authenticated Screen Sharing. \
+                           Use Chrome/Firefox for web pages; do not retry a blank page.";
 
 /// Doctor's native-dialog assessment for a status snapshot.
 pub fn native_dialogs(status: &Value, uid: u32) -> Value {
@@ -235,7 +234,17 @@ pub fn doctor(status: Value, uid: u32) -> Value {
 
 /// What doctor warns when the last native Save and Open check failed.
 pub const NATIVE_DIALOGS_FAILED: &str =
-    "Native Save and Open dialogs failed their last check. atlas verify-native checks again.";
+    "Native Save/Open failed its last check; cancel inert panels and use atlas run or atlas open.";
+
+fn compact_warning(state: Option<&str>) -> String {
+    let native = match state {
+        Some("passed") => "Native Save/Open passed a dated check, not a connection check.",
+        Some("failed") => NATIVE_DIALOGS_FAILED,
+        Some("stale") => "Native Save/Open's check is stale; use atlas run or atlas open.",
+        _ => "Native Save/Open is unqualified; use atlas run or atlas open.",
+    };
+    format!("{native} {WEB_CONTENT}")
+}
 
 /// Doctor's report for programs. A ready helper is only that, with any
 /// warnings. Otherwise it is the report without the raw helper status it was
@@ -244,16 +253,11 @@ pub const NATIVE_DIALOGS_FAILED: &str =
 pub fn summary(mut report: Value) -> Value {
     if report["ready"] == true {
         let mut warnings = report["warnings"].as_array().cloned().unwrap_or_default();
-        if report["capabilities"]["nativeDialogs"]["state"] == "failed" {
-            warnings.push(json!(NATIVE_DIALOGS_FAILED));
-        }
+        warnings.push(json!(compact_warning(
+            report["capabilities"]["nativeDialogs"]["state"].as_str()
+        )));
 
-        let mut ready = json!({"ok": true, "ready": true});
-        if !warnings.is_empty() {
-            ready["warnings"] = json!(warnings);
-        }
-
-        return ready;
+        return json!({"ok": true, "ready": true, "warnings": warnings});
     }
 
     let session = report
@@ -1160,18 +1164,54 @@ mod tests {
     }
 
     #[test]
-    fn a_ready_doctor_tells_programs_only_that_and_its_warnings() {
-        assert_eq!(
-            summary(report(true, json!([]), "unknown")),
-            json!({"ok": true, "ready": true})
+    fn a_ready_doctor_warns_about_unqualified_panels_and_webkit_in_one_compact_line() {
+        for (state, native) in [
+            (
+                "unknown",
+                "Native Save/Open is unqualified; use atlas run or atlas open.",
+            ),
+            (
+                "stale",
+                "Native Save/Open's check is stale; use atlas run or atlas open.",
+            ),
+            ("failed", NATIVE_DIALOGS_FAILED),
+            (
+                "passed",
+                "Native Save/Open passed a dated check, not a connection check.",
+            ),
+        ] {
+            let summed = summary(report(true, json!([]), state));
+            assert_eq!(
+                summed,
+                json!({"ok":true, "ready":true,
+                "warnings":[format!("{native} {WEB_CONTENT}")]})
+            );
+            assert!(summed.to_string().len() < 384);
+        }
+    }
+
+    #[test]
+    fn compact_capability_advice_preserves_existing_warnings() {
+        let summed = summary(report(true, json!(["The display changed."]), "passed"));
+        assert_eq!(summed["warnings"][0], "The display changed.");
+        assert_eq!(summed["warnings"].as_array().unwrap().len(), 2);
+    }
+
+    #[test]
+    fn a_pass_reports_its_date_without_claiming_a_connected_session() {
+        let passed = record(true, true, 100);
+        let assessment = assess(Some(&passed), Some(&generation()), 160);
+        assert_eq!(assessment["observedAt"], 100);
+        assert_eq!(assessment["ageSeconds"], 60);
+        assert!(
+            assessment["reason"]
+                .as_str()
+                .unwrap()
+                .contains("not a connection check")
         );
         assert_eq!(
-            summary(report(true, json!(["The display changed."]), "passed")),
-            json!({"ok": true, "ready": true, "warnings": ["The display changed."]})
-        );
-        assert_eq!(
-            summary(report(true, json!([]), "failed")),
-            json!({"ok": true, "ready": true, "warnings": [NATIVE_DIALOGS_FAILED]})
+            assess(Some(&passed), Some(&generation()), u64::MAX)["state"],
+            "stale"
         );
     }
 

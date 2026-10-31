@@ -448,6 +448,14 @@ pub(super) fn choose<'a>(elements: &'a [Element], filter: &ElementFilter) -> Res
         ));
     }
 
+    if element.enabled == Some(false) {
+        return Err(Error::new(
+            Code::Input,
+            "The selected control is disabled; no click was sent",
+        )
+        .with("next", crate::ui::hints::DISABLED_CONTROL));
+    }
+
     Ok(element)
 }
 
@@ -521,6 +529,11 @@ fn candidates(seen: &[&Element], matching: &[&Element], filter: &ElementFilter) 
 /// complete scan; the point must be uncovered in the element's own window in
 /// a window list read after the scan; and the click is posted under one
 /// ownership and the epoch observed at the start.
+///
+/// # Errors
+/// Refuses incomplete or ambiguous scans and definitely disabled controls
+/// before input. Identity, ownership, focus and delivery errors propagate;
+/// an uncertain outcome must be recovered before another mutation.
 pub async fn click_element(
     client: &Client,
     target: &Target,
