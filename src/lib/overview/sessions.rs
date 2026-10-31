@@ -78,10 +78,11 @@ pub(crate) fn service_blocker(client: &Client, now: u128) -> Option<String> {
         agent_holds: false,
         now,
     };
+    let rows = activity_log::recent(output, SESSION_ROWS);
     live_from(
         client,
         facts,
-        output,
+        &rows,
         &seen,
         &causes,
         holder.as_ref(),
@@ -101,6 +102,19 @@ pub(crate) fn service_blocker(client: &Client, now: u128) -> Option<String> {
             return format!("{name} has a command still running in the helper.");
         }
         format!("{name} is active in the helper.")
+    })
+    .or_else(|| {
+        // The display omits unnamed rows older than the first named row.
+        // Service replacement must still respect their recent activity.
+        (own.is_some()
+            && rows.iter().any(|row| {
+                row.session.is_none()
+                    && row.actor() != "viewer"
+                    && row.at_ms().is_some_and(|at| {
+                        now_ms.saturating_sub(at) <= crate::time::ms(SERVICE_IDLE)
+                    })
+            }))
+        .then(|| format!("{} is active in the helper.", session_view::TERMINAL))
     })
 }
 
@@ -248,13 +262,14 @@ fn live(client: &Client, facts: SessionFacts) -> Vec<Listed> {
 }
 
 fn live_with(client: &Client, facts: SessionFacts, output: &Path, seen: &[Seen]) -> Vec<Listed> {
+    let rows = activity_log::recent(output, SESSION_ROWS);
     let causes = client.controller.pending_causes().unwrap_or_default();
     let holder = client.controller.holder_note();
     let waiting = client.controller.waiting_notes();
     live_from(
         client,
         facts,
-        output,
+        &rows,
         seen,
         &causes,
         holder.as_ref(),
@@ -265,16 +280,15 @@ fn live_with(client: &Client, facts: SessionFacts, output: &Path, seen: &[Seen])
 fn live_from(
     client: &Client,
     facts: SessionFacts,
-    output: &Path,
+    rows: &[activity_log::Row],
     seen: &[Seen],
     causes: &[Cause],
     holder: Option<&Note>,
     waiting: &[Note],
 ) -> Vec<Listed> {
-    let rows = activity_log::recent(output, SESSION_ROWS);
     let running = client.controller.running_notes();
     let scene = Scene {
-        rows: &rows,
+        rows,
         holder,
         waiting,
         causes,

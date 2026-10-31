@@ -98,6 +98,64 @@ async fn a_terminal_can_update_after_its_completed_screenshot() {
     );
 }
 
+#[tokio::test]
+async fn a_named_updater_defers_for_terminal_work_before_its_own_screenshot() {
+    use crate::activity_log::{Op, Row};
+
+    let directory = tempfile::tempdir().unwrap();
+    let mut client = crate::test_support::client(directory.path());
+    let own = session("updater");
+    let now = crate::host_session::now_ms();
+    let terminal_at = now - 60_000;
+    let screenshot_at = now - 30_000;
+    seen(&client, &own, screenshot_at, false);
+    client.controller = client.controller.labelled(Some(&own));
+    client.host_session = Some(own.clone());
+    for (at, operation, verb, session) in [
+        (terminal_at, Op::Input, "click", None),
+        (
+            screenshot_at,
+            Op::Screenshot,
+            "screenshot",
+            Some(own.key().as_str().to_owned()),
+        ),
+    ] {
+        crate::activity_log::append(
+            client.output_dir().unwrap(),
+            &Row {
+                at: Some((u128::from(at) * 1_000_000).to_string()),
+                operation: Some(operation),
+                ok: Some(true),
+                actor: Some("agent".into()),
+                verb: Some(verb.into()),
+                session,
+                ..Default::default()
+            },
+        )
+        .unwrap();
+    }
+    let listed = crate::overview::live_host_sessions(
+        &client,
+        crate::overview::SessionFacts::local(&client.controller, u128::from(now) * 1_000_000),
+    )
+    .await;
+    assert_eq!(listed.len(), 1);
+    assert_eq!(listed[0]["key"], own.key().as_str());
+
+    let error = tokio::time::timeout(Duration::from_secs(1), client.service_change(false))
+        .await
+        .unwrap()
+        .unwrap_err();
+    assert_eq!(error.code, Code::Busy);
+    assert_eq!(error.error, "Terminal is active in the helper.");
+    assert!(client.controller.holder_note().is_none());
+    assert_eq!(
+        service_blocker(&client, u128::from(terminal_at + 120_000) * 1_000_000).as_deref(),
+        Some("Terminal is active in the helper.")
+    );
+    assert!(service_blocker(&client, u128::from(terminal_at + 120_001) * 1_000_000).is_none());
+}
+
 #[test]
 fn a_holder_on_its_first_command_defers_service_changes_until_it_lets_go() {
     let directory = tempfile::tempdir().unwrap();
