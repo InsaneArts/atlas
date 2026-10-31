@@ -89,7 +89,7 @@ Add `--help` to any command for its options.
   has its `role`, `name`, `value`, flags and `at`, the point a click lands on;
   for a checkbox or radio button with a label, `at` is its box. The default
   list omits groups with no name, value, set flags or read diagnostics
-  after `--max`; counts include them. `--full` and explicit name
+  before applying `--max`; only `scanned` counts them. `--full` and explicit name
   or role filters keep them.
   Secure field values are never returned. Text is cut after 200 UTF-16 units;
   `truncated` names any attribute shown only in part, so read long documents

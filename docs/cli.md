@@ -41,8 +41,8 @@ Use `doctor` to decide whether a task can start. Use the observation commands to
 
 Read web pages with `atlas elements --app "Google Chrome" --name LABEL`; use named
 clicks and `type --field LABEL`, and screenshots to check visibility. Secure field
-values are omitted. Default listings omit empty groups after `--max`; counts include
-them. `--full` and filters keep them. `scanIncomplete` and `scan` report unread content or limits.
+values are omitted. Default listings omit empty groups before applying `--max`; only `scanned`
+counts them. `--full` and filters keep them. `scanIncomplete` and `scan` report unread content or limits.
 
 ### Act in the helper
 
