@@ -162,7 +162,7 @@ pub(super) async fn execute(
     let waits = policy.waits(actor);
     let host = if policy.labelled(actor) {
         match Config::load(&config).and_then(Client::new) {
-            Ok(client) => HostSession::from_env_verified(&client.transport).await,
+            Ok(client) => HostSession::from_env_verified(&client).await,
             Err(_) => HostSession::from_env(),
         }
     } else {

@@ -637,6 +637,7 @@ fn waiting_display_candidates_keep_their_file_and_count_bounds() {
             processes: &processes,
             holder: None,
             waiting: &candidates,
+            running: &[],
             causes: &[],
             pending: false,
             agent_holds: false,

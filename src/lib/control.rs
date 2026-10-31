@@ -438,7 +438,7 @@ impl Controller {
         let marked = self.commands();
         let mut notes: Vec<_> = by_generation::read::<ByGeneration<Note>>(&self.running)
             .into_iter()
-            .filter(|(generation, _)| marked.contains(generation))
+            .filter(|(generation, _)| self.running_command(&marked, generation))
             .map(|(_, note)| note)
             .take(crate::host_session::liveness::BUDGET)
             .collect();

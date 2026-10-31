@@ -50,6 +50,7 @@ fn scene(rows: &[Row]) -> Scene<'_> {
         processes: processes(),
         holder: None,
         waiting: &[],
+        running: &[],
         causes: &[],
         pending: false,
         agent_holds: false,

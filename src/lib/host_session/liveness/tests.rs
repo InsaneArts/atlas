@@ -238,6 +238,7 @@ fn an_expired_batch_supplies_no_positive_liveness_or_inferred_end() {
         processes: &frozen,
         holder: None,
         waiting: &[],
+        running: &[],
         causes: &[],
         pending: false,
         agent_holds: false,

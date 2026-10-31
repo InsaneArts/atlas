@@ -1273,6 +1273,7 @@ fn a_verified_idle_host_does_not_expire_while_it_runs() {
             processes: &processes,
             holder: None,
             waiting: &[],
+            running: &[],
             causes: &[],
             pending: false,
             agent_holds: false,
@@ -1284,4 +1285,81 @@ fn a_verified_idle_host_does_not_expire_while_it_runs() {
         assert!(!lifetime.active);
         assert_eq!(lifetime.ended, None);
     }
+}
+
+#[test]
+fn marker_contention_preserves_a_gone_hosts_verified_running_work() {
+    use crate::{
+        host_session::{
+            Host, HostSession, Instance, liveness::Snapshot, record::Record, store::Store,
+        },
+        session_view::HistorySource,
+    };
+
+    let directory = tempfile::tempdir().unwrap();
+    let client = crate::test_support::client(directory.path());
+    let old = Instance::new(i32::MAX, [1, 0]);
+    let own = HostSession::new(Host::Codex, "running")
+        .unwrap()
+        .run_by(Some(old));
+    Store::at(client.output_dir().unwrap())
+        .update(
+            &own,
+            crate::host_session::now_ms(),
+            &client.controller,
+            |_| {},
+        )
+        .unwrap();
+    let controller = client.controller.clone().labelled(Some(&own));
+    let claim = controller.quarantine_command().unwrap();
+    let lock_path = fs::read_dir(directory.path().join("state"))
+        .unwrap()
+        .map(|entry| entry.unwrap().path())
+        .find(|path| path.to_string_lossy().ends_with(".state.lock"))
+        .unwrap();
+    let lock = fs::File::open(lock_path).unwrap();
+    fs2::FileExt::try_lock_exclusive(&lock).unwrap();
+    let read = || {
+        SessionReading::collect_with(&client, |_, instances| {
+            Snapshot::sample(instances, |instance| {
+                if instance == old {
+                    crate::process::State::Gone
+                } else {
+                    crate::process::State::Running
+                }
+            })
+        })
+        .unwrap()
+    };
+    let reading = read();
+    let now = crate::client::timestamp();
+    let facts = facts(false, now);
+    let entries = reading.entries(facts);
+    let entry = entries
+        .iter()
+        .find(|entry| entry["key"] == own.key().as_str())
+        .unwrap();
+    assert_eq!(entry["state"], "acting");
+    assert_eq!(entry["live"], true);
+    assert_eq!(entry["active"], true);
+    assert_eq!(entry["workInProgress"], true);
+    assert_eq!(entry["ended"], Value::Null);
+    let records: Vec<Record> = reading
+        .seen
+        .iter()
+        .map(|seen| seen.record.clone())
+        .collect();
+    let history = HistorySource {
+        records: &records,
+        rows: &[],
+        captures: &Default::default(),
+        copies: &Default::default(),
+        tasks: &[],
+        now: u64::try_from(now / 1_000_000).unwrap(),
+    }
+    .history_with(&reading.processes, |key| reading.work(key, facts));
+    assert_eq!(history[0].ended_at, None);
+    drop(claim);
+    assert!(read().entries(facts).is_empty());
+    drop(lock);
 }

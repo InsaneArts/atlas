@@ -100,6 +100,8 @@ pub(crate) struct Scene<'a> {
     pub holder: Option<&'a Note>,
     /// The notes of the commands waiting for control now.
     pub waiting: &'a [Note],
+    /// The independently verified notes of commands started with `run`.
+    pub running: &'a [Note],
     /// The pending changes and who claimed each.
     pub causes: &'a [Cause],
     /// Whether the status says an outcome is unknown.
@@ -154,10 +156,7 @@ impl Scene<'_> {
                 .any(|cause| !cause.running && cause.session.as_ref() == Some(key)));
         // A command it started with `run` that still runs is its work
         // under way, whoever has control meanwhile.
-        let running = self
-            .causes
-            .iter()
-            .any(|cause| cause.running && cause.command && who.names(cause.session.as_ref()));
+        let running = self.running(who);
         let note = self.waiting.iter().find(|note| {
             self.processes.state(note.process) == crate::process::State::Running
                 && who.names(note.session.as_ref())
@@ -251,6 +250,13 @@ impl Scene<'_> {
                 self.processes.state(note.process) == crate::process::State::Running
                     && who.names(note.session.as_ref())
             })
+            || self.running(who)
+    }
+
+    fn running(&self, who: &Who) -> bool {
+        self.running
+            .iter()
+            .any(|note| self.processes.running(note.process) && who.names(note.session.as_ref()))
             || self
                 .causes
                 .iter()

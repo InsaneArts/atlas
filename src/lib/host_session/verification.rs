@@ -1,6 +1,8 @@
 //! Host identity verified from the daemon socket's kernel-reported caller.
-use super::{ANCESTORS, Facts, Host, HostId, HostSession, Instance, SOURCES, ancestry};
-use crate::{process, transport::Transport};
+use super::{
+    ANCESTORS, Facts, Host, HostId, HostSession, Instance, Key, SOURCES, ancestry, store::Store,
+};
+use crate::{client::Client, process};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use std::time::Duration;
@@ -12,6 +14,8 @@ pub struct HostClaim {
     host: Host,
     id: HostId,
     hint: Option<i32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    previous: Option<Instance>,
 }
 
 #[derive(Serialize, Deserialize)]
@@ -20,6 +24,8 @@ struct VerifiedHost {
     host: Host,
     id: HostId,
     process: Instance,
+    #[serde(default)]
+    previous: Option<Instance>,
 }
 
 impl HostClaim {
@@ -45,6 +51,7 @@ pub(crate) fn claims(value: &Value) -> Option<Vec<HostClaim>> {
     for (index, claim) in claims.iter().enumerate() {
         if claim.host == Host::Named
             || claim.hint.is_some_and(|pid| pid <= 0)
+            || claim.previous.is_some_and(|process| !valid(process))
             || claims[..index]
                 .iter()
                 .any(|before| before.host == claim.host)
@@ -70,19 +77,28 @@ fn from_env() -> Vec<HostClaim> {
                 host: *host,
                 id,
                 hint,
+                previous: None,
             })
         })
         .collect()
 }
 
 impl HostSession {
-    /// Resolve locally, asking the configured daemon only when process reads
-    /// cannot establish a host. Failure leaves the ordinary unknown label.
-    pub async fn from_env_verified(transport: &Transport) -> Option<Self> {
+    /// Resolve locally, asking the daemon when ancestry or the previous
+    /// host's exit needs proof. Failure preserves the local metadata.
+    pub async fn from_env_verified(client: &Client) -> Option<Self> {
         let local = Self::from_env();
-        let claims = from_env();
+        let mut claims = from_env();
+        if let Ok(output) = client.output_dir() {
+            let store = Store::at(output);
+            for claim in &mut claims {
+                claim.previous = store
+                    .read(&Key::of(claim.host, claim.id.as_str()))
+                    .and_then(|record| record.host_process);
+            }
+        }
         let request = json!({"op": "host-session", "claims": claims});
-        Self::verify_with(local, &claims, transport.call(&request)).await
+        Self::verify_with(local, &claims, client.transport.call(&request)).await
     }
 
     async fn verify_with(
@@ -90,10 +106,16 @@ impl HostSession {
         claims: &[HostClaim],
         reply: impl std::future::Future<Output = crate::error::Result<Value>>,
     ) -> Option<Self> {
-        if local
-            .as_ref()
-            .is_some_and(|session| session.process.is_some() || session.host == Host::Named)
-        {
+        if local.as_ref().is_some_and(|session| {
+            session.host == Host::Named
+                || (session.process.is_some()
+                    && !claims.iter().any(|claim| {
+                        claim.host == session.host
+                            && claim.id == session.id
+                            && claim.previous.is_some()
+                            && claim.previous != session.process
+                    }))
+        }) {
             return local;
         }
         if claims.is_empty() {
@@ -112,9 +134,7 @@ impl HostSession {
         let Ok(verified) = serde_json::from_value::<VerifiedHost>(reply.clone()) else {
             return local;
         };
-        if verified.process.pid <= 0
-            || verified.process.start[0] == 0
-            || verified.process.start[1] >= 1_000_000
+        if !valid(verified.process)
             || !claims
                 .iter()
                 .any(|claim| claim.host == verified.host && claim.id == verified.id)
@@ -124,11 +144,22 @@ impl HostSession {
         let mut session = Self::new(verified.host, verified.id.as_str())?;
         session.process = Some(verified.process);
         session.verified = true;
+        session.replaces = verified.previous.filter(|previous| {
+            claims.iter().any(|claim| {
+                claim.host == verified.host
+                    && claim.id == verified.id
+                    && claim.previous == Some(*previous)
+            })
+        });
         session.began = Instance::current().map(|process| process.started_ms());
         // The helper account may verify another account's identity through
         // sysctl, but only the controller account may read its working directory.
         Some(session.with_folder(crate::process::cwd, None))
     }
+}
+
+fn valid(process: Instance) -> bool {
+    process.pid > 0 && process.start[0] > 0 && process.start[1] < 1_000_000
 }
 
 pub(crate) fn verify(claims: &[HostClaim], peer: Option<Instance>, uid: u32) -> Value {
@@ -170,10 +201,21 @@ fn resolve_peer(
     {
         return None;
     }
+    let previous = claims
+        .iter()
+        .find(|claim| claim.host == session.host && claim.id == session.id)
+        .and_then(|claim| claim.previous)
+        .filter(|previous| {
+            *previous != process
+                && describe(previous.pid).is_ok_and(|info| {
+                    info.is_none_or(|info| info.instance != *previous || info.zombie)
+                })
+        });
     Some(VerifiedHost {
         host: session.host,
         id: session.id,
         process,
+        previous,
     })
 }
 

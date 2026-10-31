@@ -123,13 +123,14 @@ impl Record {
     fn attach(&mut self, session: &HostSession, ancestor: Option<Instance>, now: u64) {
         let Some(process) = ancestor else { return };
         if self.host_process != Some(process) {
-            if self
-                .host_process
-                .is_some_and(|old| old.state() != crate::process::State::Gone)
-            {
+            if self.host_process.is_some_and(|old| {
+                session.replaces != Some(old) && old.state() != crate::process::State::Gone
+            }) {
                 return;
             }
             self.host_process = Some(process);
+            self.folder = None;
+            self.folder_from_host = false;
             self.ended = None;
             self.last_seen = now;
         }

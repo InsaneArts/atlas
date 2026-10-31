@@ -172,6 +172,8 @@ pub struct HostSession {
     id: HostId,
     /// The verified root host's exact process instance.
     process: Option<Instance>,
+    /// The previous exact host instance the daemon proved has exited.
+    replaces: Option<Instance>,
     /// The root host's project folder basename, or the legacy fallback.
     folder: Option<String>,
     /// When its command started, in milliseconds since 1970.
@@ -190,6 +192,7 @@ impl HostSession {
             host,
             id,
             process: None,
+            replaces: None,
             folder: None,
             began: None,
             folder_from_host: false,

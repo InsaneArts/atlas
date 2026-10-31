@@ -985,6 +985,21 @@ fn a_failed_folder_read_keeps_only_an_authoritative_folder() {
 }
 
 #[test]
+fn a_replacement_host_does_not_inherit_an_authoritative_folder() {
+    for folder in [None, Some("new")] {
+        let mut old = authoritative("resumed", Some("old"));
+        old.process = Some(Instance::new(i32::MAX, [1, 0]));
+        let mut record = Record::new(&old, 1, old.folder.clone());
+        let mut resumed = authoritative("resumed", folder);
+        resumed.folder_from_host = folder.is_some();
+        assert!(record.touched(&resumed, resumed.process(), 2));
+        assert_eq!(record.host_process, resumed.process());
+        assert_eq!(record.folder.as_deref(), folder);
+        assert_eq!(record.folder_from_host, folder.is_some());
+    }
+}
+
+#[test]
 fn successful_home_or_root_suppression_is_authoritative() {
     let directory = tempfile::tempdir().unwrap();
     let client = client(directory.path());

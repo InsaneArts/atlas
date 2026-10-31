@@ -224,6 +224,7 @@ impl SessionReading {
             processes: &self.processes,
             holder: self.holder.as_ref(),
             waiting: &self.waiting,
+            running: &self.running,
             causes: &self.causes,
             pending: facts.pending,
             agent_holds: facts.agent_holds,

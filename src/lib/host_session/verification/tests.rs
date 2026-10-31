@@ -10,6 +10,7 @@ fn claim() -> Vec<HostClaim> {
         host: Host::Codex,
         id: HostId::parse("thread").unwrap(),
         hint: None,
+        previous: None,
     }]
 }
 
@@ -57,6 +58,90 @@ fn denied() -> HostSession {
         test_support::UID,
     )
     .unwrap()
+}
+
+#[tokio::test]
+async fn a_daemon_proven_exit_allows_resume_when_local_process_reads_are_denied() {
+    let previous = Instance::new(1, [1, 0]);
+    assert_eq!(previous.state(), process::State::Unknown);
+    let claims = super::claims(&json!([{
+        "host": "codex", "id": "thread", "hint": null, "previous": previous
+    }]))
+    .unwrap();
+    let host = resolve_peer(&claims, Some(90), test_support::UID, process).unwrap();
+    let session = HostSession::verify_with(Some(denied()), &claims, async {
+        Ok(json!({"ok": true, "hostSession": host}))
+    })
+    .await
+    .unwrap();
+    let old = denied().run_by(Some(previous));
+    let mut record = crate::host_session::record::Record::new(&old, 1, None);
+    record.ended = Some(2);
+    let (changed, reads) =
+        crate::process::measure_states(|| record.touched(&session, session.ancestor(), 3));
+    assert!(changed);
+    assert_eq!(reads, 0, "attachment uses the daemon's exact exit proof");
+    assert_eq!(record.host_process, session.process());
+    assert_eq!(record.ended, None);
+}
+
+#[tokio::test]
+async fn a_live_stopped_or_unknown_previous_host_cannot_be_replaced() {
+    let previous = Instance::new(1, [1, 0]);
+    let mut claims = claim();
+    claims[0].previous = Some(previous);
+    for state in [
+        process::State::Running,
+        process::State::Stopped,
+        process::State::Unknown,
+    ] {
+        let host = super::resolve_peer(
+            &claims,
+            Some(process(90).unwrap().instance),
+            test_support::UID,
+            |pid| {
+                if pid != previous.pid {
+                    return Ok(process(pid));
+                }
+                if state == process::State::Unknown {
+                    return Err(std::io::Error::from_raw_os_error(libc::EPERM).into());
+                }
+                let mut info = process(1).unwrap();
+                info.instance = previous;
+                info.stopped = state == process::State::Stopped;
+                Ok(Some(info))
+            },
+        )
+        .unwrap();
+        assert_eq!(host.previous, None);
+        let session = HostSession::verify_with(Some(denied()), &claims, async {
+            Ok(json!({"ok": true, "hostSession": host}))
+        })
+        .await
+        .unwrap();
+        let old = denied().run_by(Some(previous));
+        let mut record = crate::host_session::record::Record::new(&old, 1, None);
+        record.ended = Some(2);
+        assert!(!record.touched(&session, session.ancestor(), 3));
+        assert_eq!(record.host_process, Some(previous));
+        assert_eq!(record.ended, Some(2));
+    }
+}
+
+#[tokio::test]
+async fn a_locally_verified_replacement_still_asks_for_the_previous_hosts_exit() {
+    let mut claims = claim();
+    claims[0].previous = Some(Instance::new(60, [1, 0]));
+    let mut local = denied();
+    local.process = Some(process(80).unwrap().instance);
+    local.verified = true;
+    let host = resolve_peer(&claims, Some(90), test_support::UID, process).unwrap();
+    let session = HostSession::verify_with(Some(local), &claims, async {
+        Ok(json!({"ok": true, "hostSession": host}))
+    })
+    .await
+    .unwrap();
+    assert_eq!(session.replaces, claims[0].previous);
 }
 
 #[tokio::test]
@@ -318,6 +403,7 @@ fn the_daemon_verifies_each_supported_host_with_the_same_ancestry_rule() {
             host,
             id: HostId::parse("thread").unwrap(),
             hint,
+            previous: None,
         }];
         let verified = resolve_peer(&claims, Some(90), test_support::UID, |pid| {
             let mut info = process(pid)?;
