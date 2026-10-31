@@ -643,8 +643,8 @@ mod tests {
 
         assert!(started.elapsed() < Duration::from_secs(5));
         assert_eq!(reply["timedOut"], true);
-        assert_eq!(reply["exitCode"], Value::Null);
-        assert_eq!(reply["signal"], "SIGTERM");
+        // A shell that handles the signal first exits 143 instead of dying by it.
+        assert!(reply["signal"] == "SIGTERM" || reply["exitCode"] == 143);
 
         let group = events[0]["pid"].as_i64().unwrap();
         assert!(!group_alive(group), "no member of the group survives");
