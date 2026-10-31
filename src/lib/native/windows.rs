@@ -91,12 +91,18 @@ pub struct Window {
 pub(crate) struct HitWindow {
     pub number: i64,
     pub pid: i64,
+    pub start: Option<crate::process::Start>,
     pub layer: i64,
     pub bounds: Bounds,
 }
 
 /// Visible hit regions, front to back, without window or application names.
-pub(crate) fn hit_windows(windows: &[Window], display: &Bounds, dock: &Dock) -> Vec<HitWindow> {
+pub(crate) fn hit_windows(
+    windows: &[Window],
+    display: &Bounds,
+    dock: &Dock,
+    starts: Option<&std::collections::BTreeMap<i64, crate::process::Start>>,
+) -> Vec<HitWindow> {
     windows
         .iter()
         .filter(|window| window.alpha > 0.0)
@@ -113,11 +119,21 @@ pub(crate) fn hit_windows(windows: &[Window], display: &Bounds, dock: &Dock) -> 
             bounds.into_iter().map(|bounds| HitWindow {
                 number: window.number,
                 pid: window.pid,
+                start: starts.and_then(|starts| starts.get(&window.pid)).copied(),
                 layer: window.layer,
                 bounds,
             })
         })
         .collect()
+}
+
+/// Whether two ordered window lists route points to the same windows.
+pub fn same_routing(before: &[Window], after: &[Window]) -> bool {
+    before.len() == after.len()
+        && before.iter().zip(after).all(|(before, after)| {
+            (before.number, before.pid, before.layer, &before.bounds)
+                == (after.number, after.pid, after.layer, &after.bounds)
+        })
 }
 
 impl Window {
@@ -816,7 +832,7 @@ mod tests {
         // Each fixture window is its own process.
         for windows in &fixtures {
             for screen in &screens {
-                let hits = hit_windows(windows, &display(), screen.dock());
+                let hits = hit_windows(windows, &display(), screen.dock(), None);
                 for x in (0..1000).step_by(25) {
                     for y in (0..800).step_by(25) {
                         let (x, y) = (f64::from(x), f64::from(y));

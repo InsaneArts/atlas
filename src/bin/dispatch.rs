@@ -98,7 +98,7 @@ fn elements_info(pid: i32, routing: bool) -> Result<Value> {
     elements_info_with(
         routing,
         || ax::elements(pid, ax::Limits::default()),
-        windows::windows,
+        || atlas::native::processes::snapshot(windows::windows, |window| window.pid),
         |windows| ax::dock(windows, ax::DOCK_TIMEOUT),
     )
 }
@@ -107,7 +107,10 @@ fn elements_info(pid: i32, routing: bool) -> Result<Value> {
 fn elements_info_with(
     routing: bool,
     scan: impl FnOnce() -> Result<atlas::native::ax::Snapshot>,
-    mut list: impl FnMut() -> Result<Vec<atlas::native::windows::Window>>,
+    mut list: impl FnMut() -> Result<(
+        Vec<atlas::native::windows::Window>,
+        std::collections::BTreeMap<i64, atlas::process::Start>,
+    )>,
     dock: impl FnOnce(&[atlas::native::windows::Window]) -> atlas::native::windows::Dock,
 ) -> Result<Value> {
     let before = routing.then(&mut list);
@@ -120,11 +123,15 @@ fn elements_info_with(
         "errors": snapshot.errors,
     });
     if let Some(before) = before {
-        let dock = dock(before.as_deref().unwrap_or_default());
-        info["windows"] = match (before, list()) {
-            (Ok(before), Ok(after)) if before == after => json!(before),
+        let (before, starts) = before.unwrap_or_default();
+        let dock = dock(&before);
+        info["windows"] = match list() {
+            Ok((after, _)) if atlas::native::windows::same_routing(&before, &after) => {
+                json!(before)
+            }
             _ => json!([]),
         };
+        info["starts"] = json!(starts);
         info["dock"] = json!(dock);
     }
     Ok(info)
@@ -996,7 +1003,6 @@ mod tests {
     #[cfg(target_os = "macos")]
     fn empty_scan() -> Result<atlas::native::ax::Snapshot> {
         Ok(atlas::native::ax::Snapshot {
-            windows: vec![],
             elements: vec![],
             incomplete: false,
             stops: Default::default(),
@@ -1009,24 +1015,39 @@ mod tests {
     fn elements_remember_no_routing_when_a_window_moves_during_traversal() {
         use atlas::native::windows::{Bounds, Dock, Window};
         let x = std::cell::Cell::new(0.0);
+        let title = std::cell::RefCell::new(None);
         let read = || {
-            Ok(vec![Window {
-                number: 42,
-                pid: 812,
-                owner: None,
-                title: None,
-                layer: 0,
-                alpha: 1.0,
-                bounds: Bounds {
-                    x: x.get(),
-                    y: 0.0,
-                    width: 100.0,
-                    height: 100.0,
-                },
-            }])
+            Ok((
+                vec![Window {
+                    number: 42,
+                    pid: 812,
+                    owner: None,
+                    title: title.borrow().clone(),
+                    layer: 0,
+                    alpha: 1.0,
+                    bounds: Bounds {
+                        x: x.get(),
+                        y: 0.0,
+                        width: 100.0,
+                        height: 100.0,
+                    },
+                }],
+                Default::default(),
+            ))
         };
         let stable = elements_info_with(true, empty_scan, read, |_| Dock::Unread).unwrap();
         assert_eq!(stable["windows"][0]["number"], 42);
+        let renamed = elements_info_with(
+            true,
+            || {
+                *title.borrow_mut() = Some("A new title".into());
+                empty_scan()
+            },
+            read,
+            |_| Dock::Unread,
+        )
+        .unwrap();
+        assert_eq!(renamed["windows"][0]["number"], 42);
         let moved = elements_info_with(
             true,
             || {

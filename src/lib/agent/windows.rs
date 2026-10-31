@@ -104,13 +104,18 @@ pub async fn list(client: &Client, filter: &WindowFilter) -> Result<Value> {
             Run::inspect().within(PROBE_LIMIT).pinned(&verified),
         )
         .await?;
-    let Shown { windows, dock, .. } = shown(&reply)?;
+    let Shown {
+        windows,
+        dock,
+        starts,
+    } = shown(&reply)?;
     let display = &verified.session().epoch.display;
     client.remember_windows(
         &hit_windows(
             &windows,
             &Bounds::display(display.width, display.height),
             &dock,
+            starts.as_ref(),
         ),
         &verified.session().epoch,
     );

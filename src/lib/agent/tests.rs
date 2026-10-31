@@ -364,10 +364,7 @@ async fn resolved(expected: Option<Expected>) -> (Result<Expect>, usize) {
         .serve(
             async {
                 let verified = client.verify().await?;
-                expected
-                    .resolve(&client, &verified)
-                    .await
-                    .map(Option::unwrap)
+                expected.resolve(&client, &verified).await
             },
             two_apps(&lists),
         )
@@ -1511,6 +1508,7 @@ fn a_click_chooses_one_visible_element() {
 /// A scan as the probe reports it, complete.
 fn scanned(elements: Vec<Element>) -> Scanned {
     Scanned {
+        starts: None,
         windows: vec![window(42, 812, "Editor", 0)],
         dock: Default::default(),
         elements,

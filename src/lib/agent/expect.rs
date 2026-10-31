@@ -10,7 +10,8 @@ use crate::{
     client::{Check, Client, Verified},
     error::{Code, Error, Result},
     last_capture::{Observation, recorded_epoch},
-    native::windows::{DOCK_LAYER, Window},
+    native::windows::{DOCK_LAYER, HitWindow, Window},
+    process::Instance,
 };
 use serde_json::Value;
 
@@ -21,27 +22,19 @@ use serde_json::Value;
 /// the app's own window, or the named one, is the top one.
 pub async fn act(client: &Client, expected: Option<&Expected>, actions: &Value) -> Result<Value> {
     let remembered = Expected::remembered(client, expected, actions);
-    if remembered.is_none() && expected.is_none() {
+    let Some(expected) = remembered.as_ref().or(expected) else {
         return client.input(actions, None, None).await;
-    }
+    };
 
     let ownership = client.controller.acquire_beside_commands()?;
     let verified = client.verify().await?;
-    let inferred = match remembered {
-        Some(remembered) => remembered.resolve(client, &verified).await?,
-        None => None,
-    };
-    let expect = match (inferred, expected) {
-        (Some(expect), _) => Some(expect),
-        (None, Some(expected)) => expected.resolve(client, &verified).await?,
-        (None, None) => None,
-    };
+    let expect = expected.resolve(client, &verified).await?;
     client
         .input_owned(
             &ownership,
             actions,
             &verified.session().epoch,
-            expect.map(Check::Required),
+            Some(Check::Required(expect)),
         )
         .await
 }
@@ -53,7 +46,7 @@ pub async fn act(client: &Client, expected: Option<&Expected>, actions: &Value) 
 pub struct Expected {
     place: Place,
     field: Option<String>,
-    observation: Option<(i64, Value)>,
+    observation: Option<(HitWindow, Value)>,
 }
 
 /// The app, or the window, an agent's input must reach.
@@ -90,7 +83,7 @@ impl Expected {
             return None;
         }
         let mut expected = Self::new(app, Some(window.number), None).ok().flatten()?;
-        expected.observation = Some((window.pid, epoch));
+        expected.observation = Some((window.clone(), epoch));
         Some(expected)
     }
 
@@ -122,31 +115,45 @@ impl Expected {
 
     /// What the helper is asked to check, found in the helper `verified`
     /// describes: the app's process, or the named window's owner, refused
-    /// when the window is not the named app's. A stale observation infers nothing.
-    pub(super) async fn resolve(
-        &self,
-        client: &Client,
-        verified: &Verified,
-    ) -> Result<Option<Expect>> {
+    /// when the window is not the named app's or its observation is stale.
+    pub(super) async fn resolve(&self, client: &Client, verified: &Verified) -> Result<Expect> {
         if self
             .observation
             .as_ref()
             .is_some_and(|(_, epoch)| *epoch != recorded_epoch(&verified.session().epoch))
         {
-            return Ok(None);
+            return Err(Error::new(
+                Code::SessionChanged,
+                "The helper changed since the window was observed; look again",
+            ));
         }
         let mut expect = match &self.place {
             Place::App(app) => target_expect(client, verified, app).await,
             Place::Window { number, app } => {
                 let listed = verified_window_snapshot(client, verified).await?;
-                if self.observation.as_ref().is_some_and(|(pid, _)| {
-                    !listed.windows.iter().any(|window| {
-                        window.number == *number && window.pid == *pid && window.is_apps()
-                    })
-                }) {
-                    return Ok(None);
-                }
                 let owner = window_owner(&listed.windows, *number)?;
+                let observed = if let Some((window, _)) = &self.observation {
+                    let start = window
+                        .start
+                        .filter(|start| {
+                            start[0] > 0
+                                && start[1] < 1_000_000
+                                && owner.pid == window.pid
+                                && listed.starts.as_ref().and_then(|starts| starts.get(&owner.pid))
+                                    == Some(start)
+                        })
+                        .ok_or_else(|| {
+                            Error::new(
+                                Code::Windows,
+                                format!(
+                                    "Window {number}'s process changed since it was observed; look again"
+                                ),
+                            )
+                        })?;
+                    Expect::from_instance(Instance::new(owner.pid as i32, start))
+                } else {
+                    snapshot_expect(owner.pid, listed.starts.as_ref())
+                };
                 if let Some(app) = app
                     && target_among(client, verified, app, Some(&listed))
                         .await?
@@ -155,7 +162,7 @@ impl Expected {
                 {
                     return Err(other_app(owner, app));
                 }
-                snapshot_expect(owner.pid, listed.starts.as_ref())
+                observed
             }
         }?;
         if let Place::Window { number, .. } = &self.place {
@@ -166,7 +173,7 @@ impl Expected {
             expect = expect.in_field(field)?;
         }
 
-        Ok(Some(expect))
+        Ok(expect)
     }
 }
 
@@ -259,6 +266,7 @@ mod tests {
                 windows,
                 &Bounds::display(display().width, display().height),
                 &Dock::Unread,
+                Some(&std::collections::BTreeMap::from([(812, [123, 456])])),
             ),
             &epoch(),
         );
@@ -297,7 +305,7 @@ mod tests {
             net::UnixListener,
         };
 
-        for change in 0..11 {
+        for change in 0..14 {
             for app in [None, Some(Target::Pid(812))] {
                 let directory = tempfile::tempdir().unwrap();
                 let (client, helper) = Helper::client(directory.path(), UID);
@@ -348,13 +356,27 @@ mod tests {
                                 &[window(42, 10.0)],
                                 &Bounds::display(100.0, 100.0),
                                 &Dock::Unread,
+                                (change != 13).then_some(&std::collections::BTreeMap::from([(
+                                    812,
+                                    [123, 456],
+                                )])),
                             ),
                             &epoch,
                         );
                         let expected = Expected::new(app.clone(), None, None).unwrap();
-                        act(&client, expected.as_ref(), &move_to(30.0, 40.0))
-                            .await
-                            .unwrap();
+                        let result = act(&client, expected.as_ref(), &move_to(30.0, 40.0)).await;
+                        if change == 0 {
+                            result.unwrap();
+                        } else {
+                            assert_eq!(
+                                result.unwrap_err().code,
+                                if (3..=10).contains(&change) {
+                                    Code::SessionChanged
+                                } else {
+                                    Code::Windows
+                                }
+                            );
+                        }
                     },
                     |request| {
                         if request["op"] == "apps" {
@@ -370,21 +392,27 @@ mod tests {
                             current.pid = 900;
                         }
                         let windows = if change == 2 { vec![] } else { vec![current] };
-                        Some(completed(&json!({"ok":true,"windows":windows}).to_string()))
+                        let starts = match change {
+                            11 => json!({"812":[124,456]}),
+                            12 => Value::Null,
+                            _ => json!({"812":[123,456]}),
+                        };
+                        Some(completed(
+                            &json!({"ok":true,"windows":windows,"starts":starts}).to_string(),
+                        ))
                     },
                 );
                 tokio::select! {
                     () = operation => {},
                     () = native => unreachable!(),
+                    () = tokio::time::sleep(std::time::Duration::from_secs(5)) => panic!("window validation timed out"),
                 }
                 let expected = if change == 0 {
-                    json!({"pid":812,"window":42})
-                } else if app.is_some() {
-                    json!({"pid":812})
+                    vec![json!({"pid":812,"start":[123,456],"window":42})]
                 } else {
-                    Value::Null
+                    vec![]
                 };
-                assert_eq!(*sent.borrow(), [expected], "change {change}, app {app:?}");
+                assert_eq!(*sent.borrow(), expected, "change {change}, app {app:?}");
             }
         }
     }
@@ -483,7 +511,7 @@ mod tests {
             Dock::Unread,
             Dock::Icons(vec![]),
         ] {
-            client.remember_windows(&hit_windows(&windows, &display, &dock), &epoch());
+            client.remember_windows(&hit_windows(&windows, &display, &dock, None), &epoch());
             let screen = crate::native::windows::Screen::new(display.clone(), dock);
             let top = crate::native::windows::top_at(&windows, 30.0, 40.0, &screen).unwrap();
             assert_eq!(
@@ -515,7 +543,7 @@ mod tests {
             .keys()
             .map(String::as_str)
             .collect();
-        assert_eq!(fields, ["bounds", "layer", "number", "pid"]);
+        assert_eq!(fields, ["bounds", "layer", "number", "pid", "start"]);
         assert_eq!(std::fs::read_dir(&sessions).unwrap().count(), 1);
         assert_eq!(
             std::fs::read_to_string(sessions.join("record.json")).unwrap(),

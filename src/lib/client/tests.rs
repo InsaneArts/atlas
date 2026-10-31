@@ -3091,18 +3091,25 @@ fn a_crop_other_than_the_one_asked_for_is_refused() {
 #[test]
 fn only_the_standard_size_asks_for_one_pixel_per_point() {
     assert_eq!(
-        screenshot_request(Size::Standard),
+        screenshot_request(Size::Standard, false),
         json!({"op": "screenshot", "maxDimension": SCREENSHOT_SIDE, "perPoint": true})
     );
     assert_eq!(
-        screenshot_request(Size::Longest(SCREENSHOT_SIDE)),
+        screenshot_request(Size::Longest(SCREENSHOT_SIDE), false),
         json!({"op": "screenshot", "maxDimension": SCREENSHOT_SIDE})
     );
     assert_eq!(
-        screenshot_request(Size::Longest(800)),
+        screenshot_request(Size::Longest(800), false),
         json!({"op": "screenshot", "maxDimension": 800})
     );
-    assert_eq!(screenshot_request(Size::Full), json!({"op": "screenshot"}));
+    assert_eq!(
+        screenshot_request(Size::Full, false),
+        json!({"op": "screenshot"})
+    );
+    assert_eq!(
+        screenshot_request(Size::Full, true),
+        json!({"op": "screenshot", "routing": true})
+    );
 }
 
 #[test]

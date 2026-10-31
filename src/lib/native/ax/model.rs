@@ -94,7 +94,6 @@ pub struct Element {
 /// One traversal's result.
 #[derive(Debug, Clone, Serialize)]
 pub struct Snapshot {
-    pub windows: Vec<windows::Window>,
     pub elements: Vec<Element>,
     /// A limit, the deadline or an unreadable element cut the scan short, so
     /// absence from it proves nothing.

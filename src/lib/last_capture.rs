@@ -675,6 +675,7 @@ mod tests {
         );
         assert!(kept.path.exists());
         let large = HitWindow {
+            start: Some([123, 456]),
             number: 42,
             pid: 812,
             layer: 0,

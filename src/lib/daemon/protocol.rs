@@ -154,6 +154,7 @@ pub enum Request {
         max_dimension: Option<u32>,
         /// At most one pixel per display point of the area captured, too.
         per_point: bool,
+        routing: bool,
         crop: Option<Crop>,
     },
     Apps {
@@ -236,9 +237,17 @@ pub fn parse(line: &[u8]) -> Result<Request, Value> {
                     .ok_or_else(|| bad("\"perPoint\" must be true or false"))?,
             };
 
+            let routing = match &request["routing"] {
+                Value::Null => false,
+                value => value
+                    .as_bool()
+                    .ok_or_else(|| bad("\"routing\" must be true or false"))?,
+            };
+
             Ok(Request::Screenshot {
                 max_dimension,
                 per_point,
+                routing,
                 crop: crop(&request)?,
             })
         }
@@ -552,6 +561,7 @@ mod tests {
             Ok(Request::Screenshot {
                 max_dimension: Some(320),
                 per_point: false,
+                routing: false,
                 crop: None
             })
         );
@@ -560,6 +570,7 @@ mod tests {
             Ok(Request::Screenshot {
                 max_dimension: None,
                 per_point: false,
+                routing: false,
                 crop: None
             })
         );
@@ -632,6 +643,7 @@ mod tests {
             Ok(Request::Screenshot {
                 max_dimension: None,
                 per_point: false,
+                routing: false,
                 crop,
             })
         };
@@ -658,6 +670,7 @@ mod tests {
             Ok(Request::Screenshot {
                 max_dimension: Some(400),
                 per_point: false,
+                routing: false,
                 crop: Some(Crop::App { pid: 7 })
             })
         );
@@ -682,6 +695,7 @@ mod tests {
             Ok(Request::Screenshot {
                 max_dimension: Some(1456),
                 per_point: true,
+                routing: false,
                 crop: None
             })
         );
@@ -690,6 +704,7 @@ mod tests {
             Ok(Request::Screenshot {
                 max_dimension: None,
                 per_point: false,
+                routing: false,
                 crop: Some(Crop::App { pid: 7 })
             })
         );
@@ -698,6 +713,7 @@ mod tests {
             Ok(Request::Screenshot {
                 max_dimension: None,
                 per_point: false,
+                routing: false,
                 crop: None
             })
         );
@@ -711,6 +727,23 @@ mod tests {
                 "{line}"
             );
         }
+    }
+
+    #[test]
+    fn screenshot_routing_is_opt_in() {
+        assert_eq!(
+            parse(br#"{"op":"screenshot","routing":true}"#),
+            Ok(Request::Screenshot {
+                max_dimension: None,
+                per_point: false,
+                routing: true,
+                crop: None,
+            })
+        );
+        assert_eq!(
+            refused(r#"{"op":"screenshot","routing":"yes"}"#)["error"],
+            "\"routing\" must be true or false"
+        );
     }
 
     #[test]

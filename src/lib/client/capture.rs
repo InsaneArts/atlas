@@ -167,8 +167,11 @@ impl Size {
 }
 
 /// The helper's request for a screenshot of `size`, before any crop.
-pub(super) fn screenshot_request(size: Size) -> Value {
+pub(super) fn screenshot_request(size: Size, routing: bool) -> Value {
     let mut request = json!({"op": "screenshot"});
+    if routing {
+        request["routing"] = json!(true);
+    }
 
     if let Some(max) = size.longest() {
         request["maxDimension"] = json!(max);
@@ -258,7 +261,7 @@ impl Client {
                 "The helper changed since the app was found; look again",
             ));
         }
-        let mut request = screenshot_request(size);
+        let mut request = screenshot_request(size, self.host_session.is_some());
 
         match crop {
             None => {}
@@ -316,10 +319,12 @@ impl Client {
             ));
         }
 
-        self.remember_windows(
-            &serde_json::from_value::<Vec<_>>(reply["windows"].take()).unwrap_or_default(),
-            &after.epoch,
-        );
+        if self.host_session.is_some() {
+            self.remember_windows(
+                &serde_json::from_value::<Vec<_>>(reply["windows"].take()).unwrap_or_default(),
+                &after.epoch,
+            );
+        }
         Ok((
             Frame {
                 png: png.into(),

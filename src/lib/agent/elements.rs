@@ -34,6 +34,7 @@ const CANDIDATES: usize = 5;
 /// One scan of an app, as the probe reported it.
 pub(super) struct Scanned {
     pub(super) windows: Vec<Window>,
+    pub(super) starts: Option<BTreeMap<i64, crate::process::Start>>,
     pub(super) dock: Dock,
     pub(super) elements: Vec<Element>,
     pub(super) incomplete: bool,
@@ -81,6 +82,7 @@ impl Scanned {
 
         Ok(Self {
             windows: serde_json::from_value(value["windows"].take()).unwrap_or_default(),
+            starts: serde_json::from_value(value["starts"].take()).ok(),
             dock: serde_json::from_value(value["dock"].take()).unwrap_or_default(),
             elements,
             incomplete: value["truncated"] == true,
@@ -170,13 +172,14 @@ pub async fn elements(
 ) -> Result<Value> {
     let verified = client.verify().await?;
     let pid = target_pid(client, &verified, target).await?;
-    let scanned = app_elements(client, &verified, pid, true).await?;
+    let scanned = app_elements(client, &verified, pid, client.host_session.is_some()).await?;
     let display = &verified.session().epoch.display;
     client.remember_windows(
         &hit_windows(
             &scanned.windows,
             &Bounds::display(display.width, display.height),
             &scanned.dock,
+            scanned.starts.as_ref(),
         ),
         &verified.session().epoch,
     );
