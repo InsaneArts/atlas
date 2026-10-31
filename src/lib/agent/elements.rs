@@ -227,6 +227,20 @@ pub(super) fn listing(
         .elements
         .iter()
         .filter(|element| filter.matches(element))
+        .filter(|element| {
+            full || filter.name.is_some()
+                || filter.role.is_some()
+                || element.role.as_deref() != Some("AXGroup")
+                || shown_name(element).is_some()
+                || element.value.iter().any(|value| !value.is_empty())
+                || element.enabled == Some(false)
+                || element.focused == Some(true)
+                || element.selected == Some(true)
+                || element.menu
+                || element.mark.is_some()
+                || !element.unreadable.is_empty()
+                || !element.truncated.is_empty()
+        })
         .collect();
     let shown = &matching[..max.min(matching.len())];
 

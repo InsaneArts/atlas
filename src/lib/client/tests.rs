@@ -2638,7 +2638,8 @@ fn typed_text_names_its_field_only_by_the_role_the_helper_found_it_of() {
         activity_log::recent(client.output_dir().unwrap(), 1).remove(0)
     };
 
-    let row = landed(json!({"ok": true, "app": "Notes", "field": {"role": "AXTextField"}}));
+    let row = landed(json!({"ok": true, "app": "Notes",
+        "field": {"role": "AXTextField", "value": "sam@example.com", "name": "private-page-text"}}));
     assert_eq!(row.label.as_deref(), Some("Email"));
     assert_eq!(crate::doing::says(&row), "typed into Email in Notes");
 
@@ -2658,6 +2659,10 @@ fn typed_text_names_its_field_only_by_the_role_the_helper_found_it_of() {
     assert!(
         !written.contains("sam@example.com"),
         "typed text is never kept"
+    );
+    assert!(
+        !written.contains("private-page-text"),
+        "reply text is never kept"
     );
 }
 

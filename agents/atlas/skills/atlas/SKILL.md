@@ -86,10 +86,10 @@ After each action:
 
 1. Read the reply. `ok` means delivered, not that the app reacted; named
    input brings its target forward and checks before acting.
-2. Check by text when you can: `atlas elements --app A --name X` for a
-   control, its value and state; `atlas wait --app A` (or `--title T`,
+2. Read apps and web pages by name first: `atlas elements --app A --name X`
+   for text, a control, its value and state; `atlas wait --app A` (or `--title T`,
    `--gone`) for a window.
-3. When text cannot tell (a web page, drawing, layout), take a crop:
+3. To check what's visible (drawing, layout), take a crop:
    `atlas screenshot --app A` or `--region X,Y,W,H`. Take a full
    `atlas screenshot` only when a crop's `overlapping` names a window in front.
 4. After a visible change you will report, take a screenshot as evidence.

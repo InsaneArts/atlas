@@ -16,7 +16,7 @@ use crate::{
     },
 };
 use objc2_application_services::{AXError, AXUIElement};
-use objc2_core_foundation::CFRetained;
+use objc2_core_foundation::{CFRetained, CFString};
 use std::{
     collections::HashSet,
     time::{Duration, Instant},
@@ -59,14 +59,20 @@ pub fn elements(pid: i32, limits: Limits) -> Result<Snapshot> {
         .ok_or_else(|| Error::new(Code::Elements, "No accessibility element for that process"))?;
 
     let mut scan = Scan::new(Instant::now() + limits.time);
+    // Some browsers build their page tree when the application's role is read.
+    let role = if scan.open() {
+        ffi::copy(&app, &CFString::from_static_str("AXRole"))
+            .map(|role| role.is_some_and(|role| role.downcast_ref::<CFString>().is_some()))
+    } else {
+        Ok(false)
+    };
     let windows = scan.children(&app, "AXWindows", limits.count);
     let windows_error = scan.last_error.take();
     let windows = scan.shown(&app, windows);
 
     // An app that answers nothing at all, not even its role, is unreachable;
     // report why, not "empty".
-    if windows.is_empty() && scan.text(Source::Element(&app), "AXRole").is_none() {
-        let error = scan.last_error.or(windows_error);
+    if let Err(error) = reachable(role, !windows.is_empty(), scan.last_error.or(windows_error)) {
         let exists = pid > 0
             && !matches!(
                 nix::sys::signal::kill(nix::unistd::Pid::from_raw(pid), None),
@@ -324,10 +330,16 @@ fn read(
         pid,
     );
     let selectable = matches!(role.as_deref(), Some("AXRow" | "AXCell"));
-    let subrole = scan.text(from, "AXSubrole");
     let title = scan.text(from, "AXTitle");
     let description = scan.text(from, "AXDescription");
-    let value = scan.value(item, values, role.as_deref(), subrole.as_deref());
+    scan.last_error = None;
+    let subrole = scan.text(from, "AXSubrole");
+    let value = if scan.last_error.is_none_or(|error| ABSENT.contains(&error)) {
+        scan.value(item, values, role.as_deref(), subrole.as_deref())
+    } else {
+        scan.unreadable.push("AXValue".to_owned());
+        None
+    };
     let mut element = Element {
         index,
         depth: visit.depth,
@@ -382,6 +394,18 @@ pub(super) fn sheet_window(
     }
 }
 
+pub(super) fn reachable(
+    role: std::result::Result<bool, AXError>,
+    has_windows: bool,
+    error: Option<AXError>,
+) -> std::result::Result<(), Option<AXError>> {
+    if has_windows || role == Ok(true) {
+        Ok(())
+    } else {
+        Err(error.filter(|error| !ABSENT.contains(error)).or(role.err()))
+    }
+}
+
 /// Why an app answered nothing, from the last AX error its reads returned,
 /// whether this process may use Accessibility, and whether the process
 /// exists. Only a missing permission is reported as one.
@@ -414,5 +438,88 @@ pub(super) fn unreachable(error: Option<AXError>, trusted: bool, exists: bool) -
             ),
         ),
         None => Error::new(Code::Elements, "The app shows no accessibility tree"),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::{
+        native::ax::batch::{BATCH, Slot},
+        select::ElementFilter,
+    };
+    use objc2_core_foundation::{CFBoolean, CFNumber, CFString, Type};
+
+    #[test]
+    fn a_malformed_subrole_withholds_the_value_without_reaching_either_getter() {
+        for characters in [0, 5000] {
+            let batch = Batch {
+                slots: BATCH
+                    .iter()
+                    .map(|name| match *name {
+                        "AXRole" => Slot::Value(CFString::from_static_str("AXTextField").into()),
+                        "AXSubrole" => Slot::Value(CFBoolean::new(true).retain().into()),
+                        "AXNumberOfCharacters" => {
+                            Slot::Value(CFNumber::new_isize(characters).into())
+                        }
+                        _ => Slot::Empty,
+                    })
+                    .collect(),
+                stalled: false,
+            };
+            let visit = Visit::root(ffi::system_wide().unwrap(), None, false);
+            let mut scan = Scan::new(Instant::now());
+            let element = read(&mut scan, &visit, Some(&batch), 0, &[], &[], 812).unwrap();
+            assert!(element.subrole.is_none());
+            assert!(element.value.is_none());
+            assert!(
+                scan.stops.is_empty(),
+                "either getter would record the expired deadline"
+            );
+            assert_eq!(element.unreadable, ["AXValue"]);
+        }
+    }
+
+    #[test]
+    fn a_withheld_static_text_value_remains_a_possible_duplicate_without_a_getter() {
+        let batch = Batch {
+            slots: BATCH
+                .iter()
+                .map(|name| match *name {
+                    "AXRole" => Slot::Value(CFString::from_static_str("AXStaticText").into()),
+                    "AXSubrole" => Slot::Failed(AXError::Failure),
+                    _ => Slot::Empty,
+                })
+                .collect(),
+            stalled: false,
+        };
+        let visit = Visit::root(ffi::system_wide().unwrap(), None, false);
+        let mut scan = Scan::new(Instant::now());
+        let hidden = read(&mut scan, &visit, Some(&batch), 0, &[], &[], 812).unwrap();
+        assert!(hidden.value.is_none());
+        assert!(
+            scan.stops.is_empty(),
+            "a getter would record the expired deadline"
+        );
+        assert!(!scan.errors.keys().any(|name| name.starts_with("AXValue:")));
+        let visible = Element {
+            index: 1,
+            value: Some("Save".into()),
+            unreadable: Vec::new(),
+            ..hidden.clone()
+        };
+        let filter = ElementFilter {
+            name: Some("Save".into()),
+            ..Default::default()
+        };
+        assert!(filter.matches(&visible));
+        assert!(!filter.matches(&hidden));
+        assert_eq!(
+            [hidden, visible]
+                .iter()
+                .filter(|element| filter.might_match(element))
+                .count(),
+            2
+        );
     }
 }

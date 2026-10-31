@@ -32,9 +32,10 @@
   (`doctor --verbose` → `capabilities.webContent`). `atlas open URL` without
   `--app` opens Safari, so name the browser:
   `atlas open --app "Google Chrome" URL`. The helper shares this Mac's
-  network, so a local dev server is reachable. `elements` lists the browser's
-  own controls but usually not the page's: read the page from crops and click
-  by its coordinates. Chrome may open a tab of its own in front of yours;
+  network, so a local dev server is reachable. Read pages with
+  `elements --app "Google Chrome" --name LABEL` first; use named clicks and
+  `type --field LABEL` for controls. Use crops to check what's visible.
+  Chrome may open a tab of its own in front of yours;
   switch to yours. Report a page that only a WebKit view shows as not checked.
 - Credentials and app sign-ins are never copied from the person's account.
 - Audio plays on the person's speakers.
@@ -86,8 +87,11 @@ Add `--help` to any command for its options.
   menu bar titles (role `AXMenuBarItem`). It shows up to `--max` (50), and
   `more` says how many more matched: narrow with `--name` and `--role`. Each
   has its `role`, `name`, `value`, flags and `at`, the point a click lands on;
-  for a checkbox or radio button with a label, `at` is its box. A browser
-  seldom lists its page: use crops. Text is cut after 200 UTF-16 units;
+  for a checkbox or radio button with a label, `at` is its box. The default
+  list omits groups with no name, value, set flags or read diagnostics
+  before applying `--max`; only `scanned` counts them. `--full` and explicit name
+  or role filters keep them.
+  Secure field values are never returned. Text is cut after 200 UTF-16 units;
   `truncated` names any attribute shown only in part, so read long documents
   from their file instead. `--full` shows every attribute the scan read. A
   `--name` that matches nothing lists the closest names in `candidates`. When
