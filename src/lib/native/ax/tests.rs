@@ -8,7 +8,7 @@ use super::{
     scan::{SELECTORS, Scan},
     telling,
     text::{TEXT_LIMIT, TEXT_ROLES, bounded_string, prefix_range, prefix_text},
-    tree::{sheet_window, unreachable},
+    tree::{reachable, sheet_window, unreachable},
     why,
 };
 use objc2_application_services::{AXError, AXUIElement};
@@ -285,6 +285,30 @@ fn strings_are_cut_between_characters() {
     assert_eq!(text, "a".repeat(199));
     let (text, _) = bound(&format!("{}e\u{301}tail", "a".repeat(198)));
     assert_eq!(text, format!("{}e\u{301}", "a".repeat(198)));
+}
+
+#[test]
+fn a_failed_role_read_keeps_its_error_when_the_app_has_no_windows() {
+    let error = reachable(Err(AXError::CannotComplete), false, None).unwrap_err();
+    let error = unreachable(error, true, true);
+    assert_eq!(error.code, "elements");
+    assert!(error.error.contains("not responding"));
+    assert!(error.error.contains("try again"));
+}
+
+#[test]
+fn window_errors_take_precedence_and_either_answer_makes_an_app_reachable() {
+    assert_eq!(
+        reachable(
+            Err(AXError::CannotComplete),
+            false,
+            Some(AXError::APIDisabled)
+        ),
+        Err(Some(AXError::APIDisabled))
+    );
+    assert_eq!(reachable(Err(AXError::CannotComplete), true, None), Ok(()));
+    assert_eq!(reachable(Ok(true), false, None), Ok(()));
+    assert_eq!(reachable(Ok(false), false, None), Err(None));
 }
 
 /// Only a missing permission is called one: a busy app, or a process ID

@@ -60,19 +60,19 @@ pub fn elements(pid: i32, limits: Limits) -> Result<Snapshot> {
 
     let mut scan = Scan::new(Instant::now() + limits.time);
     // Some browsers build their page tree when the application's role is read.
-    let role = scan.open()
-        && matches!(
-            ffi::copy(&app, &CFString::from_static_str("AXRole")),
-            Ok(Some(role)) if role.downcast_ref::<CFString>().is_some()
-        );
+    let role = if scan.open() {
+        ffi::copy(&app, &CFString::from_static_str("AXRole"))
+            .map(|role| role.is_some_and(|role| role.downcast_ref::<CFString>().is_some()))
+    } else {
+        Ok(false)
+    };
     let windows = scan.children(&app, "AXWindows", limits.count);
     let windows_error = scan.last_error.take();
     let windows = scan.shown(&app, windows);
 
     // An app that answers nothing at all, not even its role, is unreachable;
     // report why, not "empty".
-    if windows.is_empty() && !role {
-        let error = scan.last_error.or(windows_error);
+    if let Err(error) = reachable(role, !windows.is_empty(), scan.last_error.or(windows_error)) {
         let exists = pid > 0
             && !matches!(
                 nix::sys::signal::kill(nix::unistd::Pid::from_raw(pid), None),
@@ -391,6 +391,18 @@ pub(super) fn sheet_window(
             }
         }
         _ => inherited,
+    }
+}
+
+pub(super) fn reachable(
+    role: std::result::Result<bool, AXError>,
+    has_windows: bool,
+    error: Option<AXError>,
+) -> std::result::Result<(), Option<AXError>> {
+    if has_windows || role == Ok(true) {
+        Ok(())
+    } else {
+        Err(error.or(role.err()))
     }
 }
 
