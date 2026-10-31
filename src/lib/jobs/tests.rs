@@ -405,7 +405,10 @@ fn the_stop_reply_says_what_was_left() {
     ended["left"] = json!([{"pid": 4377, "name": "sleep"}]);
     let reply = stopped(&id(), &shown(&ended), waited);
     assert_eq!(reply["left"][0]["pid"], 4377);
-    assert_eq!(reply["next"], LEFT_RUNNING);
+    assert_eq!(
+        reply["next"],
+        "These processes are still running; Atlas did not stop them."
+    );
 
     let mut stopping = job_view(ID, "stopping");
     stopping["remaining"] = json!(2);
@@ -704,12 +707,10 @@ fn a_stop_says_what_still_runs_after_the_jobs_leader_went_whatever_group_it_is_i
     gone["how"] = json!("leader-gone");
     gone["left"] = json!([{"pid": 4313, "name": "sleep"}]);
     let reply = stopped(&id(), &shown(&gone), Duration::ZERO);
-    assert_eq!(reply["next"], LEADER_GONE);
-    assert!(
-        !reply["next"]
-            .as_str()
-            .unwrap()
-            .contains("left the job's group")
+    assert_eq!(reply["left"], gone["left"]);
+    assert_eq!(
+        reply["next"],
+        "The job's first process ended, so Atlas did not stop these processes. They are still running."
     );
 }
 
