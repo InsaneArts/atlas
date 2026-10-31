@@ -592,14 +592,25 @@ fn a_focus_refusal_atlas_could_not_read_says_so_rather_than_blaming_another_app(
     };
     assert_eq!(
         reason("unreadable"),
-        "Atlas couldn't tell which app was in front"
+        "Atlas couldn't read which app was in front"
     );
     for other in ["app", "point"] {
         assert_eq!(reason(other), "Another app was in front", "{other}");
     }
-    let unreadable = json!({"operation": "input", "ok": false, "code": "focus-changed",
-        "reason": "unreadable"});
-    assert_eq!(shown(&unreadable, NOW)["nothingSent"], true);
+    for partial in [false, true] {
+        let unreadable = shown(
+            &json!({"operation": "input", "ok": false, "code": "focus-changed",
+                "reason": "unreadable", "partial": partial}),
+            NOW,
+        );
+        assert_eq!(
+            unreadable["reason"],
+            "Atlas couldn't read which app was in front"
+        );
+        assert_eq!(unreadable["nothingSent"], !partial);
+        assert_eq!(unreadable["partial"], partial);
+        assert_eq!(unreadable["uncertain"], false);
+    }
 }
 
 #[test]

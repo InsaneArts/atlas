@@ -466,6 +466,13 @@ fn a_focus_that_cannot_be_read_refuses() {
     assert_eq!(refusal(keys_with(&mut Seen::default())), unreadable);
 
     let document = window(APP, "TextEdit", 0, (100.0, 100.0, 400.0, 300.0));
+    let mut visible = Seen::default().showing(vec![document.clone()]);
+    visible.app_focused = true;
+    assert_eq!(refusal(keys_with(&mut visible)), unreadable);
+    assert_eq!(visible.focus_reads, 1);
+    assert_eq!(visible.window_reads, 0);
+    assert_eq!(visible.keyboard_reads, 0);
+
     let mut no_list = Seen::focused(Some(APP));
     assert_eq!(refusal(point_with(&mut no_list, 200.0, 200.0)), unreadable);
 

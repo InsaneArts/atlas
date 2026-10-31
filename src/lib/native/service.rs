@@ -1033,6 +1033,7 @@ mod tests {
     enum Step {
         Post,
         Refuse,
+        Unreadable,
         /// Post one event, then fail.
         Break,
     }
@@ -1123,6 +1124,9 @@ mod tests {
                         .with("reason", "app")
                         .with("found", json!({"app": "Calculator", "pid": 812})),
                 );
+            }
+            if self.script.get(index) == Some(&Step::Unreadable) {
+                return Err(super::focus::unreadable());
             }
             Ok(expect
                 .field()
@@ -1228,6 +1232,70 @@ mod tests {
         assert_eq!(reply["partial"], false);
         assert_eq!(reply["uncertain"], false);
         assert_eq!(stand.lock().await.posted, 2);
+    }
+
+    #[tokio::test]
+    async fn an_unreadable_first_check_posts_nothing_and_is_not_uncertain() {
+        for action in [
+            Action::Type {
+                text: "hello".to_owned(),
+            },
+            Action::Key {
+                key: "a".to_owned(),
+            },
+        ] {
+            let stand = Stand::locked(&[Step::Unreadable]);
+            let gate = Arc::new(Gate::default());
+            let grant = gate
+                .acquire(&crate::files::token(), super::Who::Agent)
+                .unwrap();
+            assert!(gate.active().unwrap());
+
+            let mut engine = stand.lock().await;
+            assert_eq!(engine.posted, 0);
+            let reply = run(&mut *engine, &gate, vec![action], app().as_ref())
+                .await
+                .unwrap_err();
+            assert_eq!(reply["code"], "focus-changed");
+            assert_eq!(reply["reason"], "unreadable");
+            assert_eq!(reply["found"], Value::Null);
+            assert_eq!(reply["performed"], 0);
+            assert_eq!(reply["partial"], false);
+            assert_eq!(reply["uncertain"], false);
+            assert_eq!(engine.preparations, [true]);
+            assert_eq!(engine.log, ["check 0"]);
+            assert_eq!(engine.posted, 0);
+            assert_eq!(engine.releases, 1);
+            assert!(!gate.active().unwrap());
+            drop(grant);
+        }
+    }
+
+    #[tokio::test]
+    async fn an_unreadable_later_check_does_not_repeat_earlier_input() {
+        let stand = Stand::locked(&[Step::Post, Step::Unreadable]);
+        let gate = Arc::new(Gate::default());
+        let grant = gate
+            .acquire(&crate::files::token(), super::Who::Agent)
+            .unwrap();
+        assert!(gate.active().unwrap());
+
+        let mut engine = stand.lock().await;
+        let reply = run(&mut *engine, &gate, keys(2), app().as_ref())
+            .await
+            .unwrap_err();
+        assert_eq!(reply["code"], "focus-changed");
+        assert_eq!(reply["reason"], "unreadable");
+        assert_eq!(reply["found"], Value::Null);
+        assert_eq!(reply["performed"], 1);
+        assert_eq!(reply["partial"], false);
+        assert_eq!(reply["uncertain"], false);
+        assert_eq!(engine.preparations, [true, false]);
+        assert_eq!(engine.log, ["check 0", "post 0", "check 1"]);
+        assert_eq!(engine.posted, 1);
+        assert_eq!(engine.releases, 1);
+        assert!(!gate.active().unwrap());
+        drop(grant);
     }
 
     #[tokio::test]

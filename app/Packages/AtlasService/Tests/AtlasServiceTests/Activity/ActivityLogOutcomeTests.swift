@@ -6,6 +6,22 @@ import Testing
 
 @Suite("ActivityLog.Outcome")
 struct ActivityLogOutcomeTests {
+  @Test("an unreadable focus refusal keeps the service's reason")
+  func anUnreadableFocusRefusalKeepsTheServicesReason() throws {
+    let body = Data(
+      #"""
+      {"activity": [
+        {"id": "unreadable", "ok": false, "nothingSent": true, "partial": false,
+         "reason": "Atlas couldn't read which app was in front"}
+      ]}
+      """#.utf8
+    )
+    let log = try ViewerClient.activity(body, response: reply(200))
+    let entry = try #require(log.entries.first)
+    #expect(entry.reason == "Atlas couldn't read which app was in front")
+    #expect(entry.outcome == .notSent)
+  }
+
   @Test("logical identities decode leniently and fall back to the row id")
   func logicalIdentitiesFallBackToTheRowId() throws {
     let body = Data(
