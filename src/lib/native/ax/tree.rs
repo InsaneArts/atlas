@@ -113,6 +113,7 @@ pub fn elements(pid: i32, limits: Limits) -> Result<Snapshot> {
     scan.open();
 
     Ok(Snapshot {
+        windows: listed,
         elements: found,
         incomplete: scan.incomplete,
         stops: scan.stops,

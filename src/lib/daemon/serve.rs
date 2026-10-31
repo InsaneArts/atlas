@@ -595,11 +595,11 @@ async fn screenshot(
         let cropped = area.map(|area| crop_keys(area, app, bundle_id));
         validate()?;
 
-        Ok((shot, off_display, cropped))
+        Ok((shot, off_display, cropped, windows.unwrap_or_default()))
     })
     .await;
     match taken {
-        Ok(Ok((shot, off_display, cropped))) => {
+        Ok(Ok((shot, off_display, cropped, windows))) => {
             let mut reply = json!({
                 "ok": true,
                 "png": STANDARD.encode(&shot.png),
@@ -607,6 +607,7 @@ async fn screenshot(
                 "height": shot.height,
                 "scale": shot.scale,
                 "offDisplayWindows": off_display,
+                "windows": windows,
             });
             if let (Some(reply), Some(cropped)) = (reply.as_object_mut(), cropped) {
                 reply.extend(cropped);

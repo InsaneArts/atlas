@@ -9,7 +9,7 @@ use crate::{
     actions::Expect,
     client::{Check, Client, Verified},
     error::{Code, Error, Result},
-    native::windows::Window,
+    native::windows::{Bounds, Dock, Screen, Window, top_at},
 };
 use serde_json::Value;
 
@@ -19,7 +19,8 @@ use serde_json::Value;
 /// window and field when named, have keyboard focus, pointer actions where
 /// the app's own window, or the named one, is the top one.
 pub async fn act(client: &Client, expected: Option<&Expected>, actions: &Value) -> Result<Value> {
-    let Some(expected) = expected else {
+    let remembered = Expected::remembered(client, expected, actions);
+    let Some(expected) = remembered.as_ref().or(expected) else {
         return client.input(actions, None, None).await;
     };
 
@@ -55,6 +56,28 @@ enum Place {
 }
 
 impl Expected {
+    fn remembered(client: &Client, expected: Option<&Self>, actions: &Value) -> Option<Self> {
+        let app = match expected {
+            Some(Self {
+                place: Place::App(app),
+                field: None,
+            }) => Some(app.clone()),
+            Some(_) => return None,
+            None => None,
+        };
+        let action = &actions[0];
+        let (x, y) = match action["type"].as_str()? {
+            "click" | "scroll" | "move" => (action["x"].as_f64()?, action["y"].as_f64()?),
+            "drag" => (action["fromX"].as_f64()?, action["fromY"].as_f64()?),
+            _ => return None,
+        };
+        let (windows, display) = client.remembered_windows()?;
+        let display = Bounds::display(display.width, display.height);
+        let screen = Screen::new(display, Dock::Icons(vec![]));
+        let window = top_at(&windows, x, y, &screen)?;
+        Self::new(app, Some(window.number), None).ok().flatten()
+    }
+
     /// The expectation of `app`, `window` and `field`, as many as are
     /// named; None when none is. A field needs the app or window it is in.
     pub fn new(
@@ -137,4 +160,273 @@ pub(super) fn other_app(window: &Window, app: &Target) -> Error {
             window.number
         ),
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::{
+        actions::Button,
+        agent::{click, drag, keys, move_to, scroll},
+        host_session::{Host, HostSession},
+        native::windows::{Bounds, Dock, Screen, unobstructed},
+        test_support::{Helper, UID, completed},
+    };
+    use serde_json::json;
+
+    fn session(client: &Client, name: &str) -> Client {
+        let mut client = client.clone();
+        client.host_session = Some(HostSession::new(Host::Named, name).unwrap());
+        client
+    }
+
+    fn display() -> crate::session::Display {
+        crate::session::Display {
+            width: 1000.0,
+            height: 800.0,
+            scale: 1.0,
+        }
+    }
+
+    fn window(number: i64, x: f64) -> Window {
+        Window {
+            number,
+            pid: 812,
+            owner: Some("Editor".into()),
+            title: None,
+            layer: 0,
+            alpha: 1.0,
+            bounds: Bounds {
+                x,
+                y: 20.0,
+                width: 100.0,
+                height: 100.0,
+            },
+        }
+    }
+
+    fn number(client: &Client, expected: Option<&Expected>, actions: &Value) -> Option<i64> {
+        let remembered = Expected::remembered(client, expected, actions);
+        match &remembered.as_ref().or(expected)?.place {
+            Place::Window { number, .. } => Some(*number),
+            Place::App(_) => None,
+        }
+    }
+
+    #[test]
+    fn remembered_points_target_the_frontmost_window_for_each_pointer_action() {
+        let directory = tempfile::tempdir().unwrap();
+        let client = session(&crate::test_support::client(directory.path()), "one");
+        client
+            .remember_windows(&[window(42, 10.0), window(43, 0.0)], &display())
+            .unwrap();
+        let actions = [
+            click(30.0, 40.0, Button::Left, 1, &[]),
+            scroll((30.0, 40.0), (0, 1)),
+            drag((30.0, 40.0), (500.0, 500.0), Button::Left),
+            move_to(30.0, 40.0),
+        ];
+        for action in actions {
+            assert_eq!(number(&client, None, &action), Some(42));
+        }
+        assert_eq!(number(&client, None, &move_to(500.0, 500.0)), None);
+        let mut menu = window(44, 10.0);
+        menu.layer = crate::native::windows::MENU_LAYER;
+        let mut overlay = window(45, 0.0);
+        overlay.owner = Some("Dock".into());
+        overlay.layer = crate::native::windows::DOCK_LAYER;
+        overlay.bounds = Bounds::display(display().width, display().height);
+        let shown = [overlay, menu, window(42, 10.0)];
+        client.remember_windows(&shown, &display()).unwrap();
+        assert_eq!(number(&client, None, &move_to(30.0, 40.0)), Some(44));
+        assert_eq!(window_owner(&shown, 44).unwrap_err().code, Code::Windows);
+    }
+
+    #[test]
+    fn remembered_points_leave_explicit_windows_fields_and_keys_unchanged() {
+        let directory = tempfile::tempdir().unwrap();
+        let client = session(&crate::test_support::client(directory.path()), "one");
+        client
+            .remember_windows(&[window(42, 10.0)], &display())
+            .unwrap();
+        let explicit = Expected::new(None, Some(99), None).unwrap();
+        assert_eq!(
+            number(&client, explicit.as_ref(), &move_to(30.0, 40.0)),
+            Some(99)
+        );
+        let field = Expected::new(Some(Target::Pid(812)), None, Some("Search".into())).unwrap();
+        assert!(Expected::remembered(&client, field.as_ref(), &move_to(30.0, 40.0)).is_none());
+        for action in [
+            keys(&["a".into()]).unwrap(),
+            json!([{"type":"type","text":"a"}]),
+        ] {
+            assert!(Expected::remembered(&client, None, &action).is_none());
+        }
+    }
+
+    #[test]
+    fn remembered_points_without_an_observation_keep_todays_behavior() {
+        let directory = tempfile::tempdir().unwrap();
+        let client = session(&crate::test_support::client(directory.path()), "one");
+        assert_eq!(number(&client, None, &move_to(30.0, 40.0)), None);
+        let anonymous_directory = tempfile::tempdir().unwrap();
+        let anonymous = crate::test_support::client(anonymous_directory.path());
+        anonymous
+            .remember_windows(&[window(42, 10.0)], &display())
+            .unwrap();
+        assert!(anonymous.remembered_windows().is_none());
+        assert!(!anonymous.config.output_dir.exists());
+    }
+
+    #[test]
+    fn remembered_points_are_isolated_between_sessions_and_replaced_by_each_look() {
+        let directory = tempfile::tempdir().unwrap();
+        let first = session(&crate::test_support::client(directory.path()), "one");
+        let second = session(&first, "two");
+        first
+            .remember_windows(&[window(42, 10.0)], &display())
+            .unwrap();
+        assert_eq!(number(&second, None, &move_to(30.0, 40.0)), None);
+        second
+            .remember_windows(&[window(99, 10.0)], &display())
+            .unwrap();
+        assert_eq!(number(&first, None, &move_to(30.0, 40.0)), Some(42));
+        assert_eq!(number(&second, None, &move_to(30.0, 40.0)), Some(99));
+        first.remember_windows(&[], &display()).unwrap();
+        assert_eq!(number(&first, None, &move_to(30.0, 40.0)), None);
+    }
+
+    #[test]
+    fn remembered_points_keep_a_moved_window_and_let_the_existing_point_check_refuse() {
+        let directory = tempfile::tempdir().unwrap();
+        let client = session(&crate::test_support::client(directory.path()), "one");
+        client
+            .remember_windows(&[window(42, 10.0)], &display())
+            .unwrap();
+        let number = number(&client, None, &move_to(30.0, 40.0)).unwrap();
+        let current = [window(99, 10.0), window(42, 200.0)];
+        assert_eq!(window_owner(&current, number).unwrap().bounds.x, 200.0);
+        let screen = Screen::new(Bounds::display(1000.0, 800.0), Dock::Icons(vec![]));
+        assert!(!unobstructed(&current, number, 30.0, 40.0, &screen));
+    }
+
+    #[tokio::test]
+    async fn remembered_points_follow_each_look_without_extra_probes_and_use_crop_coordinates() {
+        use crate::{agent, client::Size, daemon::protocol::Region};
+        use base64::{Engine, engine::general_purpose::STANDARD};
+
+        for look in 0..3 {
+            let directory = tempfile::tempdir().unwrap();
+            let (client, helper) = Helper::client(directory.path(), UID);
+            let client = session(&client, "one");
+            let mut reads = 0;
+            let saved = helper
+                .serve(
+                    async {
+                        match look {
+                            0 => {
+                                agent::screenshot(
+                                    &client,
+                                    None,
+                                    Some(Region {
+                                        x: 10,
+                                        y: 20,
+                                        width: 80,
+                                        height: 80,
+                                    }),
+                                    Size::Longest(40),
+                                    false,
+                                )
+                                .await
+                            }
+                            1 => {
+                                agent::elements(
+                                    &client,
+                                    &Target::Pid(812),
+                                    &agent::ElementFilter::default(),
+                                    10,
+                                    false,
+                                )
+                                .await
+                            }
+                            _ => {
+                                agent::list(
+                                    &client,
+                                    &agent::WindowFilter {
+                                        app: Some("Other".into()),
+                                        ..Default::default()
+                                    },
+                                )
+                                .await
+                            }
+                        }
+                    },
+                    |request| {
+                        reads += 1;
+                        let windows = [window(42, 10.0), window(43, 0.0)];
+                        if request["op"] == "screenshot" {
+                            return Some(json!({"ok":true,
+                        "png":STANDARD.encode(crate::native::capture::sample_png(40,40)),
+                        "width":40,"height":40,"windows":windows,
+                        "region":{"x":10,"y":20,"width":80,"height":80}}));
+                        }
+                        if request["op"] == "apps" {
+                            return Some(json!({"ok":true,"apps":[{"pid":812,"name":"Editor"}]}));
+                        }
+                        assert!(matches!(
+                            request["argv"][1].as_str(),
+                            Some("elements-info" | "windows-info")
+                        ));
+                        Some(completed(
+                            &json!({"ok":true,"windows":windows,"elements":[],"truncated":false})
+                                .to_string(),
+                        ))
+                    },
+                )
+                .await
+                .unwrap();
+            assert_eq!(reads, if look == 1 { 2 } else { 1 });
+            let (x, y) = if look == 0 {
+                assert!(saved.get("windows").is_none());
+                let scale = saved["pointsPerPixel"].as_f64().unwrap();
+                (
+                    saved["origin"]["x"].as_f64().unwrap() + 10.0 * scale,
+                    saved["origin"]["y"].as_f64().unwrap() + 10.0 * scale,
+                )
+            } else {
+                assert_eq!(saved["windows"], json!([]));
+                (30.0, 40.0)
+            };
+            assert_eq!((x, y), (30.0, 40.0));
+            assert_eq!(number(&client, None, &move_to(x, y)), Some(42));
+        }
+    }
+
+    #[tokio::test]
+    async fn remembered_points_refuse_a_gone_window_through_the_existing_window_path() {
+        let directory = tempfile::tempdir().unwrap();
+        let (client, helper) = Helper::client(directory.path(), UID);
+        let client = session(&client, "one");
+        client
+            .remember_windows(&[window(42, 10.0)], &display())
+            .unwrap();
+        let expected = Expected::remembered(&client, None, &move_to(30.0, 40.0)).unwrap();
+        let error = helper
+            .serve(
+                async {
+                    let verified = client.verify().await?;
+                    expected.resolve(&client, &verified).await
+                },
+                |request| {
+                    assert_eq!(request["argv"][1], "windows-info");
+                    Some(completed(
+                        &json!({"ok":true,"windows":[window(99,10.0)]}).to_string(),
+                    ))
+                },
+            )
+            .await
+            .unwrap_err();
+        assert_eq!(error.code, Code::Windows);
+        assert_eq!(error.error, window_owner(&[], 42).unwrap_err().error);
+    }
 }

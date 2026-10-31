@@ -33,6 +33,7 @@ const CANDIDATES: usize = 5;
 
 /// One scan of an app, as the probe reported it.
 pub(super) struct Scanned {
+    pub(super) windows: Vec<Window>,
     pub(super) elements: Vec<Element>,
     pub(super) incomplete: bool,
     /// Why it is incomplete, each reason once.
@@ -78,6 +79,7 @@ impl Scanned {
         errors.truncate(SCAN_ERRORS);
 
         Ok(Self {
+            windows: serde_json::from_value(value["windows"].take()).unwrap_or_default(),
             elements,
             incomplete: value["truncated"] == true,
             reasons,
@@ -159,6 +161,7 @@ pub async fn elements(
     let verified = client.verify().await?;
     let pid = target_pid(client, &verified, target).await?;
     let scanned = app_elements(client, &verified, pid).await?;
+    client.remember_windows(&scanned.windows, &verified.session().epoch.display)?;
 
     Ok(listing(pid, &scanned, filter, max, full))
 }

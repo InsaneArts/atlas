@@ -68,6 +68,8 @@ element, or refuses and lists `candidates`. Otherwise use
 `drag`): nothing is sent while another app would get it. In an app another
 agent uses, add `--window N` from `atlas windows`; to click there, use
 `atlas click --app A --window N X Y`.
+Point actions without `--window` use the window at that point in your session's
+last `screenshot`, `elements` or `windows`; look again after a window moves.
 
 `atlas run -- PROGRAM ARGS` runs a command as the helper; its result is
 `exitCode`. Use `--timeout` up to 600, not `&`, and never send keys or clicks

@@ -33,7 +33,8 @@ use crate::{
     doing::Doing,
     error::{Code, Error, Result},
     host_session::HostSession,
-    session::{Session, has_capability, require_hidden},
+    native::windows::Window,
+    session::{Display, Session, has_capability, require_hidden},
     task::Task,
     transport::{Transport, run_output},
 };
@@ -126,6 +127,23 @@ pub fn timestamp() -> u128 {
 }
 
 impl Client {
+    fn window_memory(&self) -> Option<std::path::PathBuf> {
+        let key = self.host_session.as_ref()?.key();
+        let output = self.output_dir().ok()?;
+        Some(output.join(format!("sessions/{key}.windows")))
+    }
+
+    pub(crate) fn remember_windows(&self, windows: &[Window], display: &Display) -> Result<()> {
+        if let Some(path) = self.window_memory() {
+            crate::config::save_private(&path, &serde_json::to_vec(&(windows, display))?)?;
+        }
+        Ok(())
+    }
+
+    pub(crate) fn remembered_windows(&self) -> Option<(Vec<Window>, Display)> {
+        serde_json::from_slice(&crate::files::read_own(&self.window_memory()?, 1 << 20)?).ok()
+    }
+
     /// Construction only validates; reads such as status never write; doctor
     /// only probes that Atlas's own folders can be written, making them when
     /// missing.

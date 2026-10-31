@@ -44,11 +44,6 @@ impl WindowFilter {
     }
 }
 
-/// The helper's on-screen windows, front to back, through a read-only probe.
-async fn windows(client: &Client) -> Result<Vec<Window>> {
-    window_list(client, PROBE_LIMIT).await
-}
-
 /// The window list alone, with the helper probe bounded by `limit`.
 async fn window_list(client: &Client, limit: Duration) -> Result<Vec<Window>> {
     let probe = windows_probe(client, DockRead::Skip);
@@ -102,7 +97,9 @@ fn shown(reply: &Value) -> Result<Shown> {
 }
 
 pub async fn list(client: &Client, filter: &WindowFilter) -> Result<Value> {
-    let windows = windows(client).await?;
+    let verified = client.verify().await?;
+    let windows = verified_window_snapshot(client, &verified).await?.windows;
+    client.remember_windows(&windows, &verified.session().epoch.display)?;
     let matching: Vec<_> = windows
         .into_iter()
         .filter(|window| filter.matches(window))

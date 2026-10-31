@@ -70,6 +70,8 @@ This example expects an `atlas-work` folder in the helper. A missing folder is a
 
 Named input brings its target forward within the command, checks it and acts. `--app` identifies the app; use `--window` for a particular document in a shared app. A blocked or unreadable target still refuses input, and no app is launched. Later keys in one command only check the app, since an earlier key may move the window or field. Separate click and type commands can have another agent's turn between them.
 
+Within a session, `screenshot`, `elements` and `windows` remember the on-screen windows. A later point `click`, `scroll`, `drag` (at its start) or `move` without `--window` uses the window that was on top at that point, through the same window checks. An explicit `--window` wins; named controls, fields, keys and typing are unchanged. With no remembered window at the point, behavior is unchanged. A closed window refuses; after a window moves, look again. Redrawn content in the same window is not detected. Coordinates remain display points, including for cropped screenshots: convert pixels using `origin` and `pointsPerPixel` above.
+
 A job's `left` list names processes still running. After `leader-gone`, they may still be in the job's group; Atlas signals none of them. A descendant that calls `setsid` leaves the job's group and session, so Atlas never stops it. If Atlas did not see it before its parent exited, it may also be missing from reports.
 
 ### Prepare the helper

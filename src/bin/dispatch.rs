@@ -99,6 +99,7 @@ fn elements_info(pid: i32) -> Result<Value> {
     Ok(json!({
         "ok": true,
         "elements": snapshot.elements,
+        "windows": snapshot.windows,
         "truncated": snapshot.incomplete,
         "reasons": snapshot.stops,
         "errors": snapshot.errors,
