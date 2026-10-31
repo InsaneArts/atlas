@@ -193,6 +193,25 @@ mod tests {
         }
     }
 
+    #[test]
+    fn a_slow_focus_read_asks_for_the_same_command_again() {
+        for (unread, expected) in [
+            (
+                "slow",
+                "The app was busy and nothing was sent. Run the same command again.",
+            ),
+            (
+                "failed",
+                "Atlas couldn't tell what was in front, often because the active app has no window, and nothing of the command was sent. Click where your app shows, or open the app if none of it shows, then run it again.",
+            ),
+        ] {
+            let mut result = json!({"ok": false, "code": "focus-changed",
+                "reason": "unreadable", "unread": unread, "performed": 0});
+            advise(&mut result);
+            assert_eq!(result["next"], expected, "{unread}");
+        }
+    }
+
     /// A focus refusal says earlier actions were sent only when the result
     /// counts some, and asks for the app first when what was in front could
     /// not be read.

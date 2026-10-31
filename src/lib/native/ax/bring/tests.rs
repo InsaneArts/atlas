@@ -1,7 +1,11 @@
 use super::super::keyboard::Answer;
 use super::*;
 use crate::native::windows::Bounds;
-use std::{cell::Cell, collections::HashMap, rc::Rc};
+use std::{
+    cell::Cell,
+    collections::{HashMap, VecDeque},
+    rc::Rc,
+};
 
 const APP: usize = 0;
 const WINDOW: usize = 1;
@@ -27,6 +31,9 @@ struct Fake {
     observed_window: Rc<Cell<usize>>,
     focused_element: Rc<Cell<usize>>,
     frontmost: Rc<Cell<bool>>,
+    count_errors: VecDeque<AXError>,
+    count_reads: usize,
+    pauses: Vec<Duration>,
 }
 
 impl Fake {
@@ -63,6 +70,9 @@ impl Fake {
             observed_window: Rc::new(Cell::new(WINDOW)),
             focused_element: Rc::new(Cell::new(FIELD)),
             frontmost: Rc::new(Cell::new(false)),
+            count_errors: VecDeque::new(),
+            count_reads: 0,
+            pauses: Vec::new(),
         };
         fake.lists.insert((APP, "AXWindows"), vec![WINDOW]);
         fake.lists.insert((WINDOW, "AXChildren"), vec![FIELD]);
@@ -140,6 +150,11 @@ impl Ask for &mut Fake {
     }
 }
 impl Backend for &mut Fake {
+    fn pause(&mut self, duration: Duration) {
+        assert!(!duration.is_zero());
+        self.pauses.push(duration);
+        self.now.set(self.now.get() + duration);
+    }
     fn app(&mut self, _: i64) -> Option<usize> {
         self.present.then_some(APP)
     }
@@ -153,6 +168,15 @@ impl Backend for &mut Fake {
         _: usize,
         _: Instant,
     ) -> Result<Vec<usize>> {
+        if *element == APP
+            && name == "AXWindows"
+            && self.writes.last() == Some(&(FIELD, Write::Flag("AXFocused")))
+        {
+            self.count_reads += 1;
+            if let Some(status) = self.count_errors.pop_front() {
+                return Err(Unread::Malformed.reading(status));
+            }
+        }
         if self.malformed {
             return Err(Unread::Malformed.error());
         }
@@ -534,6 +558,40 @@ fn a_unique_enabled_field_is_focused_after_its_window() {
     assert_eq!(fake.writes.last(), Some(&(FIELD, Write::Flag("AXFocused"))));
 }
 
+#[test]
+fn a_cold_field_is_exposed_by_reading_the_application_role_before_resolution() {
+    let mut fake = Fake::new();
+    fake.lists.remove(&(WINDOW, "AXChildren"));
+    fake.on_ask = Some(|fake, element, name| {
+        if (element, name) == (APP, "AXRole") {
+            fake.lists.insert((WINDOW, "AXChildren"), vec![FIELD]);
+        } else if element == WINDOW {
+            assert!(fake.lists.contains_key(&(WINDOW, "AXChildren")));
+        }
+    });
+    fake.run(&named().in_field("Email").unwrap()).unwrap();
+    assert_eq!(fake.writes.last(), Some(&(FIELD, Write::Flag("AXFocused"))));
+}
+
+#[test]
+fn a_failed_application_role_read_still_resolves_the_field_without_retrying() {
+    let mut fake = Fake::new();
+    fake.lists.remove(&(WINDOW, "AXChildren"));
+    fake.answers
+        .insert((APP, "AXRole"), Answer::Failed(AXError::CannotComplete));
+    fake.on_ask = Some(|fake, element, name| {
+        if (element, name) == (APP, "AXRole") {
+            assert!(
+                fake.lists
+                    .insert((WINDOW, "AXChildren"), vec![FIELD])
+                    .is_none()
+            );
+        }
+    });
+    fake.run(&named().in_field("Email").unwrap()).unwrap();
+    assert_eq!(fake.writes.last(), Some(&(FIELD, Write::Flag("AXFocused"))));
+}
+
 fn find_bar() -> Fake {
     let mut fake = Fake::new();
     fake.lists.insert((WINDOW, "AXChildren"), vec![4, 5]);
@@ -589,6 +647,71 @@ fn read_find_bar(fake: &mut Fake, deadline: Instant) -> super::super::Keyboard {
         },
     )
     .unwrap()
+}
+
+fn secure_field_with_slow_window_counts(
+    failures: usize,
+) -> (Fake, Result<Option<&'static str>>, usize) {
+    let mut fake = find_bar();
+    fake.now.set(fake.now.get() + Duration::from_secs(60));
+    fake.answers
+        .insert((FIELD, "AXRole"), Answer::Text("AXSecureTextField".into()));
+    fake.count_errors = vec![AXError::CannotComplete; failures].into();
+    let expect = named().in_field("_NS:9").unwrap();
+    let deadline = fake.now.get() + Duration::from_millis(30);
+    let mut observation = fake.clone();
+    let listed = fake.windows.clone();
+    let mut verifications = 0;
+    let target = prepare(
+        &mut fake,
+        &expect,
+        Need::Keys,
+        deadline,
+        &|| Ok(()),
+        &mut |_| false,
+    )
+    .unwrap();
+    assert_eq!(target.reader.ask.focused_element.get(), FIELD);
+    let writes = target.reader.ask.writes.clone();
+    assert_eq!(writes.last(), Some(&(FIELD, Write::Flag("AXFocused"))));
+    let result = settle(target, &expect, deadline, &|| Ok(()), |number, until| {
+        verifications += 1;
+        assert!(verifications <= 2);
+        assert_eq!(number, Some(42));
+        crate::native::focus::tests::verify_keyboard(
+            &expect,
+            read_find_bar(&mut observation, until),
+            listed.clone(),
+            until,
+            Duration::ZERO,
+        )
+    });
+    assert_eq!(fake.writes, writes, "settlement must never repeat a write");
+    assert!(fake.count_reads <= 3, "settlement must remain bounded");
+    if failures == 3 {
+        assert_eq!(fake.now.get(), deadline);
+    }
+    (fake, result, verifications)
+}
+
+#[test]
+fn the_first_slow_window_count_after_focusing_a_secure_field_recovers_without_more_writes() {
+    let (fake, result, verifications) = secure_field_with_slow_window_counts(1);
+    assert_eq!(result.unwrap(), Some("AXSecureTextField"));
+    assert_eq!(verifications, 2);
+    assert_eq!(fake.count_reads, 3);
+    assert_eq!(fake.pauses, vec![Duration::from_millis(10)]);
+}
+
+#[test]
+fn a_window_count_that_stays_slow_refuses_at_the_preparation_deadline() {
+    let (fake, result, verifications) = secure_field_with_slow_window_counts(3);
+    let error = result.unwrap_err();
+    assert_eq!(error.details["unread"], "slow");
+    assert!(!error.uncertain);
+    assert_eq!(verifications, 0);
+    assert_eq!(fake.count_reads, 3);
+    assert_eq!(fake.pauses, vec![Duration::from_millis(10); 3]);
 }
 
 #[test]
@@ -1140,7 +1263,7 @@ fn failed_candidate_name(attribute: &'static str) {
     fake.answers
         .insert((3, attribute), Answer::Failed(AXError::CannotComplete));
     let error = fake.run(&named().in_field("Email").unwrap()).unwrap_err();
-    assert_eq!(error.details["unread"], "failed");
+    assert_eq!(error.details["unread"], "slow");
     assert!(fake.writes.is_empty());
 }
 
@@ -2231,7 +2354,7 @@ fn child_sheet_discovery_deduplicates_sources_and_rejects_unknown_or_conflicting
     fake.lists.remove(&(WINDOW, "AXSheets"));
     fake.answers
         .insert((3, "AXRole"), Answer::Failed(AXError::CannotComplete));
-    assert_eq!(fake.run(&expect).unwrap_err().details["unread"], "failed");
+    assert_eq!(fake.run(&expect).unwrap_err().details["unread"], "slow");
     assert!(fake.writes.is_empty());
 }
 
