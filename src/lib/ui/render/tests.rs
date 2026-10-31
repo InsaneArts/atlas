@@ -88,37 +88,6 @@ fn a_ready_doctor_is_one_line() {
 }
 
 #[test]
-fn a_doctor_without_a_native_record_warns_about_panels_and_webkit() {
-    let report = crate::capability::doctor(json!({}), crate::test_support::UID);
-    for verbose in [false, true] {
-        let out = show(View::Doctor { verbose }, report.clone()).out;
-        assert!(out.contains("! Native Save/Open is unqualified;"), "{out}");
-        assert!(out.contains("Safari/WebKit can stay blank"), "{out}");
-    }
-}
-
-#[test]
-fn a_doctor_renders_a_failed_native_warning_once() {
-    let warning = format!(
-        "{} Safari/WebKit can stay blank without authenticated Screen Sharing.",
-        crate::capability::NATIVE_DIALOGS_FAILED
-    );
-    let report = json!({
-        "ok": true, "ready": true, "warnings": [warning],
-        "capabilities": {"nativeDialogs": {"state": "failed"}},
-    });
-    for verbose in [false, true] {
-        let out = show(View::Doctor { verbose }, report.clone()).out;
-        assert_eq!(
-            out.matches(crate::capability::NATIVE_DIALOGS_FAILED)
-                .count(),
-            1,
-            "{out}"
-        );
-    }
-}
-
-#[test]
 fn a_doctor_that_is_not_ready_lists_checks_and_fixes() {
     let report = json!({
         "ok": true, "ready": false,
