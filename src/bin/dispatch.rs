@@ -1620,7 +1620,7 @@ mod tests {
                     "--",
                     "/usr/bin/nc",
                     "-lk",
-                    "8765",
+                    "8790",
                 ][..],
                 "job-start",
             ),
@@ -1630,7 +1630,7 @@ mod tests {
             let fields = fields(args);
             assert_eq!(fields["verb"], verb);
             let text = fields.to_string();
-            for word in ["web", "nc", "8765", "secret-report", "7c2e91a04b3f"] {
+            for word in ["web", "nc", "8790", "secret-report", "7c2e91a04b3f"] {
                 assert!(!text.contains(word), "{args:?}: {text}");
             }
         }

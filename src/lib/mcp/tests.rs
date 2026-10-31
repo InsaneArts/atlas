@@ -731,6 +731,26 @@ fn a_line_that_ends_with_an_ellipsis_gets_no_full_stop_after_it() {
     assert_eq!(said(&quiet)["content"][0]["text"], "Atlas: Idle.");
 }
 
+#[test]
+fn a_running_command_keeps_its_ellipsis_through_the_status_summary() {
+    let status = summary(
+        &json!({"overview": {
+            "state": "working",
+            "label": "Working",
+            "headline": "Running a command…",
+            "activity": [{"actor": "agent", "says": "running a command…"}],
+        }}),
+        &BTreeMap::new(),
+        None,
+    );
+    let reply = said(&status);
+    assert_eq!(
+        reply["content"][0]["text"],
+        "Atlas: Working. Running a command… Recent: running a command…"
+    );
+    assert_eq!(reply["structuredContent"]["status"], status);
+}
+
 #[tokio::test]
 async fn control_and_the_persons_actions_are_offered_only_to_a_client_that_draws_views() {
     let dir = tempfile::tempdir().unwrap();

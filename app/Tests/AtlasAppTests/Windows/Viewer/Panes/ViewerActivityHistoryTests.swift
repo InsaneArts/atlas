@@ -23,12 +23,12 @@ struct ViewerActivityHistoryTests {
     #expect(viewer.panes.activity.moments.first?.id == first)
     #expect(viewer.panes.activity.choices[first] == false)
     #expect(viewer.panes.activity.expanded.contains(first))
-    let shown = ViewerPresenterActivityTests.moments(ViewerPresenter.activity(viewer.snapshot))
+    let shown = ViewerActivityFixtures.moments(ViewerPresenter.activity(viewer.snapshot))
     #expect(shown.first?.id == first)
     #expect(shown.first?.isOpen == false)
     viewer.send(.toggleMoment(first, opens: true))
     let reopened = ViewerPresenter.activity(viewer.snapshot)
-    #expect(ViewerPresenterActivityTests.steps(reopened).count == 200, "the expansion still shows every retained step")
+    #expect(ViewerActivityFixtures.steps(reopened).count == 200, "the expansion still shows every retained step")
     viewer.close()
   }
 
@@ -40,7 +40,7 @@ struct ViewerActivityHistoryTests {
     ActivityLog(
       entries: range.reversed()
         .map { index in
-          ActivityLog.Entry(
+          ActivityFixtures.row(
             id: "row-\(index)",
             says: "clicked Item \(index)",
             ageSeconds: Double(range.upperBound - index),
