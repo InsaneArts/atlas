@@ -25,7 +25,6 @@ use std::{
 use unicode_segmentation::UnicodeSegmentation;
 
 mod dock;
-use dock::Click;
 
 /// The only place events go: the helper login's own session event tap, never
 /// the global HID tap.

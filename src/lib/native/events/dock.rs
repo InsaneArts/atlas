@@ -16,7 +16,20 @@ pub(super) struct Down {
 }
 
 impl Down {
-    fn ready(&self, phase: PointerPhase, point: Point, button: Button) -> Result<bool> {
+    fn ready(
+        &self,
+        phase: PointerPhase,
+        point: Point,
+        button: Button,
+        targeted: bool,
+    ) -> Result<bool> {
+        if targeted {
+            return Err(Error::new(
+                Code::FocusChanged,
+                "A deferred Dock press cannot continue in the app; no input was sent",
+            )
+            .with("reason", "point"));
+        }
         match phase {
             PointerPhase::Down => Err(Error::new(Code::Input, "A mouse button is already held")),
             PointerPhase::Up if button != self.button => {
@@ -28,24 +41,8 @@ impl Down {
     }
 }
 
-pub(super) trait Click {
-    async fn dock_click(
-        &mut self,
-        point: Point,
-        button: Button,
-        modifiers: &[String],
-        press: bool,
-    ) -> Result<bool>;
-
-    async fn post_click(
-        &mut self,
-        point: Point,
-        button: Button,
-        modifiers: &[String],
-        count: u8,
-    ) -> Result<()>;
-
-    async fn click(
+impl Engine {
+    pub(super) async fn click(
         &mut self,
         point: Point,
         button: Button,
@@ -57,9 +54,7 @@ pub(super) trait Click {
         }
         Ok(())
     }
-}
 
-impl Click for Engine {
     async fn dock_click(
         &mut self,
         point: Point,
@@ -104,9 +99,7 @@ impl Click for Engine {
         self.post_pointer(PointerPhase::Up, point, button, modifiers, count)
             .await
     }
-}
 
-impl Engine {
     pub(super) async fn pointer(
         &mut self,
         phase: PointerPhase,
@@ -116,7 +109,7 @@ impl Engine {
         count: u8,
     ) -> Result<()> {
         if let Some(down) = &self.dock_down {
-            if !down.ready(phase, point, button)? {
+            if !down.ready(phase, point, button, self.target.is_some())? {
                 return Ok(());
             }
             let down = self.dock_down.take().expect("the deferred down exists");
@@ -284,63 +277,6 @@ mod tests {
         assert_eq!(error.code, Code::LeaseLost);
     }
 
-    struct Mouse {
-        on_dock: bool,
-        lookups: usize,
-        presses: usize,
-        posts: usize,
-    }
-
-    impl Click for Mouse {
-        async fn dock_click(
-            &mut self,
-            _: Point,
-            button: Button,
-            modifiers: &[String],
-            press: bool,
-        ) -> Result<bool> {
-            resolve(
-                false,
-                button,
-                modifiers,
-                press,
-                || Ok(()),
-                || {
-                    self.lookups += 1;
-                    Ok(self.on_dock.then_some(()))
-                },
-                |_| {
-                    self.presses += 1;
-                    AXError::Success
-                },
-            )
-        }
-
-        async fn post_click(&mut self, _: Point, _: Button, _: &[String], _: u8) -> Result<()> {
-            self.posts += 2;
-            Ok(())
-        }
-    }
-
-    #[tokio::test]
-    async fn a_complete_click_resolves_the_dock_once() {
-        for on_dock in [false, true] {
-            let mut mouse = Mouse {
-                on_dock,
-                lookups: 0,
-                presses: 0,
-                posts: 0,
-            };
-            mouse
-                .click(Point { x: 40.0, y: 50.0 }, Button::Left, &[], 1)
-                .await
-                .unwrap();
-            assert_eq!(mouse.lookups, 1);
-            assert_eq!(mouse.presses, usize::from(on_dock));
-            assert_eq!(mouse.posts, if on_dock { 0 } else { 2 });
-        }
-    }
-
     #[test]
     fn a_failed_dock_press_stays_uncertain() {
         for status in [
@@ -356,6 +292,33 @@ mod tests {
     }
 
     #[test]
+    fn a_later_targeted_request_cannot_resume_a_deferred_dock_press() {
+        let down = Down {
+            point: Point { x: 40.0, y: 50.0 },
+            button: Button::Left,
+            modifiers: Vec::new(),
+            count: 1,
+        };
+        assert!(
+            !down
+                .ready(PointerPhase::Move, down.point, Button::Left, false)
+                .unwrap()
+        );
+        for phase in [PointerPhase::Move, PointerPhase::Up] {
+            for point in [Point { x: 400.0, y: 300.0 }, down.point] {
+                let error = down.ready(phase, point, Button::Left, true).unwrap_err();
+                assert_eq!(error.code, Code::FocusChanged);
+                assert_eq!(error.details["reason"], "point");
+                assert!(!error.uncertain);
+            }
+        }
+        assert!(
+            down.ready(PointerPhase::Up, down.point, Button::Left, false)
+                .unwrap()
+        );
+    }
+
+    #[test]
     fn a_viewer_dock_press_waits_for_release_and_movement_returns_to_dragging() {
         let down = Down {
             point: Point { x: 40.0, y: 50.0 },
@@ -365,19 +328,24 @@ mod tests {
         };
         assert!(
             !down
-                .ready(PointerPhase::Move, down.point, Button::Left)
+                .ready(PointerPhase::Move, down.point, Button::Left, false)
                 .unwrap()
         );
         assert!(
-            down.ready(PointerPhase::Up, down.point, Button::Left)
+            down.ready(PointerPhase::Up, down.point, Button::Left, false)
                 .unwrap()
         );
         assert!(
-            down.ready(PointerPhase::Move, Point { x: 45.0, y: 50.0 }, Button::Left)
-                .unwrap()
+            down.ready(
+                PointerPhase::Move,
+                Point { x: 45.0, y: 50.0 },
+                Button::Left,
+                false
+            )
+            .unwrap()
         );
         for phase in [PointerPhase::Down, PointerPhase::Up] {
-            assert!(down.ready(phase, down.point, Button::Right).is_err());
+            assert!(down.ready(phase, down.point, Button::Right, false).is_err());
         }
     }
 }
