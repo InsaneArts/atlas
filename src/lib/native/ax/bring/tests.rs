@@ -27,6 +27,7 @@ struct Fake {
     observed_window: Rc<Cell<usize>>,
     focused_element: Rc<Cell<usize>>,
     frontmost: Rc<Cell<bool>>,
+    fail_once: Option<(usize, &'static str, AXError)>,
 }
 
 impl Fake {
@@ -63,6 +64,7 @@ impl Fake {
             observed_window: Rc::new(Cell::new(WINDOW)),
             focused_element: Rc::new(Cell::new(FIELD)),
             frontmost: Rc::new(Cell::new(false)),
+            fail_once: None,
         };
         fake.lists.insert((APP, "AXWindows"), vec![WINDOW]);
         fake.lists.insert((WINDOW, "AXChildren"), vec![FIELD]);
@@ -130,6 +132,12 @@ impl Ask for &mut Fake {
             on_ask(self, *element, name);
         }
         self.now.set(self.now.get() + self.delay);
+        if self
+            .fail_once
+            .is_some_and(|(target, attribute, _)| target == *element && attribute == name)
+        {
+            return Answer::Failed(self.fail_once.take().unwrap().2);
+        }
         self.answers
             .get(&(*element, name))
             .cloned()
@@ -323,12 +331,16 @@ fn settling_keeps_its_check_short_even_with_a_longer_preparation_deadline() {
         &mut |_| true,
     )
     .unwrap();
+    let mut reads = 0;
     let error = settle(target, &named(), deadline, &|| Ok(()), |_, until| {
-        assert_eq!(until, now.get() + CHECK_BUDGET);
+        reads += 1;
+        assert!(reads <= 3, "settlement must remain bounded");
+        assert_eq!(until, deadline.min(now.get() + CHECK_BUDGET));
         now.set(until);
         Ok(None)
     })
     .unwrap_err();
+    assert_eq!(reads, 3);
     assert_eq!(error.details["unread"], "slow");
 }
 
@@ -364,6 +376,113 @@ fn an_unreadable_focus_read_can_succeed_before_the_preparation_deadline() {
             assert_eq!(reads, 3);
             assert_eq!(fake.writes, writes);
         }
+    }
+}
+
+#[test]
+fn a_busy_native_read_is_retried_during_admission_and_field_verification() {
+    for during_verification in [false, true] {
+        let mut fake = Fake::new();
+        fake.answers
+            .insert((APP, "AXFocusedUIElement"), Answer::Element(FIELD));
+        let expect = named().in_field("Email").unwrap();
+        let deadline = fake.now.get() + crate::native::focus::PREPARE_BUDGET;
+        let target = prepare(
+            &mut fake,
+            &expect,
+            Need::Keys,
+            deadline - SETTLE_BUDGET,
+            &|| Ok(()),
+            &mut |_| true,
+        )
+        .unwrap();
+        target.reader.ask.on_ask = Some(|fake, element, name| {
+            if fake.frontmost.get() && element == APP && name == "AXFocusedUIElement" {
+                fake.fail_once = Some((element, name, AXError::CannotComplete));
+                fake.on_ask = None;
+            }
+        });
+        let armed = target.reader.ask.frontmost.clone();
+        if !during_verification {
+            target.reader.ask.fail_once = Some((WINDOW, "AXRole", AXError::CannotComplete));
+            target.reader.ask.on_ask = None;
+        }
+        let mut reads = 0;
+        let result = settle(target, &expect, deadline, &|| Ok(()), |_, _| {
+            reads += 1;
+            assert!(reads <= 3, "settlement must remain bounded");
+            if during_verification {
+                armed.set(true);
+            }
+            Ok(Some("AXTextField"))
+        });
+        assert_eq!(result.unwrap(), Some("AXTextField"));
+        assert_eq!(reads, if during_verification { 3 } else { 2 });
+        assert!(fake.fail_once.is_none());
+        assert!(fake.writes.is_empty());
+    }
+}
+
+#[test]
+fn transient_unreadable_focus_retries_wait_before_the_next_observation() {
+    let mut fake = Fake::new();
+    let deadline = fake.now.get() + crate::native::focus::PREPARE_BUDGET;
+    let target = prepare(
+        &mut fake,
+        &named(),
+        Need::Keys,
+        deadline - SETTLE_BUDGET,
+        &|| Ok(()),
+        &mut |_| true,
+    )
+    .unwrap();
+    let mut failed_at = None;
+    let mut reads = 0;
+    settle(target, &named(), deadline, &|| Ok(()), |_, _| {
+        reads += 1;
+        assert!(reads <= 3, "settlement must remain bounded");
+        if let Some(failed_at) = failed_at {
+            assert!(Instant::now().duration_since(failed_at) >= Duration::from_millis(10));
+            Ok(None)
+        } else {
+            failed_at = Some(Instant::now());
+            Err(refused("unreadable", "The app is busy").with("unread", Unread::Failed))
+        }
+    })
+    .unwrap();
+    assert_eq!(reads, 3);
+}
+
+#[test]
+fn permanent_unreadable_focus_failures_return_without_another_observation() {
+    for why in [
+        Unread::Cut,
+        Unread::Malformed,
+        Unread::Deep,
+        Unread::Alike,
+        Unread::Unlisted,
+        Unread::Withheld,
+    ] {
+        let mut fake = Fake::new();
+        let deadline = fake.now.get() + crate::native::focus::PREPARE_BUDGET;
+        let target = prepare(
+            &mut fake,
+            &named(),
+            Need::Keys,
+            deadline - SETTLE_BUDGET,
+            &|| Ok(()),
+            &mut |_| true,
+        )
+        .unwrap();
+        let mut reads = 0;
+        let error = settle(target, &named(), deadline, &|| Ok(()), |_, _| {
+            reads += 1;
+            assert_eq!(reads, 1, "a permanent failure must not be retried");
+            Err(refused("unreadable", "Focus cannot be read").with("unread", why))
+        })
+        .unwrap_err();
+        assert_eq!(error.details["unread"], serde_json::to_value(why).unwrap());
+        assert!(fake.writes.is_empty());
     }
 }
 

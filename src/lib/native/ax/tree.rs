@@ -333,6 +333,7 @@ fn read(
     let value = if scan.last_error.is_none_or(|error| ABSENT.contains(&error)) {
         scan.value(item, values, role.as_deref(), subrole.as_deref())
     } else {
+        scan.unreadable.push("AXValue".to_owned());
         None
     };
     let mut element = Element {
@@ -421,5 +422,58 @@ pub(super) fn unreachable(error: Option<AXError>, trusted: bool, exists: bool) -
             ),
         ),
         None => Error::new(Code::Elements, "The app shows no accessibility tree"),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::{
+        native::ax::batch::{BATCH, Slot},
+        select::ElementFilter,
+    };
+    use objc2_core_foundation::CFString;
+
+    #[test]
+    fn a_withheld_static_text_value_remains_a_possible_duplicate_without_a_getter() {
+        let batch = Batch {
+            slots: BATCH
+                .iter()
+                .map(|name| match *name {
+                    "AXRole" => Slot::Value(CFString::from_static_str("AXStaticText").into()),
+                    "AXSubrole" => Slot::Failed(AXError::Failure),
+                    _ => Slot::Empty,
+                })
+                .collect(),
+            stalled: false,
+        };
+        let visit = Visit::root(ffi::system_wide().unwrap(), None, false);
+        let mut scan = Scan::new(Instant::now());
+        let hidden = read(&mut scan, &visit, Some(&batch), 0, &[], &[], 812).unwrap();
+        assert!(hidden.value.is_none());
+        assert!(
+            scan.stops.is_empty(),
+            "a getter would record the expired deadline"
+        );
+        assert!(!scan.errors.keys().any(|name| name.starts_with("AXValue:")));
+        let visible = Element {
+            index: 1,
+            value: Some("Save".into()),
+            unreadable: Vec::new(),
+            ..hidden.clone()
+        };
+        let filter = ElementFilter {
+            name: Some("Save".into()),
+            ..Default::default()
+        };
+        assert!(filter.matches(&visible));
+        assert!(!filter.matches(&hidden));
+        assert_eq!(
+            [hidden, visible]
+                .iter()
+                .filter(|element| filter.might_match(element))
+                .count(),
+            2
+        );
     }
 }
