@@ -296,6 +296,56 @@ fn a_unique_window_is_raised_and_given_key_focus_once() {
 }
 
 #[test]
+fn a_tooltip_beside_a_real_window_does_not_block_input() {
+    for entries in [vec![3, WINDOW], vec![WINDOW, 3]] {
+        for expect in [named(), Expect::new(812).unwrap()] {
+            let mut fake = Fake::new();
+            fake.lists.insert((APP, "AXWindows"), entries.clone());
+            fake.answers
+                .insert((3, "AXRole"), Answer::Text("AXHelpTag".into()));
+            fake.on_ask = Some(|_, element, attribute| {
+                if element == 3 {
+                    assert_eq!(attribute, "AXRole");
+                }
+            });
+            fake.run(&expect).unwrap();
+            assert!(fake.writes.contains(&(APP, Write::Flag("AXFrontmost"))));
+            assert!(fake.writes.iter().all(|(element, _)| *element != 3));
+        }
+    }
+}
+
+#[test]
+fn a_tooltip_alone_does_not_count_as_a_window() {
+    let mut fake = Fake::new();
+    fake.window(3);
+    fake.answers
+        .insert((3, "AXRole"), Answer::Text("AXHelpTag".into()));
+    fake.lists.insert((APP, "AXWindows"), vec![3]);
+    assert_eq!(
+        fake.run(&named()).unwrap_err().details["unread"],
+        "unlisted"
+    );
+    assert!(fake.writes.is_empty());
+}
+
+#[test]
+fn an_unknown_role_beside_a_real_window_still_refuses_input() {
+    for entries in [vec![3, WINDOW], vec![WINDOW, 3]] {
+        let mut fake = Fake::new();
+        fake.window(3);
+        fake.answers
+            .insert((3, "AXRole"), Answer::Text("AXUnknown".into()));
+        fake.lists.insert((APP, "AXWindows"), entries);
+        assert_eq!(
+            fake.run(&named()).unwrap_err().details["unread"],
+            "malformed"
+        );
+        assert!(fake.writes.is_empty());
+    }
+}
+
+#[test]
 fn a_busy_focus_write_gets_one_second_while_reads_keep_their_short_bound() {
     let mut fake = Fake::new();
     fake.after_write = Some(|fake| {
