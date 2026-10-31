@@ -596,8 +596,9 @@ pub(super) enum Command {
     /// up to --timeout seconds. Atlas also ends it when the person stops
     /// agents and when the helper comes on screen. Stopping checks that it
     /// is still the same process, then ends its group and says what is left.
-    /// A process the job starts that calls setsid leaves both its group and
-    /// its session: Atlas neither stops it nor can always report it.
+    /// A process the job starts that calls setsid leaves the job's group and
+    /// session. Atlas never stops it. If Atlas did not see it before its
+    /// parent exited, it may also be missing from reports.
     Job {
         #[command(subcommand)]
         command: JobCommand,

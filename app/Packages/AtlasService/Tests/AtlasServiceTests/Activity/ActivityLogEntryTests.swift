@@ -1,3 +1,4 @@
+import AtlasServiceTesting
 import Foundation
 import Testing
 
@@ -8,7 +9,11 @@ struct ActivityLogEntryTests {
   @Test("an activity row with every field null reads as an agent's failed action")
   func allNull() throws {
     let log = try ViewerClient.activity(activityAllNull, response: reply(200))
-    #expect(log.entries == [.init(id: "9f2c41d07a3b55e1", outcome: .failed, actor: .agent, operation: "action")])
+    #expect(
+      log.entries == [
+        ActivityFixtures.row(id: "9f2c41d07a3b55e1", outcome: .failed, actor: .agent, operation: "action")
+      ]
+    )
   }
 
   @Test("an activity row's start is read as milliseconds since 1970")

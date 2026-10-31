@@ -1677,25 +1677,25 @@ mod tests {
             return;
         };
         if std::env::var("ATLAS_MUTATION_TEST_MODE").unwrap() == "interactive" {
-            let controller = Controller::at(7001, &directory.join("state"));
-            let _ = init::setup_transaction(&controller, || {
-                // The stand-in outlives its caller, as the test needs: once
-                // the caller dies, `script` dies writing to it and hangs up
-                // the worker's terminal, which would otherwise end the
-                // stand-in at whatever moment that comes. It ends once told
-                // to, or once the test's folder is gone.
-                let script = r#"trap '' HUP; print -r -- $$ > "$4"; /usr/bin/touch "$3" "$2"; while [[ ! -e $1 && -d ${1:h} ]]; do /bin/sleep 0.01; done"#;
-                let paths = [
-                    directory.join("continue"),
-                    directory.join("paused"),
-                    directory.join("changed"),
-                    directory.join("executor"),
+            let controller = Controller::at(crate::test_support::UID, &directory.join("state"));
+            init::setup_transaction(&controller, || {
+                // Ignore terminal hangup before exec so the worker survives
+                // its caller. The worker publishes readiness itself, with
+                // no external command still running when the caller dies.
+                let executable = std::env::current_exe().unwrap();
+                let args = [
+                    "-f",
+                    "-c",
+                    "trap '' HUP; exec \"$@\"",
+                    "zsh",
+                    executable.to_str().unwrap(),
+                    "--exact",
+                    "onboarding::tests::an_interactive_setup_test_worker",
+                    "--nocapture",
                 ];
-                let paths: Vec<&str> = paths.iter().map(|path| path.to_str().unwrap()).collect();
-                let mut args = vec!["-f", "-c", script, "zsh"];
-                args.extend(paths);
                 answer_prompts("/bin/zsh", &args, b"unused", Duration::from_secs(30))
-            });
+            })
+            .unwrap();
             return;
         }
         let _ = closing_first_using(
@@ -1708,6 +1708,24 @@ mod tests {
             },
             || true,
         );
+    }
+
+    /// A subprocess worker that stays alive until released, even without its terminal.
+    #[test]
+    fn an_interactive_setup_test_worker() {
+        let Some(directory) = crate::test_support::directory() else {
+            return;
+        };
+        fs::write(directory.join("executor"), std::process::id().to_string()).unwrap();
+        fs::write(directory.join("changed"), b"").unwrap();
+        fs::write(directory.join("paused"), b"").unwrap();
+
+        let continued = directory.join("continue");
+        let deadline = Instant::now() + Duration::from_secs(15);
+        while !continued.exists() && directory.is_dir() {
+            assert!(Instant::now() < deadline, "the worker was not released");
+            std::thread::sleep(Duration::from_millis(10));
+        }
     }
 
     #[test]

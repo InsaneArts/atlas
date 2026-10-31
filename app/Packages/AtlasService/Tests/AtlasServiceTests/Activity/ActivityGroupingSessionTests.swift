@@ -1,3 +1,4 @@
+import AtlasServiceTesting
 import Foundation
 import Testing
 
@@ -5,41 +6,12 @@ import Testing
 
 @Suite("ActivityGrouping, by host session")
 struct ActivityGroupingSessionTests {
-  /// The rules over `entries`, read and looked at 10:31:42 on 22 October 2026, in UTC.
-  ///
-  /// - Parameter entries: The log's rows, newest first.
-  /// - Returns: The rules.
-  static func rules(_ entries: [ActivityLog.Entry]) -> ActivityGrouping {
-    ActivityGroupingTests.rules(entries)
-  }
-
-  /// An agent's row in a session, `age` seconds old.
-  ///
-  /// - Parameters:
-  ///   - id: Its id.
-  ///   - session: Its session's key; nil for none.
-  ///   - age: Its age, in seconds.
-  ///   - says: What it did.
-  ///   - outcome: How it went.
-  ///   - actor: Who did it.
-  /// - Returns: The row.
-  static func row(
-    _ id: String,
-    _ session: String?,
-    _ age: Double,
-    says: String = "clicked in Opie",
-    outcome: ActivityLog.Outcome = .worked,
-    actor: ActivityLog.Actor = .agent
-  ) -> ActivityLog.Entry {
-    ActivityLog.Entry(id: id, says: says, outcome: outcome, actor: actor, ageSeconds: age, session: session)
-  }
-
   @Test("Terminal's moment scope excludes the person's own rows")
   func terminalScopeExcludesThePerson() {
-    let rules = Self.rules([
-      Self.row("t1", nil, 1, says: "took a screenshot"),
-      Self.row("y1", nil, 2, says: "clicked in Opie", actor: .you),
-      Self.row("a1", "claude", 4, says: "clicked Save"),
+    let rules = ActivityFixtures.rules([
+      ActivityFixtures.row(id: "t1", says: "took a screenshot", ageSeconds: 1, session: nil),
+      ActivityFixtures.row(id: "y1", says: "clicked in Opie", actor: .you, ageSeconds: 2, session: nil),
+      ActivityFixtures.row(id: "a1", says: "clicked Save", ageSeconds: 4, session: "claude"),
     ])
     let terminal = ActivityMoments(rules, captures: [], scope: .session(""))
       .shown(filter: .all, query: "")
@@ -62,9 +34,9 @@ struct ActivityGroupingSessionTests {
     #expect(ActivityAction(log.entries[0]) == .typing)
     let rules = ActivityGrouping(
       log: log,
-      readAt: ActivityGroupingTests.readAt,
-      now: ActivityGroupingTests.readAt,
-      calendar: ActivityGroupingTests.calendar
+      readAt: ActivityFixtures.readAt,
+      now: ActivityFixtures.readAt,
+      calendar: ActivityFixtures.calendar
     )
     let problems = ActivityMoments(rules, captures: [], scope: .all)
       .shown(filter: .problems, query: "")
@@ -75,19 +47,19 @@ struct ActivityGroupingSessionTests {
 
   @Test("a screenshot row takes its own capture before one near its time")
   func aScreenshotRowTakesItsOwnCapture() {
-    let started = ActivityGroupingTests.readAt
+    let started = ActivityFixtures.readAt
       .addingTimeInterval(-20)
     let near = Screenshot(name: "near.png", takenAt: started)
     let own = Screenshot(name: "own.png", takenAt: started.addingTimeInterval(-60))
-    let rules = Self.rules([
-      ActivityLog.Entry(
+    let rules = ActivityFixtures.rules([
+      ActivityFixtures.row(
         id: "s1",
         says: "took a screenshot",
         ageSeconds: 20,
         operation: "screenshot",
         capture: "own.png"
       ),
-      ActivityLog.Entry(id: "s2", says: "took a screenshot", ageSeconds: 20, operation: "screenshot"),
+      ActivityFixtures.row(id: "s2", says: "took a screenshot", ageSeconds: 20, operation: "screenshot"),
     ])
     let shots = rules.shots(in: [near, own])
     #expect(shots == ["s1": "own.png", "s2": "near.png"])
@@ -95,11 +67,11 @@ struct ActivityGroupingSessionTests {
 
   @Test("a screenshot row whose named capture is gone takes none near its time")
   func aMissingNamedCaptureStaysMissing() {
-    let started = ActivityGroupingTests.readAt
+    let started = ActivityFixtures.readAt
       .addingTimeInterval(-20)
     let near = Screenshot(name: "near.png", takenAt: started)
-    let rules = Self.rules([
-      ActivityLog.Entry(
+    let rules = ActivityFixtures.rules([
+      ActivityFixtures.row(
         id: "s1",
         says: "took a screenshot",
         ageSeconds: 20,
@@ -112,10 +84,10 @@ struct ActivityGroupingSessionTests {
 
   @Test("repeats from two sessions stay two lines")
   func repeatsFromTwoSessionsStayTwoLines() {
-    let rules = Self.rules([
-      Self.row("c1", "codex", 1, says: "scrolled in Opie"),
-      Self.row("a1", "claude", 2, says: "scrolled in Opie"),
-      Self.row("a2", "claude", 3, says: "scrolled in Opie"),
+    let rules = ActivityFixtures.rules([
+      ActivityFixtures.row(id: "c1", says: "scrolled in Opie", ageSeconds: 1, session: "codex"),
+      ActivityFixtures.row(id: "a1", says: "scrolled in Opie", ageSeconds: 2, session: "claude"),
+      ActivityFixtures.row(id: "a2", says: "scrolled in Opie", ageSeconds: 3, session: "claude"),
     ])
     let lines = ActivityMoments(rules, captures: [], scope: .all)
       .shown(filter: .all, query: "")
@@ -126,12 +98,12 @@ struct ActivityGroupingSessionTests {
 
   @Test("one session's count today leaves out the other sessions' rows and the person's")
   func oneSessionsCountLeavesOutTheRest() {
-    let rules = Self.rules([
-      Self.row("a1", "claude", 1),
-      Self.row("c1", "codex", 2),
-      Self.row("y1", nil, 3, actor: .you),
-      Self.row("a2", "claude", 4),
-      Self.row("t1", nil, 5),
+    let rules = ActivityFixtures.rules([
+      ActivityFixtures.row(id: "a1", says: "clicked in Opie", ageSeconds: 1, session: "claude"),
+      ActivityFixtures.row(id: "c1", says: "clicked in Opie", ageSeconds: 2, session: "codex"),
+      ActivityFixtures.row(id: "y1", says: "clicked in Opie", actor: .you, ageSeconds: 3, session: nil),
+      ActivityFixtures.row(id: "a2", says: "clicked in Opie", ageSeconds: 4, session: "claude"),
+      ActivityFixtures.row(id: "t1", says: "clicked in Opie", ageSeconds: 5, session: nil),
     ])
     #expect(rules.countToday == 5)
     #expect(rules.countToday(in: .session("claude")) == 2)
