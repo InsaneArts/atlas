@@ -34,9 +34,15 @@ struct CardScrollSelectionTests {
     #expect(list.contentView.bounds.minY == 0)
 
     host.show(CardScrollTests.stepped(selected))
-    await CardScrollTests.settle(host)
-    let end = try #require(list.documentView).frame.height - list.contentView.bounds.height
-    let offset = list.contentView.bounds.minY
+    let deadline = ContinuousClock.now
+      .advanced(by: Ceiling.work)
+    var end = try #require(list.documentView).frame.height - list.contentView.bounds.height
+    var offset = list.contentView.bounds.minY
+    while !(offset > end - 16 && offset <= end), ContinuousClock.now < deadline {
+      await CardScrollTests.settle(host)
+      end = try #require(list.documentView).frame.height - list.contentView.bounds.height
+      offset = list.contentView.bounds.minY
+    }
     #expect(
       offset > end - 16 && offset <= end,
       "reselected tile scrolled to \(offset) of \(end), previously \(revealed)"
