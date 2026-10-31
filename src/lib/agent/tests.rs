@@ -1508,7 +1508,7 @@ fn a_click_chooses_one_visible_element() {
 /// A scan as the probe reports it, complete.
 fn scanned(elements: Vec<Element>) -> Scanned {
     Scanned {
-        windows: Vec::new(),
+        windows: vec![window(42, 812, "Editor", 0)],
         elements,
         incomplete: false,
         reasons: Vec::new(),

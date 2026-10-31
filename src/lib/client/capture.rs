@@ -278,7 +278,7 @@ impl Client {
             }
         }
 
-        let reply = self.transport.call(&request).await?;
+        let mut reply = self.transport.call(&request).await?;
         if reply["ok"] != true {
             if reply["code"].is_string() {
                 return Err(crate::transport::refusal(&reply));
@@ -317,7 +317,7 @@ impl Client {
         }
 
         self.remember_windows(
-            &serde_json::from_value::<Vec<_>>(reply["windows"].clone()).unwrap_or_default(),
+            &serde_json::from_value::<Vec<_>>(reply["windows"].take()).unwrap_or_default(),
             &after.epoch.display,
         )?;
         Ok((

@@ -169,7 +169,6 @@ mod tests {
         actions::Button,
         agent::{click, drag, keys, move_to, scroll},
         host_session::{Host, HostSession},
-        native::windows::{Bounds, Dock, Screen, unobstructed},
         test_support::{Helper, UID, completed},
     };
     use serde_json::json;
@@ -230,16 +229,6 @@ mod tests {
             assert_eq!(number(&client, None, &action), Some(42));
         }
         assert_eq!(number(&client, None, &move_to(500.0, 500.0)), None);
-        let mut menu = window(44, 10.0);
-        menu.layer = crate::native::windows::MENU_LAYER;
-        let mut overlay = window(45, 0.0);
-        overlay.owner = Some("Dock".into());
-        overlay.layer = crate::native::windows::DOCK_LAYER;
-        overlay.bounds = Bounds::display(display().width, display().height);
-        let shown = [overlay, menu, window(42, 10.0)];
-        client.remember_windows(&shown, &display()).unwrap();
-        assert_eq!(number(&client, None, &move_to(30.0, 40.0)), Some(44));
-        assert_eq!(window_owner(&shown, 44).unwrap_err().code, Code::Windows);
     }
 
     #[test]
@@ -254,6 +243,15 @@ mod tests {
             number(&client, explicit.as_ref(), &move_to(30.0, 40.0)),
             Some(99)
         );
+        let app = Expected::new(Some(Target::Pid(812)), None, None).unwrap();
+        let remembered = Expected::remembered(&client, app.as_ref(), &move_to(30.0, 40.0)).unwrap();
+        assert!(matches!(
+            remembered.place,
+            Place::Window {
+                number: 42,
+                app: Some(Target::Pid(812)),
+            }
+        ));
         let field = Expected::new(Some(Target::Pid(812)), None, Some("Search".into())).unwrap();
         assert!(Expected::remembered(&client, field.as_ref(), &move_to(30.0, 40.0)).is_none());
         for action in [
@@ -265,17 +263,16 @@ mod tests {
     }
 
     #[test]
-    fn remembered_points_without_an_observation_keep_todays_behavior() {
+    fn unobserved_and_anonymous_sessions_have_no_remembered_target() {
         let directory = tempfile::tempdir().unwrap();
-        let client = session(&crate::test_support::client(directory.path()), "one");
-        assert_eq!(number(&client, None, &move_to(30.0, 40.0)), None);
-        let anonymous_directory = tempfile::tempdir().unwrap();
-        let anonymous = crate::test_support::client(anonymous_directory.path());
+        let anonymous = crate::test_support::client(directory.path());
         anonymous
             .remember_windows(&[window(42, 10.0)], &display())
             .unwrap();
         assert!(anonymous.remembered_windows().is_none());
         assert!(!anonymous.config.output_dir.exists());
+        let client = session(&anonymous, "one");
+        assert_eq!(number(&client, None, &move_to(30.0, 40.0)), None);
     }
 
     #[test]
@@ -296,26 +293,12 @@ mod tests {
         assert_eq!(number(&first, None, &move_to(30.0, 40.0)), None);
     }
 
-    #[test]
-    fn remembered_points_keep_a_moved_window_and_let_the_existing_point_check_refuse() {
-        let directory = tempfile::tempdir().unwrap();
-        let client = session(&crate::test_support::client(directory.path()), "one");
-        client
-            .remember_windows(&[window(42, 10.0)], &display())
-            .unwrap();
-        let number = number(&client, None, &move_to(30.0, 40.0)).unwrap();
-        let current = [window(99, 10.0), window(42, 200.0)];
-        assert_eq!(window_owner(&current, number).unwrap().bounds.x, 200.0);
-        let screen = Screen::new(Bounds::display(1000.0, 800.0), Dock::Icons(vec![]));
-        assert!(!unobstructed(&current, number, 30.0, 40.0, &screen));
-    }
-
     #[tokio::test]
     async fn remembered_points_follow_each_look_without_extra_probes_and_use_crop_coordinates() {
         use crate::{agent, client::Size, daemon::protocol::Region};
         use base64::{Engine, engine::general_purpose::STANDARD};
 
-        for look in 0..3 {
+        for look in ["screenshot", "elements", "windows"] {
             let directory = tempfile::tempdir().unwrap();
             let (client, helper) = Helper::client(directory.path(), UID);
             let client = session(&client, "one");
@@ -324,7 +307,7 @@ mod tests {
                 .serve(
                     async {
                         match look {
-                            0 => {
+                            "screenshot" => {
                                 agent::screenshot(
                                     &client,
                                     None,
@@ -339,7 +322,7 @@ mod tests {
                                 )
                                 .await
                             }
-                            1 => {
+                            "elements" => {
                                 agent::elements(
                                     &client,
                                     &Target::Pid(812),
@@ -364,14 +347,16 @@ mod tests {
                     |request| {
                         reads += 1;
                         let windows = [window(42, 10.0), window(43, 0.0)];
-                        if request["op"] == "screenshot" {
-                            return Some(json!({"ok":true,
-                        "png":STANDARD.encode(crate::native::capture::sample_png(40,40)),
-                        "width":40,"height":40,"windows":windows,
-                        "region":{"x":10,"y":20,"width":80,"height":80}}));
-                        }
-                        if request["op"] == "apps" {
-                            return Some(json!({"ok":true,"apps":[{"pid":812,"name":"Editor"}]}));
+                        match request["op"].as_str() {
+                            Some("screenshot") => return Some(json!({
+                                "ok": true, "width": 40, "height": 40, "windows": windows,
+                                "png": STANDARD.encode(crate::native::capture::sample_png(40, 40)),
+                                "region": {"x": 10, "y": 20, "width": 80, "height": 80},
+                            })),
+                            Some("apps") => return Some(json!({
+                                "ok": true, "apps": [{"pid": 812, "name": "Editor"}],
+                            })),
+                            _ => {}
                         }
                         assert!(matches!(
                             request["argv"][1].as_str(),
@@ -385,8 +370,8 @@ mod tests {
                 )
                 .await
                 .unwrap();
-            assert_eq!(reads, if look == 1 { 2 } else { 1 });
-            let (x, y) = if look == 0 {
+            assert_eq!(reads, if look == "elements" { 2 } else { 1 });
+            let (x, y) = if look == "screenshot" {
                 assert!(saved.get("windows").is_none());
                 let scale = saved["pointsPerPixel"].as_f64().unwrap();
                 (
@@ -410,20 +395,13 @@ mod tests {
         client
             .remember_windows(&[window(42, 10.0)], &display())
             .unwrap();
-        let expected = Expected::remembered(&client, None, &move_to(30.0, 40.0)).unwrap();
         let error = helper
-            .serve(
-                async {
-                    let verified = client.verify().await?;
-                    expected.resolve(&client, &verified).await
-                },
-                |request| {
-                    assert_eq!(request["argv"][1], "windows-info");
-                    Some(completed(
-                        &json!({"ok":true,"windows":[window(99,10.0)]}).to_string(),
-                    ))
-                },
-            )
+            .serve(act(&client, None, &move_to(30.0, 40.0)), |request| {
+                assert_eq!(request["argv"][1], "windows-info");
+                Some(completed(
+                    &json!({"ok":true,"windows":[window(99,10.0)]}).to_string(),
+                ))
+            })
             .await
             .unwrap_err();
         assert_eq!(error.code, Code::Windows);

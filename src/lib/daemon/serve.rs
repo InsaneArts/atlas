@@ -1222,7 +1222,15 @@ mod tests {
         let shot = &exchange(daemon(false), r#"{"op":"screenshot"}"#).await[0];
         assert_eq!(
             keys(shot),
-            ["height", "offDisplayWindows", "ok", "png", "scale", "width"]
+            [
+                "height",
+                "offDisplayWindows",
+                "ok",
+                "png",
+                "scale",
+                "width",
+                "windows"
+            ]
         );
 
         let region = &exchange(
@@ -1239,7 +1247,8 @@ mod tests {
                 "png",
                 "region",
                 "scale",
-                "width"
+                "width",
+                "windows"
             ]
         );
         assert_eq!(keys(&region["region"]), ["height", "width", "x", "y"]);
@@ -1256,7 +1265,8 @@ mod tests {
                 "png",
                 "region",
                 "scale",
-                "width"
+                "width",
+                "windows"
             ]
         );
         assert_eq!(keys(&app["app"]), ["bundleId", "name", "pid"]);
