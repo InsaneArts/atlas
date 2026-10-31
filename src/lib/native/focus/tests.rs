@@ -140,7 +140,7 @@ pub(in crate::native) fn verify_keyboard(
     require(expect, Need::Keys, &display(), &mut look, deadline)
 }
 
-pub(in crate::native) fn verify_pointer(
+pub(in crate::native) fn verify_input(
     expect: &Expect,
     need: Need,
     number: Option<i64>,
@@ -152,7 +152,11 @@ pub(in crate::native) fn verify_pointer(
     let mut look = Seen::focused(Some(focused))
         .showing(listed)
         .typing_in(keyboard);
-    prepared(expect, need, number, &display(), &mut look, deadline)
+    let selected = match number {
+        Some(number) => expect.clone().in_window(number)?,
+        None => expect.clone(),
+    };
+    require(&selected, need, &display(), &mut look, deadline)
 }
 
 /// The refusal's code, reason and what it found, as an agent reads them.
@@ -270,13 +274,13 @@ fn the_menu_bar_counts_as_the_apps_only_while_it_has_keyboard_focus() {
     let mut behind = Seen::focused(Some(OTHER)).showing(listed.clone());
     assert_eq!(
         refusal(point_with(&mut behind, 200.0, 10.0)),
-        json!({"reason": "point", "found": {"app": "Calculator", "pid": OTHER}})
+        json!({"reason": "app", "found": {"app": "Calculator", "pid": OTHER}})
     );
 
     let mut nobody = Seen::focused(None).showing(listed);
     assert_eq!(
         refusal(point_with(&mut nobody, 200.0, 10.0)),
-        json!({"reason": "point", "found": null})
+        json!({"reason": "app", "found": null})
     );
 }
 
@@ -804,19 +808,32 @@ fn pointer_preparation_accepts_an_exposed_point_beside_an_overlapping_floating_p
         };
         let mut look = inside_with(typing(field("Email")), vec![panel, document()]);
         assert_eq!(
-            prepared(
-                &expect(),
-                need,
-                Some(DOCUMENT),
-                &display(),
-                &mut look,
-                later(),
-            )
-            .unwrap(),
+            require(&in_document(), need, &display(), &mut look, later()).unwrap(),
             None
         );
         assert_eq!(look.focus_reads, 1);
-        assert_eq!(look.keyboard_reads, 1);
+        assert_eq!(look.keyboard_reads, 0);
+    }
+}
+
+#[test]
+fn pointer_verification_accepts_an_active_app_without_reading_window_focus() {
+    for focused in [None, Some(APP)] {
+        for need in [
+            Need::Point(120.0, 120.0),
+            Need::Drag {
+                from: (120.0, 120.0),
+                to: (130.0, 130.0),
+            },
+        ] {
+            let mut look = Seen::focused(focused).showing(vec![document()]);
+            look.app_focused = true;
+            assert_eq!(
+                require(&in_document(), need, &display(), &mut look, later()).unwrap(),
+                None
+            );
+            assert_eq!(look.keyboard_reads, 0);
+        }
     }
 }
 
@@ -834,15 +851,7 @@ fn pointer_preparation_refuses_a_point_covered_by_a_same_app_floating_panel() {
             ..numbered(4130, APP, Some("Fonts"), (150.0, 150.0, 200.0, 200.0))
         };
         let mut look = inside_with(typing(field("Email")), vec![panel, document()]);
-        let error = prepared(
-            &in_document(),
-            need,
-            Some(DOCUMENT),
-            &display(),
-            &mut look,
-            later(),
-        )
-        .unwrap_err();
+        let error = require(&in_document(), need, &display(), &mut look, later()).unwrap_err();
         assert_eq!(error.code, Code::FocusChanged);
         assert_eq!(error.details["reason"], "window");
         assert_eq!(error.details["found"]["window"], 4130);
@@ -1393,7 +1402,7 @@ fn a_point_outside_the_named_window_is_refused_before_a_click() {
         "a window that is not on screen"
     );
     let elsewhere = Expect::new(OTHER).unwrap().in_window(DOCUMENT).unwrap();
-    let mut look = Seen::focused(Some(APP)).showing(listed);
+    let mut look = Seen::focused(Some(OTHER)).showing(listed);
     assert_eq!(
         refusal(require(
             &elsewhere,

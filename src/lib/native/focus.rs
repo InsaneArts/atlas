@@ -322,14 +322,11 @@ pub(super) fn prepare(
         return Ok(None);
     }
     ax::bring(expect, need, deadline, &guard, |number, until| {
-        prepared(
-            expect,
-            need,
-            number,
-            display,
-            &mut Live::until(until),
-            until,
-        )
+        let selected = match number {
+            Some(number) if expect.window() != Some(number) => expect.clone().in_window(number)?,
+            _ => expect.clone(),
+        };
+        check(&selected, need, display, until)
     })
     .map_err(|error| {
         if error.code == Code::Native {
@@ -338,26 +335,6 @@ pub(super) fn prepare(
             error
         }
     })
-}
-
-/// A visible control may need a click just to activate its window. Prove
-/// activation as well as reachability before skipping writes or settling.
-fn prepared(
-    expect: &Expect,
-    need: Need,
-    number: Option<i64>,
-    display: &Bounds,
-    look: &mut impl Look,
-    deadline: Instant,
-) -> Result<Option<&'static str>> {
-    let selected = match number {
-        Some(number) if expect.window() != Some(number) => expect.clone().in_window(number)?,
-        _ => expect.clone(),
-    };
-    if matches!(need, Need::Point(..) | Need::Drag { .. }) {
-        active(&selected, need, look)?;
-    }
-    require(&selected, need, display, look, deadline)
 }
 
 /// Refuse with `focus-changed` unless `expect` holds for `need` as `look`
@@ -374,9 +351,12 @@ fn require(
 ) -> Result<Option<&'static str>> {
     let outcome = match need {
         Need::Nothing => return Ok(None),
-        Need::Keys => active(expect, need, look),
-        Need::Point(x, y) => point(expect, (x, y), Spot::At, display, look).map(|()| None),
-        Need::Drag { from, to } => point(expect, from, Spot::At, display, look)
+        Need::Keys => active(expect, look).and_then(|()| inside(expect, look)),
+        Need::Point(x, y) => active(expect, look)
+            .and_then(|()| point(expect, (x, y), Spot::At, display, look))
+            .map(|()| None),
+        Need::Drag { from, to } => active(expect, look)
+            .and_then(|()| point(expect, from, Spot::At, display, look))
             .and_then(|()| point(expect, to, Spot::Drop, display, look))
             .map(|()| None),
     };
@@ -393,13 +373,11 @@ fn require(
     outcome
 }
 
-/// Prove the app has keyboard focus and, when named, the window and the
-/// field, whose role is then said. Keys also require the whole window to
-/// be uncovered; pointer preparation checks coverage at its points.
-fn active(expect: &Expect, need: Need, look: &mut impl Look) -> Result<Option<&'static str>> {
+/// Prove the target app is active, independently of its window focus.
+fn active(expect: &Expect, look: &mut impl Look) -> Result<()> {
     let focused = look.focused().map_err(|_| unreadable())?;
     if focused.is_none() && look.app_focused(expect.pid()).map_err(unread_by)? {
-        return inside(expect, need, look);
+        return Ok(());
     }
     let Some(pid) = focused else {
         return Err(refused(
@@ -409,7 +387,7 @@ fn active(expect: &Expect, need: Need, look: &mut impl Look) -> Result<Option<&'
         ));
     };
     if pid == expect.pid() {
-        return inside(expect, need, look);
+        return Ok(());
     }
 
     let found = Found::named(pid, look.windows().unwrap_or_default());
@@ -423,7 +401,7 @@ fn active(expect: &Expect, need: Need, look: &mut impl Look) -> Result<Option<&'
 /// With the app in focus, the window and the field it names, judged from
 /// one read of where the app's focus is; once they pass, the named field's
 /// role.
-fn inside(expect: &Expect, need: Need, look: &mut impl Look) -> Result<Option<&'static str>> {
+fn inside(expect: &Expect, look: &mut impl Look) -> Result<Option<&'static str>> {
     if expect.window().is_none() && expect.field().is_none() {
         return Ok(None);
     }
@@ -436,7 +414,7 @@ fn inside(expect: &Expect, need: Need, look: &mut impl Look) -> Result<Option<&'
     let verdict = match expect.window() {
         Some(wanted) => {
             let listed = look.windows().map_err(|_| unreadable())?;
-            in_window(wanted, expect.pid(), &keyboard, listed, need)
+            in_window(wanted, expect.pid(), &keyboard, listed)
         }
         None => Verdict::Pass,
     }
@@ -503,10 +481,10 @@ impl Verdict {
 /// Whether window `wanted` of app `pid` has keyboard focus with no sheet
 /// over it: the app's focused window is that window, the one listed window
 /// it can be ([`number`]); it holds the focused element with no sheet
-/// between them; and, for keys, no shown window of the app's is in front
-/// of it at its layer or above. A sheet named by its own number is a
-/// window like any other.
-fn in_window(wanted: i64, pid: i64, keyboard: &Keyboard, listed: &[Window], need: Need) -> Verdict {
+/// between them; and no shown window of the app's is in front of it at its
+/// layer or above. A sheet named by its own number is a window like any
+/// other.
+fn in_window(wanted: i64, pid: i64, keyboard: &Keyboard, listed: &[Window]) -> Verdict {
     let Some(window) = &keyboard.window else {
         return Verdict::Refused(
             Reason::Window,
@@ -525,7 +503,7 @@ fn in_window(wanted: i64, pid: i64, keyboard: &Keyboard, listed: &[Window], need
             if keyboard.within == Within::Sheet {
                 return over(wanted);
             }
-            if need == Need::Keys && covered(listed, pid, number) {
+            if covered(listed, pid, number) {
                 return Verdict::Refused(
                     Reason::Window,
                     format!("Another window of the app is in front of window {wanted}"),
@@ -637,8 +615,7 @@ fn covered(listed: &[Window], pid: i64, number: i64) -> bool {
 
 /// A pointer action goes ahead only where the app's own window, at any
 /// layer, is uncovered at the point, the Dock covering what is under it
-/// where it takes clicks; on the menu bar, only while the app has keyboard
-/// focus, since the menu bar shows that app's titles. With a window named,
+/// where it takes clicks. The active app owns the menu bar. With a window named,
 /// only where that window is uncovered, judged where it presses: a drop
 /// lands in the app's window if not the same one. Where the Dock could not
 /// be read and is on top, what is in front is unreadable.
@@ -655,10 +632,8 @@ fn point(
         return at_window(expect.pid(), wanted, (x, y), listed, &screen);
     }
     let top = windows::top_at(listed, x, y, &screen);
-    if top.is_some_and(Window::is_menu_bar) {
-        return menu_bar(expect, look);
-    }
-    if windows::reaches(listed, expect.pid(), x, y, &screen) {
+    if top.is_some_and(Window::is_menu_bar) || windows::reaches(listed, expect.pid(), x, y, &screen)
+    {
         return Ok(());
     }
 
@@ -742,23 +717,6 @@ fn at_window(
         ),
         Some(Found::at(top)),
     ))
-}
-
-/// The menu bar counts as the app's only while the app has keyboard focus.
-fn menu_bar(expect: &Expect, look: &mut impl Look) -> Result<()> {
-    let focused = look.focused().map_err(|_| unreadable())?;
-    if focused == Some(expect.pid())
-        || (focused.is_none() && look.app_focused(expect.pid()).map_err(unread_by)?)
-    {
-        return Ok(());
-    }
-
-    let found = focused.map(|pid| Found::named(pid, look.windows().unwrap_or_default()));
-    let message = match found.as_ref().and_then(|found| found.app.as_deref()) {
-        Some(name) => format!("The menu bar shows {name}, not the app this was for, {NOT_SENT}"),
-        None => format!("The menu bar does not show the app, {NOT_SENT}"),
-    };
-    Err(refused(Reason::Point, message, found))
 }
 
 /// The refusal when what is in front could not be read in time.

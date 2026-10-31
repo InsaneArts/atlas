@@ -772,7 +772,11 @@ fn prepare<A: Backend>(
             ));
         }
     }
-    if ready(number) {
+    if ready(number)
+        && (point.is_none()
+            || !raise
+            || reader.reference(&app, "AXFocusedWindow")?.as_ref() == window.as_ref())
+    {
         let mut field = None;
         if let Some(name) = expect.field()
             && let Some(focused) = reader.reference(&app, "AXFocusedUIElement")?
@@ -867,6 +871,9 @@ fn prepare<A: Backend>(
         changed |= status == AXError::Success;
         guard()?;
         if status != AXError::Success
+            && !(point.is_some()
+                && window.as_ref() == Some(&element)
+                && operation == Write::Flag("AXFocused"))
             && !matches!(
                 status,
                 AXError::AttributeUnsupported
