@@ -1,4 +1,5 @@
 import AtlasService
+import AtlasServiceTesting
 import AtlasUI
 import Foundation
 import Testing
@@ -9,7 +10,7 @@ import Testing
 struct ViewerActivityPreparationTests {
   @Test("presenting a copy of a snapshot never changes the original's moments")
   func presentingACopyKeepsTheOriginalMoments() throws {
-    var snapshot = try ViewerPresenterActivityTests.onActivity(ViewerPresenterActivityTests.textEditLog, sessions: [])
+    var snapshot = try ViewerActivityFixtures.onActivity(ViewerActivityFixtures.textEditLog, sessions: [])
     snapshot.panes.activity.preparation = try Self.prepared(snapshot)
     let moments = snapshot.panes.activity.moments
     let shown = ViewerPresenter.activity(snapshot)
@@ -25,21 +26,37 @@ struct ViewerActivityPreparationTests {
 
   @Test("the same snapshot gives the same moment identities whatever was presented before")
   func presentationOrderKeepsMomentIdentities() throws {
-    let rows = ViewerPresenterActivityTests.textEditLog
-    let expected = ViewerPresenter.activity(try ViewerPresenterActivityTests.onActivity(rows, sessions: []))
-    let snapshot = try ViewerPresenterActivityTests.onActivity(rows, sessions: [])
+    let rows = ViewerActivityFixtures.textEditLog
+    let expected = ViewerPresenter.activity(try ViewerActivityFixtures.onActivity(rows, sessions: []))
+    let snapshot = try ViewerActivityFixtures.onActivity(rows, sessions: [])
     var earlier = snapshot
     earlier.panes.activity.log?.entries.append(
-      ViewerPresenterActivityTests.row("earlier", "opened TextEdit", verb: "open", age: 30)
+      ActivityFixtures.row(
+        id: "earlier",
+        says: "opened TextEdit",
+        ageSeconds: 30,
+        operation: "open",
+        verb: "open",
+        app: "TextEdit"
+      )
     )
-    let earlierIDs = ViewerPresenterActivityTests.moments(ViewerPresenter.activity(earlier))
+    let earlierIDs = ViewerActivityFixtures.moments(ViewerPresenter.activity(earlier))
       .map(\.id)
-    let expectedIDs = ViewerPresenterActivityTests.moments(expected)
+    let expectedIDs = ViewerActivityFixtures.moments(expected)
       .map(\.id)
     #expect(earlierIDs != expectedIDs, "the preceding projection has a different oldest action")
-    #expect(ViewerPresenterActivityTests.moments(ViewerPresenter.activity(snapshot)).map(\.id) == expectedIDs)
-    #expect(ViewerPresenterActivityTests.moments(ViewerPresenter.activity(earlier)).map(\.id) == earlierIDs)
-    #expect(ViewerPresenterActivityTests.moments(ViewerPresenter.activity(snapshot)).map(\.id) == expectedIDs)
+    #expect(
+      ViewerActivityFixtures.moments(ViewerPresenter.activity(snapshot))
+        .map(\.id) == expectedIDs
+    )
+    #expect(
+      ViewerActivityFixtures.moments(ViewerPresenter.activity(earlier))
+        .map(\.id) == earlierIDs
+    )
+    #expect(
+      ViewerActivityFixtures.moments(ViewerPresenter.activity(snapshot))
+        .map(\.id) == expectedIDs
+    )
   }
 
   @Test(
@@ -50,8 +67,17 @@ struct ViewerActivityPreparationTests {
     ]
   )
   func presentationUsesSnapshotContext(locale: String, timeZone: String, heading: String, clock: String) throws {
-    let rows = [ViewerPresenterActivityTests.row("old", "opened TextEdit", verb: "open", age: 172_800)]
-    var snapshot = try ViewerPresenterActivityTests.onActivity(rows, sessions: [])
+    let rows = [
+      ActivityFixtures.row(
+        id: "old",
+        says: "opened TextEdit",
+        ageSeconds: 172_800,
+        operation: "open",
+        verb: "open",
+        app: "TextEdit"
+      )
+    ]
+    var snapshot = try ViewerActivityFixtures.onActivity(rows, sessions: [])
     snapshot.locale = Locale(identifier: locale)
     snapshot.timeZone = try #require(TimeZone(identifier: timeZone))
     snapshot.calendar = Calendar(identifier: .islamicCivil)
@@ -63,7 +89,7 @@ struct ViewerActivityPreparationTests {
 
   @Test("an icon arriving doesn't reform Activity's moments")
   func iconsReusePreparedMoments() throws {
-    var snapshot = try ViewerPresenterActivityTests.onActivity(ViewerPresenterActivityTests.textEditLog, sessions: [])
+    var snapshot = try ViewerActivityFixtures.onActivity(ViewerActivityFixtures.textEditLog, sessions: [])
     let prepared = try Self.prepared(snapshot)
     snapshot.panes.activity.preparation = prepared
     let before = ViewerPresenter.activity(snapshot)
@@ -79,10 +105,24 @@ struct ViewerActivityPreparationTests {
   @Test("time driven folds and age words update without reforming moments")
   func foldsUseTheCurrentTime() throws {
     let rows = [
-      ViewerPresenterActivityTests.row("new", "opened Notes", verb: "open", app: "Notes", age: 1),
-      ViewerPresenterActivityTests.row("older", "opened TextEdit", verb: "open", age: 299),
+      ActivityFixtures.row(
+        id: "new",
+        says: "opened Notes",
+        ageSeconds: 1,
+        operation: "open",
+        verb: "open",
+        app: "Notes"
+      ),
+      ActivityFixtures.row(
+        id: "older",
+        says: "opened TextEdit",
+        ageSeconds: 299,
+        operation: "open",
+        verb: "open",
+        app: "TextEdit"
+      ),
     ]
-    var snapshot = try ViewerPresenterActivityTests.onActivity(rows, sessions: [])
+    var snapshot = try ViewerActivityFixtures.onActivity(rows, sessions: [])
     let prepared = try Self.prepared(snapshot)
     snapshot.panes.activity.preparation = prepared
     let before = ViewerPresenter.activity(snapshot)
@@ -99,10 +139,10 @@ struct ViewerActivityPreparationTests {
 
   @Test("scope search filters and status changes reuse prepared moments")
   func projectionsReuseThePreparation() throws {
-    var snapshot = try ViewerPresenterActivityTests.onActivity(ViewerPresenterActivityTests.mixedLog)
+    var snapshot = try ViewerActivityFixtures.onActivity(ViewerActivityFixtures.mixedLog)
     let prepared = try Self.prepared(snapshot)
     snapshot.panes.activity.preparation = prepared
-    snapshot.session.chosenSession = .one(ViewerPresenterActivityTests.claude)
+    snapshot.session.chosenSession = .one(ViewerActivityFixtures.claude)
     #expect(ViewerPresenter.activity(snapshot).meta == "6 actions today")
     snapshot.session.search.query = "no match"
     #expect(ViewerPresenter.activity(snapshot).days.isEmpty)
@@ -114,7 +154,7 @@ struct ViewerActivityPreparationTests {
 
   @Test("log captures calendar and midnight changes each replace the preparation")
   func changedInputsReplaceThePreparation() throws {
-    var snapshot = try ViewerPresenterActivityTests.onActivity(ViewerPresenterActivityTests.textEditLog, sessions: [])
+    var snapshot = try ViewerActivityFixtures.onActivity(ViewerActivityFixtures.textEditLog, sessions: [])
     let initial = try Self.prepared(snapshot)
     snapshot.panes.activity.preparation = initial
     snapshot.panes.activity.log?.entries.removeLast()
@@ -135,7 +175,7 @@ struct ViewerActivityPreparationTests {
 
   @Test("a new reading time updates relative ages while an unchanged reading reuses preparation")
   func readingTimeAnchorsRelativeAges() throws {
-    var snapshot = try ViewerPresenterActivityTests.onActivity(ViewerPresenterActivityTests.textEditLog, sessions: [])
+    var snapshot = try ViewerActivityFixtures.onActivity(ViewerActivityFixtures.textEditLog, sessions: [])
     let first = try Self.prepared(snapshot)
     snapshot.panes.activity.preparation = first
     #expect(try Self.prepared(snapshot).moments.moments == first.moments.moments)
