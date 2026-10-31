@@ -440,6 +440,11 @@ mod tests {
 
     #[test]
     fn an_unresolved_settings_link_is_refused_and_kept() {
+        if !crate::test_support::isolated(
+            "claude_app::tests::an_unresolved_settings_link_is_refused_and_kept",
+        ) {
+            return;
+        }
         for target in ["missing.json", "claude_desktop_config.json"] {
             let dir = tempfile::tempdir().unwrap();
             let home = dir.path();
@@ -449,7 +454,10 @@ mod tests {
 
             for atlas in [Some(Path::new("/x/atlas")), None] {
                 let error = change_in(home, atlas).unwrap_err();
-                assert!(error.error.contains(&path.display().to_string()));
+                assert!(
+                    error.error.contains(&path.display().to_string()),
+                    "{error:?}"
+                );
                 assert!(error.error.contains("Could not resolve"));
                 assert_eq!(fs::read_link(&path).unwrap(), Path::new(target));
                 assert!(!path.with_extension("json.before-atlas").exists());
