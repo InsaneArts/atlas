@@ -10,8 +10,8 @@ import Testing
 struct ViewerPresenterActivityTests {
   @Test("a failed Activity read replaces the empty state and any earlier rows until a read succeeds")
   func aReadFailureTakesPrecedence() throws {
-    for rows in [[], Self.textEditLog] {
-      var snapshot = try Self.onActivity(rows, sessions: [])
+    for rows in [[], ViewerActivityFixtures.textEditLog] {
+      var snapshot = try ViewerActivityFixtures.onActivity(rows, sessions: [])
       snapshot.panes.activity.failure = "The activity log could not be read."
       let failed = ViewerPresenter.activity(snapshot)
       #expect(failed.empty?.headline == ViewerWords.activityFailed)
