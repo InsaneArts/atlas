@@ -25,6 +25,7 @@ use std::{
 use unicode_segmentation::UnicodeSegmentation;
 
 mod dock;
+use dock::Click;
 
 /// The only place events go: the helper login's own session event tap, never
 /// the global HID tap.
@@ -562,16 +563,11 @@ impl Engine {
                 count,
                 modifiers,
             } => {
+                if self.held.is_some() || self.dock_down.is_some() {
+                    return Err(Error::new(Code::Input, "A mouse button is already held"));
+                }
                 for click in 1..=count {
-                    self.pointer(
-                        PointerPhase::Down,
-                        Point { x, y },
-                        button,
-                        &modifiers,
-                        click,
-                    )
-                    .await?;
-                    self.pointer(PointerPhase::Up, Point { x, y }, button, &modifiers, click)
+                    self.click(Point { x, y }, button, &modifiers, click)
                         .await?;
 
                     if click < count {
