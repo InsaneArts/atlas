@@ -63,16 +63,11 @@ pub(crate) fn service_blocker(client: &Client, recovery: bool, now: u128) -> Opt
         .as_ref()
         .map(|session| session.key().as_str());
     let pending = causes.iter().any(|cause| !cause.running);
-    if recovery
+    let recovering_own = recovery
+        && pending
         && causes
             .iter()
-            .any(|cause| !cause.running && cause.session.as_ref().map(|key| key.as_str()) != own)
-    {
-        return Some(
-            "Another session has an unknown outcome; that session must recover it.".into(),
-        );
-    }
-    let recovering_own = recovery && pending;
+            .all(|cause| cause.running || cause.session.as_ref().map(|key| key.as_str()) == own);
     if !recovering_own && let Some(note) = waiting.first() {
         let first = unrecorded(None, &waiting, &[], &seen);
         let names = names_with(seen.iter().map(|seen| &seen.record), first.iter().copied());

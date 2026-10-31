@@ -337,8 +337,16 @@ async fn recovery_replaces_stale_input_during_restart_despite_recent_work_and_wa
         net::UnixListener,
     };
 
-    for own in [None, Some(session("recovering"))] {
+    for (own, other_owner, through_app) in [
+        (None, false, false),
+        (Some(session("recovering")), false, false),
+        (None, true, false),
+        (None, true, true),
+    ] {
         for waiter in [false, true] {
+            if other_owner && waiter {
+                continue;
+            }
             let directory = tempfile::Builder::new().tempdir_in("/tmp").unwrap();
             let mut client = crate::test_support::client(directory.path());
             client.host_session = own.clone();
@@ -348,7 +356,8 @@ async fn recovery_replaces_stale_input_during_restart_despite_recent_work_and_wa
             std::fs::write(&client.config.identity_probe, b"installed build").unwrap();
             let build = client.installed_build().unwrap();
             let other = session("worker");
-            seen(&client, &other, crate::host_session::now_ms(), false);
+            let at = crate::host_session::now_ms() - if other_owner { 120_001 } else { 0 };
+            seen(&client, &other, at, false);
             if waiter {
                 let holder = client
                     .controller
@@ -359,7 +368,12 @@ async fn recovery_replaces_stale_input_during_restart_despite_recent_work_and_wa
                 crate::test_support::waiting_note(&directory.path().join("state"), Some(&other));
                 drop(holder);
             }
-            drop(client.controller.quarantine().unwrap());
+            let controller = client.controller.clone().labelled(if other_owner {
+                Some(&other)
+            } else {
+                own.as_ref()
+            });
+            drop(controller.quarantine().unwrap());
             let pending = client.controller.pending().unwrap();
             assert_eq!(pending.len(), 1);
 
@@ -456,7 +470,13 @@ async fn recovery_replaces_stale_input_during_restart_despite_recent_work_and_wa
             };
             let outcome = tokio::time::timeout(Duration::from_secs(5), async {
                 tokio::select! {
-                    outcome = client.restart() => outcome,
+                    outcome = async {
+                        if through_app {
+                            Ok(crate::viewer::recover_from_app(client.clone()).await)
+                        } else {
+                            client.restart().await
+                        }
+                    } => outcome,
                     _ = serve => unreachable!(),
                 }
             })
@@ -532,7 +552,7 @@ async fn recovery_of_the_callers_unknown_outcome_still_refuses_a_running_command
 }
 
 #[tokio::test]
-async fn recovery_refuses_another_sessions_unknown_outcome_even_when_it_is_quiet() {
+async fn recovery_of_another_sessions_unknown_outcome_uses_the_ordinary_idle_guard() {
     for own in [None, Some(session("recovering"))] {
         for pending_session in [None, Some(session("worker"))] {
             if own.is_none() && pending_session.is_none() {
@@ -551,13 +571,26 @@ async fn recovery_refuses_another_sessions_unknown_outcome_even_when_it_is_quiet
                     .unwrap(),
             );
             let pending = client.controller.pending().unwrap();
+            let worker = session("worker");
+            let now = crate::host_session::now_ms();
+            seen(&client, &worker, now, false);
             let error = tokio::time::timeout(Duration::from_secs(1), client.service_change(true))
                 .await
                 .unwrap()
                 .unwrap_err();
             assert_eq!(error.code, Code::Busy);
-            assert!(error.error.contains("that session must recover it"));
+            assert_eq!(error.error, "worker is active in the helper.");
             assert_eq!(client.controller.pending().unwrap(), pending);
+            assert!(client.controller.holder_note().is_none());
+
+            seen(&client, &worker, now - 120_001, false);
+            let ownership =
+                tokio::time::timeout(Duration::from_secs(1), client.service_change(true))
+                    .await
+                    .unwrap()
+                    .unwrap();
+            assert_eq!(client.controller.pending().unwrap(), pending);
+            drop(ownership);
             assert!(client.controller.holder_note().is_none());
         }
     }
