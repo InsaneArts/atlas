@@ -238,23 +238,19 @@ fn verified(output: &Path, file: &str, hash: &str) -> Option<PathBuf> {
 
 /// A missing, oversized, unreadable or unknown record counts as empty.
 fn read(output: &Path) -> BTreeMap<String, Value> {
-    let Some(file) = crate::files::open_plain(&output.join(RECORD)) else {
-        return BTreeMap::new();
+    let read = || {
+        let mut bytes = Vec::new();
+        crate::files::open_plain(&output.join(RECORD))?
+            .take(RECORD_LIMIT + 1)
+            .read_to_end(&mut bytes)
+            .ok()?;
+        let mut record: Value = serde_json::from_slice(&bytes).ok()?;
+        if bytes.len() as u64 > RECORD_LIMIT || record["version"].as_u64() != Some(VERSION) {
+            return None;
+        }
+        serde_json::from_value(record["targets"].take()).ok()
     };
-    let mut bytes = Vec::new();
-    if file.take(RECORD_LIMIT + 1).read_to_end(&mut bytes).is_err()
-        || bytes.len() as u64 > RECORD_LIMIT
-    {
-        return BTreeMap::new();
-    }
-
-    let Ok(mut record) = serde_json::from_slice::<Value>(&bytes) else {
-        return BTreeMap::new();
-    };
-    if record["version"].as_u64() != Some(VERSION) {
-        return BTreeMap::new();
-    }
-    serde_json::from_value(record["targets"].take()).unwrap_or_default()
+    read().unwrap_or_default()
 }
 
 /// Write the newest targets within the record's count and byte limits.

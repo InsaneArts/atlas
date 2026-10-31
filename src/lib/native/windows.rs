@@ -128,12 +128,17 @@ pub(crate) fn hit_windows(
 }
 
 /// Whether two ordered window lists route points to the same windows.
-pub fn same_routing(before: &[Window], after: &[Window]) -> bool {
-    before.len() == after.len()
-        && before.iter().zip(after).all(|(before, after)| {
-            (before.number, before.pid, before.layer, &before.bounds)
-                == (after.number, after.pid, after.layer, &after.bounds)
-        })
+pub(crate) fn same_routing(before: &[Window], after: &[Window]) -> bool {
+    fn route(window: &Window) -> (i64, i64, i64, &Bounds, bool) {
+        (
+            window.number,
+            window.pid,
+            window.layer,
+            &window.bounds,
+            window.alpha > 0.0,
+        )
+    }
+    before.iter().map(route).eq(after.iter().map(route))
 }
 
 impl Window {
@@ -472,6 +477,28 @@ pub fn frontmost_pid(windows: &[Window]) -> Option<i64> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn routing_compares_visibility_but_ignores_names_and_visible_alpha_changes() {
+        let before = vec![placed(42, 0, None, 1.0), placed(43, 0, None, 1.0)];
+        for change in 0..8 {
+            let mut after = before.clone();
+            match change {
+                0 => after[0].alpha = 0.0,
+                1 => after[0].alpha = 0.5,
+                2 => after[0].title = Some("Renamed".into()),
+                3 => after.reverse(),
+                4 => after[0].bounds.x += 1.0,
+                5 => after[0].pid += 1,
+                6 => after[0].layer += 1,
+                _ => {
+                    after.pop();
+                }
+            }
+            assert_eq!(same_routing(&before, &after), matches!(change, 1 | 2));
+            assert_eq!(same_routing(&after, &before), matches!(change, 1 | 2));
+        }
+    }
 
     /// A window of process 8 at `layer` with `title`, at one place.
     fn placed(number: i64, layer: i64, title: Option<&str>, alpha: f64) -> Window {

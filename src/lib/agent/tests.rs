@@ -1508,9 +1508,6 @@ fn a_click_chooses_one_visible_element() {
 /// A scan as the probe reports it, complete.
 fn scanned(elements: Vec<Element>) -> Scanned {
     Scanned {
-        starts: None,
-        windows: vec![window(42, 812, "Editor", 0)],
-        dock: Default::default(),
         elements,
         incomplete: false,
         reasons: Vec::new(),
@@ -2971,5 +2968,96 @@ fn a_named_sheet_button_keeps_the_exact_sheet_or_parent_number_from_the_scan() {
         assert!(
             matches!(check, crate::client::Check::Required(expect) if expect.pid() == 812 && expect.window() == Some(number))
         );
+    }
+}
+
+#[tokio::test]
+async fn looks_share_optional_routing_and_finish_with_a_plain_list() {
+    use crate::{
+        client::Size,
+        daemon::protocol::Crop,
+        host_session::{Host, HostSession},
+        test_support::{Helper, UID, completed, exited},
+    };
+    use base64::{Engine, engine::general_purpose::STANDARD};
+    use std::cell::RefCell;
+
+    for named in [false, true] {
+        for command in 0..3 {
+            for change in 0..8 {
+                let directory = tempfile::tempdir().unwrap();
+                let (mut client, helper) = Helper::client(directory.path(), UID);
+                if named {
+                    client.host_session = Some(HostSession::new(Host::Named, "one").unwrap());
+                }
+                let reads = RefCell::new(Vec::new());
+                let reply = helper.serve(async {
+                    match command {
+                        0 => client.capture(Size::Full, Some(&Crop::App { pid: 812 }), false).await,
+                        1 => elements(&client, &Target::Pid(812), &ElementFilter::default(), 10, false).await,
+                        _ => list(&client, &WindowFilter::default()).await,
+                    }
+                }, |request| {
+                    if request["op"] == "screenshot" {
+                        return Some(json!({
+                            "ok": true, "png": STANDARD.encode(crate::native::capture::sample_png(10, 10)),
+                            "width": 10, "height": 10,
+                            "region": {"x": 0, "y": 0, "width": 10, "height": 10},
+                            "app": {"pid": 812, "name": "Editor"}, "overlapping": [],
+                        }));
+                    }
+                    if request["op"] == "apps" {
+                        return Some(json!({"ok": true, "apps": [{"pid": 812, "name": "Editor"}], "starts": {"812": [123,456]}}));
+                    }
+                    match request["argv"][1].as_str().unwrap() {
+                        "elements-info" => Some(completed(&json!({"ok": true, "elements": [], "truncated": false}).to_string())),
+                        "windows-info" => {
+                            let flag = request["argv"][2].as_str().unwrap_or("");
+                            reads.borrow_mut().push(flag.to_owned());
+                            if (flag == "--dock" && change == 6) || (flag == "--plain" && change == 3) {
+                                return Some(exited(1, "identity or list unavailable"));
+                            }
+                            let mut windows = vec![window(42, 812, "Editor", 0), window(43, 812, "Editor", 0)];
+                            if flag == "--plain" {
+                                match change {
+                                    1 => windows.reverse(),
+                                    2 => windows[0].bounds.x += 1.0,
+                                    4 => windows[0].title = Some("A new title".into()),
+                                    5 => windows[0].alpha = 0.0,
+                                    7 => windows[0].alpha = 0.5,
+                                    _ => {}
+                                }
+                            }
+                            Some(completed(&json!({"ok": true, "windows": windows,
+                                "starts": (flag != "--plain").then_some(json!({"812": [123,456]})),
+                                "dock": "unread"}).to_string()))
+                        }
+                        other => panic!("unexpected probe: {other}"),
+                    }
+                }).await.unwrap();
+                assert_eq!(reply["ok"], true, "command {command}, change {change}");
+                let expected = if named {
+                    if command == 2 {
+                        vec!["--dock", "", "--plain"]
+                    } else {
+                        vec!["--dock", "--plain"]
+                    }
+                } else if command == 2 {
+                    vec![""]
+                } else {
+                    vec![]
+                };
+                assert_eq!(*reads.borrow(), expected);
+                if !named && command == 2 {
+                    assert_eq!(helper.proofs(), 1);
+                }
+                if named {
+                    let memory = client.remembered_windows().unwrap();
+                    assert_eq!(memory.windows.is_empty(), !matches!(change, 0 | 4 | 7));
+                } else {
+                    assert!(client.remembered_windows().is_none());
+                }
+            }
+        }
     }
 }

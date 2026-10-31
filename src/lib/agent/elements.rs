@@ -14,7 +14,7 @@ use crate::{
     error::{Code, Error, Result},
     native::{
         ax::{self, Element, Frame, Stop},
-        windows::{Bounds, Dock, Shown, Window, hit_windows, owning_window},
+        windows::{Shown, Window, owning_window},
     },
     select::{ElementFilter, NameMatch, closeness, names, shown_name},
     transport::run_output,
@@ -33,9 +33,6 @@ const CANDIDATES: usize = 5;
 
 /// One scan of an app, as the probe reported it.
 pub(super) struct Scanned {
-    pub(super) windows: Vec<Window>,
-    pub(super) starts: Option<BTreeMap<i64, crate::process::Start>>,
-    pub(super) dock: Dock,
     pub(super) elements: Vec<Element>,
     pub(super) incomplete: bool,
     /// Why it is incomplete, each reason once.
@@ -81,9 +78,6 @@ impl Scanned {
         errors.truncate(SCAN_ERRORS);
 
         Ok(Self {
-            windows: serde_json::from_value(value["windows"].take()).unwrap_or_default(),
-            starts: serde_json::from_value(value["starts"].take()).ok(),
-            dock: serde_json::from_value(value["dock"].take()).unwrap_or_default(),
             elements,
             incomplete: value["truncated"] == true,
             reasons,
@@ -141,17 +135,9 @@ pub(super) const WITHHELD_NEXT: &str = "Ask the person to unlock the Mac: apps h
 
 /// The accessibility elements of process `pid`, scanned in the helper
 /// `verified` describes, which the caller verified just before.
-async fn app_elements(
-    client: &Client,
-    verified: &Verified,
-    pid: i64,
-    routing: bool,
-) -> Result<Scanned> {
+async fn app_elements(client: &Client, verified: &Verified, pid: i64) -> Result<Scanned> {
     let probe = client.config.identity_probe.to_string_lossy().into_owned();
-    let mut argv = vec![probe, "elements-info".into(), pid.to_string()];
-    if routing {
-        argv.push("--routing".into());
-    }
+    let argv = vec![probe, "elements-info".into(), pid.to_string()];
     let reply = client.run(argv, Run::inspect().pinned(verified)).await?;
     let value = run_output(&reply, 8 << 20)
         .ok()
@@ -172,17 +158,9 @@ pub async fn elements(
 ) -> Result<Value> {
     let verified = client.verify().await?;
     let pid = target_pid(client, &verified, target).await?;
-    let scanned = app_elements(client, &verified, pid, client.host_session.is_some()).await?;
-    let display = &verified.session().epoch.display;
-    client.remember_windows(
-        &hit_windows(
-            &scanned.windows,
-            &Bounds::display(display.width, display.height),
-            &scanned.dock,
-            scanned.starts.as_ref(),
-        ),
-        &verified.session().epoch,
-    );
+    let scanned = client
+        .look(&verified, app_elements(client, &verified, pid))
+        .await?;
 
     Ok(listing(pid, &scanned, filter, max, full))
 }
@@ -550,7 +528,7 @@ pub async fn click_element(
     let verified = client.verify().await?;
     let expect = target_expect(client, &verified, target).await?;
     let pid = expect.pid();
-    let scanned = app_elements(client, &verified, pid, false).await?;
+    let scanned = app_elements(client, &verified, pid).await?;
     let epoch = verified.session().epoch.clone();
     if scanned.incomplete {
         return Err(scanned.refusal());

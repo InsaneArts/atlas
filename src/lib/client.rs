@@ -33,8 +33,7 @@ use crate::{
     doing::Doing,
     error::{Code, Error, Result},
     host_session::HostSession,
-    native::windows::HitWindow,
-    session::{Epoch, Session, has_capability, require_hidden},
+    session::{Session, has_capability, require_hidden},
     task::Task,
     transport::{Transport, run_output},
 };
@@ -127,21 +126,6 @@ pub fn timestamp() -> u128 {
 }
 
 impl Client {
-    pub(crate) fn remember_windows(&self, windows: &[HitWindow], epoch: &Epoch) {
-        if let Some(session) = &self.host_session
-            && let Ok(output) = self.output_dir()
-        {
-            crate::last_capture::remember_windows(output, session.key().as_str(), windows, epoch);
-        }
-    }
-
-    pub(crate) fn remembered_windows(&self) -> Option<crate::last_capture::Observation> {
-        crate::last_capture::remembered_windows(
-            &self.config.output_dir,
-            self.host_session.as_ref()?.key().as_str(),
-        )
-    }
-
     /// Construction only validates; reads such as status never write; doctor
     /// only probes that Atlas's own folders can be written, making them when
     /// missing.

@@ -18,6 +18,7 @@ use crate::{
     digest::file_sha256,
     error::Holder,
     interrupt::Interrupt,
+    native::windows::HitWindow,
     session::{Display, Epoch, FOCUS_APP, FOCUS_DOCK, FOCUS_FIELD, FOCUS_WINDOW, HOLD, SHUTDOWN},
     test_support::client_in,
 };
@@ -3091,25 +3092,18 @@ fn a_crop_other_than_the_one_asked_for_is_refused() {
 #[test]
 fn only_the_standard_size_asks_for_one_pixel_per_point() {
     assert_eq!(
-        screenshot_request(Size::Standard, false),
+        screenshot_request(Size::Standard),
         json!({"op": "screenshot", "maxDimension": SCREENSHOT_SIDE, "perPoint": true})
     );
     assert_eq!(
-        screenshot_request(Size::Longest(SCREENSHOT_SIDE), false),
+        screenshot_request(Size::Longest(SCREENSHOT_SIDE)),
         json!({"op": "screenshot", "maxDimension": SCREENSHOT_SIDE})
     );
     assert_eq!(
-        screenshot_request(Size::Longest(800), false),
+        screenshot_request(Size::Longest(800)),
         json!({"op": "screenshot", "maxDimension": 800})
     );
-    assert_eq!(
-        screenshot_request(Size::Full, false),
-        json!({"op": "screenshot"})
-    );
-    assert_eq!(
-        screenshot_request(Size::Full, true),
-        json!({"op": "screenshot", "routing": true})
-    );
+    assert_eq!(screenshot_request(Size::Full), json!({"op": "screenshot"}));
 }
 
 #[test]
@@ -3639,4 +3633,21 @@ async fn a_named_click_sends_its_window_and_keeps_a_native_dock_refusal() {
         assert_eq!(reply[field], refused[field]);
     }
     assert!(client.controller.pending().unwrap().is_empty());
+}
+
+impl Client {
+    pub(crate) fn remember_windows(&self, windows: &[HitWindow], epoch: &Epoch) {
+        if let Some(session) = &self.host_session
+            && let Ok(output) = self.output_dir()
+        {
+            crate::last_capture::remember_windows(output, session.key().as_str(), windows, epoch);
+        }
+    }
+
+    pub(crate) fn remembered_windows(&self) -> Option<crate::last_capture::Observation> {
+        crate::last_capture::remembered_windows(
+            &self.config.output_dir,
+            self.host_session.as_ref()?.key().as_str(),
+        )
+    }
 }

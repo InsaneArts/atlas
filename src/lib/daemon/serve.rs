@@ -43,19 +43,13 @@ const CONSOLE_CHECK: Duration = Duration::from_secs(1);
 /// the real display in the daemon, a synthetic image in tests, so ordinary
 /// tests never capture the desktop they run on.
 type Capture = fn(u32, Option<CGRect>, Option<u32>) -> Result<capture::Shot>;
-type WindowList = fn() -> Result<Vec<windows::Window>>;
-type WindowSnapshot = (
-    Vec<windows::Window>,
-    std::collections::BTreeMap<i64, crate::process::Start>,
-);
 
 struct Daemon {
     /// launchd's session type, read once at start.
     manager: String,
     capture: Capture,
     /// The session's on-screen windows, front to back.
-    windows: WindowList,
-    snapshot: fn(WindowList) -> Result<WindowSnapshot>,
+    windows: fn() -> Result<Vec<windows::Window>>,
     /// Bundle identity is read in this helper session, never the controller's.
     bundle_id: fn(i64) -> Option<String>,
     /// Where the Dock in a window list takes clicks.
@@ -82,7 +76,6 @@ impl Daemon {
             manager,
             capture,
             windows: windows::windows,
-            snapshot: |list| crate::native::processes::snapshot(list, |window| window.pid),
             bundle_id: apps::bundle_id,
             dock: read_dock,
             on_console,
@@ -518,12 +511,10 @@ async fn screenshot(
     daemon: &Daemon,
     max_dimension: Option<u32>,
     per_point: bool,
-    routing: bool,
     crop: Option<Crop>,
 ) -> Value {
     let capture = daemon.capture;
     let list = daemon.windows;
-    let snapshot = daemon.snapshot;
     let bundle_id = daemon.bundle_id;
     let dock = daemon.dock;
     let on_console = daemon.on_console;
@@ -537,7 +528,6 @@ async fn screenshot(
         let request = Request::Screenshot {
             max_dimension,
             per_point,
-            routing,
             crop,
         };
         let validate = || {
@@ -556,19 +546,9 @@ async fn screenshot(
         };
         validate()?;
 
-        let (windows, starts) = if routing {
-            match snapshot(list) {
-                Ok((windows, starts)) => (Ok(windows), Some(starts)),
-                Err(error) => (Err(error), None),
-            }
-        } else {
-            (list(), None)
-        };
-        let dock = if routing || matches!(crop, Some(Crop::App { .. })) {
-            dock(windows.as_deref().unwrap_or_default())
-        } else {
-            windows::Dock::Unread
-        };
+        // One read of the window list serves the crop and the report of
+        // windows off the display.
+        let windows = list();
         // The main display's corner is the origin of global points, so a
         // window's bounds are points of this display.
         let display = Region {
@@ -589,7 +569,7 @@ async fn screenshot(
                 let on_screen = windows
                     .as_ref()
                     .map_err(|_| failure(Code::Windows, "The window list is unavailable"))?;
-                let found = crop::app(on_screen, pid, &display, &dock).ok_or_else(|| {
+                let found = crop::app(on_screen, pid, &display, &dock(on_screen)).ok_or_else(|| {
                     failure(
                         Code::NoWindow,
                         format!(
@@ -613,21 +593,13 @@ async fn screenshot(
         let off_display = off_display_windows(windows.as_deref().unwrap_or_default());
 
         let cropped = area.map(|area| crop_keys(area, app, bundle_id));
-        let remembered = routing.then(|| match (windows.as_ref(), list().as_ref()) {
-            (Ok(before), Ok(after)) if windows::same_routing(before, after) => windows::hit_windows(
-                before,
-                &windows::Bounds::display(epoch.width, epoch.height),
-                &dock,
-                starts.as_ref(),
-            ),
-            _ => Vec::new(),
-        });
         validate()?;
-        Ok((shot, off_display, cropped, remembered))
+
+        Ok((shot, off_display, cropped))
     })
     .await;
     match taken {
-        Ok(Ok((shot, off_display, cropped, windows))) => {
+        Ok(Ok((shot, off_display, cropped))) => {
             let mut reply = json!({
                 "ok": true,
                 "png": STANDARD.encode(&shot.png),
@@ -636,9 +608,6 @@ async fn screenshot(
                 "scale": shot.scale,
                 "offDisplayWindows": off_display,
             });
-            if let Some(windows) = windows {
-                reply["windows"] = json!(windows);
-            }
             if let (Some(reply), Some(cropped)) = (reply.as_object_mut(), cropped) {
                 reply.extend(cropped);
             }
@@ -718,9 +687,8 @@ async fn handle(stream: UnixStream, daemon: Arc<Daemon>, controller: bool) -> Re
         Ok(Request::Screenshot {
             max_dimension,
             per_point,
-            routing,
             crop,
-        }) => screenshot(&daemon, max_dimension, per_point, routing, crop).await,
+        }) => screenshot(&daemon, max_dimension, per_point, crop).await,
         Ok(Request::Run { argv, timeout, .. }) => {
             // Events reach the client through their own writer, so a slow
             // client never stalls supervision of the command.
@@ -1130,7 +1098,6 @@ mod tests {
                         &Request::Screenshot {
                             max_dimension: None,
                             per_point: false,
-                            routing: false,
                             crop: None
                         },
                         true
@@ -1213,7 +1180,6 @@ mod tests {
                     &Request::Screenshot {
                         max_dimension: None,
                         per_point: false,
-                        routing: false,
                         crop: None
                     },
                     true
@@ -1339,49 +1305,9 @@ mod tests {
     ) -> Arc<Daemon> {
         let mut daemon = Daemon::new("Aqua".into(), capture, || false, session);
         daemon.windows = windows;
-        daemon.snapshot = |list| Ok((list()?, Default::default()));
         daemon.bundle_id = fake_bundle_id;
         daemon.dock = |_| windows::Dock::Icons(Vec::new());
         Arc::new(daemon)
-    }
-
-    #[tokio::test]
-    async fn a_capture_remembers_nothing_when_its_window_lists_disagree() {
-        use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
-        static CAPTURED: AtomicBool = AtomicBool::new(false);
-        static CHANGE: AtomicUsize = AtomicUsize::new(0);
-        let daemon = with_windows(
-            |display, area, limit| {
-                CAPTURED.store(true, Ordering::SeqCst);
-                synthetic(display, area, limit)
-            },
-            || {
-                let mut windows = fake_windows()?;
-                if CAPTURED.load(Ordering::SeqCst) {
-                    match CHANGE.load(Ordering::SeqCst) {
-                        1 => windows.reverse(),
-                        2 => windows[0].bounds.x += 1.0,
-                        3 => return Err(Error::new(Code::Windows, "unavailable")),
-                        4 => {
-                            windows[0].title = Some("A new title".into());
-                            windows[0].owner = Some("A new name".into());
-                        }
-                        _ => {}
-                    }
-                }
-                Ok(windows)
-            },
-        );
-        for change in 0..5 {
-            CAPTURED.store(false, Ordering::SeqCst);
-            CHANGE.store(change, Ordering::SeqCst);
-            let reply = screenshot(&daemon, None, false, true, None).await;
-            assert_eq!(reply["ok"], true);
-            assert_eq!(
-                reply["windows"].as_array().unwrap().is_empty(),
-                (1..=3).contains(&change)
-            );
-        }
     }
 
     #[tokio::test]
@@ -1390,7 +1316,6 @@ mod tests {
         static LISTS: AtomicUsize = AtomicUsize::new(0);
         static DOCKS: AtomicUsize = AtomicUsize::new(0);
         let mut daemon = Daemon::new("Aqua".into(), synthetic, || false, session);
-        daemon.snapshot = |_| panic!("anonymous captures never read process identities");
         daemon.windows = || {
             LISTS.fetch_add(1, Ordering::SeqCst);
             fake_windows()
@@ -1413,7 +1338,7 @@ mod tests {
             DOCKS.store(0, Ordering::SeqCst);
             let reply = tokio::time::timeout(
                 Duration::from_secs(5),
-                screenshot(&daemon, None, false, false, crop),
+                screenshot(&daemon, None, false, crop),
             )
             .await
             .unwrap();
