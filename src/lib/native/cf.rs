@@ -3,7 +3,7 @@
 //! typed CF values), and every element's type is checked at run time.
 #![allow(
     unsafe_code,
-    reason = "FFI: casts resting on CoreGraphics' documented collection types"
+    reason = "FFI: CoreGraphics collection types and session-local CF notifications"
 )]
 pub use objc2_core_foundation::{
     CFArray, CFBoolean, CFDictionary, CFNumber, CFRetained, CFString, CFType, Type,
@@ -11,6 +11,18 @@ pub use objc2_core_foundation::{
 use objc2_core_graphics::{
     CGSessionCopyCurrentDictionary, CGWindowListCopyWindowInfo, CGWindowListOption,
 };
+
+/// Deliver a distributed preference notification only in this login session.
+pub(crate) fn notify_preferences(name: &str) -> bool {
+    let Some(center) = objc2_core_foundation::CFNotificationCenter::distributed_center() else {
+        return false;
+    };
+    let name = CFString::from_str(name);
+    // SAFETY: a live notification name, no object or user info. Immediate
+    // delivery does not include the option to post to all login sessions.
+    unsafe { center.post_notification(Some(&name), std::ptr::null(), None, true) };
+    true
+}
 
 /// A dictionary CoreGraphics returns: string keys, values of any CF type.
 pub type Record = CFDictionary<CFString, CFType>;

@@ -2,6 +2,7 @@
 //! display, with which permissions.
 use crate::{
     daemon::protocol::Census,
+    error::{Code, Error, Result},
     native::{
         accessibility_trusted as accessibility, capture,
         cf::{self, CFBoolean, CFDictionary, CFString},
@@ -525,6 +526,40 @@ pub fn type_exactly() {
     }
 }
 
+/// Keep a wallpaper click from hiding every helper window. Called only after
+/// the daemon has proved it runs as the configured helper in its Aqua login.
+pub(super) fn keep_desktop() -> Result<()> {
+    use objc2::AllocAnyThread;
+    use objc2_foundation::{NSNumber, NSString, NSUserDefaults};
+    let domain = NSString::from_str("com.apple.WindowManager");
+    let key = NSString::from_str("EnableStandardClickToShowDesktop");
+    let defaults = NSUserDefaults::initWithSuiteName(NSUserDefaults::alloc(), Some(&domain))
+        .ok_or_else(|| {
+            Error::new(
+                Code::Native,
+                "Could not read the helper's desktop preference",
+            )
+        })?;
+    let current = defaults
+        .objectForKey(&key)
+        .and_then(|value| value.downcast::<NSNumber>().ok())
+        .map(|value| value.boolValue());
+    keep_desktop_with(current, || {
+        defaults.setBool_forKey(false, &key);
+        defaults.synchronize() && cf::notify_preferences("com.apple.ec.WindowManager.preferences")
+    })
+}
+
+fn keep_desktop_with(current: Option<bool>, write: impl FnOnce() -> bool) -> Result<()> {
+    if current != Some(false) && !write() {
+        return Err(Error::new(
+            Code::Native,
+            "Could not prepare the helper's desktop preference",
+        ));
+    }
+    Ok(())
+}
+
 /// Open a Privacy & Security page of System Settings in this session.
 fn open_settings(page: &str) {
     let _ = std::process::Command::new("/usr/bin/open")
@@ -648,6 +683,22 @@ pub fn hello(manager: &str, jobs: Option<Census>) -> Value {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn the_desktop_preference_is_written_only_when_it_is_not_false() {
+        for current in [None, Some(true), Some(false)] {
+            let mut writes = 0;
+            super::keep_desktop_with(current, || {
+                writes += 1;
+                true
+            })
+            .unwrap();
+            assert_eq!(writes, usize::from(current != Some(false)));
+        }
+        assert!(super::keep_desktop_with(Some(true), || false).is_err());
+        assert!(
+            super::keep_desktop_with(Some(false), || panic!("must not write or notify")).is_ok()
+        );
+    }
     use super::*;
 
     #[tokio::test]

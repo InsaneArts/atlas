@@ -615,9 +615,9 @@ trait Perform {
         budget: Duration,
         prepare: bool,
     ) -> Result<Option<&'static str>>;
-    /// Carry out one action, posting its events.
+    /// Carry out one action through posted events or a Dock AXPress.
     async fn perform(&mut self, action: Action) -> Result<()>;
-    /// Events posted so far.
+    /// Events posted or AX presses acknowledged so far.
     fn posted(&self) -> u64;
     fn held_input(&self) -> bool;
     /// Let go of every key and button still held.
@@ -1036,6 +1036,7 @@ mod tests {
         Unreadable,
         /// Post one event, then fail.
         Break,
+        UnacknowledgedPress,
     }
 
     /// An engine that logs each check and post, and does at each action
@@ -1137,6 +1138,12 @@ mod tests {
             self.assert_locked();
             let index = self.logged("post");
             self.log.push(format!("post {index}"));
+            if self.script.get(index) == Some(&Step::UnacknowledgedPress) {
+                return Err(
+                    Error::new(Code::Uncertain, "The Dock did not acknowledge the press")
+                        .uncertain(),
+                );
+            }
             self.posted += 1;
             if self.opens_sheet {
                 self.sheet = true;
@@ -1306,6 +1313,26 @@ mod tests {
         assert_eq!(reply["performed"], 0);
         assert_eq!(reply["partial"], true);
         assert_eq!(reply["uncertain"], true);
+    }
+
+    #[tokio::test]
+    async fn an_unacknowledged_dock_press_stays_uncertain_without_a_posted_event() {
+        let stand = Stand::locked(&[Step::UnacknowledgedPress]);
+        let gate = Gate::default();
+        let action = serde_json::from_value(json!({"type": "click", "x": 380, "y": 760})).unwrap();
+        let mut engine = stand.lock().await;
+        let reply = tokio::time::timeout(
+            Duration::from_secs(1),
+            run(&mut *engine, &gate, vec![action], None),
+        )
+        .await
+        .unwrap()
+        .unwrap_err();
+        assert_eq!(reply["performed"], 0);
+        assert_eq!(reply["partial"], false);
+        assert_eq!(reply["uncertain"], true);
+        assert_eq!(engine.posted, 0);
+        assert_eq!(engine.releases, 1);
     }
 
     /// Run `actions` on a stand-in that posts each, expecting `expect`.

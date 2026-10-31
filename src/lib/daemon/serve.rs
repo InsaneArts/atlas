@@ -158,6 +158,7 @@ pub async fn serve(uid: u32, controller_uid: u32, socket: PathBuf) -> Result<()>
     require_graphical_session(uid, &manager)?;
     crate::login_log::mark(&format!("daemon.start uid={uid}"));
     facts::type_exactly();
+    facts::keep_desktop()?;
 
     let mut daemon = Daemon::new(
         manager,

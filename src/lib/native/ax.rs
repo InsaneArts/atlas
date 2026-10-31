@@ -25,6 +25,7 @@ pub(crate) use keyboard::{Focused, Judged, Keyboard, Unread, Within, frontmost, 
 pub use model::{Element, Frame, Limits, Snapshot};
 pub use stop::Stop;
 pub(crate) use stop::{telling, why};
+pub(crate) use system::dock_click;
 pub use system::{DOCK_TIMEOUT, dock, focused_pid};
 pub use tree::elements;
 

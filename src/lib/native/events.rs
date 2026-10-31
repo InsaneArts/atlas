@@ -24,6 +24,8 @@ use std::{
 };
 use unicode_segmentation::UnicodeSegmentation;
 
+mod dock;
+
 /// The only place events go: the helper login's own session event tap, never
 /// the global HID tap.
 const TAP: CGEventTapLocation = CGEventTapLocation::SessionEventTap;
@@ -91,11 +93,12 @@ pub(super) struct Engine {
     pub target: Option<crate::process::Instance>,
     journal: Option<Journal>,
     journal_dirty: bool,
-    /// Events posted so far: tells an action that posted some of its
-    /// events before failing from one that posted none.
+    /// Events posted or AX presses acknowledged so far: distinguishes an
+    /// action that already changed something from one that changed nothing.
     pub(crate) posted: u64,
     source: Source,
     held: Option<Button>,
+    dock_down: Option<dock::Down>,
     held_keys: Vec<u16>,
     position: Point,
     click_count: u8,
@@ -121,6 +124,7 @@ impl Engine {
             posted: 0,
             source,
             held: None,
+            dock_down: None,
             held_keys: Vec::new(),
             position: Point { x: 0.0, y: 0.0 },
             click_count: 1,
@@ -336,6 +340,7 @@ impl Engine {
     pub(super) fn release(&mut self) -> Result<()> {
         self.grant = None;
         self.target = None;
+        self.dock_down = None;
 
         if !self.held_input() {
             return if self.journal_dirty {
@@ -361,7 +366,10 @@ impl Engine {
     }
 
     pub(super) fn held_input(&self) -> bool {
-        self.held.is_some() || !self.held_keys.is_empty() || self.flags != 0
+        self.held.is_some()
+            || self.dock_down.is_some()
+            || !self.held_keys.is_empty()
+            || self.flags != 0
     }
 
     async fn pointer(
@@ -537,10 +545,22 @@ impl Engine {
                 modifiers,
                 count,
             } => {
+                if self
+                    .dock_pointer(phase, Point { x, y }, button, &modifiers, count)
+                    .await?
+                {
+                    return Ok(());
+                }
                 self.pointer(phase, Point { x, y }, button, &modifiers, count)
                     .await?
             }
             Action::Move { x, y } => {
+                if self
+                    .dock_pointer(PointerPhase::Move, Point { x, y }, Button::Left, &[], 1)
+                    .await?
+                {
+                    return Ok(());
+                }
                 self.pointer(PointerPhase::Move, Point { x, y }, Button::Left, &[], 1)
                     .await?
             }
@@ -551,6 +571,15 @@ impl Engine {
                 count,
                 modifiers,
             } => {
+                if self.held.is_some() || self.dock_down.is_some() {
+                    return Err(Error::new(
+                        Code::Input,
+                        "Release the held mouse button first",
+                    ));
+                }
+                if self.dock_click(Point { x, y }, true).await? {
+                    return Ok(());
+                }
                 for click in 1..=count {
                     self.pointer(
                         PointerPhase::Down,
@@ -575,6 +604,12 @@ impl Engine {
                 to_y,
                 button,
             } => {
+                if self.dock_down.is_some() {
+                    return Err(Error::new(
+                        Code::Input,
+                        "Release the held mouse button first",
+                    ));
+                }
                 self.pointer(
                     PointerPhase::Down,
                     Point {
@@ -636,8 +671,13 @@ impl Engine {
                 .await?;
             }
             Action::Scroll { x, y, dx, dy } => {
-                self.pointer(PointerPhase::Move, Point { x, y }, Button::Left, &[], 1)
-                    .await?;
+                if !self
+                    .dock_pointer(PointerPhase::Move, Point { x, y }, Button::Left, &[], 1)
+                    .await?
+                {
+                    self.pointer(PointerPhase::Move, Point { x, y }, Button::Left, &[], 1)
+                        .await?;
+                }
                 // The app learns where the pointer is from that move; the
                 // wheel turn reaches the view under it only once it has.
                 self.delay(SCROLL_SETTLE).await?;

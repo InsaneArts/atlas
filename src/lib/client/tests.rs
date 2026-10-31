@@ -1876,6 +1876,20 @@ async fn an_input_change_stays_pending_only_while_its_outcome_is_unknown() {
         1,
         "an unknown one stays"
     );
+
+    let press = Error::new(Code::Uncertain, "The Dock did not acknowledge the press").uncertain();
+    assert!(
+        client
+            .pending_until_known(async { Err::<(), _>(press) })
+            .await
+            .unwrap_err()
+            .uncertain
+    );
+    assert_eq!(
+        client.controller.unresolved().unwrap().len(),
+        2,
+        "the unacknowledged Dock press stays pending too"
+    );
 }
 
 #[test]
