@@ -112,12 +112,15 @@ test('opencode gives each shell command the root of its session tree', async () 
 
   assert.deepEqual(await env({ cwd: '/', sessionID: 'child' }), {
     ATLAS_OPENCODE_SESSION: 'root',
+    ATLAS_OPENCODE_PID: String(process.pid),
   });
   assert.deepEqual(await env({ cwd: '/', sessionID: 'root' }), {
     ATLAS_OPENCODE_SESSION: 'root',
+    ATLAS_OPENCODE_PID: String(process.pid),
   });
   assert.deepEqual(await env({ cwd: '/', sessionID: 'broken' }), {
     ATLAS_OPENCODE_SESSION: 'gone',
+    ATLAS_OPENCODE_PID: String(process.pid),
   });
   assert.deepEqual(await env({ cwd: '/' }), {}, 'a terminal of the person names no session');
   assert.deepEqual(await env({ cwd: '/', sessionID: 'not plain' }), {});
@@ -137,7 +140,10 @@ test('opencode gives each shell command the root of its session tree', async () 
   });
   const output = { env: {} };
   await failing['shell.env']({ cwd: '/', sessionID: 'ses_alone' }, output);
-  assert.deepEqual(output.env, { ATLAS_OPENCODE_SESSION: 'ses_alone' });
+  assert.deepEqual(output.env, {
+    ATLAS_OPENCODE_SESSION: 'ses_alone',
+    ATLAS_OPENCODE_PID: String(process.pid),
+  });
 });
 
 test('opencode asks for a new brief after a session is compacted', async () => {
@@ -157,7 +163,7 @@ import fs from 'node:fs';
 import {fileURLToPath} from 'node:url';
 const file=fileURLToPath(new URL('../calls',import.meta.url));
 fs.appendFileSync(file,'x');
-console.log('Atlas: '+fs.readFileSync(file,'utf8').length+' '+process.env.ATLAS_OPENCODE_SESSION);
+console.log('Atlas: '+fs.readFileSync(file,'utf8').length+' '+process.env.ATLAS_OPENCODE_SESSION+' '+process.env.ATLAS_OPENCODE_PID);
 `,
       { mode: 0o755 },
     );
@@ -166,13 +172,17 @@ console.log('Atlas: '+fs.readFileSync(file,'utf8').length+' '+process.env.ATLAS_
     const transform = hooks['experimental.chat.system.transform'];
     const first = { system: [] };
     await transform({ sessionID: 'ses_one' }, first);
-    assert.deepEqual(first.system, ['Atlas: 1 ses_one'], 'the brief knows its session');
+    assert.deepEqual(
+      first.system,
+      [`Atlas: 1 ses_one ${process.pid}`],
+      'the brief knows its session',
+    );
     await hooks.event({
       event: { type: 'session.compacted', properties: { sessionID: 'ses_one' } },
     });
     const after = { system: [] };
     await transform({ sessionID: 'ses_one' }, after);
-    assert.deepEqual(after.system, ['Atlas: 2 ses_one']);
+    assert.deepEqual(after.system, [`Atlas: 2 ses_one ${process.pid}`]);
   } finally {
     rmSync(root, { recursive: true, force: true });
   }

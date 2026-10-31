@@ -65,17 +65,16 @@ pub(super) async fn pointer_view(client: &Client) -> Result<Shown> {
     shown(&reply)
 }
 
-/// The window list alone, in the helper `verified` describes, which the
-/// caller verified just before.
-pub(super) async fn verified_window_list(
+/// The windows and process identities read together inside the helper.
+pub(super) async fn verified_window_snapshot(
     client: &Client,
     verified: &Verified,
-) -> Result<Vec<Window>> {
+) -> Result<Shown> {
     let probe = windows_probe(client, DockRead::Skip);
     let reply = client
         .run(probe, Run::inspect().within(PROBE_LIMIT).pinned(verified))
         .await?;
-    Ok(shown(&reply)?.windows)
+    shown(&reply)
 }
 
 /// Whether a window probe also reads where the Dock takes clicks, which

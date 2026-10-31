@@ -56,7 +56,7 @@ in, read Give the app what it needs.
 
 Open with `atlas open --app NAME [FILE|URL]` or `atlas open /path/App.app`,
 then `atlas wait --app NAME`. Prefer
-`atlas click --app NAME --name LABEL [--role ROLE]`: it clicks one visible
+`atlas click --app NAME --name LABEL [--role ROLE]`: it clicks one named
 element, or refuses and lists `candidates`. Otherwise use
 `atlas click --app A X Y`, `atlas type --app A "text"`,
 `atlas key --app A cmd+a` or `atlas scroll --app A X Y --dy -3` (and
@@ -78,8 +78,8 @@ running (see Limits).
 
 After each action:
 
-1. Read the reply. `ok` means delivered, not that the app reacted; a first
-   click on an inactive window may only bring it forward.
+1. Read the reply. `ok` means delivered, not that the app reacted; named
+   input brings its target forward and checks before acting.
 2. Check by text when you can: `atlas elements --app A --name X` for a
    control, its value and state; `atlas wait --app A` (or `--title T`,
    `--gone`) for a window.

@@ -218,23 +218,32 @@ impl Watch {
         let Some(own) = &self.own else {
             return;
         };
-        let mine = |session: &&Value| session["key"].as_str() == Some(own.as_str());
-        let listed = status["overview"]["hostSessions"]
+        if status["overview"]["hostSessions"]
             .as_array()
-            .and_then(|sessions| sessions.iter().find(mine))
-            .cloned();
-        let found = match listed {
-            Some(entry) => Some(entry),
-            None => {
-                let facts = crate::overview::SessionFacts::of(status, crate::client::timestamp());
-                crate::overview::live_host_sessions(client, facts)
-                    .await
+            .is_some_and(|sessions| {
+                sessions
                     .iter()
-                    .find(mine)
-                    .cloned()
-            }
-        };
-        status["overview"]["ownSession"] = found.unwrap_or(Value::Null);
+                    .any(|session| session["key"].as_str() == Some(own.as_str()))
+            })
+        {
+            status["overview"]["ownSession"] = status["overview"]["hostSessions"]
+                .as_array()
+                .and_then(|sessions| {
+                    sessions
+                        .iter()
+                        .find(|session| session["key"].as_str() == Some(own.as_str()))
+                })
+                .cloned()
+                .unwrap_or(Value::Null);
+        } else {
+            crate::overview::add_sessions_for(
+                status,
+                client,
+                crate::client::timestamp(),
+                Some(own),
+            )
+            .await;
+        }
     }
 
     /// Whether to read the status now: soon after the log changed, and
@@ -876,5 +885,91 @@ mod tests {
         fs::create_dir(&open).unwrap();
         fs::set_permissions(&open, fs::Permissions::from_mode(0o755)).unwrap();
         assert_eq!(private_folder(&open).unwrap_err().code, "usage");
+    }
+    #[tokio::test]
+    async fn a_resumed_session_is_own_before_its_first_action() {
+        use crate::host_session::{Host, HostSession, Instance, store};
+        let directory = tempfile::tempdir().unwrap();
+        let client = crate::test_support::client(directory.path());
+        let pid = nix::unistd::getppid().as_raw();
+        let process = Instance::new(
+            pid,
+            crate::host_session::ancestry::process(pid).unwrap().start,
+        );
+        let own = HostSession::new(Host::Claude, "resumed")
+            .unwrap()
+            .run_by(Some(process));
+        store::touch(&client, &own).unwrap();
+        let watch = Watch::new(None).for_session(Some(own.key().clone()));
+        let began = Instant::now();
+        let mut status = json!({"overview": {"hostSessions": []}});
+        loop {
+            watch.add_own_session(&client, &mut status).await;
+            if status["overview"]["ownSession"]["live"] == true {
+                break;
+            }
+            assert!(began.elapsed() < Duration::from_secs(2));
+            tokio::time::sleep(Duration::from_millis(5)).await;
+        }
+        let entry = &status["overview"]["ownSession"];
+        assert_eq!(entry["state"], "idle");
+        assert!(entry["ended"].is_null());
+        assert!(
+            crate::host_session::store::Store::at(client.output_dir().unwrap())
+                .read(own.key())
+                .unwrap()
+                .counts
+                .is_empty()
+        );
+    }
+
+    #[tokio::test]
+    async fn a_dead_host_cannot_be_revived_by_a_watchs_environment() {
+        use crate::host_session::{Host, HostSession, Instance, store};
+        let directory = tempfile::tempdir().unwrap();
+        let client = crate::test_support::client(directory.path());
+        let own = HostSession::new(Host::Codex, "dead")
+            .unwrap()
+            .run_by(Some(Instance::new(i32::MAX, [1, 0])));
+        store::note(
+            &client,
+            &own,
+            store::Kind::Other,
+            Some(&crate::doing::Doing::new("click")),
+            &Ok(json!({"ok": true})),
+        )
+        .unwrap();
+        let path = client
+            .output_dir()
+            .unwrap()
+            .join("sessions")
+            .join(format!("{}.json", own.key()));
+        let before = fs::read(&path).unwrap();
+        let watch = Watch::new(None).for_session(Some(own.key().clone()));
+        let mut status = json!({"overview": {"hostSessions": []}});
+        watch.add_own_session(&client, &mut status).await;
+        assert!(status["overview"]["ownSession"].is_null());
+        assert_eq!(fs::read(path).unwrap(), before);
+    }
+
+    #[tokio::test]
+    async fn an_ended_causers_own_entry_has_no_live_flag() {
+        use crate::host_session::{Host, Key};
+        let directory = tempfile::tempdir().unwrap();
+        let client = crate::test_support::client(directory.path());
+        let own = Key::of(Host::Codex, "dead");
+        let watch = Watch::new(None).for_session(Some(own.clone()));
+        for (state, work, ended, live) in [
+            ("needsYou", false, json!(100), false),
+            ("acting", true, json!(100), false),
+            ("acting", true, Value::Null, true),
+        ] {
+            let mut status = json!({"overview": {"hostSessions": [{"key": own, "state": state, "live": live, "active": live, "ended": ended, "workInProgress": work, "holdsHelper": false}]}});
+            watch.add_own_session(&client, &mut status).await;
+            let entry = &status["overview"]["ownSession"];
+            assert_eq!(entry["live"], live);
+            assert_eq!(entry["ended"], ended);
+            assert_eq!(entry["workInProgress"], work);
+        }
     }
 }

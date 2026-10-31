@@ -6,6 +6,9 @@
 //! account's process and a process that has exited but is not yet reaped,
 //! with its exact start time. `proc_pidinfo` refuses both; [`own`] keeps
 //! its rule, for what describes only this account's live processes.
+mod cwd;
+pub(crate) use cwd::cwd;
+
 use crate::error::{Code, Error, Result};
 use serde::{Deserialize, Serialize};
 use std::ffi::CStr;
@@ -39,6 +42,12 @@ impl Instance {
 
     /// How this very process is now, as this account may know it.
     pub fn state(&self) -> State {
+        #[cfg(test)]
+        STATE_READS.with(|reads| {
+            if let Some(count) = reads.get() {
+                reads.set(Some(count + 1));
+            }
+        });
         match own(self.pid) {
             Own::Found(info) if info.instance.start != self.start => State::Gone,
             Own::Found(info) if info.stopped => State::Stopped,
@@ -65,6 +74,26 @@ impl Instance {
     pub fn is_this_one(&self) -> bool {
         u32::try_from(self.pid).is_ok_and(|pid| pid == std::process::id())
     }
+}
+
+#[cfg(test)]
+thread_local! {
+    static STATE_READS: std::cell::Cell<Option<usize>> = const { std::cell::Cell::new(None) };
+}
+
+#[cfg(test)]
+pub(crate) fn measure_states<T>(read: impl FnOnce() -> T) -> (T, usize) {
+    struct Reset(Option<usize>);
+    impl Drop for Reset {
+        fn drop(&mut self) {
+            STATE_READS.with(|reads| reads.set(self.0));
+        }
+    }
+    let reset = Reset(STATE_READS.with(|reads| reads.replace(Some(0))));
+    let result = read();
+    let count = STATE_READS.with(|reads| reads.get().unwrap());
+    drop(reset);
+    (result, count)
 }
 
 /// How an [`Instance`] is now, as this account may know it.

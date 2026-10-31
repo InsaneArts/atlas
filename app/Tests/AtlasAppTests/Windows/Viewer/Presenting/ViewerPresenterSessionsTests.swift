@@ -189,7 +189,7 @@ struct ViewerPresenterSessionsTests {
 
   @Test("a session only the list names live reads its own state in the sidebar, as its Activity header does")
   func aSessionOnlyTheListNamesLiveReadsItsOwnState() throws {
-    var snapshot = try ViewerSnapshot.listing(Self.three)
+    var snapshot = try ViewerSnapshot.listing(Self.three, more: 1)
     let cursor = ViewerStatus.HostSession(key: "aaaa00000002", name: "Cursor · notes", host: .cursor, state: .acting)
     snapshot.panes.sessions.list = HostSessionList(
       sessions: [HostSessionRecord(key: "aaaa00000002", name: "Cursor · notes", host: .cursor)],
@@ -346,4 +346,142 @@ struct ViewerPresenterSessionsTests {
     #expect(row.help == "Claude Code · understudy\nClicking Show Center in Opie\nHost: Claude Code")
     #expect(!row.menu.flatMap(\.items).contains { $0.role == .destructive }, "nothing to clean up is known")
   }
+  @Test("an ended causer stays under Needs you until recovery without increasing the live count")
+  func anEndedCauserStaysUnderNeedsYouUntilRecovery() throws {
+    var causer = SessionReplies.claudeNeedsYou
+    causer["ended"] = 1000
+    causer["live"] = false
+    var snapshot = try ViewerSnapshot.listing(
+      [causer, SessionReplies.cursorIdle],
+      mode: "recovering",
+      state: "needsYou",
+      pending: 1
+    )
+    let record = HostSessionRecord(
+      key: "3f9a1c07b2e4",
+      name: "Claude Code · understudy",
+      host: .claude,
+      endedAt: Date(timeIntervalSince1970: 1),
+      state: .ended
+    )
+    snapshot.panes.sessions.list = HostSessionList(
+      sessions: [record],
+      live: snapshot.reading.statusReading.relevantSessions
+    )
+    let sessions = ViewerPresenter.sessions(snapshot)
+    #expect(sessions.rows(.needsYou).map(\.id) == [record.key])
+    #expect(sessions.liveCount == 1 && sessions.icons.count == 1)
+    #expect(sessions.endedCount == 0)
+    #expect(ViewerPresenter.resolvedSession(record.key, snapshot).state == .needsYou)
+    var recovered = try ViewerSnapshot.listing([SessionReplies.cursorIdle])
+    recovered.panes.sessions.list = HostSessionList(sessions: [record])
+    recovered.session.endedShown = true
+    #expect(ViewerPresenter.sessions(recovered).rows(.needsYou).isEmpty)
+    #expect(ViewerPresenter.sessions(recovered).rows(.ended).map(\.id) == [record.key])
+  }
+
+  @Test("a current end wins over an older live list")
+  func aCurrentEndWinsOverAnOlderLiveList() throws {
+    var ended = SessionReplies.claudeActing
+    ended["ended"] = 1000
+    var snapshot = try ViewerSnapshot.listing([ended])
+    snapshot.panes.sessions.list = HostSessionList(live: [
+      ViewerStatus.HostSession(key: "3f9a1c07b2e4", name: "Old Claude", host: .claude, state: .acting)
+    ])
+    snapshot.session.endedShown = true
+    #expect(ViewerPresenter.resolvedSession("3f9a1c07b2e4", snapshot).state == .ended)
+    let sessions = ViewerPresenter.sessions(snapshot)
+    #expect(sessions.liveCount == 0 && sessions.rows(.working).isEmpty)
+    #expect(sessions.rows(.ended).map(\.id) == ["3f9a1c07b2e4"])
+  }
+
+  @Test("a complete status omission drops an older live entry without inventing an end")
+  func aCompleteStatusOmissionDropsAnOlderLiveEntry() throws {
+    let key = "3f9a1c07b2e4"
+    var snapshot = try ViewerSnapshot.listing([SessionReplies.cursorIdle])
+    let cached: [String: Any] = [
+      "sessions": [["key": key, "name": "Claude Code · understudy", "host": "claude", "state": "idle"]],
+      "live": [SessionReplies.claudeActing],
+    ]
+    snapshot.panes.sessions.list = try JSONDecoder()
+      .decode(
+        HostSessionList.self,
+        from: JSONSerialization.data(withJSONObject: cached)
+      )
+    #expect(snapshot.reading.status.overview.moreSessions == 0)
+    #expect(snapshot.reading.status.overview.hostSessions.allSatisfy { $0.key != key })
+    #expect(snapshot.panes.sessions.live(key)?.state == .acting)
+    let resolved = ViewerPresenter.resolvedSession(key, snapshot)
+    #expect(resolved.live == nil && resolved.state == .idle)
+    let sessions = ViewerPresenter.sessions(snapshot)
+    #expect(sessions.liveCount == 1 && sessions.icons == [SessionHost.cursor.icon])
+    #expect(sessions.groups.flatMap(\.rows).allSatisfy { $0.id != key })
+    #expect(sessions.endedCount == 0)
+    #expect(snapshot.panes.sessions.record(key)?.endedAt == nil)
+  }
+
+  @Test("the cached list supplies live entries before the first status")
+  func theCachedListSuppliesLiveEntriesBeforeTheFirstStatus() throws {
+    var snapshot = try ViewerSnapshot.listing([])
+    snapshot.reading.hasStatus = false
+    let cached = try status(["overview": ["hostSessions": [SessionReplies.claudeActing]]])
+    snapshot.panes.sessions.list = HostSessionList(live: cached.overview.hostSessions)
+    #expect(ViewerPresenter.sessions(snapshot).liveCount == 1)
+    #expect(ViewerPresenter.sessions(snapshot).rows(.working).map(\.id) == ["3f9a1c07b2e4"])
+    #expect(ViewerPresenter.resolvedSession("3f9a1c07b2e4", snapshot).state == .acting)
+  }
+
+  @Test("a resumed status wins over ended history")
+  func aResumedStatusWinsOverEndedHistory() throws {
+    var snapshot = try ViewerSnapshot.listing([SessionReplies.claudeActing])
+    snapshot.panes.sessions.list = HostSessionList(sessions: [
+      HostSessionRecord(key: "3f9a1c07b2e4", name: "Old Claude", host: .claude, state: .ended)
+    ])
+    #expect(ViewerPresenter.resolvedSession("3f9a1c07b2e4", snapshot).state == .acting)
+    #expect(ViewerPresenter.sessions(snapshot).liveCount == 1)
+    #expect(ViewerPresenter.sessions(snapshot).endedCount == 0)
+  }
+
+  @Test("proven work stays once under Working and only a live host contributes to the count")
+  func provenWorkStaysOnceUnderWorking() throws {
+    for explicit in [false, true] {
+      var work = SessionReplies.claudeActing
+      work["workInProgress"] = true
+      work["holdsHelper"] = false
+      work["live"] = !explicit
+      if explicit { work["ended"] = 1000 }
+      var snapshot = try ViewerSnapshot.listing([work])
+      let end = explicit ? Date(timeIntervalSince1970: 1) : nil
+      let record = HostSessionRecord(
+        key: "3f9a1c07b2e4",
+        name: "Claude",
+        host: .claude,
+        endedAt: end,
+        state: explicit ? .ended : .idle
+      )
+      snapshot.panes.sessions.list = HostSessionList(
+        sessions: [record],
+        live: snapshot.reading.statusReading.relevantSessions
+      )
+      let sessions = ViewerPresenter.sessions(snapshot)
+      #expect(sessions.rows(.working).map(\.id) == [record.key])
+      #expect(sessions.liveCount == (explicit ? 0 : 1))
+      #expect(sessions.endedCount == 0)
+      #expect(snapshot.panes.sessions.record(record.key)?.endedAt == end)
+      var finished = try ViewerSnapshot.listing([])
+      finished.panes.sessions.list = HostSessionList(sessions: [
+        HostSessionRecord(
+          key: record.key,
+          name: record.name,
+          host: record.host,
+          endedAt: end ?? snapshot.date,
+          state: .ended
+        )
+      ])
+      finished.session.endedShown = true
+      #expect(ViewerPresenter.sessions(finished).rows(.working).isEmpty)
+      #expect(ViewerPresenter.sessions(finished).rows(.ended).map(\.id) == [record.key])
+    }
+  }
+
 }

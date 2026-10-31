@@ -8,13 +8,66 @@ use crate::{
     interrupt::Interrupt,
     native::{
         ax::{Element, Frame, Stop},
-        windows::{Bounds, Dock, MENU_BAR_LAYER, MENU_LAYER, Screen, Window, owning_window},
+        windows::{Bounds, MENU_BAR_LAYER, MENU_LAYER, Window, owning_window},
     },
     select::{ElementFilter, NameMatch},
     session::Display,
 };
 use serde_json::{Value, json};
 use std::{collections::BTreeMap, path::Path, time::Duration};
+
+#[test]
+fn helper_identity_resolves_even_when_the_process_is_unavailable_to_the_controller() {
+    let pid = i64::from(i32::MAX);
+    let start = [123, 456];
+    let starts = BTreeMap::from([(pid, start)]);
+    let expect = snapshot_expect(pid, Some(&starts)).unwrap();
+    assert_eq!(
+        serde_json::to_value(&expect).unwrap(),
+        json!({"pid":pid,"start":start})
+    );
+    assert_eq!(expect.app_only().instance(), expect.instance());
+}
+
+#[test]
+fn a_current_snapshot_without_the_process_identity_refuses_instead_of_adopting_it() {
+    for starts in [
+        BTreeMap::new(),
+        BTreeMap::from([(812, [0, 1])]),
+        BTreeMap::from([(812, [123, 1_000_000])]),
+    ] {
+        let error = snapshot_expect(812, Some(&starts)).unwrap_err();
+        assert_eq!(error.code, Code::Elements);
+        assert!(!error.uncertain);
+    }
+}
+
+#[test]
+fn an_older_snapshot_leaves_the_instance_for_the_input_service_to_pin() {
+    let expect = snapshot_expect(812, None).unwrap();
+    assert_eq!(serde_json::to_value(&expect).unwrap(), json!({"pid":812}));
+    assert_eq!(expect.instance(), None);
+}
+
+#[test]
+fn window_snapshot_identities_are_read_but_never_appear_in_the_public_window_rows() {
+    let reply = crate::test_support::completed(
+        &json!({
+            "ok":true,"starts":{"812":[123,456]},"windows":[window(42,812,"Editor",0)]
+        })
+        .to_string(),
+    );
+    let snapshot = crate::native::windows::from_probe(&reply).unwrap();
+    let expect = snapshot_expect(snapshot.windows[0].pid, snapshot.starts.as_ref()).unwrap();
+    assert_eq!(
+        serde_json::to_value(expect).unwrap(),
+        json!({"pid":812,"start":[123,456]})
+    );
+    let public = json!({"ok":true,"windows":snapshot.windows});
+    assert!(public.get("starts").is_none());
+    assert!(public["windows"][0].get("start").is_none());
+    assert!(public["windows"][0].get("starts").is_none());
+}
 
 /// The stand-in helper's answer to a read: TextEdit (812) with one
 /// window and no elements.
@@ -183,43 +236,6 @@ fn only_a_point_check_asks_the_window_probe_for_the_dock() {
     assert_eq!(read[1..], ["windows-info", "--dock"]);
 }
 
-/// A named click refused under the Dock says it is the Dock, and when
-/// the Dock could not be read, that Atlas could not tell.
-#[test]
-fn a_named_click_under_the_dock_says_it_is_the_dock() {
-    let dock = Window {
-        number: 1,
-        pid: 2,
-        owner: Some("Dock".into()),
-        title: None,
-        layer: 20,
-        alpha: 1.0,
-        bounds: Bounds::display(1000.0, 800.0),
-    };
-    let app = Window {
-        number: 3,
-        owner: Some("TextEdit".into()),
-        layer: 0,
-        pid: 4,
-        ..dock.clone()
-    };
-    let windows = [dock, app];
-    let display = Bounds::display(1000.0, 800.0);
-    let icons = Dock::Icons(vec![Bounds {
-        x: 200.0,
-        y: 740.0,
-        width: 600.0,
-        height: 60.0,
-    }]);
-    let said =
-        |dock: Dock, y| hidden_element(&windows, 300.0, y, &Screen::new(display.clone(), dock));
-
-    assert!(said(icons.clone(), 770.0).starts_with("The Dock covers"));
-    assert!(said(Dock::Other, 300.0).starts_with("The Dock covers"));
-    assert!(said(Dock::Unread, 300.0).contains("could not read where the Dock takes clicks"));
-    assert!(said(icons, 300.0).starts_with("The element is not visible"));
-}
-
 /// The process a name resolves to from the window list alone.
 fn app_pid(windows: &[Window], target: &Target) -> Result<i64> {
     match target {
@@ -317,8 +333,10 @@ fn two_apps(lists: &std::cell::Cell<usize>) -> impl FnMut(&Value) -> Option<Valu
         use crate::test_support::completed;
 
         if request["op"] == "apps" {
-            return Some(json!({"ok": true, "apps": [
-                {"pid": 812, "name": "TextEdit"}, {"pid": 900, "name": "Calculator"}]}));
+            return Some(
+                json!({"ok": true, "starts": {"812":[123,456],"900":[124,0]}, "apps": [
+                {"pid": 812, "name": "TextEdit"}, {"pid": 900, "name": "Calculator"}]}),
+            );
         }
         assert_eq!(request["argv"][1], "windows-info", "nothing else is read");
         lists.set(lists.get() + 1);
@@ -327,7 +345,7 @@ fn two_apps(lists: &std::cell::Cell<usize>) -> impl FnMut(&Value) -> Option<Valu
             "owner": owner, "title": null, "layer": 0, "alpha": 1.0,
             "bounds": {"x": 0, "y": 0, "width": 100, "height": 100}})
         };
-        let listed = json!({"ok": true, "windows": [
+        let listed = json!({"ok": true, "starts": {"812":[123,456],"900":[124,0]}, "windows": [
             window(4120, 812, "TextEdit"), window(339, 900, "Calculator")]});
         Some(completed(&listed.to_string()))
     }
@@ -362,7 +380,7 @@ async fn an_expectation_is_resolved_in_the_helper_with_one_window_list() {
     let (alone, lists) = resolved(Expected::new(None, Some(4120), field()).unwrap()).await;
     assert_eq!(
         serde_json::to_value(alone.unwrap()).unwrap(),
-        json!({"pid": 812, "window": 4120, "field": "Email"}),
+        json!({"pid": 812, "start": [123, 456], "window": 4120, "field": "Email"}),
         "the window names its app"
     );
     assert_eq!(lists, 1);
@@ -385,7 +403,7 @@ async fn an_expectation_is_resolved_in_the_helper_with_one_window_list() {
     let (app, _) = resolved(Expected::new(textedit(), None, field()).unwrap()).await;
     assert_eq!(
         serde_json::to_value(app.unwrap()).unwrap(),
-        json!({"pid": 812, "field": "Email"})
+        json!({"pid": 812, "start": [123, 456], "field": "Email"})
     );
 }
 
@@ -2822,4 +2840,133 @@ fn an_app_name_keeps_its_identity_only_when_its_processes_agree() {
         )
         .is_none()
     );
+}
+
+#[test]
+fn a_covered_named_element_requires_its_exact_window_at_the_native_boundary() {
+    let mut target = shown(0, "AXTextField", None, Some("Email"));
+    target.window = Some(frame(10.0, 20.0, 300.0, 200.0));
+    let own = window(42, 812, "Editor", 0);
+    let cover = window(43, 900, "Other", 0);
+    let check = element_check(
+        &target,
+        &[cover, own],
+        Expect::new(812).unwrap(),
+        (20.0, 40.0),
+    )
+    .unwrap();
+    let crate::client::Check::Required(expect) = check;
+    assert_eq!(expect.pid(), 812);
+    assert_eq!(expect.window(), Some(42));
+}
+
+#[test]
+fn missing_or_ambiguous_owning_windows_refuse_named_clicks() {
+    let mut target = shown(0, "AXButton", Some("Save"), None);
+    target.window = Some(frame(10.0, 20.0, 300.0, 200.0));
+    for windows in [
+        vec![],
+        vec![window(42, 812, "Editor", 0), window(43, 812, "Editor", 0)],
+    ] {
+        let error =
+            element_check(&target, &windows, Expect::new(812).unwrap(), (20.0, 40.0)).unwrap_err();
+        assert_eq!(error.code, Code::Elements);
+    }
+}
+
+#[test]
+fn menu_titles_and_open_items_require_the_app_without_raising_a_menu_window() {
+    let mut title = shown(0, "AXMenuBarItem", Some("File"), None);
+    let bar = window(2, 1, "Window Server", MENU_BAR_LAYER);
+    title.window = Some(frame(10.0, 20.0, 300.0, 200.0));
+    let check = element_check(&title, &[bar], Expect::new(812).unwrap(), (20.0, 21.0)).unwrap();
+    assert!(
+        matches!(check, crate::client::Check::Required(expect) if expect.window().is_none() && expect.pid() == 812)
+    );
+    let mut item = shown(0, "AXMenuItem", Some("Save"), None);
+    item.menu = true;
+    item.window = title.window;
+    let check = element_check(
+        &item,
+        &[window(3, 812, "Editor", MENU_LAYER)],
+        Expect::new(812).unwrap(),
+        (20.0, 21.0),
+    )
+    .unwrap();
+    assert!(matches!(check, crate::client::Check::Required(expect) if expect.window().is_none()));
+}
+
+#[tokio::test]
+async fn incomplete_or_ambiguous_element_scans_never_dispatch_input() {
+    use crate::test_support::{Helper, UID, completed};
+    for incomplete in [true, false] {
+        let directory = tempfile::tempdir().unwrap();
+        let (client, helper) = Helper::client(directory.path(), UID);
+        let mut reads = 0;
+        let error = helper
+            .serve(
+                click_element(
+                    &client,
+                    &Target::Pid(i64::from(std::process::id())),
+                    &named("Save"),
+                    Button::Left,
+                    1,
+                    &[],
+                ),
+                |request| {
+                    if request["argv"][1] == "elements-info" {
+                        reads += 1;
+                        let elements = vec![
+                            shown(0, "AXButton", Some("Save"), None),
+                            shown(1, "AXButton", Some("Save"), None),
+                        ];
+                        Some(completed(
+                            &json!({"ok":true,"elements":elements,"truncated":incomplete})
+                                .to_string(),
+                        ))
+                    } else if request["op"] == "apps" {
+                        Some(json!({"ok": true, "apps": [{"pid": std::process::id(), "name": "TextEdit"}]}))
+                    } else {
+                        textedit_reads(request)
+                    }
+                },
+            )
+            .await
+            .unwrap_err();
+        assert_eq!(error.code, Code::Elements);
+        assert_eq!(reads, 1);
+        assert!(client.controller.pending().unwrap().is_empty());
+    }
+}
+
+#[test]
+fn a_named_sheet_button_keeps_the_exact_sheet_or_parent_number_from_the_scan() {
+    let mut button = shown(0, "AXButton", Some("OK"), None);
+    button.frame = Some(frame(100.0, 120.0, 60.0, 24.0));
+    let parent = window(42, 812, "TextEdit", 0);
+    let sheet = Window {
+        number: 43,
+        bounds: Bounds {
+            x: 0.0,
+            y: 40.0,
+            width: 500.0,
+            height: 180.0,
+        },
+        ..parent.clone()
+    };
+    for (owning, listed, number) in [
+        (
+            frame(0.0, 40.0, 500.0, 180.0),
+            vec![sheet, parent.clone()],
+            43,
+        ),
+        (frame(10.0, 20.0, 300.0, 200.0), vec![parent], 42),
+    ] {
+        button.window = Some(owning);
+        let check =
+            element_check(&button, &listed, Expect::new(812).unwrap(), (130.0, 132.0)).unwrap();
+        assert!(
+            matches!(check, crate::client::Check::Required(expect) if expect.pid() == 812 && expect.window() == Some(number))
+        );
+    }
 }

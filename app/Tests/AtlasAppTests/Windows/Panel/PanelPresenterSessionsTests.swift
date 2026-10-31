@@ -145,4 +145,43 @@ struct PanelPresenterSessionsTests {
     controller.send(.showAllSessions)
     #expect(opened == [.one("8be20c4d1a77"), .all, nil])
   }
+  @Test("the panel retains an ended causer and hides an ordinary ended session")
+  func thePanelRetainsAnEndedCauser() throws {
+    var causer = SessionReplies.claudeNeedsYou
+    causer["ended"] = 1000
+    causer["live"] = false
+    var ended = SessionReplies.cursorIdle
+    ended["state"] = "ended"
+    let snapshot = try SessionReplies.snapshot(
+      [causer, ended, causer],
+      mode: "recovering",
+      state: "needsYou",
+      pending: 1
+    )
+    let panel = PanelPresenter.state(snapshot)
+    #expect(panel.sessions.map(\.id) == ["3f9a1c07b2e4"])
+    #expect(panel.sessions.first?.isUrgent == true)
+    #expect(panel.sessions.first?.line == "A click may not have finished")
+    let recovered = PanelPresenter.state(try SessionReplies.snapshot([ended]))
+    #expect(recovered.sessions.isEmpty)
+  }
+
+  @Test("the panel retains proven work whether or not the host is still live")
+  func thePanelRetainsProvenWork() throws {
+    for explicit in [false, true] {
+      var work = SessionReplies.claudeActing
+      work["workInProgress"] = true
+      work["holdsHelper"] = false
+      work["live"] = !explicit
+      if explicit { work["ended"] = 1000 }
+      let panel = PanelPresenter.state(try SessionReplies.snapshot([work]))
+      #expect(panel.sessions.map(\.id) == ["3f9a1c07b2e4"])
+      #expect(panel.sessions.first?.state == "Acting")
+      work["state"] = "ended"
+      work["live"] = false
+      work["workInProgress"] = false
+      #expect(PanelPresenter.state(try SessionReplies.snapshot([work])).sessions.isEmpty)
+    }
+  }
+
 }

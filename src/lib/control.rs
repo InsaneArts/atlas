@@ -449,6 +449,23 @@ impl Controller {
         Note::read(&self.holder)
     }
 
+    /// Bounded display candidates; the reply's frozen batch checks liveness.
+    pub(crate) fn waiting_candidates(&self) -> Vec<Note> {
+        turns::candidates(&self.waiting)
+    }
+
+    pub(crate) fn running_candidates(&self) -> Vec<Note> {
+        let marked = self.commands();
+        let mut notes: Vec<_> = by_generation::read::<ByGeneration<Note>>(&self.running)
+            .into_iter()
+            .filter(|(generation, _)| self.running_command(&marked, generation))
+            .map(|(_, note)| note)
+            .take(crate::host_session::liveness::BUDGET)
+            .collect();
+        notes.sort_by_key(|note| note.since);
+        notes
+    }
+
     /// The notes of the commands waiting for control now, oldest first:
     /// for apps to show who waits, never to decide who goes next.
     pub fn waiting_notes(&self) -> Vec<Note> {

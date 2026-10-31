@@ -4,7 +4,7 @@
 //! same way.
 use super::{
     input::click,
-    target::{Target, target_pid},
+    target::{Target, target_expect, target_pid},
     windows::pointer_view,
 };
 use crate::{
@@ -14,7 +14,7 @@ use crate::{
     error::{Code, Error, Result},
     native::{
         ax::{self, Element, Frame, Stop},
-        windows::{Bounds, Dock, Screen, Shown, Window, owning_window, top_at, unobstructed},
+        windows::{Shown, Window, owning_window},
     },
     select::{ElementFilter, NameMatch, closeness, names, shown_name},
     transport::run_output,
@@ -346,18 +346,6 @@ pub(super) fn menu_bar_window(windows: &[Window], x: f64, y: f64) -> Option<i64>
         .map(|window| window.number)
 }
 
-/// The process of the active application in the helper: the one whose
-/// titles the menu bar shows.
-async fn active_pid(client: &Client) -> Result<Option<i64>> {
-    let apps = client.apps().await?;
-    Ok(apps["apps"]
-        .as_array()
-        .into_iter()
-        .flatten()
-        .find(|app| app["active"] == true)
-        .and_then(|app| app["pid"].as_i64()))
-}
-
 /// Whether a frame has any area to click: a collapsed element is not on
 /// screen, whatever lies under its point.
 fn drawn(frame: &Frame) -> bool {
@@ -536,7 +524,8 @@ pub async fn click_element(
 
     let ownership = client.controller.acquire_beside_commands()?;
     let verified = client.verify().await?;
-    let pid = target_pid(client, &verified, target).await?;
+    let expect = target_expect(client, &verified, target).await?;
+    let pid = expect.pid();
     let scanned = app_elements(client, &verified, pid).await?;
     let epoch = verified.session().epoch.clone();
     if scanned.incomplete {
@@ -550,35 +539,10 @@ pub async fn click_element(
         .map(|frame| click_point(element.role.as_deref(), frame))
         .unwrap_or_default();
 
-    // A fresh list, read after the scan, judged for the element's own window
-    // as the helper judges a point: the Dock covers what is under it where
-    // it takes clicks.
-    let Shown { windows, dock } = pointer_view(client).await?;
-    let display = Bounds::display(epoch.display.width, epoch.display.height);
-    let screen = Screen::new(display, dock);
-    let window = if element.role.as_deref() == Some("AXMenuBarItem") {
-        // The menu bar shows the active app's titles, and only those.
-        if active_pid(client).await? != Some(pid) {
-            return Err(Error::new(
-                Code::Elements,
-                "The app is no longer active, so the menu bar does not show its titles",
-            ));
-        }
-
-        menu_bar_window(&windows, x, y)
-    } else {
-        element
-            .window
-            .as_ref()
-            .and_then(|frame| owning_window(&windows, pid, frame))
-    };
-
-    if !window.is_some_and(|window| unobstructed(&windows, window, x, y, &screen)) {
-        return Err(Error::new(
-            Code::Elements,
-            hidden_element(&windows, x, y, &screen),
-        ));
-    }
+    // Resolve the element's owning window from a fresh list. Visibility is
+    // checked after native preparation, under the same lock as the click.
+    let Shown { windows, .. } = pointer_view(client).await?;
+    let check = element_check(element, &windows, expect, (x, y))?;
 
     // The name it was found by is kept only as a control's caption: any
     // other element's name may be a document's text, a file or a title.
@@ -591,9 +555,6 @@ pub async fn click_element(
     };
 
     let actions = click(x, y, which, count, modifiers);
-    // The helper repeats the visibility check under its own lock where it
-    // can; an older one is not needed for it, since the check above ran.
-    let check = Check::Offered(Expect::new(pid)?);
     let mut result = client
         .input_owned(&ownership, &actions, &epoch, Some(check))
         .await?;
@@ -602,17 +563,41 @@ pub async fn click_element(
     Ok(result)
 }
 
-/// Why a named click's element at the point is not visible: the Dock in
-/// front of it, which may be one Atlas could not read, or anything else.
-pub(super) fn hidden_element(windows: &[Window], x: f64, y: f64, screen: &Screen) -> &'static str {
-    let docked = top_at(windows, x, y, screen).is_some_and(Window::is_dock);
-    match (docked, screen.dock()) {
-        (true, Dock::Unread) => {
-            "Atlas could not read where the Dock takes clicks, so it cannot tell whether the Dock covers the element; try again"
+/// The exact target selected by the scan, before native preparation.
+pub(super) fn element_check(
+    element: &Element,
+    windows: &[Window],
+    expect: Expect,
+    (x, y): (f64, f64),
+) -> Result<Check> {
+    let pid = expect.pid();
+    let expect = if element.role.as_deref() == Some("AXMenuBarItem") {
+        menu_bar_window(windows, x, y)
+            .ok_or_else(|| Error::new(Code::Elements, "The menu bar is no longer on screen"))?;
+        expect
+    } else {
+        let number = element
+            .window
+            .as_ref()
+            .and_then(|frame| owning_window(windows, pid, frame))
+            .ok_or_else(|| {
+                Error::new(
+                    Code::Elements,
+                    "The element's window could not be selected uniquely",
+                )
+            })?;
+        let menu = element.menu
+            || windows.iter().any(|window| {
+                window.number == number && window.layer == crate::native::windows::MENU_LAYER
+            });
+        if menu {
+            expect
+        } else {
+            expect.in_window(number)?
         }
-        (true, _) => "The Dock covers the element, so a click there would reach the Dock",
-        (false, _) => "The element is not visible in its window: covered, moved or off screen",
-    }
+    };
+
+    Ok(Check::Required(expect))
 }
 
 /// Where a click on an element lands: the middle of its frame, or for a

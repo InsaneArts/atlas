@@ -6,7 +6,7 @@
 //! cleanup. Recording is best effort and never holds a command up: when
 //! another command is writing the records, this one's goes unrecorded.
 use super::{
-    HostSession, Instance, Key, now_ms,
+    Host, HostSession, Instance, Key, now_ms,
     record::{Leftovers, Record, Seen},
 };
 use crate::{
@@ -175,8 +175,8 @@ impl Store {
     }
 
     /// Change `session`'s record under the store's lock, making it when
-    /// new, and write it whole. A new record follows the one before it in
-    /// the same host process, which then ends, and makes room among the
+    /// new, and write it whole. A new Claude record follows the one before
+    /// it in the same host process, which then ends, and makes room among the
     /// others; `controller` says which pending changes are whose.
     pub(crate) fn update(
         &self,
@@ -185,77 +185,72 @@ impl Store {
         controller: &Controller,
         change: impl FnOnce(&mut Record),
     ) -> Result<()> {
-        self.update_within(session, now, controller, SESSIONS.lock_wait, change)
-    }
-
-    fn update_within(
-        &self,
-        session: &HostSession,
-        now: u64,
-        controller: &Controller,
-        wait: Duration,
-        change: impl FnOnce(&mut Record),
-    ) -> Result<()> {
+        let causes = controller.pending_causes_within(Duration::ZERO)?;
         self.folder.make()?;
-        let _lock = self.folder.lock_within(wait)?;
+        let _lock = self.folder.lock()?;
 
         let existing = self.read(session.key());
         let made = existing.is_none();
-        // A new record starts when its first command did, as that command's
-        // notes named it meanwhile.
-        let mut record = existing.unwrap_or_else(|| {
-            let mut record = Record::new(session, now, session.folder().map(str::to_owned));
-            record.started = session.began().map_or(now, |began| began.min(now));
-            record
-        });
-
-        if made && let Some(mut before) = self.before_clear(&record) {
-            record.previous = Some(before.key.clone());
-            before.ended = Some(now);
-            self.write(&before)?;
-        }
+        let mut record = match existing {
+            Some(record) => record,
+            None => self.started_record(session, session.process(), now)?,
+        };
 
         change(&mut record);
         self.write(&record)?;
 
         if made {
-            let causes = if wait.is_zero() {
-                let Ok(causes) = controller.pending_causes_within(wait) else {
-                    return Ok(());
-                };
-                causes
-            } else {
-                controller.pending_causes().unwrap_or_default()
-            };
             self.prune(&record.key, &causes);
         }
         Ok(())
     }
 
-    /// Note a command of `key`'s session `now`, as [`Record::touched`]
-    /// says, `ancestor` being its host's process when that is one of the
-    /// command's ancestors. Nothing is written, and the lock is not taken,
-    /// while nothing would change; a session with no record gets none. The
-    /// lock is tried once: while another command writes the records, this
-    /// one is refused at once rather than wait.
-    pub(crate) fn touch(&self, key: &Key, ancestor: Option<Instance>, now: u64) -> Result<()> {
-        if !self
-            .read(key)
-            .is_some_and(|mut record| record.touched(ancestor, now))
+    /// Attach before dispatch with zero-wait locks. Pending attribution is
+    /// read before the record lock; a failed snapshot creates and prunes nothing.
+    pub(crate) fn touch(
+        &self,
+        session: &HostSession,
+        ancestor: Option<Instance>,
+        now: u64,
+        controller: &Controller,
+    ) -> Result<()> {
+        if let Some(mut record) = self.read(session.key())
+            && !record.touched(session, ancestor, now)
         {
             return Ok(());
         }
-
+        let causes = controller.pending_causes_within(Duration::ZERO)?;
+        self.folder.make()?;
         let _lock = self.folder.lock_within(Duration::ZERO)?;
-        match self.read(key) {
-            Some(mut record) => {
-                if record.touched(ancestor, now) {
-                    self.write(&record)?;
-                }
-                Ok(())
+        if let Some(mut record) = self.read(session.key()) {
+            if record.touched(session, ancestor, now) {
+                self.write(&record)?;
             }
-            None => Ok(()),
+        } else {
+            let record = self.started_record(session, ancestor, now)?;
+            self.write(&record)?;
+            self.prune(&record.key, &causes);
         }
+        Ok(())
+    }
+
+    /// Start once, using the command's original start and preserving a
+    /// predecessor in the same host process before writing the new record.
+    fn started_record(
+        &self,
+        session: &HostSession,
+        process: Option<Instance>,
+        now: u64,
+    ) -> Result<Record> {
+        let mut record = Record::new(session, now, session.folder().map(str::to_owned));
+        record.host_process = process;
+        record.started = session.began().map_or(now, |began| began.min(now));
+        if let Some(mut before) = self.before_clear(&record) {
+            record.previous = Some(before.key.clone());
+            before.ended = Some(now);
+            self.write(&before)?;
+        }
+        Ok(record)
     }
 
     /// Forget plan `plan_id`, which a command rolled back, in every record
@@ -299,12 +294,18 @@ impl Store {
             .collect()
     }
 
-    /// The session `record` followed in the same host process: the newest
-    /// other record naming that process that has not ended.
+    /// The Claude session `record` followed through `/clear`: the newest
+    /// Claude record naming that process that has not ended.
     fn before_clear(&self, record: &Record) -> Option<Record> {
+        if record.host != Host::Claude {
+            return None;
+        }
         let process = record.host_process?;
         self.all().into_iter().find(|other| {
-            other.key != record.key && other.host_process == Some(process) && other.ended.is_none()
+            other.host == Host::Claude
+                && other.key != record.key
+                && other.host_process == Some(process)
+                && other.ended.is_none()
         })
     }
 
@@ -389,23 +390,12 @@ pub fn note(
     })
 }
 
-/// Note that `session` runs a command now, whatever it does: a read too,
-/// and before it does anything, so a command killed partway still counts.
-/// A first use makes its record. It gets its last seen time and, when the
-/// host's process is one of this command's ancestors, that process (a
-/// resumed conversation runs in a new one), so it never reads as ended
-/// while that process runs. Best effort, and never waits.
+/// Note any command before dispatch, including a first read, without counting
+/// an action. Only a verified ancestor may attach or replace lifetime metadata;
+/// an existing root must be confirmed gone before replacement. Best effort,
+/// with zero-wait locks.
 pub fn touch(client: &Client, session: &HostSession) -> Result<()> {
-    let store = Store::at(client.output_dir()?);
-    let ancestor = session.ancestor();
-    let now = now_ms();
-    if store.read(session.key()).is_none() {
-        store.update_within(session, now, &client.controller, Duration::ZERO, |record| {
-            record.touched(ancestor, now);
-        })
-    } else {
-        store.touch(session.key(), ancestor, now)
-    }
+    Store::at(client.output_dir()?).touch(session, session.ancestor(), now_ms(), &client.controller)
 }
 
 /// Forget, in every session's record, the plan a successful rollback in

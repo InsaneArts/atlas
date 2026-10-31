@@ -6,13 +6,16 @@ pub mod activity;
 pub(crate) mod ancestry;
 pub(crate) mod brief;
 pub mod explain;
+pub(crate) mod liveness;
 pub(crate) mod names;
 pub(crate) mod record;
 mod recovery;
 pub mod store;
+pub(crate) mod verification;
 
 pub use crate::process::Instance;
 pub use recovery::{Asker, Recovery};
+pub use verification::HostClaim;
 
 use crate::name::{hex, lower_hex, name_type};
 use ancestry::{Ancestor, Facts};
@@ -51,6 +54,15 @@ pub enum Host {
 }
 
 impl Host {
+    fn pid_hint(self) -> Option<&'static str> {
+        match self {
+            Self::Claude => Some("CLAUDE_PID"),
+            Self::Opencode => Some("ATLAS_OPENCODE_PID"),
+            Self::Pi => Some("ATLAS_PI_PID"),
+            _ => None,
+        }
+    }
+
     /// The host as people know it: "Claude Code", "Codex", "opencode", "Pi",
     /// "Cursor"; empty for a named session, whose name is its label.
     pub fn label(self) -> &'static str {
@@ -76,15 +88,17 @@ impl Host {
         }
     }
 
-    /// Whether `ancestor` is this host's own process: Claude Code's when it
-    /// is `claude_pid`, the others' by their command names.
-    fn runs_as(self, ancestor: &Ancestor, claude_pid: Option<i32>) -> bool {
+    /// Whether an ancestor matches a host-specific PID hint or command name.
+    fn runs_as(self, ancestor: &Ancestor, hint: Option<i32>, uid: u32) -> bool {
+        if ancestor.uid != uid {
+            return false;
+        }
         let command = ancestor.command.as_str();
         match self {
-            Self::Claude => claude_pid == Some(ancestor.pid),
+            Self::Claude => hint == Some(ancestor.pid),
             Self::Codex => command.starts_with("codex"),
-            Self::Opencode => command == "opencode",
-            Self::Pi => command == "pi",
+            Self::Opencode => hint == Some(ancestor.pid) || command == "opencode",
+            Self::Pi => hint == Some(ancestor.pid) || command == "pi",
             Self::Cursor => command.starts_with("Cursor") || command == "cursor-agent",
             Self::Named => false,
         }
@@ -156,12 +170,17 @@ pub struct HostSession {
     host: Host,
     /// The host's own id, or the ATLAS_SESSION label.
     id: HostId,
-    /// The host's process, where the host names it (Claude Code).
+    /// The verified root host's exact process instance.
     process: Option<Instance>,
-    /// The project folder's name its command works in, never its path.
+    /// The previous exact host instance the daemon proved has exited.
+    replaces: Option<Instance>,
+    /// The root host's project folder basename, or the legacy fallback.
     folder: Option<String>,
     /// When its command started, in milliseconds since 1970.
     began: Option<u64>,
+    folder_from_host: bool,
+    verified: bool,
+    ambiguous: bool,
 }
 
 impl HostSession {
@@ -173,8 +192,12 @@ impl HostSession {
             host,
             id,
             process: None,
+            replaces: None,
             folder: None,
             began: None,
+            folder_from_host: false,
+            verified: false,
+            ambiguous: false,
         })
     }
 
@@ -216,7 +239,7 @@ impl HostSession {
         &self.id
     }
 
-    /// The host's process, where the host names it (Claude Code).
+    /// The verified root host's exact process instance.
     pub fn process(&self) -> Option<Instance> {
         self.process
     }
@@ -226,14 +249,15 @@ impl HostSession {
     /// that this command runs in that host.
     pub(crate) fn ancestor(&self) -> Option<Instance> {
         self.process.filter(|process| {
-            process.running()
-                && ancestry::ancestors(ANCESTORS)
-                    .iter()
-                    .any(|ancestor| ancestor.pid == process.pid)
+            self.verified
+                || (process.running()
+                    && ancestry::ancestors(ANCESTORS)
+                        .iter()
+                        .any(|ancestor| ancestor.instance == *process))
         })
     }
 
-    /// The project folder's name its command works in, never its path.
+    /// The root host's project folder basename, or the legacy fallback.
     pub fn folder(&self) -> Option<&str> {
         self.folder.as_deref()
     }
@@ -245,7 +269,7 @@ impl HostSession {
     }
 
     /// The host session of this process's command, from its environment,
-    /// working in the project of its working directory and begun when this
+    /// named by the verified root host's project and begun when this
     /// process started; None when no host names one or its value is not a
     /// plain id.
     pub fn from_env() -> Option<Self> {
@@ -254,26 +278,25 @@ impl HostSession {
             || ancestry::ancestors(ANCESTORS),
             ancestry::process,
         )?;
-        let folder = std::env::current_dir()
-            .ok()
-            .and_then(|directory| store::project_folder(&directory));
+        let session = session.with_folder(crate::process::cwd, std::env::current_dir().ok());
         let began = Instance::current().map(|process| process.started_ms());
-        Some(Self {
-            folder,
-            began,
-            ..session
-        })
+        Some(Self { began, ..session })
     }
 
-    /// [`HostSession::from_env`] over `env`, with `ancestors` asked only
-    /// when two hosts' variables are present, and `process` only for the
-    /// process Claude Code names. With two hosts, the nearest is the
-    /// session only when the walk finds every one of them; otherwise which
-    /// is innermost is not known, and the command has no session.
+    /// Resolve labels using only same-account ancestry and exact process starts.
     pub(crate) fn resolve(
         env: impl Fn(&str) -> Option<String>,
         ancestors: impl FnOnce() -> Vec<Ancestor>,
         process: impl Fn(i32) -> Option<Facts>,
+    ) -> Option<Self> {
+        Self::resolve_for(env, ancestors, process, nix::unistd::geteuid().as_raw())
+    }
+
+    fn resolve_for(
+        env: impl Fn(&str) -> Option<String>,
+        ancestors: impl FnOnce() -> Vec<Ancestor>,
+        process: impl Fn(i32) -> Option<Facts>,
+        uid: u32,
     ) -> Option<Self> {
         let candidates: Vec<(Host, HostId)> = SOURCES
             .iter()
@@ -284,34 +307,58 @@ impl HostSession {
                     .map(|id| (*host, id))
             })
             .collect();
-        let claude_pid = candidates
-            .iter()
-            .any(|(host, _)| *host == Host::Claude)
-            .then(|| env("CLAUDE_PID").and_then(|pid| pid.parse::<i32>().ok()))
-            .flatten()
-            .filter(|pid| *pid > 0);
-
-        let (host, id) = match candidates.len() {
-            0 => (
-                Host::Named,
-                env("ATLAS_SESSION").as_deref().and_then(HostId::parse)?,
-            ),
-            1 => candidates.into_iter().next()?,
-            _ => nearest(candidates, &ancestors(), claude_pid)?,
+        if candidates.is_empty() {
+            return Self::new(Host::Named, env("ATLAS_SESSION")?.as_str());
+        }
+        let hint = |host: Host| {
+            let name = host.pid_hint()?;
+            env(name)?.parse::<i32>().ok().filter(|pid| *pid > 0)
         };
-
-        let process = claude_pid
-            .filter(|_| host == Host::Claude)
-            .and_then(|pid| process(pid).map(|facts| Instance::new(pid, facts.start)));
-
+        let walk = ancestors();
+        let (host, id) = if candidates.len() == 1 {
+            candidates.into_iter().next()?
+        } else {
+            nearest(candidates, &walk, &hint, uid)?
+        };
+        let matching: Vec<_> = walk
+            .iter()
+            .filter(|ancestor| host.runs_as(ancestor, hint(host), uid))
+            .collect();
+        let complete = walk
+            .last()
+            .is_some_and(|ancestor| ancestor.pid == 1 || ancestor.parent == 1);
+        let ambiguous = host == Host::Codex && (!complete || matching.len() != 1);
+        let selected =
+            (!ambiguous && host != Host::Cursor && matching.len() == 1).then(|| matching[0]);
+        let instance = selected.and_then(|ancestor| {
+            let facts = process(ancestor.pid)?;
+            (facts.uid == uid
+                && facts.start == ancestor.instance.start
+                && facts.command == ancestor.command)
+                .then_some(ancestor.instance)
+        });
         Some(Self {
-            key: Key::of(host, id.as_str()),
-            host,
-            id,
-            process,
-            folder: None,
-            began: None,
+            process: instance,
+            verified: instance.is_some(),
+            ambiguous,
+            ..Self::new(host, id.as_str())?
         })
+    }
+
+    fn with_folder(
+        mut self,
+        cwd: impl FnOnce(Instance) -> Option<std::path::PathBuf>,
+        command_cwd: Option<std::path::PathBuf>,
+    ) -> Self {
+        if let Some(process) = self.process {
+            if let Some(directory) = cwd(process) {
+                self.folder = store::project_folder(&directory);
+                self.folder_from_host = true;
+            }
+        } else if !self.ambiguous {
+            self.folder = command_cwd.and_then(|directory| store::project_folder(&directory));
+        }
+        self
     }
 
     /// What other sessions may know of this one.
@@ -332,12 +379,13 @@ impl HostSession {
 fn nearest(
     candidates: Vec<(Host, HostId)>,
     ancestors: &[Ancestor],
-    claude_pid: Option<i32>,
+    hint: &impl Fn(Host) -> Option<i32>,
+    uid: u32,
 ) -> Option<(Host, HostId)> {
     let found = |host: &Host| {
         ancestors
             .iter()
-            .position(|ancestor| host.runs_as(ancestor, claude_pid))
+            .position(|ancestor| host.runs_as(ancestor, hint(*host), uid))
     };
     let places: Vec<usize> = candidates
         .iter()

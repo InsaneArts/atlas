@@ -1187,6 +1187,41 @@ async fn the_helpers_activity_apps_and_screenshots_answer_only_the_viewers_own_o
 }
 
 #[tokio::test]
+async fn activity_json_reports_an_unreadable_log_and_recovers_after_it_is_replaced() {
+    let dir = tempfile::tempdir().unwrap();
+    let viewer = http::configured(client(dir.path()), "127.0.0.1:0".to_owned(), None);
+    let output = viewer.client().output_dir().unwrap().to_path_buf();
+    let path = output.join(crate::activity_log::FILE);
+
+    let (status, reply) = read_json(&viewer, "activity.json").await;
+    assert_eq!((status, reply["ok"].clone()), (200, json!(true)));
+    assert_eq!(reply["activity"], json!([]));
+    std::fs::create_dir(&path).unwrap();
+    for _ in 0..2 {
+        let (status, reply) = read_json(&viewer, "activity.json").await;
+        assert_eq!(status, 503);
+        assert_eq!(reply["ok"], false);
+        assert_eq!(reply["code"], "io");
+        assert_eq!(reply["error"], "The activity log could not be read.");
+        assert_eq!(reply["uncertain"], false);
+        assert!(reply.get("activity").is_none());
+    }
+    assert!(crate::activity_log::recent(&output, ACTIVITY_ROWS).is_empty());
+    let (status, reply) = read_json(&viewer, "status.json").await;
+    assert_eq!(status, 200);
+    assert_eq!(reply["overview"]["activity"], json!([]));
+    std::fs::remove_dir(path).unwrap();
+    std::fs::write(
+        output.join(crate::activity_log::PREVIOUS),
+        "bad row\n{}\n{\"at\":\"1\",\"operation\":\"input\",\"ok\":true}\n",
+    )
+    .unwrap();
+    let (status, reply) = read_json(&viewer, "activity.json").await;
+    assert_eq!((status, reply["ok"].clone()), (200, json!(true)));
+    assert_eq!(reply["activity"].as_array().unwrap().len(), 1);
+}
+
+#[tokio::test]
 async fn activity_json_never_carries_typed_text() {
     let dir = tempfile::tempdir().unwrap();
     let viewer = unreachable(dir.path()).await;
@@ -1677,7 +1712,7 @@ async fn sessions_json_never_carries_ids_paths_or_tokens() {
 }
 
 #[test]
-fn a_session_ends_an_hour_after_it_was_last_seen_and_is_listed_for_seven_days() {
+fn a_quiet_session_has_no_known_end_and_is_listed_for_seven_days() {
     use crate::host_session::{Host, HostSession, record::Record};
 
     let now = 1_793_170_000_000_u64;
@@ -1715,7 +1750,7 @@ fn a_session_ends_an_hour_after_it_was_last_seen_and_is_listed_for_seven_days() 
         .iter()
         .map(|past| json!(past.state).as_str().unwrap().to_owned())
         .collect();
-    assert_eq!(states, ["idle", "ended"], "a week and more is gone");
+    assert_eq!(states, ["idle", "idle"], "a week and more is gone");
     assert_eq!(history[1].ended_at, None, "it only went quiet");
     let plans: Vec<_> = history[0]
         .plans

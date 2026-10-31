@@ -5,7 +5,10 @@
 //! apart from one that failed or answered something else, and each request
 //! is bounded by what is left of one deadline. Only copies are made;
 //! nothing is set but each element's own messaging timeout.
-use super::{ABSENT, Element, Frame, ffi, text::bounded_string};
+use super::{
+    ABSENT, Element, Frame, ffi,
+    text::{bounded_string, getter_failed},
+};
 use crate::error::{Code, Error, Result};
 use objc2_application_services::{AXError, AXUIElement, AXValue, AXValueType};
 use objc2_core_foundation::{CFBoolean, CFNull, CFRetained, CFString, CFType};
@@ -96,7 +99,7 @@ impl Unread {
 
 /// One attribute's answer, as the read tells answers apart.
 #[derive(Debug, Clone, PartialEq)]
-enum Answer<E> {
+pub(super) enum Answer<E> {
     /// The element has no such attribute, or no value for it.
     Absent,
     /// The request failed with this error.
@@ -114,7 +117,7 @@ enum Answer<E> {
 }
 
 /// What the read asks of the app, and when: the live app, or a test's.
-trait Ask {
+pub(super) trait Ask {
     /// An element of the app.
     type Element: Clone + PartialEq;
     fn now(&self) -> Instant;
@@ -138,14 +141,14 @@ pub(crate) struct Judged {
 }
 
 /// One strict read, until its deadline.
-struct Reader<A> {
-    ask: A,
-    deadline: Instant,
+pub(super) struct Reader<A> {
+    pub(super) ask: A,
+    pub(super) deadline: Instant,
 }
 
 impl<A: Ask> Reader<A> {
     /// What is left of the deadline; an error once it is spent.
-    fn left(&self) -> Result<Duration> {
+    pub(super) fn left(&self) -> Result<Duration> {
         let left = self.deadline.saturating_duration_since(self.ask.now());
         if left.is_zero() {
             return Err(Unread::Slow.error());
@@ -163,7 +166,10 @@ impl<A: Ask> Reader<A> {
         attribute: &'static str,
     ) -> Result<Answer<A::Element>> {
         let left = self.left()?;
-        if !self.ask.bound(element, left) {
+        if !self
+            .ask
+            .bound(element, left.min(Duration::from_millis(250)))
+        {
             return Err(Unread::Failed.error());
         }
 
@@ -184,24 +190,37 @@ impl<A: Ask> Reader<A> {
         }
     }
 
-    fn text(&mut self, element: &A::Element, attribute: &'static str) -> Result<Option<String>> {
+    pub(super) fn text(
+        &mut self,
+        element: &A::Element,
+        attribute: &'static str,
+    ) -> Result<Option<String>> {
         text(self.answer(element, attribute)?)
     }
 
-    /// One of a field's names. A name getter that fails outright, as an
-    /// AppKit text view's description does every time, gives no name: a
-    /// name only ever matches, so one that cannot be read can only leave a
-    /// field unmatched, never matched wrongly. Any other failure is an
-    /// error.
-    fn name(&mut self, element: &A::Element, attribute: &'static str) -> Result<Option<String>> {
+    /// One name, retaining plain getter failures for candidate ranking.
+    /// Other failures and malformed or incomplete text refuse immediately.
+    fn name(
+        &mut self,
+        element: &A::Element,
+        attribute: &'static str,
+        failed: &mut Vec<&'static str>,
+    ) -> Result<Option<String>> {
         match self.asked(element, attribute)? {
-            Answer::Failed(AXError::Failure) => Ok(None),
+            Answer::Failed(status) if getter_failed(status, attribute) => {
+                failed.push(attribute);
+                Ok(None)
+            }
             Answer::Failed(_) => Err(Unread::Failed.error()),
             answer => text(answer),
         }
     }
 
-    fn flag(&mut self, element: &A::Element, attribute: &'static str) -> Result<Option<bool>> {
+    pub(super) fn flag(
+        &mut self,
+        element: &A::Element,
+        attribute: &'static str,
+    ) -> Result<Option<bool>> {
         match self.answer(element, attribute)? {
             Answer::Absent => Ok(None),
             Answer::Flag(flag) => Ok(Some(flag)),
@@ -209,7 +228,7 @@ impl<A: Ask> Reader<A> {
         }
     }
 
-    fn reference(
+    pub(super) fn reference(
         &mut self,
         element: &A::Element,
         attribute: &'static str,
@@ -234,7 +253,7 @@ impl<A: Ask> Reader<A> {
     }
 
     /// A window as the check judges it: role, subrole, title and frame.
-    fn window(&mut self, element: &A::Element) -> Result<Element> {
+    pub(super) fn window(&mut self, element: &A::Element) -> Result<Element> {
         Ok(Element {
             role: self.text(element, "AXRole")?,
             subrole: self.text(element, "AXSubrole")?,
@@ -248,21 +267,36 @@ impl<A: Ask> Reader<A> {
     /// names, as `atlas elements --name` matches them, and whether it is
     /// enabled and focused. No value is read: a field's value is what was
     /// typed, never its name.
-    fn field(&mut self, element: &A::Element) -> Result<Element> {
-        Ok(Element {
+    pub(super) fn field(&mut self, element: &A::Element) -> Result<Element> {
+        self.field_names(element).map(|(field, _)| field)
+    }
+
+    /// The field and the name attributes whose getters failed plainly.
+    /// Each failed read leaves that name's namespace uncertain.
+    pub(super) fn field_names(
+        &mut self,
+        element: &A::Element,
+    ) -> Result<(Element, Vec<&'static str>)> {
+        let mut failed = Vec::new();
+        let field = Element {
             role: self.text(element, "AXRole")?,
             subrole: self.text(element, "AXSubrole")?,
-            title: self.name(element, "AXTitle")?,
-            description: self.name(element, "AXDescription")?,
-            identifier: self.name(element, "AXIdentifier")?,
+            title: self.name(element, "AXTitle", &mut failed)?,
+            description: self.name(element, "AXDescription", &mut failed)?,
+            identifier: self.name(element, "AXIdentifier", &mut failed)?,
             enabled: self.flag(element, "AXEnabled")?,
             focused: self.flag(element, "AXFocused")?,
             ..bare()
-        })
+        };
+        Ok((field, failed))
     }
 
     /// Where `element` sits, walking its parents until [`place`] tells.
-    fn within(&mut self, element: A::Element, window: Option<&A::Element>) -> Result<Within> {
+    pub(super) fn within(
+        &mut self,
+        element: A::Element,
+        window: Option<&A::Element>,
+    ) -> Result<Within> {
         let mut current = element;
         for _ in 0..PARENTS {
             let at_window = window.is_some_and(|window| *window == current);
@@ -281,6 +315,32 @@ impl<A: Ask> Reader<A> {
             }
         }
 
+        Err(Unread::Deep.error())
+    }
+
+    /// A focused window may be the document that holds the focused sheet.
+    /// Prefer that sheet's own frame when matching its CG window number.
+    fn focused_window(
+        &mut self,
+        element: A::Element,
+        window: Option<&A::Element>,
+    ) -> Result<Option<A::Element>> {
+        let mut current = element;
+        for _ in 0..PARENTS {
+            if window == Some(&current) {
+                return Ok(None);
+            }
+            match self.text(&current, "AXRole")?.as_deref() {
+                Some("AXSheet") => return Ok(Some(current)),
+                Some("AXWindow") if window.is_none() => return Ok(Some(current)),
+                Some("AXWindow" | "AXApplication") => return Ok(None),
+                _ => {}
+            }
+            match self.reference(&current, "AXParent")? {
+                Some(parent) => current = parent,
+                None => return Ok(None),
+            }
+        }
         Err(Unread::Deep.error())
     }
 }
@@ -354,19 +414,45 @@ fn place(at_window: bool, role: Option<&str>) -> Step {
 
 /// Where keyboard focus is inside the app whose element is `app`, read
 /// through `ask` until `deadline`, as far as what is `judged` needs.
-fn read<A: Ask>(ask: A, app: &A::Element, deadline: Instant, judged: Judged) -> Result<Keyboard> {
+pub(super) fn read<A: Ask>(
+    ask: A,
+    app: &A::Element,
+    deadline: Instant,
+    judged: Judged,
+) -> Result<Keyboard> {
     let mut reader = Reader { ask, deadline };
     let mut keyboard = Keyboard::default();
-    let window = if judged.window {
+    let mut window = if judged.window {
         reader.reference(app, "AXFocusedWindow")?
     } else {
         None
     };
-    if let Some(window) = &window {
-        keyboard.window = Some(reader.window(window)?);
+    let element = reader.reference(app, "AXFocusedUIElement")?;
+    if judged.window {
+        if let Some(element) = &element
+            && let Some(focused) = reader.focused_window(element.clone(), window.as_ref())?
+        {
+            let owner = reader
+                .ask
+                .owner(app)
+                .ok_or_else(|| Unread::Failed.error())?;
+            if reader.ask.owner(&focused) != Some(owner) {
+                return Err(Unread::Failed.error());
+            }
+            window = Some(focused);
+        }
+        if let Some(window) = &window {
+            let owner = reader
+                .ask
+                .owner(app)
+                .ok_or_else(|| Unread::Failed.error())?;
+            if reader.ask.owner(window) != Some(owner) {
+                return Err(Unread::Failed.error());
+            }
+            keyboard.window = Some(reader.window(window)?);
+        }
     }
-
-    let Some(element) = reader.reference(app, "AXFocusedUIElement")? else {
+    let Some(element) = element else {
         return Ok(keyboard);
     };
     if judged.field {
@@ -398,8 +484,45 @@ pub(crate) fn keyboard(pid: i64, timeout: Duration, judged: Judged) -> Result<Ke
     read(Live, &app, deadline, judged)
 }
 
+/// Some apps omit the system-wide focused application. Their own frontmost
+/// flag and an owned focus reference must both be present to substitute.
+pub(crate) fn frontmost(pid: i64, timeout: Duration) -> Result<bool> {
+    let deadline = Instant::now() + timeout;
+    let pid = libc::pid_t::try_from(pid).map_err(|_| Unread::Failed.error())?;
+    let app = ffi::application(pid).ok_or_else(|| Unread::Failed.error())?;
+    app_focus(
+        &mut Reader {
+            ask: Live,
+            deadline,
+        },
+        &app,
+        i64::from(pid),
+    )
+}
+
+fn app_focus<A: Ask>(reader: &mut Reader<A>, app: &A::Element, pid: i64) -> Result<bool> {
+    if reader.ask.owner(app) != Some(pid) || reader.flag(app, "AXFrontmost")? != Some(true) {
+        return Ok(false);
+    }
+    for attribute in ["AXFocusedWindow", "AXFocusedUIElement"] {
+        if let Some(element) = reader.reference(app, attribute)? {
+            if reader.ask.owner(&element) != Some(pid) {
+                return Err(Unread::Failed.error());
+            }
+            match reader.text(&element, "AXRole")?.as_deref() {
+                Some("AXApplication") => return Err(Unread::Withheld.error()),
+                Some("AXWindow" | "AXSheet") => {}
+                Some(_) if attribute == "AXFocusedUIElement" => {}
+                _ => return Err(Unread::Malformed.error()),
+            }
+            return Ok(true);
+        }
+    }
+    Ok(false)
+}
+
 /// The app itself, asked through Accessibility.
-struct Live;
+pub(super) struct Live;
 
 impl Ask for Live {
     type Element = CFRetained<AXUIElement>;
@@ -491,6 +614,7 @@ mod tests {
         bounds: Vec<Duration>,
         asked: Vec<(usize, &'static str)>,
         bounded: bool,
+        owners: HashMap<usize, i64>,
     }
 
     impl Fake {
@@ -503,6 +627,7 @@ mod tests {
                 bounds: Vec::new(),
                 asked: Vec::new(),
                 bounded: true,
+                owners: HashMap::new(),
             };
             let text = |text: &str| Answer::Text(text.to_owned());
             fake.set(APP, "AXFocusedWindow", Answer::Element(WINDOW));
@@ -558,8 +683,8 @@ mod tests {
             answer
         }
 
-        fn owner(&mut self, _: &usize) -> Option<i64> {
-            Some(812)
+        fn owner(&mut self, element: &usize) -> Option<i64> {
+            Some(*self.owners.get(element).unwrap_or(&812))
         }
     }
 
@@ -619,9 +744,9 @@ mod tests {
         read_with(&mut fake, budget()).unwrap();
 
         assert_eq!(fake.bounds.len(), fake.asked.len(), "one bound per request");
-        assert_eq!(fake.bounds[0], budget());
+        assert_eq!(fake.bounds[0], Duration::from_millis(250));
         assert!(
-            fake.bounds.windows(2).all(|pair| pair[1] < pair[0]),
+            fake.bounds.windows(2).all(|pair| pair[1] <= pair[0]),
             "each bound is what is left, never the first one again: {:?}",
             fake.bounds
         );
@@ -794,10 +919,13 @@ mod tests {
         let mut fake = Fake::app();
         fake.set(GROUP, "AXParent", Answer::Element(SHEET));
         fake.set(SHEET, "AXRole", Answer::Text("AXSheet".to_owned()));
-        assert_eq!(
-            read_with(&mut fake, budget()).unwrap().within,
-            Within::Sheet
-        );
+        fake.set(SHEET, "AXPosition", Answer::Point(80.0, 120.0));
+        fake.set(SHEET, "AXSize", Answer::Size(500.0, 180.0));
+        let keyboard = read_with(&mut fake, budget()).unwrap();
+        assert_eq!(keyboard.within, Within::Window);
+        let window = keyboard.window.unwrap();
+        assert_eq!(window.role.as_deref(), Some("AXSheet"));
+        assert_eq!(window.frame.unwrap().width, 500.0);
 
         let mut orphan = Fake::app();
         orphan.set(GROUP, "AXParent", Answer::Absent);
@@ -841,5 +969,79 @@ mod tests {
             let error = reference::<usize>(answer).unwrap_err();
             assert_eq!(error.details["unread"], "malformed");
         }
+    }
+    #[test]
+    fn direct_app_focus_requires_both_frontmost_and_an_owned_focus_reference() {
+        for attribute in ["AXFocusedWindow", "AXFocusedUIElement"] {
+            let mut fake = Fake::app();
+            fake.set(APP, "AXFrontmost", Answer::Flag(true));
+            fake.set(APP, "AXFocusedWindow", Answer::Absent);
+            fake.set(APP, "AXFocusedUIElement", Answer::Absent);
+            fake.set(APP, attribute, Answer::Element(WINDOW));
+            let deadline = fake.started + budget();
+            assert!(
+                app_focus(
+                    &mut Reader {
+                        ask: &mut fake,
+                        deadline
+                    },
+                    &APP,
+                    812
+                )
+                .unwrap()
+            );
+            fake.owners.insert(WINDOW, 999);
+            assert!(
+                app_focus(
+                    &mut Reader {
+                        ask: &mut fake,
+                        deadline
+                    },
+                    &APP,
+                    812
+                )
+                .is_err()
+            );
+        }
+        for frontmost in [Answer::Absent, Answer::Flag(false), Answer::Flag(true)] {
+            let mut fake = Fake::app();
+            fake.set(APP, "AXFrontmost", frontmost);
+            fake.set(APP, "AXFocusedWindow", Answer::Absent);
+            fake.set(APP, "AXFocusedUIElement", Answer::Absent);
+            let deadline = fake.started + budget();
+            assert!(
+                !app_focus(
+                    &mut Reader {
+                        ask: &mut fake,
+                        deadline
+                    },
+                    &APP,
+                    812
+                )
+                .unwrap()
+            );
+        }
+        let mut fake = Fake::app();
+        fake.set(APP, "AXFrontmost", Answer::Failed(AXError::CannotComplete));
+        let deadline = fake.started + budget();
+        assert!(
+            app_focus(
+                &mut Reader {
+                    ask: &mut fake,
+                    deadline
+                },
+                &APP,
+                812
+            )
+            .is_err()
+        );
+    }
+    #[test]
+    fn a_focused_element_proves_its_window_when_the_app_omits_the_window_attribute() {
+        let mut fake = Fake::app();
+        fake.set(APP, "AXFocusedWindow", Answer::Absent);
+        let keyboard = read_with(&mut fake, budget()).unwrap();
+        assert_eq!(keyboard.window.unwrap().role.as_deref(), Some("AXWindow"));
+        assert_eq!(keyboard.within, Within::Window);
     }
 }

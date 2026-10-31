@@ -94,6 +94,8 @@ mod journal;
 #[cfg(target_os = "macos")]
 mod lease;
 #[cfg(target_os = "macos")]
+pub mod processes;
+#[cfg(target_os = "macos")]
 pub mod service;
 #[cfg(target_os = "macos")]
 pub mod windows;

@@ -39,21 +39,31 @@ extension ViewerPresenter {
   /// - Parameter snapshot: What the controller holds.
   /// - Returns: The sessions.
   static func sessions(_ snapshot: ViewerSnapshot) -> ViewerSessionsState {
-    let reading = snapshot.reading.statusReading
     let chosen = snapshot.shownSessions
-    let listed = reading.liveSessions
-    let listedKeys = Set(listed.map(\.key))
-    let rest = (snapshot.panes.sessions.list?.live ?? [])
-      .filter { !listedKeys.contains($0.key) && $0.isLive && $0.state != .ended }
-    let live = listed + rest
+    let current = currentSessions(snapshot)
+    let live = current.filter(StatusReading.isRelevant)
     let liveKeys = Set(live.map(\.key))
-    let history = (snapshot.panes.sessions.list?.sessions ?? [])
-      .filter { $0.isEnded && !liveKeys.contains($0.key) }
+    let currentEnds = current.filter {
+      $0.state == .ended && !StatusReading.isRelevant($0)
+    }
+    let currentEndKeys = Set(currentEnds.map(\.key))
+    let history =
+      currentEnds.map { session in
+        var record =
+          snapshot.panes.sessions.record(session.key)
+          ?? HostSessionRecord(key: session.key, name: session.name, host: session.host)
+        record.state = .ended
+        record.endedAt = session.endedAt
+        return record
+      }
+      + (snapshot.panes.sessions.list?.sessions ?? [])
+      .filter { $0.isEnded && !liveKeys.contains($0.key) && !currentEndKeys.contains($0.key) }
     let ended = history.enumerated()
       .filter { $0.offset < mostEnded || chosen == .one($0.element.key) }
       .map(\.element)
     let icons =
       live
+      .filter(\.isLive)
       .prefix(mostStackedIcons)
       .map { $0.host.icon }
     let query = snapshot.session.search.query
@@ -77,7 +87,7 @@ extension ViewerPresenter {
     return ViewerSessionsState(
       chosen: chosen,
       icons: icons,
-      liveCount: live.count,
+      liveCount: live.filter(\.isLive).count,
       groups: groups,
       endedCount: endedRows.count,
       endedShown: endedShown

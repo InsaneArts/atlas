@@ -102,7 +102,7 @@ extension ViewerClient {
     return request(to: url)
   }
 
-  /// An `activity.json` reply read: only a 200 carries a log.
+  /// An `activity.json` reply read: only a 200 carries a log. An unreadable log's refusal keeps its error code.
   ///
   /// - Parameters:
   ///   - data: The reply's body.
@@ -111,7 +111,7 @@ extension ViewerClient {
   /// - Throws: ``ServiceError`` with the service's error for any reply that is not a 200, or when its body is not an
   ///   object.
   static func activity(_ data: Data, response: HTTPURLResponse) throws(ServiceError) -> ActivityLog {
-    try listed(ActivityLog.self, data, response: response, fallback: "No activity")
+    try listed(ActivityLog.self, data, response: response, fallback: "The activity log could not be read.")
   }
 
   /// An `apps.json` reply read: only a 200 carries apps, so a refusal never reads as no apps.

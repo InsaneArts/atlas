@@ -83,8 +83,9 @@ fn task_of(makes: bool, host: Option<&HostSession>, name: Option<&OsStr>) -> Res
 fn windows_info(dock: bool) -> Result<Value> {
     use atlas::native::{ax, windows};
 
-    let windows = windows::windows()?;
-    let mut info = json!({ "ok": true, "windows": windows });
+    let (windows, starts) =
+        atlas::native::processes::snapshot(windows::windows, |window| window.pid)?;
+    let mut info = json!({ "ok": true, "windows": windows, "starts": starts });
     if dock {
         info["dock"] = json!(ax::dock(&windows, ax::DOCK_TIMEOUT));
     }
@@ -160,7 +161,14 @@ pub(super) async fn execute(
     let doing = policy.doing.clone();
     let changes = policy.changes_helper;
     let waits = policy.waits(actor);
-    let host = policy.labelled(actor).then(HostSession::from_env).flatten();
+    let host = if policy.labelled(actor) {
+        match Config::load(&config).and_then(Client::new) {
+            Ok(client) => HostSession::from_env_verified(&client).await,
+            Err(_) => HostSession::from_env(),
+        }
+    } else {
+        None
+    };
     let task = task_of(
         policy.makes,
         host.as_ref(),

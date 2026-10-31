@@ -61,7 +61,12 @@ impl Client {
             self.identity().await?;
             self.listed_apps(json!({"op": "apps"})).await
         };
-        read.await.map_err(Error::certain)
+        let mut reply = read.await.map_err(Error::certain)?;
+        reply
+            .as_object_mut()
+            .expect("validated app list")
+            .remove("starts");
+        Ok(reply)
     }
 
     /// [`Client::apps`] in the helper session `verified` names, as a pinned
@@ -69,7 +74,11 @@ impl Client {
     /// refuses the listing in any other, and an older one is verified again.
     pub(crate) async fn apps_in(&self, verified: &Verified) -> Result<Value> {
         let Some(pin) = verified.pin() else {
-            return self.apps().await;
+            self.identity().await?;
+            return self
+                .listed_apps(json!({"op": "apps"}))
+                .await
+                .map_err(Error::certain);
         };
 
         self.listed_apps(json!({"op": "apps", "session": pin}))

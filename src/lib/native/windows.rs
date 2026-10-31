@@ -295,6 +295,8 @@ impl Screen {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Shown {
     pub windows: Vec<Window>,
+    /// Process identities from this snapshot; absent only for older probes.
+    pub starts: Option<std::collections::BTreeMap<i64, crate::process::Start>>,
     /// Unread when the probe does not say: it was not asked, or is older.
     #[serde(default)]
     pub dock: Dock,

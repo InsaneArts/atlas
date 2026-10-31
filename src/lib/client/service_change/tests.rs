@@ -18,6 +18,19 @@ fn seen(client: &Client, session: &HostSession, at: u64, ended: bool) {
         .unwrap();
 }
 
+fn service_blocker_with_state(
+    client: &Client,
+    recovery: bool,
+    state: crate::process::State,
+) -> Option<String> {
+    crate::overview::service_blocker_with(
+        client,
+        recovery,
+        super::super::timestamp(),
+        |_, instances| crate::host_session::liveness::Snapshot::sample(instances, |_| state),
+    )
+}
+
 #[test]
 fn service_changes_defer_for_two_minutes_but_not_for_the_callers_own_session() {
     let directory = tempfile::tempdir().unwrap();
@@ -37,6 +50,68 @@ fn service_changes_defer_for_two_minutes_but_not_for_the_callers_own_session() {
     assert!(service_blocker(&client, false, u128::from(now + 120_001) * 1_000_000).is_none());
     seen(&client, &other, now, true);
     assert!(service_blocker(&client, false, u128::from(now) * 1_000_000).is_none());
+}
+
+#[test]
+fn service_changes_respect_host_exits_without_treating_unknown_hosts_as_idle() {
+    use crate::process::{Instance, State};
+
+    for (process, state, blocks) in [
+        (Instance::current().unwrap(), State::Running, true),
+        (Instance::new(i32::MAX, [1, 0]), State::Gone, false),
+        (Instance::new(1, [1, 0]), State::Unknown, true),
+    ] {
+        assert_eq!(process.state(), state);
+        let directory = tempfile::tempdir().unwrap();
+        let client = crate::test_support::client(directory.path());
+        let worker = session("worker");
+        let now = crate::host_session::now_ms();
+        Store::at(client.output_dir().unwrap())
+            .update(&worker, now, &client.controller, |record| {
+                record.host_process = Some(process);
+            })
+            .unwrap();
+
+        assert_eq!(
+            service_blocker(&client, false, u128::from(now) * 1_000_000).as_deref(),
+            blocks.then_some("worker is active in the helper."),
+            "host state: {state:?}"
+        );
+    }
+}
+
+#[test]
+fn only_recovery_of_the_callers_outcome_can_pass_a_recent_host_with_unknown_liveness() {
+    for own in [None, Some(session("recovering"))] {
+        for owns_outcome in [false, true] {
+            let directory = tempfile::tempdir().unwrap();
+            let mut client = crate::test_support::client(directory.path());
+            client.host_session = own.clone();
+            client.controller = client.controller.labelled(own.as_ref());
+            let worker = session("worker");
+            let now = crate::host_session::now_ms();
+            Store::at(client.output_dir().unwrap())
+                .update(&worker, now, &client.controller, |record| {
+                    record.host_process = Some(crate::process::Instance::new(1, [1, 0]));
+                })
+                .unwrap();
+            let controller = client.controller.clone().labelled(if owns_outcome {
+                own.as_ref()
+            } else {
+                Some(&worker)
+            });
+            drop(controller.quarantine().unwrap());
+            let pending = client.controller.pending().unwrap();
+
+            for recovery in [false, true] {
+                assert_eq!(
+                    service_blocker(&client, recovery, u128::from(now) * 1_000_000).as_deref(),
+                    (!(recovery && owns_outcome)).then_some("worker is active in the helper.")
+                );
+                assert_eq!(client.controller.pending().unwrap(), pending);
+            }
+        }
+    }
 }
 
 #[test]
@@ -250,11 +325,12 @@ async fn recovery_can_take_control_after_the_callers_screenshot_with_an_unknown_
             },
         )
         .unwrap();
-        let listed = crate::overview::live_host_sessions(
-            &client,
-            crate::overview::SessionFacts::local(&client.controller, u128::from(now) * 1_000_000),
-        )
-        .await;
+        let listed = crate::overview::SessionReading::collect(&client)
+            .unwrap()
+            .entries(crate::overview::SessionFacts::local(
+                &client.controller,
+                u128::from(now) * 1_000_000,
+            ));
         assert_eq!(listed.len(), 1);
         if client.host_session.is_some() {
             assert_eq!(listed[0]["state"], "needsYou");
@@ -543,9 +619,10 @@ async fn recovery_of_the_callers_unknown_outcome_still_refuses_a_running_command
         .unwrap()
         .unwrap_err();
     assert_eq!(error.code, Code::Busy);
-    assert_eq!(
-        error.error,
-        "worker has a command still running in the helper."
+    assert!(
+        error.error == "worker has a command still running in the helper."
+            || error.error
+                == "Atlas could not check whether a command is still active in the helper."
     );
     assert_eq!(client.controller.pending().unwrap(), pending);
     other.clear_if(&command).unwrap();
@@ -657,11 +734,12 @@ async fn a_named_updater_defers_for_terminal_work_before_its_own_screenshot() {
         )
         .unwrap();
     }
-    let listed = crate::overview::live_host_sessions(
-        &client,
-        crate::overview::SessionFacts::local(&client.controller, u128::from(now) * 1_000_000),
-    )
-    .await;
+    let listed = crate::overview::SessionReading::collect(&client)
+        .unwrap()
+        .entries(crate::overview::SessionFacts::local(
+            &client.controller,
+            u128::from(now) * 1_000_000,
+        ));
     assert_eq!(listed.len(), 1);
     assert_eq!(listed[0]["key"], own.key().as_str());
 
@@ -703,11 +781,114 @@ fn a_holder_on_its_first_command_defers_service_changes_until_it_lets_go() {
         .acquire(false)
         .unwrap();
     assert_eq!(
-        service_blocker(&client, false, super::super::timestamp()).as_deref(),
+        service_blocker_with_state(&client, false, crate::process::State::Running).as_deref(),
         Some("worker is active in the helper.")
     );
     drop(holder);
-    assert!(service_blocker(&client, false, super::super::timestamp()).is_none());
+    assert!(service_blocker_with_state(&client, false, crate::process::State::Running).is_none());
+}
+
+#[test]
+fn service_changes_refuse_an_unknown_holder_even_during_own_recovery() {
+    let directory = tempfile::tempdir().unwrap();
+    let client = crate::test_support::client(directory.path());
+    let host = session("worker");
+    let _holder = client
+        .controller
+        .clone()
+        .labelled(Some(&host))
+        .acquire(false)
+        .unwrap();
+    drop(client.controller.quarantine().unwrap());
+    for recovery in [false, true] {
+        assert_eq!(
+            service_blocker_with_state(&client, recovery, crate::process::State::Unknown)
+                .as_deref(),
+            Some("Atlas could not check whether a command is still active in the helper.")
+        );
+    }
+}
+
+#[test]
+fn service_changes_refuse_an_unknown_running_command_even_during_own_recovery() {
+    let directory = tempfile::tempdir().unwrap();
+    let client = crate::test_support::client(directory.path());
+    let host = session("worker");
+    let controller = client.controller.clone().labelled(Some(&host));
+    let _command = controller.quarantine_command().unwrap();
+    drop(client.controller.quarantine().unwrap());
+    for recovery in [false, true] {
+        assert_eq!(
+            service_blocker_with_state(&client, recovery, crate::process::State::Unknown)
+                .as_deref(),
+            Some("Atlas could not check whether a command is still active in the helper.")
+        );
+    }
+}
+
+#[test]
+fn an_unavailable_snapshot_refuses_service_changes_and_preserves_pending_claims() {
+    let directory = tempfile::tempdir().unwrap();
+    let mut client = crate::test_support::client(directory.path());
+    client.host_session = Some(session("recovering"));
+    client.controller = client.controller.labelled(client.host_session.as_ref());
+    let command = client.controller.quarantine_command().unwrap();
+    drop(client.controller.quarantine().unwrap());
+    let pending = client.controller.pending().unwrap();
+    assert_eq!(pending.len(), 2);
+
+    for recovery in [false, true] {
+        assert_eq!(
+            crate::overview::service_blocker_with(
+                &client,
+                recovery,
+                super::super::timestamp(),
+                |_, _| crate::host_session::liveness::Snapshot::default(),
+            )
+            .as_deref(),
+            Some("Atlas could not check whether a command is still active in the helper.")
+        );
+        assert_eq!(client.controller.pending().unwrap(), pending);
+    }
+    client.controller.clear_if(&command).unwrap();
+}
+
+#[test]
+fn service_changes_refuse_an_unknown_waiter_unless_recovering_the_callers_outcome() {
+    let directory = tempfile::tempdir().unwrap();
+    let client = crate::test_support::client(directory.path());
+    let host = session("worker");
+    let holder = client
+        .controller
+        .clone()
+        .labelled(Some(&host))
+        .acquire(false)
+        .unwrap();
+    crate::test_support::waiting_note(&directory.path().join("state"), Some(&host));
+    drop(holder);
+    for recovery in [false, true] {
+        assert_eq!(
+            service_blocker_with_state(&client, recovery, crate::process::State::Unknown)
+                .as_deref(),
+            Some("worker is active in the helper.")
+        );
+    }
+    drop(client.controller.quarantine().unwrap());
+    assert!(service_blocker_with_state(&client, true, crate::process::State::Unknown).is_none());
+}
+
+#[test]
+fn service_changes_do_not_refuse_a_gone_holder() {
+    let directory = tempfile::tempdir().unwrap();
+    let client = crate::test_support::client(directory.path());
+    let host = session("worker");
+    let _holder = client
+        .controller
+        .clone()
+        .labelled(Some(&host))
+        .acquire(false)
+        .unwrap();
+    assert!(service_blocker_with_state(&client, false, crate::process::State::Gone).is_none());
 }
 
 #[test]
@@ -720,12 +901,12 @@ fn a_running_command_defers_service_changes_even_when_its_session_went_quiet() {
     let controller = client.controller.clone().labelled(Some(&host));
     let command = controller.quarantine_command().unwrap();
     assert_eq!(
-        service_blocker(&client, false, u128::from(now) * 1_000_000).as_deref(),
+        service_blocker_with_state(&client, false, crate::process::State::Running).as_deref(),
         Some("worker has a command still running in the helper.")
     );
     controller.clear_if(&command).unwrap();
     drop(command);
-    assert!(service_blocker(&client, false, u128::from(now) * 1_000_000).is_none());
+    assert!(service_blocker_with_state(&client, false, crate::process::State::Running).is_none());
 }
 
 #[test]
@@ -734,7 +915,7 @@ fn an_unnamed_running_command_is_named_terminal_without_an_activity_row() {
     let client = crate::test_support::client(directory.path());
     let command = client.controller.quarantine_command().unwrap();
     assert_eq!(
-        service_blocker(&client, false, super::super::timestamp()).as_deref(),
+        service_blocker_with_state(&client, false, crate::process::State::Running).as_deref(),
         Some("Terminal has a command still running in the helper.")
     );
     client.controller.clear_if(&command).unwrap();
@@ -1009,17 +1190,14 @@ async fn truncated_session_records_and_exhausted_directory_scans_refuse() {
     }
 }
 
-#[tokio::test]
-async fn recovery_names_a_running_command_and_leaves_it_pending() {
+#[test]
+fn recovery_names_a_running_command_and_leaves_it_pending() {
     let directory = tempfile::tempdir().unwrap();
     let client = crate::test_support::client(directory.path());
     let command = client.controller.quarantine_command().unwrap();
-    let error = client.restart().await.unwrap_err();
-    assert_eq!(error.code, Code::Busy);
-    assert_eq!(error.holder, Some(crate::error::Holder::Agent));
     assert_eq!(
-        error.error,
-        "Terminal has a command still running in the helper."
+        service_blocker_with_state(&client, true, crate::process::State::Running).as_deref(),
+        Some("Terminal has a command still running in the helper.")
     );
     assert_eq!(client.controller.pending().unwrap(), [command.generation()]);
     client.controller.clear_if(&command).unwrap();

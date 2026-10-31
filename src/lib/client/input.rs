@@ -26,9 +26,6 @@ pub enum Check {
     /// Sent only with the check: an input service that cannot check is
     /// refused before anything is sent.
     Required(Expect),
-    /// Checked when the input service can, and otherwise sent as before:
-    /// for input whose own check already ran before it was sent.
-    Offered(Expect),
 }
 
 /// What the helper is asked to expect of an agent's batch, given what its
@@ -39,11 +36,9 @@ pub enum Check {
 /// icon through, and input cannot be taken back once it is sent. One that
 /// did not answer is refused later, as unavailable.
 pub(super) fn expectation(native: &Value, check: Option<Check>) -> Result<Option<Expect>> {
-    let offered = has_capability(native, FOCUS_APP);
     let answered = native["ok"] == true;
     match check {
         None => Ok(None),
-        Some(Check::Offered(expect)) => Ok(offered.then_some(expect)),
         Some(Check::Required(expect)) if !answered || checks_all(native, &expect) => {
             Ok(Some(expect))
         }

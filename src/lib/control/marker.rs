@@ -78,26 +78,6 @@ impl Controller {
         Ok(file)
     }
 
-    /// Every pending generation, whether a live process is still carrying
-    /// it out, and the host session that claimed it when one is recorded;
-    /// from one locked read of the marker, or none when there is no marker.
-    pub fn pending_causes(&self) -> Result<Vec<Cause>> {
-        if !self.marker.try_exists()? {
-            return Ok(Vec::new());
-        }
-
-        let _lock = self.lock_marker()?;
-        self.read_pending_causes()
-    }
-
-    /// The same pending causes, refusing if the marker lock stays busy.
-    /// Service replacement must finish its activity check even when a writer
-    /// is suspended while holding the marker lock.
-    pub(crate) fn pending_causes_within(&self, wait: Duration) -> Result<Vec<Cause>> {
-        let _lock = self.lock_marker_within(wait)?;
-        self.read_pending_causes()
-    }
-
     /// Take the marker lock with bounded patience, including when no marker exists.
     pub(super) fn lock_marker_within(&self, wait: Duration) -> Result<File> {
         self.make_directory()?;
@@ -111,8 +91,35 @@ impl Controller {
         Ok(file)
     }
 
-    /// Read while the caller holds the marker lock.
-    fn read_pending_causes(&self) -> Result<Vec<Cause>> {
+    /// Every pending generation, whether a live process is still carrying
+    /// it out, and the host session that claimed it when one is recorded;
+    /// from one locked read of the marker, or none when there is no marker.
+    pub fn pending_causes(&self) -> Result<Vec<Cause>> {
+        if !self.marker.try_exists()? {
+            return Ok(Vec::new());
+        }
+
+        let _lock = self.lock_marker()?;
+        self.read_causes()
+    }
+
+    /// Read one pending snapshot, waiting at most `wait` for its lock.
+    /// An absent marker creates neither its directory nor its lock.
+    pub fn pending_causes_within(&self, wait: Duration) -> Result<Vec<Cause>> {
+        if !self.marker.try_exists()? {
+            return Ok(Vec::new());
+        }
+        let _lock = self.lock_marker_within(wait)?;
+        self.read_causes()
+    }
+
+    /// Service replacement must check for a writer even before a marker exists.
+    pub(crate) fn pending_causes_for_service_change(&self, wait: Duration) -> Result<Vec<Cause>> {
+        let _lock = self.lock_marker_within(wait)?;
+        self.read_causes()
+    }
+
+    fn read_causes(&self) -> Result<Vec<Cause>> {
         let mut claimed: ByGeneration<Key> = by_generation::read(&self.causes);
         let marked = self.commands();
         Ok(pending(&self.marker)?
@@ -143,9 +150,16 @@ impl Controller {
     /// Unresolved generations, the total and the commands still running,
     /// from one locked marker read.
     pub(crate) fn pending_snapshot(&self) -> Result<Snapshot> {
-        // Under the marker lock a finishing mutation cannot clear its entry
-        // between reading the marker and probing its claim.
         let _lock = self.lock_marker()?;
+        self.read_snapshot()
+    }
+
+    pub(crate) fn pending_snapshot_within(&self, wait: Duration) -> Result<Snapshot> {
+        let _lock = self.lock_marker_within(wait)?;
+        self.read_snapshot()
+    }
+
+    fn read_snapshot(&self) -> Result<Snapshot> {
         let pending = pending(&self.marker)?;
         let marked = self.commands();
         let total = pending.len();

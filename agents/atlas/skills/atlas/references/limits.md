@@ -118,8 +118,8 @@ Add `--help` to any command for its options.
   and `input` sends each action only while that app has keyboard focus (text
   and keys) or its window is the top one at the point (clicks, scrolls,
   and both ends of a drag). Otherwise the reply is `focus-changed` and
-  nothing more is sent. Text is checked every 16 characters. Atlas never
-  brings the app forward itself: click where it shows.
+  nothing more is sent. Atlas brings the named target forward within its
+  turn, then checks it. No app is launched. Text is checked every 16 characters.
 - `--window NUMBER` (from `atlas windows`) on `type` and `key` sends only
   while that window has keyboard focus with nothing of the app in front of
   it, a sheet, dialog, popup or panel; on `click X Y`, `scroll` and `drag`,
@@ -127,8 +127,8 @@ Add `--help` to any command for its options.
   `click --name`. Use it for a document that may open a sheet, or an app
   another agent also uses. The number stays the same while the title
   changes.
-- `--field NAME` on `type` and `key` sends only while the focused field has
-  that name, as `atlas elements --name` matches it (often an identifier, such
+- `--field NAME` on `type` and `key` establishes a named field where supported
+  and sends only while it has that name, as `atlas elements --name` matches it (often an identifier, such
   as TextEdit's `First Text View`); only a text field, text area, combo box
   or search field counts. A name alone cannot tell two fields of that name
   apart, so pair it with `--window`. Type each field with its own command: a
@@ -140,12 +140,12 @@ Add `--help` to any command for its options.
   focus as the app reports it, which can lag behind keys already sent, so
   text sent after focus moved may land where focus went before a check sees
   the change. `typed` counts the characters Atlas sent, not the ones that
-  reached the field: look before typing more. Atlas never switches back or
-  brings anything forward for you.
+  reached the field: look before typing more. Later keys only check the app;
+  they do not bring the original window or field back.
 - In one `input` batch given `--app`, put a short wait
-  (`{"type":"wait","ms":150}`) between a click that brings the app forward
-  and the typing after it: focus moves a moment after the click, and the
-  typing is checked as it starts.
+  (`{"type":"wait","ms":150}`) after a click when the control needs time
+  to update before typing. Bringing the app forward does not prove the
+  clicked control finished updating.
 - `atlas type` types about 150 characters a second, and other agents'
   commands wait until it is done. For several lines, pipe them in on one
   command line: `printf 'one\ntwo\n' | atlas type --app A --stdin`, or
@@ -259,14 +259,13 @@ running beside them.
   `atlas key --app A --window N cmd+s`, then
   `atlas key --app A --window N cmd+w`.
 - Pass `--app NAME` to `type`, `key`, `scroll`, `drag` and `click X Y`.
-  Between your commands another agent may bring its own window forward; then
-  Atlas answers `focus-changed` and sends nothing more. Do what its `next`
-  says (often: click where your window shows), then send only what was not
-  sent. Do not use `atlas open` to bring a showing app forward.
+  Each command brings its named target forward during its turn, then checks
+  it before input. A blocked or unreadable target still refuses. Separate
+  click and type commands can have another agent's turn between them.
 - `--app` checks the app, not the window. In an app another agent also uses,
   add `--window N` from `atlas windows` to `type`, `key`, `click X Y`,
-  `scroll` and `drag`. `click --name` takes no `--window`: click by point
-  with `--window N`, or check that the element's `at` lies in your window.
+  `scroll` and `drag`. App-only input cannot select a document. A named click
+  uses the selected element's own window. `click --name` takes no `--window`.
 - An app's settings are shared by all its windows: changing them while
   another agent works in that app changes its work too.
 - An `uncertain` you did not cause is not yours to recover: wait, and tell

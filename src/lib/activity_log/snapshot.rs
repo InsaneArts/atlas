@@ -46,26 +46,43 @@ struct Cache {
     kept: Option<Snapshot>,
 }
 
+struct Reading {
+    rows: Vec<Row>,
+    failure: Option<io::Error>,
+}
+
+impl Reading {
+    fn checked(self) -> io::Result<Vec<Row>> {
+        match self.failure {
+            Some(error) => Err(error),
+            None => Ok(self.rows),
+        }
+    }
+}
+
 impl Cache {
     fn recent(&mut self, directory: &Path, limit: usize) -> Vec<Row> {
-        self.recent_using(directory, limit, read_back)
+        self.read_using(directory, limit, read_back).rows
     }
 
-    fn recent_using(
+    fn read_using(
         &mut self,
         directory: &Path,
         limit: usize,
         mut read: impl FnMut(File, &mut u64, &mut Vec<Row>) -> io::Result<bool>,
-    ) -> Vec<Row> {
+    ) -> Reading {
         if limit == 0 {
-            return Vec::new();
+            return Reading {
+                rows: Vec::new(),
+                failure: None,
+            };
         }
 
         // Inspect the descriptors try_open_plain checked, never following links
         // or waiting on pipes. Open both first, retaining the rotation guard.
         let mut files = [None, None];
         let mut revision = [None, None];
-        let mut complete = true;
+        let mut failure = None;
         for (index, name) in [FILE, PREVIOUS].into_iter().enumerate() {
             match crate::files::try_open_plain(&directory.join(name)) {
                 Ok(Some(file)) => match Revision::of(&file) {
@@ -73,10 +90,14 @@ impl Cache {
                         revision[index] = Some(found);
                         files[index] = Some(file);
                     }
-                    Err(_) => complete = false,
+                    Err(error) => {
+                        failure.get_or_insert(error);
+                    }
                 },
                 Ok(None) => {}
-                Err(_) => complete = false,
+                Err(error) => {
+                    failure.get_or_insert(error);
+                }
             }
         }
         if let [Some(current), Some(previous)] = &revision
@@ -86,7 +107,7 @@ impl Cache {
             revision[1] = None;
         }
         let unchanged = self.kept.as_ref().is_some_and(|kept| {
-            complete && kept.directory == directory && kept.revision == revision
+            failure.is_none() && kept.directory == directory && kept.revision == revision
         });
         if !unchanged {
             // Discard the previous candidates before allocating their
@@ -97,8 +118,8 @@ impl Cache {
             #[cfg(test)]
             observed(directory);
             for file in files.into_iter().flatten() {
-                if read(file, &mut room, &mut rows).is_err() {
-                    complete = false;
+                if let Err(error) = read(file, &mut room, &mut rows) {
+                    failure.get_or_insert(error);
                 }
             }
             // Wall-clock time can move backwards during a command. Its last
@@ -111,10 +132,13 @@ impl Cache {
                     .is_none_or(|command| commands.insert(command.clone()))
             });
             rows.sort_by_key(|row| std::cmp::Reverse(row.at_nanos()));
-            if !complete {
-                // Preserve the endpoint's best-effort response, but retry the
-                // read next time even if the file's revision has not changed.
-                return selected(&rows, limit);
+            if failure.is_some() {
+                // Status keeps the rows that read, but Activity reports the
+                // failure. Retry even if the revision has not changed.
+                return Reading {
+                    rows: selected(&rows, limit),
+                    failure,
+                };
             }
             self.kept = Some(Snapshot {
                 directory: directory.to_owned(),
@@ -122,7 +146,10 @@ impl Cache {
                 rows,
             });
         }
-        selected(&self.kept.as_ref().expect("snapshot was built").rows, limit)
+        Reading {
+            rows: selected(&self.kept.as_ref().expect("snapshot was built").rows, limit),
+            failure: None,
+        }
     }
 }
 
@@ -132,6 +159,14 @@ pub(super) fn recent(directory: &Path, limit: usize) -> Vec<Row> {
         .lock()
         .unwrap_or_else(std::sync::PoisonError::into_inner)
         .recent(directory, limit)
+}
+
+pub(super) fn try_recent(directory: &Path, limit: usize) -> io::Result<Vec<Row>> {
+    CACHE
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .read_using(directory, limit, read_back)
+        .checked()
 }
 
 #[cfg(test)]

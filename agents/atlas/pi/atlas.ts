@@ -9,6 +9,7 @@ const refusal =
   'Only the person resumes agents or acts as the person in Atlas. Ask them to use the Atlas menu bar.';
 
 export default function (pi: ExtensionAPI) {
+  process.env.ATLAS_PI_PID = String(process.pid);
   pi.registerMcpServer('atlas', {
     command: join(root, 'scripts/atlas'),
     args: ['mcp'],
@@ -27,6 +28,7 @@ export default function (pi: ExtensionAPI) {
       .catch(() => ''));
 
   pi.on('session_start', () => {
+    process.env.ATLAS_PI_PID = String(process.pid);
     status = undefined;
     void brief();
   });

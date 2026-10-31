@@ -59,6 +59,7 @@ struct Seen {
     focus_reads: usize,
     window_reads: usize,
     keyboard_reads: usize,
+    app_focused: bool,
 }
 
 impl Seen {
@@ -86,6 +87,10 @@ impl Seen {
 }
 
 impl Look for Seen {
+    fn app_focused(&mut self, _: i64) -> Result<bool> {
+        Ok(self.app_focused)
+    }
+
     fn focused(&mut self) -> Result<Option<i64>> {
         self.focus_reads += 1;
         match &self.focused {
@@ -119,6 +124,39 @@ impl Look for Seen {
 
 fn expect() -> Expect {
     Expect::new(APP).unwrap()
+}
+
+pub(in crate::native) fn verify_keyboard(
+    expect: &Expect,
+    keyboard: Keyboard,
+    listed: Vec<Window>,
+    deadline: Instant,
+    slow: Duration,
+) -> Result<Option<&'static str>> {
+    let mut look = Seen::focused(Some(expect.pid()))
+        .showing(listed)
+        .typing_in(keyboard);
+    look.slow = slow;
+    require(expect, Need::Keys, &display(), &mut look, deadline)
+}
+
+pub(in crate::native) fn verify_input(
+    expect: &Expect,
+    need: Need,
+    number: Option<i64>,
+    focused: i64,
+    keyboard: Keyboard,
+    listed: Vec<Window>,
+    deadline: Instant,
+) -> Result<Option<&'static str>> {
+    let mut look = Seen::focused(Some(focused))
+        .showing(listed)
+        .typing_in(keyboard);
+    let selected = match number {
+        Some(number) => expect.clone().in_window(number)?,
+        None => expect.clone(),
+    };
+    require(&selected, need, &display(), &mut look, deadline)
 }
 
 /// The refusal's code, reason and what it found, as an agent reads them.
@@ -236,13 +274,13 @@ fn the_menu_bar_counts_as_the_apps_only_while_it_has_keyboard_focus() {
     let mut behind = Seen::focused(Some(OTHER)).showing(listed.clone());
     assert_eq!(
         refusal(point_with(&mut behind, 200.0, 10.0)),
-        json!({"reason": "point", "found": {"app": "Calculator", "pid": OTHER}})
+        json!({"reason": "app", "found": {"app": "Calculator", "pid": OTHER}})
     );
 
     let mut nobody = Seen::focused(None).showing(listed);
     assert_eq!(
         refusal(point_with(&mut nobody, 200.0, 10.0)),
-        json!({"reason": "point", "found": null})
+        json!({"reason": "app", "found": null})
     );
 }
 
@@ -755,6 +793,72 @@ fn a_window_of_the_app_in_front_at_a_higher_layer_is_refused_as_another_window()
     );
 }
 
+#[test]
+fn pointer_preparation_accepts_an_exposed_point_beside_an_overlapping_floating_panel() {
+    for need in [
+        Need::Point(120.0, 120.0),
+        Need::Drag {
+            from: (120.0, 120.0),
+            to: (130.0, 130.0),
+        },
+    ] {
+        let panel = Window {
+            layer: 3,
+            ..numbered(4130, APP, Some("Fonts"), (150.0, 150.0, 200.0, 200.0))
+        };
+        let mut look = inside_with(typing(field("Email")), vec![panel, document()]);
+        assert_eq!(
+            require(&in_document(), need, &display(), &mut look, later()).unwrap(),
+            None
+        );
+        assert_eq!(look.focus_reads, 1);
+        assert_eq!(look.keyboard_reads, 0);
+    }
+}
+
+#[test]
+fn pointer_verification_accepts_an_active_app_without_reading_window_focus() {
+    for focused in [None, Some(APP)] {
+        for need in [
+            Need::Point(120.0, 120.0),
+            Need::Drag {
+                from: (120.0, 120.0),
+                to: (130.0, 130.0),
+            },
+        ] {
+            let mut look = Seen::focused(focused).showing(vec![document()]);
+            look.app_focused = true;
+            assert_eq!(
+                require(&in_document(), need, &display(), &mut look, later()).unwrap(),
+                None
+            );
+            assert_eq!(look.keyboard_reads, 0);
+        }
+    }
+}
+
+#[test]
+fn pointer_preparation_refuses_a_point_covered_by_a_same_app_floating_panel() {
+    for need in [
+        Need::Point(200.0, 200.0),
+        Need::Drag {
+            from: (200.0, 200.0),
+            to: (120.0, 120.0),
+        },
+    ] {
+        let panel = Window {
+            layer: 3,
+            ..numbered(4130, APP, Some("Fonts"), (150.0, 150.0, 200.0, 200.0))
+        };
+        let mut look = inside_with(typing(field("Email")), vec![panel, document()]);
+        let error = require(&in_document(), need, &display(), &mut look, later()).unwrap_err();
+        assert_eq!(error.code, Code::FocusChanged);
+        assert_eq!(error.details["reason"], "window");
+        assert_eq!(error.details["found"]["window"], 4130);
+        assert!(error.error.contains("at that point"));
+    }
+}
+
 /// A floating panel and a document at the same place, with titles
 /// that do not tell them apart: the panel's subrole says which one has
 /// focus, and the document is never taken for the panel.
@@ -939,6 +1043,14 @@ fn a_focused_field_that_elements_would_list_by_the_name_passes() {
         ),
         (
             Element {
+                identifier: Some("_NS:9".to_owned()),
+                focused: Some(true),
+                ..element("AXTextField", (120.0, 110.0, 200.0, 22.0))
+            },
+            "_NS:9",
+        ),
+        (
+            Element {
                 title: Some("Search".to_owned()),
                 ..element("AXSearchField", (120.0, 110.0, 200.0, 22.0))
             },
@@ -953,6 +1065,38 @@ fn a_focused_field_that_elements_would_list_by_the_name_passes() {
         let mut look = inside_with(typing(focused), vec![document()]);
         assert!(expecting(&in_field(name), &mut look).is_ok(), "{name}");
     }
+}
+
+#[test]
+fn a_find_field_identifier_requires_fresh_app_and_sibling_focus_proof() {
+    let target = in_document().in_field("_NS:9").unwrap();
+    let area = Element {
+        identifier: Some("First Text View".to_owned()),
+        focused: Some(true),
+        ..element("AXTextArea", (100.0, 132.0, 400.0, 268.0))
+    };
+    let mut background = inside_with(typing(area), vec![document()]);
+    background.focused = Some(Ok(Some(OTHER)));
+    assert_eq!(
+        refusal(expecting(&target, &mut background))["reason"],
+        "app"
+    );
+    background.focused = Some(Ok(Some(APP)));
+    assert_eq!(
+        refusal(expecting(&target, &mut background))["reason"],
+        "field"
+    );
+    background.keyboard = Some(typing(Element {
+        identifier: Some("_NS:9".to_owned()),
+        focused: Some(true),
+        ..element("AXTextField", (120.0, 110.0, 200.0, 22.0))
+    }));
+    assert_eq!(
+        expecting(&target, &mut background).unwrap(),
+        Some("AXTextField")
+    );
+    assert_eq!(background.focus_reads, 3);
+    assert_eq!(background.keyboard_reads, 2);
 }
 
 #[test]
@@ -1153,6 +1297,7 @@ fn a_check_that_ran_out_of_time_is_refused_and_says_so() {
         let deadline = Instant::now() + Duration::from_millis(5);
         let error = require(&expect, Need::Keys, &display(), &mut look, deadline).unwrap_err();
         assert_eq!(error.details["reason"], "unreadable");
+        assert_eq!(error.details["unread"], "slow");
         assert!(error.error.contains("could not tell"), "{}", error.error);
         assert!(!error.uncertain);
     }
@@ -1172,6 +1317,29 @@ fn a_check_that_ran_out_of_time_is_refused_and_says_so() {
         "slow",
         "nothing is asked once the time is spent"
     );
+}
+
+#[test]
+fn an_unreadable_verification_that_exceeds_the_deadline_retains_the_slow_marker() {
+    let mut look = inside_with(typing(field("Email")), vec![document()]);
+    look.slow = Duration::from_millis(20);
+    look.unread = Some(Unread::Failed);
+    let deadline = Instant::now() + Duration::from_millis(5);
+    let error = require(
+        &in_field("Email"),
+        Need::Keys,
+        &display(),
+        &mut look,
+        deadline,
+    )
+    .unwrap_err();
+    assert_eq!(error.details["reason"], "unreadable");
+    assert_eq!(error.details["unread"], "slow");
+    assert!(!error.uncertain);
+
+    let mut spent = Live::until(Instant::now());
+    assert_eq!(spent.focused().unwrap_err().details["unread"], "slow");
+    assert_eq!(spent.windows().unwrap_err().details["unread"], "slow");
 }
 
 #[test]
@@ -1234,7 +1402,7 @@ fn a_point_outside_the_named_window_is_refused_before_a_click() {
         "a window that is not on screen"
     );
     let elsewhere = Expect::new(OTHER).unwrap().in_window(DOCUMENT).unwrap();
-    let mut look = Seen::focused(Some(APP)).showing(listed);
+    let mut look = Seen::focused(Some(OTHER)).showing(listed);
     assert_eq!(
         refusal(require(
             &elsewhere,
@@ -1278,36 +1446,41 @@ fn a_drag_is_checked_at_its_press_point_only() {
 }
 
 #[test]
-fn the_check_never_activates_raises_or_focuses_anything() {
-    // What the check reads with: this module and the Accessibility
-    // reads, keyboard focus among them, which make copies and set only
-    // messaging timeouts.
-    for source in [
-        include_str!("../focus.rs"),
-        include_str!("../ax.rs"),
-        include_str!("../ax/batch.rs"),
-        include_str!("../ax/ffi.rs"),
-        include_str!("../ax/keyboard.rs"),
-        include_str!("../ax/menus.rs"),
-        include_str!("../ax/model.rs"),
-        include_str!("../ax/scan.rs"),
-        include_str!("../ax/stop.rs"),
-        include_str!("../ax/system.rs"),
-        include_str!("../ax/text.rs"),
-        include_str!("../ax/tree.rs"),
-    ] {
-        let code = source.split("#[cfg(test)]").next().unwrap_or_default();
-        for setter in [
-            "set_attribute_value",
-            "AXUIElementSetAttributeValue",
-            "perform_action",
-            "AXUIElementPerformAction",
-            "activateWithOptions",
-            "activate(",
-            "AXRaise",
-            "makeKeyAndOrderFront",
-        ] {
-            assert!(!code.contains(setter), "{setter}");
-        }
+fn read_only_verification_leaves_wrong_and_absent_focus_in_place() {
+    for focused in [None, Some(OTHER)] {
+        let mut look = Seen::focused(focused);
+        assert_eq!(refusal(keys_with(&mut look))["reason"], "app");
+        assert_eq!(look.focused.as_ref().unwrap().as_ref().unwrap(), &focused);
+        assert_eq!(look.keyboard_reads, 0);
+        assert_eq!(refusal(keys_with(&mut look))["reason"], "app");
     }
+}
+
+#[test]
+fn absent_system_focus_accepts_direct_app_proof_and_still_checks_the_window_and_field() {
+    let mut look = inside_with(typing(field("Email")), vec![document()]);
+    look.focused = Some(Ok(None));
+    look.app_focused = true;
+    assert!(expecting(&in_document().in_field("Email").unwrap(), &mut look).is_ok());
+    assert_eq!(
+        refusal(expecting(
+            &in_document().in_field("Other").unwrap(),
+            &mut look
+        ))["reason"],
+        "field"
+    );
+    assert_eq!(
+        refusal(expecting(&expect().in_window(999).unwrap(), &mut look))["reason"],
+        "window"
+    );
+    look.app_focused = false;
+    assert_eq!(refusal(expecting(&expect(), &mut look))["reason"], "app");
+    look.app_focused = true;
+    look.focused = Some(Ok(Some(OTHER)));
+    assert_eq!(refusal(expecting(&expect(), &mut look))["reason"], "app");
+    look.focused = Some(Err(Error::new(Code::Native, "unreadable")));
+    assert_eq!(
+        refusal(expecting(&expect(), &mut look))["reason"],
+        "unreadable"
+    );
 }

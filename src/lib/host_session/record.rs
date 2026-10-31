@@ -28,12 +28,14 @@ pub(crate) struct Record {
     pub host: Host,
     /// The host's own id, so the person can find the conversation.
     pub host_session: HostId,
-    /// The host's process, where the host names it (Claude Code).
+    /// The root host's verified process identity.
     #[serde(default)]
     pub host_process: Option<Instance>,
     /// The project folder's name, never its path.
     #[serde(default)]
     pub folder: Option<String>,
+    #[serde(default)]
+    pub folder_from_host: bool,
     /// The session's first recorded Atlas command, in milliseconds since
     /// 1970; not when the host started it.
     pub started: u64,
@@ -70,6 +72,7 @@ impl Record {
             host_session: session.id().clone(),
             host_process: session.process(),
             folder,
+            folder_from_host: session.folder_from_host,
             started: now,
             last_seen: now,
             ended: None,
@@ -82,7 +85,7 @@ impl Record {
     }
 
     /// When the session ended: as recorded, or at its last command once
-    /// the host process it names is confirmed gone.
+    /// the host process it names is known to be gone.
     pub(crate) fn ended_at(&self) -> Option<u64> {
         self.ended.or_else(|| {
             self.host_process
@@ -102,10 +105,12 @@ impl Record {
     /// not refused.
     pub(crate) fn seen(&mut self, session: &HostSession, now: u64, verb: Option<&str>) {
         self.last_seen = now;
-        self.ended = None;
-        if session.process().is_some() {
-            self.host_process = session.process();
+        // Without a host identity, activity is the legacy lifetime proof.
+        // A process-backed end still requires a verified new root to revive.
+        if self.host_process.is_none() {
+            self.ended = None;
         }
+        self.attach(session, session.ancestor(), now);
         if let Some(verb) = verb
             && (self.counts.len() < COUNTS || self.counts.contains_key(verb))
         {
@@ -113,27 +118,56 @@ impl Record {
         }
     }
 
-    /// Note a command of this session `now` that records nothing else,
-    /// `ancestor` being its host's process when that is one of the
-    /// command's own ancestors. A process other than the one named (a
-    /// resumed conversation) takes its place and undoes any end. Otherwise
-    /// only the last seen time moves, at most every [`SEEN_WITHIN`], and an
-    /// ended session stays ended: a command's word alone, as an id in its
-    /// environment, never revives one. Whether anything changed.
-    pub(crate) fn touched(&mut self, ancestor: Option<Instance>, now: u64) -> bool {
-        if let Some(process) = ancestor.filter(|process| self.host_process != Some(*process)) {
+    /// Attach verified metadata without letting delayed commands replace a
+    /// root that is still live, or revive a same-process explicit end.
+    fn attach(&mut self, session: &HostSession, ancestor: Option<Instance>, now: u64) {
+        let Some(process) = ancestor else { return };
+        if self.host_process != Some(process) {
+            if self.host_process.is_some_and(|old| {
+                session.replaces != Some(old) && old.state() != crate::process::State::Gone
+            }) {
+                return;
+            }
             self.host_process = Some(process);
+            self.folder = None;
+            self.folder_from_host = false;
             self.ended = None;
             self.last_seen = now;
-            return true;
         }
+        if session.folder_from_host {
+            self.folder.clone_from(&session.folder);
+            self.folder_from_host = true;
+        } else if !self.folder_from_host {
+            self.folder = None;
+        }
+    }
 
+    /// Refresh changed metadata immediately, throttling unchanged timestamps.
+    pub(crate) fn touched(
+        &mut self,
+        session: &HostSession,
+        ancestor: Option<Instance>,
+        now: u64,
+    ) -> bool {
+        let before = (
+            self.host_process,
+            self.ended,
+            self.last_seen,
+            self.folder.clone(),
+            self.folder_from_host,
+        );
+        self.attach(session, ancestor, now);
         let within = crate::time::ms(SEEN_WITHIN);
-        if self.ended.is_some() || now.saturating_sub(self.last_seen) <= within {
-            return false;
+        if self.ended.is_none() && now.saturating_sub(self.last_seen) > within {
+            self.last_seen = now;
         }
-        self.last_seen = now;
-        true
+        (
+            self.host_process,
+            self.ended,
+            self.last_seen,
+            self.folder.clone(),
+            self.folder_from_host,
+        ) != before
     }
 
     /// Note the screenshot saved as `capture`, newest first.
