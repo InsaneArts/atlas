@@ -136,6 +136,7 @@ pub(crate) fn dock_item(
         return Err(refused());
     }
     let mut scan = Scan::new(Instant::now() + DOCK_TIMEOUT);
+    let subrole = scan.text(Source::Element(&item), "AXSubrole");
     let frame = scan.frame(Source::Element(&item));
     let press = CFString::from_static_str("AXPress");
     let supported = ffi::actions(&item).ok().flatten().is_some_and(|names| {
@@ -144,10 +145,23 @@ pub(crate) fn dock_item(
                 .iter()
                 .any(|name| name.downcast_ref::<CFString>() == Some(&*press))
     });
-    if !scan.open() || !pressable_at(frame, supported, x, y) {
+    if !scan.open() || !launchable(subrole.as_deref()) || !pressable_at(frame, supported, x, y) {
         return Err(refused());
     }
     Ok(Some(item))
+}
+
+fn launchable(subrole: Option<&str>) -> bool {
+    matches!(
+        subrole,
+        Some(
+            "AXApplicationDockItem"
+                | "AXDocumentDockItem"
+                | "AXFolderDockItem"
+                | "AXMinimizedWindowDockItem"
+                | "AXURLDockItem"
+        )
+    )
 }
 
 fn pressable_at(frame: Option<super::Frame>, supported: bool, x: f64, y: f64) -> bool {
@@ -179,5 +193,33 @@ mod tests {
             "separator without AXPress"
         );
         assert!(!pressable_at(None, true, 1138.0, 940.0));
+    }
+
+    #[test]
+    fn only_launchable_dock_subroles_are_pressable_even_with_axpress() {
+        for (subrole, expected) in [
+            (Some("AXApplicationDockItem"), true),
+            (Some("AXDocumentDockItem"), true),
+            (Some("AXFolderDockItem"), true),
+            (Some("AXMinimizedWindowDockItem"), true),
+            (Some("AXURLDockItem"), true),
+            (Some("AXSeparatorDockItem"), false),
+            (Some("AXTrashDockItem"), false),
+            (Some("AXDockExtraDockItem"), false),
+            (Some("AXUnknownDockItem"), false),
+            (None, false),
+        ] {
+            let frame = Some(super::super::Frame {
+                x: 1120.0,
+                y: 920.0,
+                width: 40.0,
+                height: 40.0,
+            });
+            assert_eq!(
+                launchable(subrole) && pressable_at(frame, true, 1138.0, 940.0),
+                expected,
+                "{subrole:?}"
+            );
+        }
     }
 }
