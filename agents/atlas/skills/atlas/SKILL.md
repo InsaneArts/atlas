@@ -66,8 +66,8 @@ element, or refuses and lists `candidates`. Otherwise use
 `atlas click --app A X Y`, `atlas type --app A "text"`,
 `atlas key --app A cmd+a` or `atlas scroll --app A X Y --dy -3` (and
 `drag`): nothing is sent while another app would get it.
-Points use the top window in your session's last `screenshot`, `elements`
-or `windows`. Look again after a move. Override with
+Points use the top window from your last `screenshot`, `elements` or
+`windows`. Override with
 `atlas click --app A --window N X Y`.
 
 `atlas run -- PROGRAM ARGS` runs a command as the helper; its result is
