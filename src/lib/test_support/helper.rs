@@ -57,6 +57,7 @@ impl Helper {
         let mut client = super::client(directory);
         client.config.helper_uid = uid;
         client.transport.peer_uid = nix::unistd::getuid().as_raw();
+        client.input_peer_uid = Some(nix::unistd::getuid().as_raw());
 
         let helper = Self {
             listener: UnixListener::bind(&client.transport.path).unwrap(),

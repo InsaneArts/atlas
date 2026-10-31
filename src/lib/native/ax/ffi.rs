@@ -1,16 +1,16 @@
-//! The Accessibility and CoreFoundation calls the reads make, each behind a
+//! The Accessibility and CoreFoundation calls, each behind a
 //! safe function: elements are made and their attributes, counts, owners
 //! and values copied, and what a successful Copy hands over is owned once.
-//! Only copies are made; nothing is set but an element's messaging timeout.
+//! Target preparation also sets typed flags and requests supported actions.
 #![allow(
     unsafe_code,
-    reason = "FFI: Accessibility reads return values through out-pointers"
+    reason = "FFI: Accessibility uses out-pointers and typed CoreFoundation values"
 )]
 use objc2_application_services::{
     AXCopyMultipleAttributeOptions, AXError, AXUIElement, AXValue, AXValueType,
 };
 use objc2_core_foundation::{
-    CFArray, CFIndex, CFRange, CFRetained, CFString, CFType, CGPoint, CGSize,
+    CFArray, CFBoolean, CFIndex, CFRange, CFRetained, CFString, CFType, CGPoint, CGSize,
 };
 use std::{ptr::NonNull, time::Duration};
 
@@ -51,6 +51,47 @@ pub(super) fn system_wide() -> Option<CFRetained<AXUIElement>> {
 pub(super) fn set_timeout(element: &AXUIElement, timeout: Duration) -> AXError {
     // SAFETY: a live element; only its messaging timeout is set.
     unsafe { element.set_messaging_timeout(timeout.as_secs_f32()) }
+}
+
+/// Whether an attribute accepts a setter, without issuing one.
+pub(super) fn settable(element: &AXUIElement, name: &CFString) -> Result<bool, AXError> {
+    let mut value = 0u8;
+    // SAFETY: a live element and string, and a valid Boolean output slot.
+    let status = unsafe { element.is_attribute_settable(name, NonNull::from(&mut value)) };
+    if status != AXError::Success {
+        return Err(status);
+    }
+    Ok(value != 0)
+}
+
+/// Request a typed boolean attribute change.
+pub(super) fn set_flag(element: &AXUIElement, name: &CFString, value: bool) -> AXError {
+    // SAFETY: both references are live; the value is a CFBoolean, never an
+    // unchecked cast of another CoreFoundation type.
+    unsafe { element.set_attribute_value(name, CFBoolean::new(value).as_ref()) }
+}
+
+/// Copy supported action names. Each member is checked before use.
+pub(super) fn actions(
+    element: &AXUIElement,
+) -> Result<Option<CFRetained<CFArray<CFType>>>, AXError> {
+    let mut array: *const CFArray = std::ptr::null();
+    // SAFETY: a live element and a valid output slot for the owned Copy result.
+    let status = unsafe { element.copy_action_names(NonNull::from(&mut array)) };
+    if status != AXError::Success {
+        return Err(status);
+    }
+    // SAFETY: a successful Copy supplied an owned array or null.
+    Ok(unsafe { adopt(array) }.map(|array| {
+        // SAFETY: CFArray members are CF objects; callers check each type.
+        unsafe { CFRetained::cast_unchecked::<CFArray<CFType>>(array) }
+    }))
+}
+
+/// Request an action already checked for support.
+pub(super) fn act(element: &AXUIElement, name: &CFString) -> AXError {
+    // SAFETY: live element and action name; no reference escapes the call.
+    unsafe { element.perform_action(name) }
 }
 
 /// The value of `element`'s attribute `name`: None when a successful Copy

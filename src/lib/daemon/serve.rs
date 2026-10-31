@@ -659,8 +659,16 @@ async fn handle(stream: UnixStream, daemon: Arc<Daemon>, controller: bool) -> Re
             }
             daemon.hello()
         }
-        Ok(Request::Apps { .. }) => match tokio::task::spawn_blocking(apps::running).await {
-            Ok(apps) => json!({"ok": true, "apps": apps}),
+        Ok(Request::Apps { .. }) => match tokio::task::spawn_blocking(|| {
+            crate::native::processes::snapshot(
+                || Ok(apps::running()),
+                |app| app["pid"].as_i64().expect("running apps have process IDs"),
+            )
+        })
+        .await
+        {
+            Ok(Ok((apps, starts))) => json!({"ok": true, "apps": apps, "starts": starts}),
+            Ok(Err(error)) => json!(error),
             Err(_) => failure(Code::Apps, "Running applications could not be listed"),
         },
         Ok(Request::Screenshot {

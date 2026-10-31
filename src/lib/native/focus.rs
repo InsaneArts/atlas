@@ -2,8 +2,8 @@
 //! names, judged inside the helper just before the action is sent: text
 //! and keys need the app, and the window and field when named, to have
 //! keyboard focus; pointer actions need the app's own window, or the named
-//! one, to be the top one at the point. Nothing here activates, raises or
-//! focuses anything: what is not in place is refused, never moved.
+//! one, to be the top one at the point. Preparation requests focus first;
+//! the final verifier independently proves where input would land.
 use super::{
     ax::{self, Element, Focused, Judged, Keyboard, Unread, Within},
     windows::{self, Bounds, Dock, Kind, Listed, Screen, Window},
@@ -17,9 +17,11 @@ use serde::Serialize;
 use serde_json::json;
 use std::time::{Duration, Instant};
 
-/// The most time one request spends checking; past it, the rest is refused
-/// rather than risk the controller's five-second deadline.
+/// The longest one destination check may take before input is posted.
 pub(super) const CHECK_BUDGET: Duration = Duration::from_millis(500);
+
+/// The total focus allowance per input batch, including preparation and settling.
+pub(super) const PREPARE_BUDGET: Duration = Duration::from_millis(1250);
 
 /// The longest one Accessibility question may take.
 const FOCUS_TIMEOUT: Duration = Duration::from_millis(250);
@@ -32,7 +34,7 @@ const KEYBOARD_TIMEOUT: Duration = Duration::from_millis(300);
 /// reported as focused (a window or a web page while focus moves between
 /// fields or sits in a custom view, a button, a tab group, an unknown
 /// element) is no field, whatever its name.
-const FIELDS: [&str; 5] = [
+pub(super) const FIELDS: [&str; 5] = [
     "AXTextField",
     "AXTextArea",
     "AXComboBox",
@@ -59,7 +61,7 @@ const NOT_SENT: &str = "so this action and the rest were not sent";
 
 /// What an action needs of its app before its first event.
 #[derive(Debug, Clone, Copy, PartialEq)]
-pub(super) enum Need {
+pub(crate) enum Need {
     /// Keyboard focus.
     Keys,
     /// The app's own window on top at this point.
@@ -208,6 +210,8 @@ impl Found {
 trait Look {
     /// The process with keyboard focus; None when no app has it.
     fn focused(&mut self) -> Result<Option<i64>>;
+    /// Direct app evidence when the system-wide focus attribute is absent.
+    fn app_focused(&mut self, pid: i64) -> Result<bool>;
     /// Where keyboard focus is inside process `pid`, as far as what is
     /// `judged` needs.
     fn keyboard(&mut self, pid: i64, judged: Judged) -> Result<Keyboard>;
@@ -240,10 +244,7 @@ impl Live {
     fn left(&self) -> Result<Duration> {
         let left = self.deadline.saturating_duration_since(Instant::now());
         if left.is_zero() {
-            return Err(Error::new(
-                Code::Native,
-                "The time to check which app is in front ran out",
-            ));
+            return Err(Unread::Slow.error());
         }
 
         Ok(left)
@@ -258,10 +259,15 @@ impl Look for Live {
         super::ax::focused_pid(left.min(FOCUS_TIMEOUT))
     }
 
+    fn app_focused(&mut self, pid: i64) -> Result<bool> {
+        let left = self.left()?;
+        ax::frontmost(pid, left.min(FOCUS_TIMEOUT))
+    }
+
     /// Read from the app element of the process judged to have focus, so
     /// the app, window and field checks look at the same app.
     fn keyboard(&mut self, pid: i64, judged: Judged) -> Result<Keyboard> {
-        let left = self.left().map_err(|_| Unread::Slow.error())?;
+        let left = self.left()?;
         ax::keyboard(pid, left.min(KEYBOARD_TIMEOUT), judged)
     }
 
@@ -302,7 +308,36 @@ pub(super) fn check(
     display: &Bounds,
     deadline: Instant,
 ) -> Result<Option<&'static str>> {
+    let deadline = deadline.min(Instant::now() + CHECK_BUDGET);
     require(expect, need, display, &mut Live::until(deadline), deadline)
+}
+
+/// Prepare once, then poll with fresh observations. Resolution and writes
+/// leave time for a final read within the same request's deadline.
+pub(super) fn prepare(
+    expect: &Expect,
+    need: Need,
+    display: &Bounds,
+    deadline: Instant,
+    guard: impl Fn() -> Result<()>,
+) -> Result<Option<&'static str>> {
+    if need == Need::Nothing {
+        return Ok(None);
+    }
+    ax::bring(expect, need, deadline, &guard, |number, until| {
+        let selected = match number {
+            Some(number) if expect.window() != Some(number) => expect.clone().in_window(number)?,
+            _ => expect.clone(),
+        };
+        check(&selected, need, display, until)
+    })
+    .map_err(|error| {
+        if error.code == Code::Native {
+            unread_by(error)
+        } else {
+            error
+        }
+    })
 }
 
 /// Refuse with `focus-changed` unless `expect` holds for `need` as `look`
@@ -319,25 +354,34 @@ fn require(
 ) -> Result<Option<&'static str>> {
     let outcome = match need {
         Need::Nothing => return Ok(None),
-        Need::Keys => keys(expect, look),
-        Need::Point(x, y) => point(expect, (x, y), Spot::At, display, look).map(|()| None),
-        Need::Drag { from, to } => point(expect, from, Spot::At, display, look)
+        Need::Keys => active(expect, look).and_then(|()| inside(expect, look)),
+        Need::Point(x, y) => active(expect, look)
+            .and_then(|()| point(expect, (x, y), Spot::At, display, look))
+            .map(|()| None),
+        Need::Drag { from, to } => active(expect, look)
+            .and_then(|()| point(expect, from, Spot::At, display, look))
             .and_then(|()| point(expect, to, Spot::Drop, display, look))
             .map(|()| None),
     };
-    if outcome.is_ok() && Instant::now() >= deadline {
-        return Err(unreadable());
+    let unread = outcome.as_ref().is_err_and(|error| {
+        error
+            .details
+            .get("reason")
+            .is_some_and(|why| why == "unreadable")
+    });
+    if (outcome.is_ok() || unread) && Instant::now() >= deadline {
+        return Err(unreadable().with("unread", Unread::Slow));
     }
 
     outcome
 }
 
-/// Keys go ahead only while the app has keyboard focus and, when named,
-/// the window and the field, whose role is then said. The window list is
-/// read only to name another app that has it, or to tell which window has
-/// it.
-fn keys(expect: &Expect, look: &mut impl Look) -> Result<Option<&'static str>> {
+/// Prove the target app is active, independently of its window focus.
+fn active(expect: &Expect, look: &mut impl Look) -> Result<()> {
     let focused = look.focused().map_err(|_| unreadable())?;
+    if focused.is_none() && look.app_focused(expect.pid()).map_err(unread_by)? {
+        return Ok(());
+    }
     let Some(pid) = focused else {
         return Err(refused(
             Reason::App,
@@ -346,7 +390,7 @@ fn keys(expect: &Expect, look: &mut impl Look) -> Result<Option<&'static str>> {
         ));
     };
     if pid == expect.pid() {
-        return inside(expect, look);
+        return Ok(());
     }
 
     let found = Found::named(pid, look.windows().unwrap_or_default());
@@ -574,8 +618,7 @@ fn covered(listed: &[Window], pid: i64, number: i64) -> bool {
 
 /// A pointer action goes ahead only where the app's own window, at any
 /// layer, is uncovered at the point, the Dock covering what is under it
-/// where it takes clicks; on the menu bar, only while the app has keyboard
-/// focus, since the menu bar shows that app's titles. With a window named,
+/// where it takes clicks. The active app owns the menu bar. With a window named,
 /// only where that window is uncovered, judged where it presses: a drop
 /// lands in the app's window if not the same one. Where the Dock could not
 /// be read and is on top, what is in front is unreadable.
@@ -592,10 +635,8 @@ fn point(
         return at_window(expect.pid(), wanted, (x, y), listed, &screen);
     }
     let top = windows::top_at(listed, x, y, &screen);
-    if top.is_some_and(Window::is_menu_bar) {
-        return menu_bar(expect, look);
-    }
-    if windows::reaches(listed, expect.pid(), x, y, &screen) {
+    if top.is_some_and(Window::is_menu_bar) || windows::reaches(listed, expect.pid(), x, y, &screen)
+    {
         return Ok(());
     }
 
@@ -681,21 +722,6 @@ fn at_window(
     ))
 }
 
-/// The menu bar counts as the app's only while the app has keyboard focus.
-fn menu_bar(expect: &Expect, look: &mut impl Look) -> Result<()> {
-    let focused = look.focused().map_err(|_| unreadable())?;
-    if focused == Some(expect.pid()) {
-        return Ok(());
-    }
-
-    let found = focused.map(|pid| Found::named(pid, look.windows().unwrap_or_default()));
-    let message = match found.as_ref().and_then(|found| found.app.as_deref()) {
-        Some(name) => format!("The menu bar shows {name}, not the app this was for, {NOT_SENT}"),
-        None => format!("The menu bar does not show the app, {NOT_SENT}"),
-    };
-    Err(refused(Reason::Point, message, found))
-}
-
 /// The refusal when what is in front could not be read in time.
 pub(super) fn unreadable() -> Error {
     refused(
@@ -731,4 +757,4 @@ fn refused(reason: Reason, message: String, found: Option<Found>) -> Error {
 }
 
 #[cfg(test)]
-mod tests;
+pub(super) mod tests;
