@@ -20,8 +20,10 @@ extension ViewerStatus {
     public var lastSeenAt: Date?
     /// When it ended; nil while it has not.
     public var endedAt: Date?
-    /// Whether it is live: not ended, and seen lately.
+    /// Whether its host or proven command is live, independently of recovery attention.
     public var isLive: Bool
+    /// Whether a verified command still works, independently of the host's lifetime.
+    public var workInProgress: Bool
     /// What it is doing.
     public var state: HostSessionState
     /// What it waits for, while it waits.
@@ -52,6 +54,7 @@ extension ViewerStatus {
     ///   - lastSeenAt: When it last did something.
     ///   - endedAt: When it ended.
     ///   - isLive: Whether it is live; live by default.
+    ///   - workInProgress: Whether a verified command still works.
     ///   - state: What it is doing; idle by default.
     ///   - waitingFor: What it waits for.
     ///   - waitingSeconds: How long it has waited for the helper, in seconds.
@@ -69,6 +72,7 @@ extension ViewerStatus {
       lastSeenAt: Date? = nil,
       endedAt: Date? = nil,
       isLive: Bool = true,
+      workInProgress: Bool = false,
       state: HostSessionState = .idle,
       waitingFor: HostSessionWait? = nil,
       waitingSeconds: Double? = nil,
@@ -86,6 +90,7 @@ extension ViewerStatus {
       self.lastSeenAt = lastSeenAt
       self.endedAt = endedAt
       self.isLive = isLive
+      self.workInProgress = workInProgress
       self.state = state
       self.waitingFor = waitingFor
       self.waitingSeconds = waitingSeconds
@@ -93,13 +98,14 @@ extension ViewerStatus {
       self.latest = latest
       self.uncertainRow = uncertainRow
       self.uncertainVerb = uncertainVerb
+      normalizeLifetime()
     }
 
     /// The fields of one `hostSessions` entry this app reads.
     enum CodingKeys: String, CodingKey {
       /// Each field by the name the service writes.
       case key, host, hostLabel, name, folder, started, lastSeen, ended, live, state, waitingFor, waitingSeconds,
-        holdsHelper, latest, uncertainRow, uncertainVerb
+        holdsHelper, latest, uncertainRow, uncertainVerb, workInProgress
     }
 
     /// Decodes a session, keeping the default of anything missing or of the wrong type. Times are read as
@@ -126,6 +132,7 @@ extension ViewerStatus {
       lastSeenAt = container.lenientDate(milliseconds: .lastSeen)
       endedAt = container.lenientDate(milliseconds: .ended)
       state = HostSessionState(word: container.lenientText(.state))
+      workInProgress = container.lenientFlag(.workInProgress)
       isLive = container.lenientBool(.live) ?? (endedAt == nil && state != .ended)
       waitingFor = container.lenientText(.waitingFor)
         .flatMap(HostSessionWait.init(rawValue:))
@@ -135,6 +142,20 @@ extension ViewerStatus {
       latest = try? container.decodeIfPresent(Activity.self, forKey: .latest)
       uncertainRow = container.lenientText(.uncertainRow)
       uncertainVerb = container.lenientText(.uncertainVerb)
+      normalizeLifetime()
     }
+    /// Normalize older replies using only service facts, never local process guesses.
+    private mutating func normalizeLifetime() {
+      if endedAt != nil || state == .ended {
+        isLive = false
+        if state != .needsYou && !(workInProgress && (state == .acting || state == .waiting)) {
+          state = .ended
+          waitingFor = nil
+          waitingSeconds = nil
+        }
+      }
+      if !isLive { holdsHelper = false }
+    }
+
   }
 }

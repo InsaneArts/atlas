@@ -1,6 +1,12 @@
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
-import test from 'node:test';
+import test, { afterEach } from 'node:test';
+import { execFileSync } from 'node:child_process';
+const originalPid = process.env.ATLAS_PI_PID;
+afterEach(() => {
+  if (originalPid === undefined) delete process.env.ATLAS_PI_PID;
+  else process.env.ATLAS_PI_PID = originalPid;
+});
 import extension from '../agents/atlas/pi/atlas.ts';
 
 function host(exec = async () => ({ code: 0, stdout: 'Atlas: ready.\n' })) {
@@ -74,4 +80,21 @@ test('Pi refuses shell actor overrides while allowing ordinary helper commands a
     assert.match(result.reason, /Only the person/);
   }
   assert.equal(guard({ toolName: 'write', input: { content: 'ATLAS_ACTOR' } }), undefined);
+});
+
+test('Pi passes its own pid to brief and shell children', async () => {
+  const childHint = () =>
+    execFileSync(process.execPath, ['-e', 'process.stdout.write(process.env.ATLAS_PI_PID)'], {
+      encoding: 'utf8',
+      timeout: 2000,
+    });
+  const { hooks } = host(async () => {
+    assert.equal(childHint(), String(process.pid));
+    return { code: 0, stdout: 'ready' };
+  });
+  assert.equal(childHint(), String(process.pid));
+  process.env.ATLAS_PI_PID = 'unrelated';
+  hooks.get('session_start')();
+  await hooks.get('before_agent_start')({ systemPromptOptions: { sections: {} } });
+  assert.equal(childHint(), String(process.pid));
 });

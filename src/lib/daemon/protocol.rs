@@ -149,6 +149,7 @@ pub struct ReadRequest {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Request {
     Hello,
+    HostSession(Vec<crate::host_session::HostClaim>),
     Screenshot {
         max_dimension: Option<u32>,
         /// At most one pixel per display point of the area captured, too.
@@ -201,6 +202,9 @@ pub fn parse(line: &[u8]) -> Result<Request, Value> {
         .ok_or_else(|| bad("request is missing an \"op\" string"))?;
     match op {
         "hello" => Ok(Request::Hello),
+        "host-session" => crate::host_session::verification::claims(&request["claims"])
+            .map(Request::HostSession)
+            .ok_or_else(|| bad("invalid host session claims")),
         "apps" => Ok(Request::Apps {
             pin: pin(&request)?,
         }),

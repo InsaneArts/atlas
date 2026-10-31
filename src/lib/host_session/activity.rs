@@ -5,7 +5,8 @@
 //! Stop. Only the caller's own session is told its host's id, or to recover.
 use super::{
     Asker, Host, HostSession, Key, Recovery,
-    names::{name_of, names},
+    liveness::{Lifetime, Snapshot},
+    names::{Naming, name_of, named},
     record::{Leftovers, Record},
     store::Store,
 };
@@ -19,7 +20,10 @@ use crate::{
     task::Owned,
 };
 use serde_json::{Value, json};
-use std::{collections::BTreeMap, path::Path};
+use std::{
+    collections::{BTreeMap, BTreeSet},
+    path::Path,
+};
 
 /// How many rows of the activity log are looked through for a session's.
 const ROWS: usize = 256;
@@ -49,15 +53,51 @@ pub fn list(
     let output = client.output_dir()?;
     let store = Store::at(output);
     let records = store.all();
+    let causes = client.controller.pending_causes().unwrap_or_default();
+    let holder = client.controller.holder_note();
+    let waiting = client.controller.waiting_candidates();
+    let running = client.controller.running_candidates();
+    let processes = Snapshot::sample(
+        holder
+            .iter()
+            .chain(&waiting)
+            .chain(&running)
+            .map(|note| note.process)
+            .chain(records.iter().filter_map(|record| record.host_process)),
+        |instance| instance.state(),
+    );
+    let holder = holder
+        .filter(|note| processes.running(note.process))
+        .and_then(|note| note.session);
+    let mut work: BTreeSet<_> = waiting
+        .iter()
+        .filter(|note| processes.state(note.process) == crate::process::State::Running)
+        .chain(
+            running
+                .iter()
+                .filter(|note| processes.running(note.process)),
+        )
+        .filter_map(|note| note.session.clone())
+        .collect();
+    work.extend(holder.iter().cloned());
+    work.extend(
+        causes
+            .iter()
+            .filter(|cause| cause.running && cause.command)
+            .filter_map(|cause| cause.session.clone()),
+    );
     let reading = Reading {
         output,
-        names: names(&records),
-        causes: client.controller.pending_causes().unwrap_or_default(),
-        holder: client
-            .controller
-            .holder_note()
-            .filter(|note| note.live())
-            .and_then(|note| note.session),
+        names: named(
+            records.iter().map(Naming::from).chain(
+                own.filter(|own| records.iter().all(|record| record.key != *own.key()))
+                    .map(Naming::of_session),
+            ),
+        ),
+        causes,
+        holder,
+        processes,
+        work,
         rows: activity_log::recent(output, ROWS),
         now: crate::client::timestamp(),
         store: &store,
@@ -111,6 +151,8 @@ struct Reading<'a> {
     causes: Vec<Cause>,
     /// The session holding the helper, when its command still runs.
     holder: Option<Key>,
+    processes: Snapshot,
+    work: BTreeSet<Key>,
     rows: Vec<Row>,
     /// Every task record, for what each session's tasks left.
     tasks: Vec<crate::task::record::Record>,
@@ -118,6 +160,14 @@ struct Reading<'a> {
 }
 
 impl Reading<'_> {
+    fn lifetime(&self, record: &Record) -> Lifetime {
+        self.processes.lifetime(
+            record,
+            u64::try_from(self.now / 1_000_000).unwrap_or(u64::MAX),
+            self.work.contains(&record.key),
+        )
+    }
+
     fn record(&self, key: &Key) -> Option<&Record> {
         self.records.iter().find(|record| record.key == *key)
     }
@@ -189,7 +239,10 @@ impl Reading<'_> {
             "name": self.name(subject.key, subject.host),
             "started": record.map(|record| record.started),
             "lastSeen": record.map(|record| record.last_seen),
-            "ended": record.and_then(Record::ended_at),
+            "ended": record.and_then(|record| self.lifetime(record).ended),
+            "live": record.is_some_and(|record| self.lifetime(record).live),
+            "active": record.is_some_and(|record| self.lifetime(record).active),
+            "workInProgress": self.work.contains(subject.key),
             "this": subject.own.is_some(),
         });
         if let Some(own) = subject.own {
@@ -287,9 +340,11 @@ impl Reading<'_> {
                     "name": self.name(&record.key, record.host),
                     "started": record.started,
                     "lastSeen": record.last_seen,
-                    "ended": record.ended_at(),
-                    "active": record.active(super::now_ms()),
-                    "holdsHelper": self.holder.as_ref() == Some(&record.key),
+                    "ended": self.lifetime(record).ended,
+                    "active": self.lifetime(record).active,
+                    "live": self.lifetime(record).live,
+                    "workInProgress": self.work.contains(&record.key),
+                    "holdsHelper": self.lifetime(record).live && self.holder.as_ref() == Some(&record.key),
                     "screenshots": record.screenshots.len(),
                     "leftovers": left,
                 })

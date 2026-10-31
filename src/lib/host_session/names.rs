@@ -2,7 +2,7 @@
 //! "Claude Code · left", with its start time only when another session
 //! shares both. Names are worked out when read, so one may gain its time
 //! later. No host title, transcript or host store is ever read.
-use super::{Host, HostId, Key, record::Record};
+use super::{Host, HostId, HostSession, Key, record::Record};
 use crate::control::Note;
 use std::collections::BTreeMap;
 
@@ -39,6 +39,16 @@ const KEY_SHOWN: usize = 4;
 const DOT: &str = " · ";
 
 impl<'a> Naming<'a> {
+    pub(crate) fn of_session(session: &'a HostSession) -> Self {
+        Self {
+            key: session.key(),
+            host: session.host(),
+            named: (session.host() == Host::Named).then(|| session.id().as_str()),
+            folder: session.folder(),
+            started: session.began().unwrap_or_else(super::now_ms),
+        }
+    }
+
     /// What a session on its first command is named by, from its `note`:
     /// its host and folder as that command resolved them, and when that
     /// command started, as its record will say once written.

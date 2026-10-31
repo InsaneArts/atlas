@@ -14,7 +14,7 @@ extension PanelPresenter {
   /// - Returns: The rows.
   static func sessions(_ reading: StatusReading, mode: Mode, now: Date) -> [PanelSessionEntry] {
     guard reading.listsSessions, !hidesRecent(mode) else { return [] }
-    return reading.liveSessions
+    return reading.relevantSessions
       .prefix(PanelState.mostSessions)
       .map { session in
         let line = Words.sessionLine(reading.line(of: session), now: now)

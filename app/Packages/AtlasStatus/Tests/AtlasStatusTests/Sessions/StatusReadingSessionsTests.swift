@@ -165,4 +165,34 @@ struct StatusReadingSessionsTests {
       .map(\.failed)
     #expect(failed == [false, true, false])
   }
+  @Test("an ended causer stays relevant without being live or naming a holder")
+  func anEndedCauserStaysRelevantWithoutBeingLive() throws {
+    let ended: [String: Any] = [
+      "key": "gone", "name": "Codex", "state": "needsYou", "ended": 1000, "live": true, "holdsHelper": true,
+      "uncertainRow": "row", "uncertainVerb": "click",
+    ]
+    let reading = try reading([
+      "sessionsShown": true, "holder": "gone", "pending": 1, "hostSessions": [ended, Self.three[2], ended],
+    ])
+    #expect(reading.liveSessions.count == 1)
+    #expect(reading.relevantSessions.map(\.key) == ["gone", "cursor"])
+    #expect(reading.listsSessions && reading.sessionsPast(1) == 1)
+    #expect(reading.holder == nil)
+    #expect(reading.causer?.key == "gone" && reading.uncertainRow == "row")
+    #expect(reading.line(of: reading.relevantSessions[0]) == .mayNotHaveFinished(verb: "click"))
+  }
+
+  @Test("an explicitly ended working session remains relevant without becoming a holder or causer")
+  func anExplicitlyEndedWorkingSessionRemainsRelevant() throws {
+    let work: [String: Any] = [
+      "key": "gone", "name": "Codex", "state": "acting", "ended": 1000, "live": true, "holdsHelper": true,
+      "workInProgress": true,
+    ]
+    let reading = try reading(["sessionsShown": true, "holder": "gone", "pending": 1, "hostSessions": [work]])
+    #expect(reading.liveSessions.isEmpty)
+    #expect(reading.relevantSessions.count == 1 && reading.listsSessions)
+    #expect(reading.holder == nil && reading.causer == nil)
+    #expect(reading.line(of: reading.relevantSessions[0]) == .acting(says: nil))
+  }
+
 }

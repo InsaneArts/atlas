@@ -623,6 +623,14 @@ async fn screenshot(
 /// hello, as the setup window does there, never act with Atlas's
 /// permissions.
 async fn handle(stream: UnixStream, daemon: Arc<Daemon>, controller: bool) -> Result<()> {
+    let peer = stream.peer_cred()?;
+    // Capture the connection owner's start before reading a request, so a
+    // passed socket or a reused PID cannot acquire another caller's ancestry.
+    let caller = peer
+        .pid()
+        .and_then(|pid| crate::process::info(pid).ok().flatten())
+        .filter(|info| info.uid == peer.uid() && !info.zombie)
+        .map(|info| info.instance);
     let (mut reader, mut writer) = stream.into_split();
     let request = match endpoint::read_line(&mut reader, MAX_REQUEST).await {
         Ok(line) => protocol::parse(&line),
@@ -650,6 +658,11 @@ async fn handle(stream: UnixStream, daemon: Arc<Daemon>, controller: bool) -> Re
     });
     let reply = match request {
         Err(reply) => reply,
+        Ok(Request::HostSession(claims)) => tokio::task::spawn_blocking(move || {
+            crate::host_session::verification::verify(&claims, caller, peer.uid())
+        })
+        .await
+        .unwrap_or_else(|_| failure(Code::State, "The caller's host could not be verified")),
         Ok(Request::Hello) => {
             // The first hello of this login: Atlas answers in the helper.
             static GREETED: std::sync::atomic::AtomicBool =

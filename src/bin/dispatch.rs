@@ -161,7 +161,14 @@ pub(super) async fn execute(
     let kind = policy.kind;
     let changes = policy.changes_helper;
     let waits = policy.waits(actor);
-    let host = policy.labelled(actor).then(HostSession::from_env).flatten();
+    let host = if policy.labelled(actor) {
+        match Config::load(&config).and_then(Client::new) {
+            Ok(client) => HostSession::from_env_verified(&client).await,
+            Err(_) => HostSession::from_env(),
+        }
+    } else {
+        None
+    };
     let task = task_of(
         policy.makes,
         host.as_ref(),
