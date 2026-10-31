@@ -32,12 +32,12 @@ const OLDER: &str = "The helper is running an older Atlas that cannot keep backg
 const POLL: Duration = Duration::from_millis(200);
 /// How long a stop waits beyond its grace for the job to end.
 const BEYOND_GRACE: Duration = Duration::from_secs(5);
-/// What a stop says of processes that left the job's group.
-const LEFT_RUNNING: &str =
-    "These processes left the job's group and are still running; Atlas did not stop them.";
+/// What a stop says of processes still running.
+const LEFT_RUNNING: &str = "These processes are still running; Atlas did not stop them.";
 /// What a stop says of processes still running once the job's leader was
 /// gone, in its group or out of it.
-const LEADER_GONE: &str = "The job's first process ended while these were still running, in its group or out of it; without it Atlas cannot prove they are the job's, so it did not stop them.";
+const LEADER_GONE: &str =
+    "The job's first process ended, so Atlas did not stop these processes. They are still running.";
 
 /// Start `argv` as a background job named `name` (its program's name
 /// unless given) that Atlas stops after `lifetime`. Control is held until

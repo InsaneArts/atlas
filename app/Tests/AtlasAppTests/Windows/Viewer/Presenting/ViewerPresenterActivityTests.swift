@@ -1,4 +1,5 @@
 import AtlasService
+import AtlasServiceTesting
 import AtlasUI
 import Foundation
 import Testing
@@ -27,16 +28,16 @@ struct ViewerPresenterActivityTests {
   @Test("each kind of action has its glyph, and a problem has the warning glyph")
   func eachKindHasItsGlyph() {
     let rows: [(entry: ActivityLog.Entry, kind: ViewerActivityKind)] = [
-      (.init(id: "1", says: "clicked Save in TextEdit", verb: "click"), .pointer),
-      (.init(id: "2", says: "typed in TextEdit", verb: "type"), .typing),
-      (.init(id: "3", says: "pressed ⌘S in TextEdit", verb: "key"), .keys),
-      (.init(id: "4", says: "scrolled in Opie"), .scroll),
-      (.init(id: "5", says: "took a screenshot", operation: "screenshot"), .screenshot),
-      (.init(id: "6", says: "opened Opie", operation: "open"), .window),
-      (.init(id: "7", says: "ran a command", operation: "run"), .command),
-      (.init(id: "8", says: "clicked in Opie", actor: .you), .person),
-      (.init(id: "9", says: "gave back control", actor: .you, operation: "release"), .control),
-      (.init(id: "10", says: "couldn't click Save in TextEdit", outcome: .failed), .problem),
+      (ActivityFixtures.row(id: "1", says: "clicked Save in TextEdit", verb: "click"), .pointer),
+      (ActivityFixtures.row(id: "2", says: "typed in TextEdit", verb: "type"), .typing),
+      (ActivityFixtures.row(id: "3", says: "pressed ⌘S in TextEdit", verb: "key"), .keys),
+      (ActivityFixtures.row(id: "4", says: "scrolled in Opie"), .scroll),
+      (ActivityFixtures.row(id: "5", says: "took a screenshot", operation: "screenshot"), .screenshot),
+      (ActivityFixtures.row(id: "6", says: "opened Opie", operation: "open"), .window),
+      (ActivityFixtures.row(id: "7", says: "ran a command", operation: "run"), .command),
+      (ActivityFixtures.row(id: "8", says: "clicked in Opie", actor: .you), .person),
+      (ActivityFixtures.row(id: "9", says: "gave back control", actor: .you, operation: "release"), .control),
+      (ActivityFixtures.row(id: "10", says: "couldn't click Save in TextEdit", outcome: .failed), .problem),
     ]
     for row in rows {
       #expect(ViewerPresenter.stepKind(row.entry) == row.kind, "\(row.entry.id)")
@@ -48,19 +49,23 @@ struct ViewerPresenterActivityTests {
 
   @Test("consecutive actions in one app form one moment under its icon, its steps never naming the app")
   func actionsInOneAppFormOneMoment() throws {
-    let activity = ViewerPresenter.activity(try Self.onActivity(Self.textEditLog, sessions: []))
-    let moments = Self.moments(activity)
+    let activity = ViewerPresenter.activity(
+      try ViewerActivityFixtures.onActivity(ViewerActivityFixtures.textEditLog, sessions: [])
+    )
+    let moments = ViewerActivityFixtures.moments(activity)
     #expect(moments.map(\.title) == ["TextEdit"])
     #expect(moments.first?.isOpen == true)
     #expect(moments.first?.icon == .app(.monogram(AppMonogram(name: "TextEdit"))))
-    let words = Self.steps(activity)
+    let words = ViewerActivityFixtures.steps(activity)
       .map(\.words.text)
     #expect(words == ["Pressed ⌘S", "Typed into Name", "Clicked Save", "Opened TextEdit"])
   }
 
   @Test("a key press shows its keys as caps")
   func aKeyPressShowsItsKeysAsCaps() throws {
-    let steps = Self.steps(ViewerPresenter.activity(try Self.onActivity(Self.textEditLog, sessions: [])))
+    let steps = ViewerActivityFixtures.steps(
+      ViewerPresenter.activity(try ViewerActivityFixtures.onActivity(ViewerActivityFixtures.textEditLog, sessions: []))
+    )
     let pressed = try #require(steps.first)
     #expect(pressed.words.verb == "Pressed")
     #expect(pressed.words.keys == [["⌘", "S"]])
@@ -70,12 +75,14 @@ struct ViewerPresenterActivityTests {
 
   @Test("a typed action names its field only when the row names one")
   func aTypedActionNamesItsFieldOnlyWhenTheRowDoes() throws {
-    let steps = Self.steps(ViewerPresenter.activity(try Self.onActivity(Self.textEditLog, sessions: [])))
+    let steps = ViewerActivityFixtures.steps(
+      ViewerPresenter.activity(try ViewerActivityFixtures.onActivity(ViewerActivityFixtures.textEditLog, sessions: []))
+    )
     #expect(steps[1].words == ViewerStepWords("Typed into", target: "Name"))
-    let plain = Self.steps(
+    let plain = ViewerActivityFixtures.steps(
       ViewerPresenter.activity(
-        try Self.onActivity(
-          [Self.row("t1", "typed in TextEdit", verb: "type", age: 0)],
+        try ViewerActivityFixtures.onActivity(
+          [ActivityFixtures.row(id: "t1", says: "typed in TextEdit", ageSeconds: 0, verb: "type", app: "TextEdit")],
           sessions: []
         )
       )
@@ -94,32 +101,44 @@ struct ViewerPresenterActivityTests {
         "install": "installed TextEdit", "cleanup": "cleaned up this session's work",
       ][verb]
     )
-    let row = ActivityLog.Entry(
+    let row = ActivityFixtures.row(
       id: "app",
       says: words,
       operation: "run",
       verb: verb,
       app: "TextEdit"
     )
-    let activity = ViewerPresenter.activity(try Self.onActivity([row], sessions: []))
-    #expect(Self.steps(activity).first?.words.text == Words.leadingCapital(words))
-    #expect(Self.steps(activity).first?.kind == .window)
+    let activity = ViewerPresenter.activity(try ViewerActivityFixtures.onActivity([row], sessions: []))
+    #expect(ViewerActivityFixtures.steps(activity).first?.words.text == Words.leadingCapital(words))
+    #expect(ViewerActivityFixtures.steps(activity).first?.kind == .window)
   }
 
   @Test("a command shows no arguments")
   func aCommandShowsNoArguments() throws {
     let log = [
-      ActivityLog.Entry(id: "r2", says: "ran swift build --verbose", outcome: .failed, ageSeconds: 1, operation: "run"),
-      ActivityLog.Entry(id: "r1", says: "ran rm -rf build", ageSeconds: 5, operation: "run"),
+      ActivityFixtures.row(
+        id: "r2",
+        says: "ran swift build --verbose",
+        outcome: .failed,
+        ageSeconds: 1,
+        operation: "run"
+      ),
+      ActivityFixtures.row(id: "r1", says: "ran rm -rf build", ageSeconds: 5, operation: "run"),
     ]
-    let activity = ViewerPresenter.activity(try Self.onActivity(log, sessions: []))
-    #expect(Self.moments(activity).map(\.title) == ["Commands"])
-    #expect(Self.steps(activity).map(\.words.text) == ["A command failed", "Ran a command"])
+    let activity = ViewerPresenter.activity(try ViewerActivityFixtures.onActivity(log, sessions: []))
+    #expect(
+      ViewerActivityFixtures.moments(activity)
+        .map(\.title) == ["Commands"]
+    )
+    #expect(
+      ViewerActivityFixtures.steps(activity)
+        .map(\.words.text) == ["A command failed", "Ran a command"]
+    )
   }
 
   @Test("a moment's header never shows a window's title")
   func aMomentsHeaderNeverShowsAWindowsTitle() throws {
-    var snapshot = try Self.onActivity(Self.textEditLog, sessions: [])
+    var snapshot = try ViewerActivityFixtures.onActivity(ViewerActivityFixtures.textEditLog, sessions: [])
     snapshot.panes.apps.apps = [
       HelperApp(
         pid: 7,
@@ -137,9 +156,29 @@ struct ViewerPresenterActivityTests {
   func aFoldedMomentSaysItsAppCountAndSpan() throws {
     let older = (0..<9)
       .reversed()
-      .map { Self.row("e\($0)", "clicked in TextEdit", verb: "click", age: Double(600 - $0 * 20)) }
-    let log = [Self.row("n1", "opened Notes", verb: "open", app: "Notes", age: 2)] + older
-    let moments = Self.moments(ViewerPresenter.activity(try Self.onActivity(log, sessions: [])))
+      .map {
+        ActivityFixtures.row(
+          id: "e\($0)",
+          says: "clicked in TextEdit",
+          ageSeconds: Double(600 - $0 * 20),
+          verb: "click",
+          app: "TextEdit"
+        )
+      }
+    let log =
+      [
+        ActivityFixtures.row(
+          id: "n1",
+          says: "opened Notes",
+          ageSeconds: 2,
+          operation: "open",
+          verb: "open",
+          app: "Notes"
+        )
+      ] + older
+    let moments = ViewerActivityFixtures.moments(
+      ViewerPresenter.activity(try ViewerActivityFixtures.onActivity(log, sessions: []))
+    )
     let folded = try #require(moments.last)
     #expect(folded.title == "TextEdit")
     #expect(!folded.isOpen)
@@ -150,17 +189,40 @@ struct ViewerPresenterActivityTests {
   @Test("opening a folded moment keeps it open as new actions arrive")
   func openingAFoldedMomentKeepsItOpen() throws {
     let older = (0..<3)
-      .map { Self.row("e\($0)", "clicked in TextEdit", verb: "click", age: Double(600 + $0 * 10)) }
-    var snapshot = try Self.onActivity(older, sessions: [])
-    var moment = try #require(Self.moments(ViewerPresenter.activity(snapshot)).first)
+      .map {
+        ActivityFixtures.row(
+          id: "e\($0)",
+          says: "clicked in TextEdit",
+          ageSeconds: Double(600 + $0 * 10),
+          verb: "click",
+          app: "TextEdit"
+        )
+      }
+    var snapshot = try ViewerActivityFixtures.onActivity(older, sessions: [])
+    var moment = try #require(ViewerActivityFixtures.moments(ViewerPresenter.activity(snapshot)).first)
     snapshot.panes.activity.choices[moment.id] = false
-    #expect(Self.moments(ViewerPresenter.activity(snapshot)).first?.isOpen == false)
+    #expect(ViewerActivityFixtures.moments(ViewerPresenter.activity(snapshot)).first?.isOpen == false)
     snapshot.panes.activity.choices[moment.id] = true
-    let newer = Self.row("e9", "clicked in TextEdit", verb: "click", age: 590)
-    snapshot.panes.activity.log = ActivityLog(
-      entries: [Self.row("n1", "opened Notes", verb: "open", app: "Notes", age: 0), newer] + older
+    let newer = ActivityFixtures.row(
+      id: "e9",
+      says: "clicked in TextEdit",
+      ageSeconds: 590,
+      verb: "click",
+      app: "TextEdit"
     )
-    moment = try #require(Self.moments(ViewerPresenter.activity(snapshot)).last)
+    snapshot.panes.activity.log = ActivityLog(
+      entries: [
+        ActivityFixtures.row(
+          id: "n1",
+          says: "opened Notes",
+          ageSeconds: 0,
+          operation: "open",
+          verb: "open",
+          app: "Notes"
+        ), newer,
+      ] + older
+    )
+    moment = try #require(ViewerActivityFixtures.moments(ViewerPresenter.activity(snapshot)).last)
     #expect(moment.title == "TextEdit")
     #expect(moment.isOpen, "the person's choice outlasts newer actions")
   }
@@ -168,19 +230,32 @@ struct ViewerPresenterActivityTests {
   @Test("the filters count the problems and screenshots there are")
   func theFiltersCountWhatWasDone() throws {
     let log =
-      Self.textEditLog + [
-        ActivityLog.Entry(id: "s1", says: "took a screenshot", ageSeconds: 40, operation: "screenshot"),
-        Self.row("f1", "couldn't click Save in TextEdit", verb: "click", age: 50, outcome: .failed),
+      ViewerActivityFixtures.textEditLog + [
+        ActivityFixtures.row(id: "s1", says: "took a screenshot", ageSeconds: 40, operation: "screenshot"),
+        ActivityFixtures.row(
+          id: "f1",
+          says: "couldn't click Save in TextEdit",
+          outcome: .failed,
+          ageSeconds: 50,
+          verb: "click",
+          app: "TextEdit"
+        ),
       ]
-    let activity = ViewerPresenter.activity(try Self.onActivity(log, sessions: []))
+    let activity = ViewerPresenter.activity(try ViewerActivityFixtures.onActivity(log, sessions: []))
     #expect(activity.filters.tabs.map(\.count) == [nil, 1, 1, nil])
   }
 
   @Test("the Activity search follows the sidebar's query while Activity shows")
   func theActivitySearchFollowsTheSidebar() throws {
-    var snapshot = try Self.onActivity(Self.mixedLog, sessions: [SessionReplies.claudeActing])
+    var snapshot = try ViewerActivityFixtures.onActivity(
+      ViewerActivityFixtures.mixedLog,
+      sessions: [SessionReplies.claudeActing]
+    )
     snapshot.session.search.query = "notes"
-    #expect(Self.moments(ViewerPresenter.activity(snapshot)).map(\.title) == ["Notes"])
+    #expect(
+      ViewerActivityFixtures.moments(ViewerPresenter.activity(snapshot))
+        .map(\.title) == ["Notes"]
+    )
     snapshot.session.search.query = "nothing like it"
     let none = ViewerPresenter.activity(snapshot)
     #expect(none.days.isEmpty)
@@ -190,24 +265,30 @@ struct ViewerPresenterActivityTests {
 
   @Test("one session's pane lists only its moments, under its name")
   func oneSessionListsOnlyItsMoments() throws {
-    var snapshot = try Self.onActivity(Self.mixedLog)
+    var snapshot = try ViewerActivityFixtures.onActivity(ViewerActivityFixtures.mixedLog)
     snapshot.session.chosenSession = .one("3f9a1c07b2e4")
     let activity = ViewerPresenter.activity(snapshot)
     #expect(activity.filters.tabs.map(\.id) == ViewerActivityFilter.allCases)
     #expect(activity.title == "Claude Code · understudy")
     #expect(activity.meta == "6 actions today")
-    #expect(Self.moments(activity).map(\.title) == ["Opie"])
-    #expect(Self.moments(activity).allSatisfy { $0.session == nil }, "one session's moments need no name")
+    #expect(
+      ViewerActivityFixtures.moments(activity)
+        .map(\.title) == ["Opie"]
+    )
+    #expect(
+      ViewerActivityFixtures.moments(activity).allSatisfy { $0.session == nil },
+      "one session's moments need no name"
+    )
   }
 
   @Test("All sessions preserves historical attribution and VoiceOver names after every session ends")
   func historyKeepsSessionAttribution() throws {
-    var snapshot = try Self.onActivity(Self.mixedLog, sessions: [])
+    var snapshot = try ViewerActivityFixtures.onActivity(ViewerActivityFixtures.mixedLog, sessions: [])
     snapshot.panes.activity.log?.sessions = [
-      Self.claude: HostSessionSummary(name: "Claude Code · history", host: .claude),
-      Self.codex: HostSessionSummary(name: "Codex · history", host: .codex),
+      ViewerActivityFixtures.claude: HostSessionSummary(name: "Claude Code · history", host: .claude),
+      ViewerActivityFixtures.codex: HostSessionSummary(name: "Codex · history", host: .codex),
     ]
-    let moments = Self.moments(ViewerPresenter.activity(snapshot))
+    let moments = ViewerActivityFixtures.moments(ViewerPresenter.activity(snapshot))
     let claude = try #require(moments.first { $0.title == "Opie" && $0.session?.name == "Claude Code · history" })
     let codex = try #require(moments.first { $0.title == "Notes" })
     #expect(claude.session?.icon != nil)
@@ -215,33 +296,33 @@ struct ViewerPresenterActivityTests {
     #expect(claude.label.contains("Claude Code · history"))
     #expect(codex.label.contains("Codex · history"))
     snapshot.reading.hasStatus = false
-    snapshot.session.chosenSession = .one(Self.claude)
-    #expect(Self.moments(ViewerPresenter.activity(snapshot)).allSatisfy { $0.session == nil })
+    snapshot.session.chosenSession = .one(ViewerActivityFixtures.claude)
+    #expect(ViewerActivityFixtures.moments(ViewerPresenter.activity(snapshot)).allSatisfy { $0.session == nil })
   }
 
   @Test("only the causing session's uncertain step offers Recover, and its moment stays open")
   func onlyTheCausersUncertainStepOffersRecover() throws {
     let log = [
-      Self.row(
-        "c1",
-        "clicked Show Center in Opie",
-        verb: "click",
-        app: "Opie",
-        age: 0,
+      ActivityFixtures.row(
+        id: "c1",
+        says: "clicked Show Center in Opie",
         outcome: .failed,
-        session: Self.claude
+        ageSeconds: 0,
+        session: ViewerActivityFixtures.claude,
+        verb: "click",
+        app: "Opie"
       ),
-      Self.row(
-        "x1",
-        "couldn't click Save in Notes",
-        verb: "click",
-        app: "Notes",
-        age: 1,
+      ActivityFixtures.row(
+        id: "x1",
+        says: "couldn't click Save in Notes",
         outcome: .failed,
-        session: Self.codex
+        ageSeconds: 1,
+        session: ViewerActivityFixtures.codex,
+        verb: "click",
+        app: "Notes"
       ),
     ]
-    var snapshot = try Self.onActivity(
+    var snapshot = try ViewerActivityFixtures.onActivity(
       log,
       sessions: [SessionReplies.claudeNeedsYou, SessionReplies.codexWaiting(recovery: true)],
       mode: "recovering",
@@ -249,47 +330,64 @@ struct ViewerPresenterActivityTests {
       pending: 1
     )
     snapshot.panes.activity.choices = Dictionary(
-      uniqueKeysWithValues: Self.moments(ViewerPresenter.activity(snapshot)).map { ($0.id, false) }
+      uniqueKeysWithValues: ViewerActivityFixtures.moments(ViewerPresenter.activity(snapshot)).map { ($0.id, false) }
     )
     let activity = ViewerPresenter.activity(snapshot)
-    let offering = Self.steps(activity)
+    let offering = ViewerActivityFixtures.steps(activity)
       .filter(\.offersRecovery)
       .map(\.id)
     #expect(offering == ["c1"])
-    #expect(Self.steps(activity).first?.problem?.why == "May not have finished. Every session waits until you recover.")
-    #expect(Self.moments(activity).first?.canFold == false, "the moment holding it offers no fold")
+    #expect(
+      ViewerActivityFixtures.steps(activity).first?.problem?.why
+        == "May not have finished. Every session waits until you recover."
+    )
+    #expect(ViewerActivityFixtures.moments(activity).first?.canFold == false, "the moment holding it offers no fold")
   }
 
   @Test("a lone session's unresolved action holds its folded moment open and offers recovery")
   func oneSessionCannotFoldAwayRecovery() throws {
-    var snapshot = try Self.onActivity(
-      [Self.row("c1", "clicked in Opie", verb: "click", app: "Opie", age: 0, outcome: .failed, session: Self.claude)],
+    var snapshot = try ViewerActivityFixtures.onActivity(
+      [
+        ActivityFixtures.row(
+          id: "c1",
+          says: "clicked in Opie",
+          outcome: .failed,
+          ageSeconds: 0,
+          session: ViewerActivityFixtures.claude,
+          verb: "click",
+          app: "Opie"
+        )
+      ],
       sessions: [SessionReplies.claudeNeedsYou],
       mode: "recovering",
       state: "needsYou",
       pending: 1
     )
-    let first = try #require(Self.moments(ViewerPresenter.activity(snapshot)).first)
+    let first = try #require(ViewerActivityFixtures.moments(ViewerPresenter.activity(snapshot)).first)
     snapshot.panes.activity.choices[first.id] = false
     let activity = ViewerPresenter.activity(snapshot)
     #expect(snapshot.reading.statusReading.causer == nil, "one session needs no session label")
-    #expect(Self.moments(activity).first?.isOpen == true)
-    #expect(Self.moments(activity).first?.canFold == false)
-    #expect(Self.steps(activity).filter(\.offersRecovery).map(\.id) == ["c1"])
+    #expect(ViewerActivityFixtures.moments(activity).first?.isOpen == true)
+    #expect(ViewerActivityFixtures.moments(activity).first?.canFold == false)
+    #expect(
+      ViewerActivityFixtures.steps(activity)
+        .filter(\.offersRecovery)
+        .map(\.id) == ["c1"]
+    )
   }
 
   @Test("an aggregated personal input row has the same action total in its moment, Library and VoiceOver summary")
   func personalInputCountsAgreeAcrossTheViewer() throws {
-    let row = ActivityLog.Entry(id: "personal", says: "sent 2107 actions", actor: .you, ageSeconds: 0, count: 2107)
-    var snapshot = try Self.onActivity([row], sessions: [])
+    let row = ActivityFixtures.row(id: "personal", says: "sent 2107 actions", actor: .you, ageSeconds: 0, count: 2107)
+    var snapshot = try ViewerActivityFixtures.onActivity([row], sessions: [])
     let activity = ViewerPresenter.activity(snapshot)
-    #expect(Self.moments(activity).first?.span.hasPrefix("2107 actions ·") == true)
+    #expect(ViewerActivityFixtures.moments(activity).first?.span.hasPrefix("2107 actions ·") == true)
     #expect(activity.meta == "2107 actions today")
     #expect(ViewerPresenter.library(snapshot).first { $0.place == .activity }?.count == 2107)
 
-    let moment = try #require(Self.moments(activity).first)
+    let moment = try #require(ViewerActivityFixtures.moments(activity).first)
     snapshot.panes.activity.choices[moment.id] = false
-    let folded = try #require(Self.moments(ViewerPresenter.activity(snapshot)).first)
+    let folded = try #require(ViewerActivityFixtures.moments(ViewerPresenter.activity(snapshot)).first)
     #expect(!folded.isOpen)
     #expect(folded.label.contains("2107 actions"))
 
@@ -304,34 +402,34 @@ struct ViewerPresenterActivityTests {
   @Test("a session's Library and VoiceOver summary count its actions and exclude personal input")
   func sessionActionCountsAgreeAcrossTheViewer() throws {
     let rows = [
-      ActivityLog.Entry(id: "chosen", ageSeconds: 0, count: 7, session: Self.claude),
-      ActivityLog.Entry(id: "other", ageSeconds: 1, count: 3, session: Self.codex),
-      ActivityLog.Entry(id: "personal", actor: .you, ageSeconds: 2, count: 2107),
+      ActivityFixtures.row(id: "chosen", ageSeconds: 0, count: 7, session: ViewerActivityFixtures.claude),
+      ActivityFixtures.row(id: "other", ageSeconds: 1, count: 3, session: ViewerActivityFixtures.codex),
+      ActivityFixtures.row(id: "personal", actor: .you, ageSeconds: 2, count: 2107),
     ]
-    var snapshot = try Self.onActivity(rows)
-    snapshot.session.chosenSession = .one(Self.claude)
+    var snapshot = try ViewerActivityFixtures.onActivity(rows)
+    snapshot.session.chosenSession = .one(ViewerActivityFixtures.claude)
     let activity = ViewerPresenter.activity(snapshot)
     #expect(activity.meta == "7 actions today")
-    #expect(Self.moments(activity).first?.span.hasPrefix("7 actions ·") == true)
+    #expect(ViewerActivityFixtures.moments(activity).first?.span.hasPrefix("7 actions ·") == true)
     #expect(ViewerPresenter.library(snapshot).first { $0.place == .activity }?.count == 7)
   }
 
   @Test("a refusal before anything was sent is no problem, and says what the agent did next")
   func aRefusalIsNoProblem() throws {
     let log = [
-      Self.row("f2", "typed in Notes", verb: "type", app: "Notes", age: 1),
-      Self.row(
-        "f1",
-        "didn't type in Notes",
-        verb: "type",
-        app: "Notes",
-        age: 3,
+      ActivityFixtures.row(id: "f2", says: "typed in Notes", ageSeconds: 1, verb: "type", app: "Notes"),
+      ActivityFixtures.row(
+        id: "f1",
+        says: "didn't type in Notes",
         outcome: .notSent,
-        reason: "Another app was in front"
+        ageSeconds: 3,
+        reason: "Another app was in front",
+        verb: "type",
+        app: "Notes"
       ),
     ]
-    var snapshot = try Self.onActivity(log, sessions: [])
-    let step = try #require(Self.steps(ViewerPresenter.activity(snapshot)).last)
+    var snapshot = try ViewerActivityFixtures.onActivity(log, sessions: [])
+    let step = try #require(ViewerActivityFixtures.steps(ViewerPresenter.activity(snapshot)).last)
     #expect(step.mark == .notSent)
     #expect(step.kind == .typing)
     #expect(
@@ -345,7 +443,7 @@ struct ViewerPresenterActivityTests {
   @Test("a personal moment's follow-up names the person after its step has removed the actor prefix")
   func personalFollowUpsKeepTheirActor() throws {
     let log = [
-      ActivityLog.Entry(
+      ActivityFixtures.row(
         id: "next",
         says: "clicked Cancel in Notes",
         actor: .you,
@@ -354,7 +452,7 @@ struct ViewerPresenterActivityTests {
         app: "Notes",
         label: "Cancel"
       ),
-      ActivityLog.Entry(
+      ActivityFixtures.row(
         id: "failed",
         says: "couldn't click Save in Notes",
         outcome: .failed,
@@ -365,126 +463,10 @@ struct ViewerPresenterActivityTests {
         label: "Save"
       ),
     ]
-    let steps = Self.steps(ViewerPresenter.activity(try Self.onActivity(log, sessions: [])))
+    let steps = ViewerActivityFixtures.steps(
+      ViewerPresenter.activity(try ViewerActivityFixtures.onActivity(log, sessions: []))
+    )
     #expect(steps.last?.problem?.next == "Then you clicked Cancel.")
   }
 
-  /// The Activity tab over `log` while Claude Code acts, Codex waits and Cursor is idle, read at the snapshot's time.
-  ///
-  /// - Parameters:
-  ///   - log: The log read.
-  ///   - sessions: The status's sessions; the three by default.
-  ///   - mode: The helper's mode.
-  ///   - state: The state the service shows for it.
-  ///   - pending: Actions of unknown outcome.
-  /// - Returns: The snapshot.
-  /// - Throws: A decoding error, which a fixed reply never gives.
-  static func onActivity(
-    _ log: [ActivityLog.Entry],
-    sessions: [[String: Any]] = ViewerPresenterSessionsTests.three,
-    mode: String = "agent",
-    state: String = "working",
-    pending: Int = 0
-  ) throws -> ViewerSnapshot {
-    var snapshot = try ViewerSnapshot.listing(sessions, mode: mode, state: state, pending: pending)
-    snapshot.session.place = .activity
-    snapshot.date = Date(timeIntervalSince1970: 1_792_665_102)
-    snapshot.timeZone = TimeZone(secondsFromGMT: 0) ?? .current
-    snapshot.locale = Locale(identifier: "de_DE")
-    snapshot.panes.activity.log = ActivityLog(entries: log)
-    snapshot.panes.activity.readAt = snapshot.date
-    return snapshot
-  }
-
-  /// Claude Code's session key.
-  static let claude = "3f9a1c07b2e4"
-  /// Codex's session key.
-  static let codex = "8be20c4d1a77"
-
-  /// A row an agent wrote in an app.
-  ///
-  /// - Parameters:
-  ///   - id: The row's id.
-  ///   - says: What it did, in the service's words.
-  ///   - verb: The verb Atlas wrote for it.
-  ///   - app: The app's name; TextEdit by default.
-  ///   - label: The control or field it named, or the keys; none by default.
-  ///   - keys: The keys as caps; none by default.
-  ///   - age: How long before the reading it started.
-  ///   - outcome: How it went; worked by default.
-  ///   - reason: Why it did not work; none by default.
-  ///   - session: The host session's key; none by default.
-  /// - Returns: The row.
-  static func row(
-    _ id: String,
-    _ says: String,
-    verb: String,
-    app: String = "TextEdit",
-    label: String? = nil,
-    keys: [[String]] = [],
-    age: Double,
-    outcome: ActivityLog.Outcome = .worked,
-    reason: String? = nil,
-    session: String? = nil
-  ) -> ActivityLog.Entry {
-    ActivityLog.Entry(
-      id: id,
-      says: says,
-      outcome: outcome,
-      ageSeconds: age,
-      reason: reason,
-      operation: verb == "open" ? "open" : "input",
-      session: session,
-      verb: verb,
-      app: app,
-      label: label,
-      keys: keys
-    )
-  }
-
-  /// An agent's four steps in TextEdit, newest first: ⌘S pressed, Name typed into, Save clicked, TextEdit opened.
-  static let textEditLog = [
-    row("k1", "pressed ⌘S in TextEdit", verb: "key", label: "⌘S", keys: [["⌘", "S"]], age: 0),
-    row("t1", "typed into Name in TextEdit", verb: "type", label: "Name", age: 5),
-    row("c1", "clicked Save in TextEdit", verb: "click", label: "Save", age: 10),
-    row("o1", "opened TextEdit", verb: "open", age: 20),
-  ]
-
-  /// Six of Claude Code's rows in Opie, one of Codex's in Notes, the person's, and one no host named, newest first.
-  static var mixedLog: [ActivityLog.Entry] {
-    (0..<6)
-      .map {
-        row(
-          "claude-\($0)",
-          "clicked Item \($0) in Opie",
-          verb: "click",
-          app: "Opie",
-          label: "Item \($0)",
-          age: Double($0),
-          session: claude
-        )
-      } + [
-        row("codex", "opened Notes", verb: "open", app: "Notes", age: 10, session: codex),
-        ActivityLog.Entry(id: "you", says: "clicked in Opie", actor: .you, ageSeconds: 20, verb: "click", app: "Opie"),
-        ActivityLog.Entry(id: "terminal", says: "ran a command", ageSeconds: 30, operation: "run"),
-      ]
-  }
-
-  /// The moments a pane lists.
-  ///
-  /// - Parameter activity: The pane.
-  /// - Returns: Its moments, in order.
-  static func moments(_ activity: ViewerActivityState) -> [ViewerActivityMoment] {
-    activity.days.flatMap(\.moments)
-  }
-
-  /// The steps a pane lists.
-  ///
-  /// - Parameter activity: The pane.
-  /// - Returns: Its steps, in order.
-  static func steps(_ activity: ViewerActivityState) -> [ViewerActivityStep] {
-    activity.days
-      .flatMap(\.moments)
-      .flatMap(\.steps)
-  }
 }
