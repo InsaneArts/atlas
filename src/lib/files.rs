@@ -147,7 +147,7 @@ pub fn probe_write(directory: &Path) -> Result<()> {
 
 /// The lock file at `path`, made private to this account when it is new,
 /// and refused unless it is a plain file of this account.
-pub(crate) fn open_lock(path: &Path) -> Result<File> {
+pub(crate) fn open_lock(path: &Path) -> Result<LockFile> {
     let file = OpenOptions::new()
         .create(true)
         .truncate(false)
@@ -159,7 +159,17 @@ pub(crate) fn open_lock(path: &Path) -> Result<File> {
         .map_err(|error| Error::writing(path, error))?;
     own_private(&file, path)?;
 
-    Ok(file)
+    Ok(LockFile(file))
+}
+
+/// Unlocks on drop even while a forked child still has the open file description.
+#[derive(Debug)]
+pub(crate) struct LockFile(pub File);
+
+impl Drop for LockFile {
+    fn drop(&mut self) {
+        let _ = fs2::FileExt::unlock(&self.0);
+    }
 }
 
 /// How a lock is held: beside other readers, or by one holder alone.
@@ -177,12 +187,9 @@ pub(crate) struct Held;
 const LOCK_POLL: Duration = Duration::from_millis(5);
 
 /// Take `lock` on `file`, trying again until `patience` has passed; none at
-/// all tries once. A process being spawned elsewhere briefly holds every
-/// open file of its parent, close-on-exec ones too, until it executes, so a
-/// lock just let go of can look held for a few milliseconds; a real holder
-/// keeps it far longer.
+/// all tries once.
 pub(crate) fn lock_within(
-    file: &File,
+    file: &LockFile,
     lock: Lock,
     patience: Duration,
 ) -> std::result::Result<(), Held> {
@@ -192,7 +199,7 @@ pub(crate) fn lock_within(
 /// [`lock_within`], trying again only while `retry` says to, given the
 /// moment `patience` runs out.
 pub(crate) fn lock_retrying(
-    file: &File,
+    file: &LockFile,
     lock: Lock,
     patience: Duration,
     mut retry: impl FnMut(Instant) -> bool,
@@ -200,8 +207,8 @@ pub(crate) fn lock_retrying(
     let deadline = Instant::now() + patience;
     loop {
         let taken = match lock {
-            Lock::Shared => fs2::FileExt::try_lock_shared(file),
-            Lock::Exclusive => fs2::FileExt::try_lock_exclusive(file),
+            Lock::Shared => fs2::FileExt::try_lock_shared(&file.0),
+            Lock::Exclusive => fs2::FileExt::try_lock_exclusive(&file.0),
         };
         if taken.is_ok() {
             return Ok(());
@@ -287,6 +294,68 @@ mod tests {
     use std::time::{Duration, Instant};
 
     #[test]
+    #[allow(
+        unsafe_code,
+        reason = "The isolated fork child only calls async-signal-safe syscalls"
+    )]
+    fn a_lock_is_released_even_when_a_forked_child_inherits_it() {
+        use nix::{
+            sys::{
+                signal::{Signal, kill},
+                wait::{WaitPidFlag, WaitStatus, waitpid},
+            },
+            unistd::{ForkResult, alarm, fork, pause},
+        };
+
+        if !crate::test_support::isolated(
+            "files::tests::a_lock_is_released_even_when_a_forked_child_inherits_it",
+        ) {
+            return;
+        }
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("lock");
+        let held = open_lock(&path).unwrap();
+        lock_within(&held, Lock::Exclusive, Duration::ZERO).unwrap();
+        let next = open_lock(&path).unwrap();
+        // SAFETY: The child only calls async-signal-safe alarm and pause;
+        // it expires after five seconds even if the parent's cleanup fails.
+        let child = match unsafe { fork() }.unwrap() {
+            ForkResult::Parent { child } => child,
+            ForkResult::Child => {
+                alarm::set(5);
+                loop {
+                    pause();
+                }
+            }
+        };
+
+        let refused = lock_within(&next, Lock::Exclusive, Duration::ZERO);
+        drop(held);
+        let released = lock_within(&next, Lock::Exclusive, Duration::ZERO);
+
+        let killed = kill(child, Signal::SIGKILL);
+        let deadline = Instant::now() + Duration::from_secs(2);
+        let reaped = loop {
+            match waitpid(child, Some(WaitPidFlag::WNOHANG)) {
+                Ok(WaitStatus::StillAlive) if Instant::now() < deadline => {
+                    std::thread::sleep(Duration::from_millis(5));
+                }
+                status => break status,
+            }
+        };
+        killed.unwrap();
+        assert_eq!(
+            reaped.unwrap(),
+            WaitStatus::Signaled(child, Signal::SIGKILL, false)
+        );
+        assert!(matches!(refused, Err(Held)));
+        assert!(
+            released.is_ok(),
+            "the inherited descriptor kept the lock: {released:?}"
+        );
+    }
+
+    #[test]
     fn a_held_lock_is_refused_once_its_patience_runs_out() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("lock");
@@ -294,14 +363,14 @@ mod tests {
 
         lock_within(&first, Lock::Shared, Duration::ZERO).unwrap();
         lock_within(&second, Lock::Shared, Duration::ZERO).expect("readers share it");
-        fs2::FileExt::unlock(&second).unwrap();
+        fs2::FileExt::unlock(&second.0).unwrap();
 
         let started = Instant::now();
         let refused = lock_within(&second, Lock::Exclusive, Duration::from_millis(30));
         assert!(matches!(refused, Err(Held)));
         assert!(started.elapsed() >= Duration::from_millis(30), "it waited");
 
-        fs2::FileExt::unlock(&first).unwrap();
+        fs2::FileExt::unlock(&first.0).unwrap();
         lock_within(&second, Lock::Exclusive, Duration::ZERO)
             .expect("a free lock is taken at once");
     }

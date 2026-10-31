@@ -23,10 +23,7 @@ pub(crate) fn rerun(test: &str) -> Command {
     command
 }
 
-/// Run lock-lifetime assertions in a process without parallel test threads.
-/// On macOS a concurrent spawn can briefly inherit another thread's flock
-/// until exec, keeping it held after the owning test drops its descriptor.
-/// Unique directories cannot isolate those inherited open file descriptions.
+/// Run a test in a process without parallel test threads.
 pub(crate) fn isolated(test: &str) -> bool {
     if std::env::var("ATLAS_ISOLATED_TEST").as_deref() == Ok(test) {
         return true;

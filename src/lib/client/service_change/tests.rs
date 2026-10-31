@@ -1039,7 +1039,7 @@ async fn a_locked_activity_marker_refuses_within_a_deadline_even_without_pending
             .find(|path| path.to_string_lossy().ends_with(".state.lock"))
             .unwrap();
         let lock = crate::files::open_lock(&marker_lock).unwrap();
-        FileExt::try_lock_exclusive(&lock).unwrap();
+        FileExt::try_lock_exclusive(&lock.0).unwrap();
         let result =
             tokio::time::timeout(Duration::from_secs(2), client.require_service_idle()).await;
         // Release before asserting so even an unbounded-reader regression
@@ -1080,7 +1080,7 @@ async fn allowing_disruption_still_bounds_the_marker_lock_during_controller_acqu
                 .find(|path| path.to_string_lossy().ends_with(".state.lock"))
                 .unwrap();
             let lock = crate::files::open_lock(&marker_lock).unwrap();
-            FileExt::try_lock_exclusive(&lock).unwrap();
+            FileExt::try_lock_exclusive(&lock.0).unwrap();
             let waiting = client.clone();
             let mut change = tokio::task::spawn_blocking(move || {
                 tokio::runtime::Handle::current().block_on(waiting.service_change(recovery))

@@ -162,7 +162,7 @@ fn save(output: &Path, frame: &Frame) -> Result<(PathBuf, String)> {
 }
 
 /// The record's lock, held until dropped; `None` when it cannot be taken.
-fn locked(output: &Path) -> Option<fs::File> {
+fn locked(output: &Path) -> Option<crate::files::LockFile> {
     let lock = OpenOptions::new()
         .create(true)
         .truncate(false)
@@ -176,7 +176,7 @@ fn locked(output: &Path) -> Option<fs::File> {
     }
     FileExt::lock_exclusive(&lock).ok()?;
 
-    Some(lock)
+    Some(crate::files::LockFile(lock))
 }
 
 /// The display epoch a capture was taken in, as the record keeps it.

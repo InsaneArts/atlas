@@ -5,7 +5,10 @@
 //! never do.
 use crate::{
     error::{Code, Error, Result},
-    files::{Durability, Held, Lock, Token, lock_within, own_folder, read_own, write_private_with},
+    files::{
+        Durability, Held, Lock, LockFile, Token, lock_within, own_folder, read_own,
+        write_private_with,
+    },
     host_session::Key,
 };
 use serde::{Serialize, de::DeserializeOwned};
@@ -256,13 +259,13 @@ impl<K: RecordName> RecordFolder<K> {
     /// reader. A writer waits at most its kind's lock wait for another to
     /// let go of it, then is refused, so recording never holds a command
     /// up for long.
-    pub(crate) fn lock(&self) -> Result<File> {
+    pub(crate) fn lock(&self) -> Result<LockFile> {
         self.lock_within(self.records.lock_wait)
     }
 
     /// [`RecordFolder::lock`], waiting at most `wait`: none at all tries
     /// once.
-    pub(crate) fn lock_within(&self, wait: Duration) -> Result<File> {
+    pub(crate) fn lock_within(&self, wait: Duration) -> Result<LockFile> {
         let path = self.directory.join(".lock");
         let lock = OpenOptions::new()
             .create(true)
@@ -282,6 +285,7 @@ impl<K: RecordName> RecordFolder<K> {
             ));
         }
 
+        let lock = LockFile(lock);
         lock_within(&lock, Lock::Exclusive, wait).map_err(|Held| {
             Error::new(
                 Code::Busy,

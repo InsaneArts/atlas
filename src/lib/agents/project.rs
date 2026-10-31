@@ -211,7 +211,9 @@ fn remember(record: &Path, dir: &Path, keep: bool) -> Result<()> {
         .custom_flags(libc::O_NOFOLLOW)
         .open(&lock_path)
         .map_err(|error| problem(format!("Could not write {}: {error}", lock_path.display())))?;
-    lock.lock_exclusive()
+    let lock = crate::files::LockFile(lock);
+    lock.0
+        .lock_exclusive()
         .map_err(|error| problem(format!("Could not lock {}: {error}", lock_path.display())))?;
 
     let mut listed = taught_in(record);

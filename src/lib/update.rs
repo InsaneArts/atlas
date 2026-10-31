@@ -219,7 +219,7 @@ fn caches() -> Result<PathBuf> {
 /// a scratch folder and sweep each other's staging copies otherwise.
 #[derive(Debug)]
 pub struct Exclusive {
-    _lock: fs::File,
+    _lock: crate::files::LockFile,
 }
 
 /// Take the update lock, or say another update is running.
@@ -251,7 +251,9 @@ fn exclusive_in(directory: &Path) -> Result<Exclusive> {
     lock.try_lock_exclusive()
         .map_err(|_| problem("Another atlas update is running. Wait for it to finish."))?;
 
-    Ok(Exclusive { _lock: lock })
+    Ok(Exclusive {
+        _lock: crate::files::LockFile(lock),
+    })
 }
 
 /// A private scratch directory for one update, emptied first: an update

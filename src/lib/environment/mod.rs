@@ -22,6 +22,7 @@ use crate::{
     config::parse_toml,
     control::Ownership,
     error::{Code, Error, Result},
+    files::LockFile,
     task::{self, Claims},
     transport::{OutputError, run_output},
 };
@@ -737,7 +738,7 @@ fn create_stage(stage: &Path, helper: &str) -> Result<()> {
 /// Make a private folder the helper may read at `stage`, holding its lock.
 /// It is made and locked under a name no sweep looks at, then moved into
 /// place, so no other command ever finds it unlocked.
-fn create_locked_stage(stage: &Path, helper: &str) -> Result<fs::File> {
+fn create_locked_stage(stage: &Path, helper: &str) -> Result<LockFile> {
     create_locked_stage_with(stage, helper, |_| {})
 }
 
@@ -747,7 +748,7 @@ fn create_locked_stage_with(
     stage: &Path,
     helper: &str,
     made: impl FnOnce(&Path),
-) -> Result<fs::File> {
+) -> Result<LockFile> {
     let parent = stage
         .parent()
         .ok_or_else(|| problem("Missing shared directory"))?;
@@ -767,7 +768,7 @@ fn create_locked_stage_with(
     placed
 }
 
-fn lock_stage(stage: &Path) -> Result<fs::File> {
+fn lock_stage(stage: &Path) -> Result<LockFile> {
     let directory = directory(stage, false)?.ok_or_else(|| problem("Frozen plan is missing"))?;
     installation_parent(&directory)?;
 
@@ -779,10 +780,8 @@ fn lock_stage(stage: &Path) -> Result<fs::File> {
         .ok_or_else(|| problem("Plan lock is missing"))?;
     validate_private(&lock, false)?;
 
-    // A listing looks at the lock for an instant, and a process being
-    // spawned elsewhere briefly holds every open file of its parent: a lock
-    // held that briefly is waited out; a command using the plan holds it
-    // far longer.
+    let lock = LockFile(lock);
+    // A listing holds a shared lock for an instant.
     crate::files::lock_within(&lock, crate::files::Lock::Exclusive, STAGE_PATIENCE)
         .map_err(|_| problem("This environment plan is already running"))?;
 

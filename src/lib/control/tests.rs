@@ -14,7 +14,11 @@ use super::{
     wait::poll_with,
 };
 use crate::{error::Holder, files::token};
-use std::io::{Seek, SeekFrom, Write};
+use fs2::FileExt;
+use std::{
+    fs::File,
+    io::{Seek, SeekFrom, Write},
+};
 use tokio::sync::Mutex;
 
 /// What agents and people read gives the default wait the code uses.
@@ -131,15 +135,10 @@ fn unreadable_markers_and_unopenable_locks_are_reported_as_unresolved() {
 
 #[test]
 fn dropping_ownership_releases_control_while_a_duplicate_descriptor_stays_open() {
-    if !crate::test_support::isolated(
-        "control::tests::dropping_ownership_releases_control_while_a_duplicate_descriptor_stays_open",
-    ) {
-        return;
-    }
     let directory = tempfile::tempdir().unwrap();
     let controller = Controller::at(505, directory.path());
     let ownership = controller.acquire_for_person().unwrap();
-    let duplicate = ownership._lock.try_clone().unwrap();
+    let duplicate = ownership._lock.0.try_clone().unwrap();
     assert_eq!(controller.acquire(false).unwrap_err().code, "busy");
 
     drop(ownership);
@@ -346,11 +345,6 @@ fn an_exited_executor_releases_its_claim_when_its_identity_is_unavailable() {
 
 #[test]
 fn a_partial_executor_record_does_not_block_recovery_after_its_executor_and_boot_are_gone() {
-    if !crate::test_support::isolated(
-        "control::tests::a_partial_executor_record_does_not_block_recovery_after_its_executor_and_boot_are_gone",
-    ) {
-        return;
-    }
     let dir = tempfile::tempdir().unwrap();
     let controller = Controller::at(505, dir.path());
     let pending = controller.quarantine().unwrap();
@@ -374,7 +368,7 @@ fn a_partial_executor_record_does_not_block_recovery_after_its_executor_and_boot
         })
         .is_err()
     );
-    FileExt::unlock(&pending.lock).unwrap();
+    FileExt::unlock(&pending.lock.0).unwrap();
 
     assert_eq!(controller.pending().unwrap(), vec![generation]);
     assert!(live.exists());
@@ -428,11 +422,6 @@ fn interrupted_claim_cleanup_leaves_recovery_unblocked_despite_a_malformed_recor
 
 #[test]
 fn a_partial_executor_record_keeps_a_possibly_live_executor_pending() {
-    if !crate::test_support::isolated(
-        "control::tests::a_partial_executor_record_keeps_a_possibly_live_executor_pending",
-    ) {
-        return;
-    }
     let dir = tempfile::tempdir().unwrap();
     let controller = Controller::at(505, dir.path());
     let pending = controller.quarantine().unwrap();

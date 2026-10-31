@@ -7,11 +7,13 @@ use super::{
     busy::{busy_agent, busy_person},
     turns,
 };
-use crate::error::{Error, Result};
+use crate::{
+    error::{Error, Result},
+    files::LockFile,
+};
 use fs2::FileExt;
 use rand::Rng;
 use std::{
-    fs::File,
     sync::Arc,
     time::{Duration, Instant},
 };
@@ -67,7 +69,7 @@ impl Controller {
     /// Lock `lock`, trying again for what is left of [`Controller::wait`]
     /// while another controller holds it. A controller given a wait lets
     /// those already waiting go first.
-    pub(super) fn take(&self, lock: &File) -> Result<()> {
+    pub(super) fn take(&self, lock: &LockFile) -> Result<()> {
         let started = Instant::now();
         let first = self.wait.is_zero() || !turns::queued(&self.waiting);
         if self.try_take(lock, started, first)? {
@@ -81,7 +83,7 @@ impl Controller {
     /// that the wait began and that it ended, whenever no command that began
     /// waiting earlier is still waiting. A signal's stop ends the wait
     /// within one poll.
-    fn wait_for_lock(&self, lock: &File, started: Instant) -> Result<()> {
+    fn wait_for_lock(&self, lock: &LockFile, started: Instant) -> Result<()> {
         let _notice = WaitNotice::begin(self.on_wait.as_ref());
         let turn = turns::Turn::join(&self.waiting, self.label.as_ref());
         loop {
@@ -99,8 +101,8 @@ impl Controller {
     /// left, else why not. The person's note and a Stop are looked at on
     /// every try, so either ends a wait within one poll, and the person is
     /// never waited for. A refused lock is let go when the caller drops it.
-    fn try_take(&self, lock: &File, started: Instant, turn: bool) -> Result<bool> {
-        let taken = turn && FileExt::try_lock_exclusive(lock).is_ok();
+    fn try_take(&self, lock: &LockFile, started: Instant, turn: bool) -> Result<bool> {
+        let taken = turn && FileExt::try_lock_exclusive(&lock.0).is_ok();
         let waited = (!self.wait.is_zero()).then(|| started.elapsed());
         if !taken && self.person.exists() {
             return Err(busy_person(waited));

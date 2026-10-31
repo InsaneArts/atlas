@@ -37,14 +37,13 @@ use marker::{Unsettled, pending};
 use crate::{
     config::home,
     error::{Code, Error, Result},
-    files::{open_lock, probe_write},
+    files::{LockFile, open_lock, probe_write},
     host_session::{HostSession, Key, Label},
     interrupt::{Hold, Interrupt},
 };
-use fs2::FileExt;
 use sha2::{Digest, Sha256};
 use std::{
-    fs::{self, File},
+    fs,
     os::unix::fs::MetadataExt,
     path::{Path, PathBuf},
     sync::Arc,
@@ -95,7 +94,7 @@ pub struct Pending {
     generation: String,
     live: PathBuf,
     /// The claim file, exclusively locked for as long as it is open.
-    lock: File,
+    lock: LockFile,
     /// Keeps a signal's stop waiting until the claim file is let go.
     _hold: Hold,
 }
@@ -115,7 +114,7 @@ impl Pending {
 
     /// Whether the claim path still names the file this claim locked.
     fn names_own_file(&self) -> bool {
-        let (named, held) = (fs::symlink_metadata(&self.live), self.lock.metadata());
+        let (named, held) = (fs::symlink_metadata(&self.live), self.lock.0.metadata());
         matches!((named, held), (Ok(a), Ok(b)) if (a.dev(), a.ino()) == (b.dev(), b.ino()))
     }
 }
@@ -125,8 +124,7 @@ impl Drop for Pending {
         // Only an unlocked claim file is ever removed by others, and a
         // replacement can only appear once this one is gone, so a path that
         // still names the locked file stays ours until it is removed here.
-        // The lock goes with the descriptor.
-        if self.names_own_file() && !claim_executor_running(&self.lock, &self.live) {
+        if self.names_own_file() && !claim_executor_running(&self.lock.0, &self.live) {
             remove_claim(&self.live);
         }
     }
@@ -145,7 +143,7 @@ fn remove_claim(live: &Path) {
 /// Exclusive control of one helper, held until dropped.
 #[derive(Debug)]
 pub struct Ownership {
-    _lock: File,
+    _lock: LockFile,
     /// The note that the person holds this ownership through a viewer, gone
     /// with it.
     person: Option<PathBuf>,
@@ -159,7 +157,6 @@ impl Drop for Ownership {
         for note in [&self.holder, &self.person].into_iter().flatten() {
             let _ = fs::remove_file(note);
         }
-        let _ = FileExt::unlock(&self._lock);
     }
 }
 
@@ -407,7 +404,7 @@ impl Controller {
     }
 
     /// The controller lock, taken as [`Controller::take`] takes it.
-    fn take_lock(&self) -> Result<File> {
+    fn take_lock(&self) -> Result<LockFile> {
         // Nothing new starts once a signal asked this command to stop.
         self.interrupt.check()?;
         self.make_directory()?;
@@ -421,7 +418,7 @@ impl Controller {
     }
 
     /// Ownership of `lock`, held, with the note naming its holder.
-    fn owning(&self, lock: File) -> Ownership {
+    fn owning(&self, lock: LockFile) -> Ownership {
         Ownership {
             _lock: lock,
             person: None,

@@ -1328,9 +1328,9 @@ fn marker_contention_preserves_a_gone_hosts_verified_running_work() {
         .map(|entry| entry.unwrap().path())
         .find(|path| path.to_string_lossy().ends_with(".state.lock"))
         .unwrap();
-    let lock = fs::File::open(lock_path).unwrap();
-    crate::files::lock_within(&lock, crate::files::Lock::Exclusive, Duration::from_secs(2))
-        .expect("the marker lock should become available within two seconds");
+    let lock = crate::files::LockFile(fs::File::open(lock_path).unwrap());
+    crate::files::lock_within(&lock, crate::files::Lock::Exclusive, Duration::ZERO)
+        .expect("the marker lock is available");
     let read = || {
         SessionReading::collect_with(&client, |_, instances| {
             Snapshot::sample(instances, |instance| {
