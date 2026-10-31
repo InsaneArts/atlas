@@ -972,31 +972,19 @@ fn settle<A: Backend>(
         target.reader.deadline = deadline;
         let error = match result {
             Ok(role) => return Ok(role),
-            Err(error) => error,
-        };
-        let unreadable = (error.code == Code::Native
-            || (error.code == Code::FocusChanged
-                && error
-                    .details
-                    .get("reason")
-                    .is_some_and(|why| why == "unreadable")))
-            && matches!(
-                error.details.get("unread").and_then(|value| value.as_str()),
-                Some("failed" | "slow")
-            );
-        let awaiting_focus = target.changed
-            && error.code == Code::FocusChanged
-            && matches!(
-                error.details.get("reason").and_then(|value| value.as_str()),
-                Some("app" | "window" | "point" | "field")
-            );
-        if !(unreadable || awaiting_focus)
-            || target.reader.left().is_err()
-            || Instant::now() >= deadline
-        {
-            if error.details.get("unread").is_some_and(|why| why == "slow") {
+            Err(error) if error.details.get("unread").is_some_and(|why| why == "slow") => {
                 return Err(last_refusal.unwrap_or(error));
             }
+            Err(error) => error,
+        };
+        if !target.changed
+            || error.code != Code::FocusChanged
+            || !matches!(
+                error.details.get("reason").and_then(|value| value.as_str()),
+                Some("app" | "window" | "point" | "field")
+            )
+            || target.reader.left().is_err()
+        {
             return Err(error);
         }
         // A refused destination never authorizes input. Keep its actual reason
