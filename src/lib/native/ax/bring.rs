@@ -8,7 +8,7 @@ use crate::{
     actions::Expect,
     error::{Code, Error, Result},
     native::{
-        focus::{FIELDS, Need},
+        focus::{CHECK_BUDGET, FIELDS, Need},
         windows::{self, Kind, Listed, Window},
     },
     process::{Info, Instance},
@@ -20,6 +20,8 @@ use objc2_core_foundation::{CFArray, CFString, CFType, Type};
 use std::time::{Duration, Instant};
 
 const REQUEST: Duration = Duration::from_millis(250);
+const WRITE_BUDGET: Duration = Duration::from_secs(1);
+const SETTLE_BUDGET: Duration = Duration::from_millis(50);
 const WINDOWS: usize = 64;
 const ACTIONS: usize = 64;
 const ELEMENTS: usize = 1500;
@@ -303,9 +305,9 @@ impl<A: Backend> Reader<A> {
         Ok(refs)
     }
 
-    fn bound(&mut self, element: &A::Element) -> Result<()> {
+    fn bound(&mut self, element: &A::Element, budget: Duration) -> Result<()> {
         let left = self.left()?;
-        if !self.ask.bound(element, left.min(REQUEST)) {
+        if !self.ask.bound(element, left.min(budget)) {
             return Err(Unread::Failed.error());
         }
         Ok(())
@@ -833,7 +835,7 @@ fn prepare<A: Backend>(
             point,
         )?;
         guard()?;
-        reader.bound(&element)?;
+        reader.bound(&element, REQUEST)?;
         let supported = reader.ask.supports(&element, operation, reader.deadline)?;
         reader.left()?;
         if !supported {
@@ -859,7 +861,7 @@ fn prepare<A: Backend>(
             reader.identity(window, expect.pid(), number)?;
         }
         guard()?;
-        reader.bound(&element)?;
+        reader.bound(&element, WRITE_BUDGET)?;
         let status = reader.ask.write(&element, operation);
         if status == AXError::CannotComplete {
             return Err(Error::new(
@@ -918,7 +920,7 @@ pub(crate) fn bring(
     mut verify: impl FnMut(Option<i64>, Instant) -> Result<Option<&'static str>>,
 ) -> Result<Option<&'static str>> {
     let preparation = deadline
-        .checked_sub(Duration::from_millis(50))
+        .checked_sub(SETTLE_BUDGET)
         .ok_or_else(|| Unread::Slow.error())?;
     let target = prepare(Live, expect, need, preparation, guard, &mut |number| {
         verify(number, preparation).is_ok()
@@ -933,10 +935,11 @@ fn settle<A: Backend>(
     guard: &impl Fn() -> Result<()>,
     mut verify: impl FnMut(Option<i64>, Instant) -> Result<Option<&'static str>>,
 ) -> Result<Option<&'static str>> {
-    target.reader.deadline = deadline;
     let mut last_refusal = None;
     loop {
         guard()?;
+        let checking = deadline.min(target.reader.ask.now() + CHECK_BUDGET);
+        target.reader.deadline = checking;
         let result = (|| {
             target.reader.blocking(
                 &target.app,
@@ -945,7 +948,7 @@ fn settle<A: Backend>(
                 expect.window().is_some() || target.point.is_some(),
                 target.point,
             )?;
-            let mut result = target.verify(deadline, &mut verify);
+            let mut result = target.verify(checking, &mut verify);
             if result.is_ok() {
                 target.reader.blocking(
                     &target.app,
@@ -956,12 +959,13 @@ fn settle<A: Backend>(
                 )?;
                 // Admission is another observation. Its scan may outlive the
                 // earlier proof, so verify the destination again before returning.
-                result = target.verify(deadline, &mut verify);
+                result = target.verify(checking, &mut verify);
             }
             result
         })();
         guard()?;
         let result = result.and_then(|role| target.reader.left().map(|_| role));
+        target.reader.deadline = deadline;
         let error = match result {
             Ok(role) => return Ok(role),
             Err(error) if error.details.get("unread").is_some_and(|why| why == "slow") => {

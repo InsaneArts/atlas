@@ -17,9 +17,11 @@ use serde::Serialize;
 use serde_json::json;
 use std::time::{Duration, Instant};
 
-/// The most time one request spends checking; past it, the rest is refused
-/// rather than risk the controller's five-second deadline.
+/// The longest one destination check may take before input is posted.
 pub(super) const CHECK_BUDGET: Duration = Duration::from_millis(500);
+
+/// The total focus allowance per input batch, including preparation and settling.
+pub(super) const PREPARE_BUDGET: Duration = Duration::from_millis(1250);
 
 /// The longest one Accessibility question may take.
 const FOCUS_TIMEOUT: Duration = Duration::from_millis(250);
@@ -306,6 +308,7 @@ pub(super) fn check(
     display: &Bounds,
     deadline: Instant,
 ) -> Result<Option<&'static str>> {
+    let deadline = deadline.min(Instant::now() + CHECK_BUDGET);
     require(expect, need, display, &mut Live::until(deadline), deadline)
 }
 

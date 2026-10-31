@@ -125,6 +125,7 @@ impl Ask for &mut Fake {
     }
     fn ask(&mut self, element: &usize, name: &'static str) -> Answer<usize> {
         assert_ne!(name, "AXValue");
+        assert!(self.bounds.last().is_some_and(|bound| *bound <= REQUEST));
         if let Some(on_ask) = self.on_ask {
             on_ask(self, *element, name);
         }
@@ -162,6 +163,7 @@ impl Backend for &mut Fake {
             .unwrap_or_default())
     }
     fn supports(&mut self, _: &usize, _: Write, _: Instant) -> Result<bool> {
+        assert!(self.bounds.last().is_some_and(|bound| *bound <= REQUEST));
         Ok(self.supported)
     }
     fn write(&mut self, element: &usize, operation: Write) -> AXError {
@@ -266,7 +268,68 @@ fn a_unique_window_is_raised_and_given_key_focus_once() {
             (WINDOW, Write::Flag("AXFocused"))
         ]
     );
-    assert!(fake.bounds.iter().all(|timeout| *timeout <= REQUEST));
+    assert!(fake.bounds.iter().all(|timeout| *timeout <= WRITE_BUDGET));
+}
+
+#[test]
+fn a_busy_focus_write_gets_one_second_while_reads_keep_their_short_bound() {
+    let mut fake = Fake::new();
+    fake.after_write = Some(|fake| {
+        if fake.writes.len() == 1 {
+            assert_eq!(fake.bounds.last(), Some(&Duration::from_secs(1)));
+            fake.now.set(fake.now.get() + Duration::from_millis(600));
+        }
+    });
+    let deadline = fake.now.get() + crate::native::focus::PREPARE_BUDGET - SETTLE_BUDGET;
+    prepare(
+        &mut fake,
+        &named(),
+        Need::Keys,
+        deadline,
+        &|| Ok(()),
+        &mut |_| false,
+    )
+    .unwrap();
+    assert_eq!(fake.writes.len(), 4);
+    assert!(fake.bounds.iter().all(|timeout| *timeout <= WRITE_BUDGET));
+}
+
+#[test]
+fn a_focus_write_fits_preparation_before_the_client_reply_timeout() {
+    let dir = tempfile::tempdir().unwrap();
+    let client = crate::test_support::client_in(dir.path());
+    let budget = crate::native::focus::PREPARE_BUDGET;
+    assert_eq!(WRITE_BUDGET, Duration::from_secs(1));
+    assert_eq!(budget, Duration::from_millis(1250));
+    assert_eq!(CHECK_BUDGET, Duration::from_millis(500));
+    assert_eq!(REQUEST, Duration::from_millis(250));
+    assert!(WRITE_BUDGET < budget - SETTLE_BUDGET);
+    assert!(budget - SETTLE_BUDGET < budget);
+    assert!(budget < client.input_transport().timeout);
+    assert_eq!(client.input_transport().timeout, Duration::from_secs(5));
+}
+
+#[test]
+fn settling_keeps_its_check_short_even_with_a_longer_preparation_deadline() {
+    let mut fake = Fake::new();
+    let deadline = fake.now.get() + crate::native::focus::PREPARE_BUDGET;
+    let now = fake.now.clone();
+    let target = prepare(
+        &mut fake,
+        &named(),
+        Need::Keys,
+        deadline - SETTLE_BUDGET,
+        &|| Ok(()),
+        &mut |_| true,
+    )
+    .unwrap();
+    let error = settle(target, &named(), deadline, &|| Ok(()), |_, until| {
+        assert_eq!(until, now.get() + CHECK_BUDGET);
+        now.set(until);
+        Ok(None)
+    })
+    .unwrap_err();
+    assert_eq!(error.details["unread"], "slow");
 }
 
 #[test]

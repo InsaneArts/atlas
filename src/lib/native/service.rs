@@ -717,7 +717,7 @@ async fn run(
     actions: Vec<Action>,
     expect: Option<&Expect>,
 ) -> std::result::Result<Option<&'static str>, Value> {
-    let mut budget = focus::CHECK_BUDGET;
+    let mut budget = focus::PREPARE_BUDGET;
     let later = expect.map(Expect::app_only);
     let mut pressed = false;
     let mut roles = BTreeSet::new();
@@ -769,7 +769,12 @@ async fn require_within(
     let outcome = if need == Need::Nothing {
         Ok(None)
     } else {
-        engine.require(expect, need, *budget, prepare).await
+        let available = if prepare {
+            *budget
+        } else {
+            (*budget).min(focus::CHECK_BUDGET)
+        };
+        engine.require(expect, need, available, prepare).await
     };
     *budget = budget.saturating_sub(started.elapsed());
     outcome
@@ -1430,6 +1435,8 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(engine.preparations, [true, false]);
+        assert_eq!(engine.budgets[0], super::focus::PREPARE_BUDGET);
+        assert_eq!(engine.budgets[1], super::focus::CHECK_BUDGET);
         assert_eq!(engine.posted, 2);
         let refused = run(&mut *engine, &gate, keys(1), Some(&expect))
             .await
@@ -1456,6 +1463,7 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(engine.preparations, [false, false]);
+        assert_eq!(engine.budgets, [super::focus::CHECK_BUDGET; 2]);
         assert_eq!(engine.posted, 3);
         assert!(engine.budgets.windows(2).all(|pair| pair[1] <= pair[0]));
         engine.script = vec![Step::Post, Step::Post, Step::Refuse];
@@ -1938,7 +1946,7 @@ mod tests {
         run(&mut *engine, &gate, actions, app().as_ref())
             .await
             .unwrap();
-        assert_eq!(engine.budgets[0], super::focus::CHECK_BUDGET);
+        assert_eq!(engine.budgets[0], super::focus::PREPARE_BUDGET);
         assert!(engine.budgets.windows(2).all(|pair| pair[1] < pair[0]));
         assert_eq!(engine.preparations, [true, true, true]);
     }
