@@ -91,6 +91,43 @@ pub(crate) fn client(directory: &Path) -> Client {
     client
 }
 
+/// A live waiting note beside a temporary client's existing holder. No
+/// thread waits for control, and no account's runtime paths are resolved.
+pub(crate) fn waiting_note(state: &Path, host: Option<&crate::host_session::HostSession>) {
+    use crate::host_session::{Host, Instance, now_ms};
+    use std::fs;
+
+    let holder = fs::read_dir(state)
+        .unwrap()
+        .map(|entry| entry.unwrap().path())
+        .find(|path| path.to_string_lossy().ends_with(".holder.json"))
+        .unwrap();
+    let waiting = holder.with_file_name(
+        holder
+            .file_name()
+            .unwrap()
+            .to_str()
+            .unwrap()
+            .replace(".holder.json", ".waiting"),
+    );
+    fs::create_dir_all(&waiting).unwrap();
+    let note = crate::control::Note {
+        session: host.map(|host| host.key().clone()),
+        host: host.map(|host| host.host()),
+        folder: host.and_then(|host| host.folder().map(str::to_owned)),
+        named: host
+            .filter(|host| host.host() == Host::Named)
+            .map(|host| host.id().clone()),
+        process: Instance::current().unwrap(),
+        since: now_ms(),
+    };
+    fs::write(
+        waiting.join("0000000000000001.json"),
+        serde_json::to_vec(&note).unwrap(),
+    )
+    .unwrap();
+}
+
 /// The helper account [`SETTINGS`] names.
 pub(crate) const CONFIGURED_UID: u32 = 60001;
 

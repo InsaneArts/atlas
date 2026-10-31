@@ -578,11 +578,25 @@ async fn swap(
     record: &Path,
     preflight: impl AsyncFnOnce(&Path) -> Result<()>,
 ) -> Result<()> {
-    preflight(&new.join(EXECUTABLE)).await?;
-    swap_recording(new, installed, name, record)
+    swap_using(new, installed, name, record, preflight, stage).await
 }
 
-fn swap_recording(new: &Path, installed: &Path, name: &str, record: &Path) -> Result<()> {
+fn stage(new: &Path, staged: &Path) -> Result<()> {
+    check(
+        "/usr/bin/ditto",
+        &[new.as_os_str(), staged.as_os_str()],
+        "The new app could not be staged beside the installed one",
+    )
+}
+
+async fn swap_using(
+    new: &Path,
+    installed: &Path,
+    name: &str,
+    record: &Path,
+    preflight: impl AsyncFnOnce(&Path) -> Result<()>,
+    stage: impl FnOnce(&Path, &Path) -> Result<()>,
+) -> Result<()> {
     let parent = installed
         .parent()
         .ok_or_else(|| problem("The installed app has no parent directory"))?;
@@ -596,11 +610,14 @@ fn swap_recording(new: &Path, installed: &Path, name: &str, record: &Path) -> Re
     }
 
     let staged = parent.join(format!("{STAGED}{UPDATE}{}", crate::files::token()));
-    check(
-        "/usr/bin/ditto",
-        &[new.as_os_str(), staged.as_os_str()],
-        "The new app could not be staged beside the installed one",
-    )?;
+    stage(new, &staged)?;
+
+    // Staging can take time. Check the staged executable only once that
+    // work is done, while the caller still owns controller exclusion.
+    if let Err(error) = preflight(&staged.join(EXECUTABLE)).await {
+        let _ = fs::remove_dir_all(&staged);
+        return Err(error);
+    }
 
     // Recorded, in one rename, before the exchange: whatever happens next,
     // the next update finds this handover and finishes it first. After the
@@ -964,6 +981,85 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn a_waiter_arriving_during_staging_prevents_recording_and_exchange_under_ownership() {
+        use crate::host_session::{Host, HostSession};
+        use std::time::Duration;
+
+        for waiter in [None, Some("worker"), Some("updater")] {
+            let directory = tempfile::tempdir().unwrap();
+            let installed = directory.path().join("Applications/Atlas.app");
+            let new = directory.path().join("unpacked/Atlas.app");
+            let record = directory.path().join("Support/update.json");
+            for (app, version) in [(&installed, "old"), (&new, "new")] {
+                fs::create_dir_all(app.join("Contents/MacOS")).unwrap();
+                fs::write(app.join(EXECUTABLE), version).unwrap();
+            }
+            let mut client = crate::test_support::client(directory.path());
+            client.host_session = Some(HostSession::new(Host::Named, "updater").unwrap());
+            client.controller = client.controller.labelled(client.host_session.as_ref());
+            let ownership = client.service_change(false).await.unwrap();
+            let worker = waiter.map(|name| HostSession::new(Host::Named, name).unwrap());
+            let mut checked = false;
+            let result = tokio::time::timeout(
+                Duration::from_secs(1),
+                swap_using(
+                    &new,
+                    &installed,
+                    "Atlas-9.9.9-macos.zip",
+                    &record,
+                    async |program| {
+                        checked = true;
+                        assert_eq!(fs::read_to_string(program).unwrap(), "new");
+                        assert_eq!(program, staged_copies(&installed)[0].join(EXECUTABLE));
+                        assert!(!record.exists());
+                        assert_eq!(
+                            client.controller.acquire(false).unwrap_err().code,
+                            Code::Busy
+                        );
+                        client.require_service_idle().await
+                    },
+                    |new, staged| {
+                        stage(new, staged)?;
+                        crate::test_support::waiting_note(
+                            &directory.path().join("state"),
+                            worker.as_ref(),
+                        );
+                        Ok(())
+                    },
+                ),
+            )
+            .await
+            .unwrap();
+            let error = result.unwrap_err();
+            assert!(checked);
+            assert_eq!(error.code, Code::Busy);
+            assert_eq!(
+                error.error,
+                format!("{} is active in the helper.", waiter.unwrap_or("Terminal"))
+            );
+            assert_eq!(
+                fs::read_to_string(installed.join(EXECUTABLE)).unwrap(),
+                "old"
+            );
+            assert!(!record.exists());
+            assert!(staged_copies(&installed).is_empty());
+            assert!(
+                client
+                    .controller
+                    .holder_note()
+                    .unwrap()
+                    .process
+                    .is_this_one()
+            );
+            assert_eq!(
+                client.controller.acquire(false).unwrap_err().code,
+                Code::Busy
+            );
+            drop(ownership);
+        }
+    }
+
+    #[tokio::test]
     async fn setup_refusal_prevents_the_bundle_exchange_and_update_record() {
         let dir = tempfile::tempdir().unwrap();
         let installed = dir.path().join("Applications/Atlas.app");
@@ -979,7 +1075,9 @@ mod tests {
             "Atlas-9.9.9-macos.zip",
             &record,
             async |program| {
-                assert_eq!(program, new.join(EXECUTABLE));
+                assert_ne!(program, new.join(EXECUTABLE));
+                assert_eq!(fs::read_to_string(program).unwrap(), "new");
+                assert_eq!(program, staged_copies(&installed)[0].join(EXECUTABLE));
                 assert_eq!(
                     fs::read_to_string(installed.join(EXECUTABLE)).unwrap(),
                     "old"
@@ -1188,7 +1286,15 @@ mod tests {
         }
 
         let record = root.join("Support/update.json");
-        swap_recording(&new, &installed, "Atlas-9.9.9-macos.zip", &record).unwrap();
+        swap(
+            &new,
+            &installed,
+            "Atlas-9.9.9-macos.zip",
+            &record,
+            async |_| Ok(()),
+        )
+        .await
+        .unwrap();
         assert!(!stale.exists() && !legacy.exists());
         for folder in &kept {
             assert!(folder.exists(), "{}", folder.display());
@@ -1256,7 +1362,11 @@ mod tests {
         // A swap that cannot exchange leaves no record and no staged copy.
         let missing = root.join("Elsewhere/Atlas.app");
         fs::create_dir_all(missing.parent().unwrap()).unwrap();
-        assert!(swap_recording(&new, &missing, "x", &record).is_err());
+        assert!(
+            swap(&new, &missing, "x", &record, async |_| Ok(()))
+                .await
+                .is_err()
+        );
         assert!(!record.exists());
         assert_eq!(fs::read_dir(missing.parent().unwrap()).unwrap().count(), 0);
     }

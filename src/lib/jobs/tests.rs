@@ -63,6 +63,32 @@ fn shown(view: &Value) -> Shown {
     serde_json::from_value(view.clone()).unwrap()
 }
 
+#[test]
+fn malformed_job_lists_are_not_reported_as_no_running_jobs() {
+    for reply in [
+        json!({"ok": true}),
+        json!({"ok": true, "op": "job", "action": "show", "jobs": {}}),
+    ] {
+        assert_eq!(shown_from(&reply).unwrap_err().code, Code::Protocol);
+    }
+    assert!(
+        shown_from(&json!({"ok": true, "op": "job", "action": "show", "jobs": []}))
+            .unwrap()
+            .is_empty()
+    );
+    let jobs = shown_from(
+        &json!({"ok": true, "op": "job", "action": "show", "jobs": [job_view(ID, "running")]}),
+    )
+    .unwrap();
+    assert_eq!(jobs[0].state(), Some(JobState::Running));
+    assert_eq!(
+        shown_from(&json!({"ok": false, "code": "bad-request"}))
+            .unwrap_err()
+            .code,
+        Code::Daemon
+    );
+}
+
 const ID: &str = "7c2e91a04b3f";
 
 fn id() -> JobId {

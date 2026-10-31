@@ -6,7 +6,7 @@ mod sessions;
 
 pub(crate) use activity::shown;
 pub(crate) use sessions::{
-    SessionFacts, add_host_sessions, first_command_running, live_host_sessions,
+    SessionFacts, add_host_sessions, first_command_running, live_host_sessions, service_blocker,
 };
 
 use crate::{

@@ -68,13 +68,23 @@ impl Store {
 
     /// Every record, as read.
     pub(super) fn records(&self) -> Vec<Found> {
-        let mut ids = self.folder.listed(LISTED);
+        self.scanned_records().0
+    }
+
+    /// Every record found, and whether the scan can account for all jobs.
+    pub(super) fn scanned_records(&self) -> (Vec<Found>, bool) {
+        let listing = self.folder.listing(LISTED);
+        let mut ids = listing.keys;
         for id in self.unwritten.keys() {
             if !ids.contains(id) {
                 ids.push(id.clone());
             }
         }
-        ids.into_iter().filter_map(|id| self.read(&id)).collect()
+        let records = ids
+            .into_iter()
+            .map(|id| self.read(&id).unwrap_or(Found::Unreadable(id)))
+            .collect();
+        (records, listing.complete)
     }
 
     /// The record of `id`: none when there is none, unreadable when it does

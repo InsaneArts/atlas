@@ -5,7 +5,7 @@ use super::pending;
 use crate::{
     activity_log,
     client::Client,
-    control::Controller,
+    control::{Cause, Controller, Note},
     host_session::{
         Key,
         names::{name_of, names_with},
@@ -15,13 +15,94 @@ use crate::{
     session_view::{self, Scene, Who},
 };
 use serde_json::{Value, json};
-use std::collections::BTreeMap;
+use std::{collections::BTreeMap, path::Path};
 
 /// The most host sessions a status lists.
 const SESSIONS: usize = 8;
 /// How many recent activity rows each session's state and latest action
 /// are read from.
 const SESSION_ROWS: usize = 64;
+/// How recently another session used Atlas to defer service replacement.
+const SERVICE_IDLE: std::time::Duration = std::time::Duration::from_secs(2 * 60);
+/// How long the local service-change read waits for a marker writer.
+const MARKER_CHECK: std::time::Duration = std::time::Duration::from_millis(250);
+
+/// Who would be interrupted by a service replacement, from the same
+/// bounded read the session lists use. The caller's own session is left
+/// out for recent activity. Its waiting and running commands still defer
+/// replacement; the service change's own holder note does not.
+pub(crate) fn service_blocker(client: &Client, now: u128) -> Option<String> {
+    let Ok(output) = client.output_dir() else {
+        return Some("Atlas could not check which sessions are active.".into());
+    };
+    let Some(seen) = Store::at(output).checked_recent() else {
+        return Some(
+            "Atlas could not read every session record; another session may still be active."
+                .into(),
+        );
+    };
+    let Some(waiting) = client.controller.checked_waiting_notes() else {
+        return Some(
+            "Atlas could not read every waiting command; a command may still be active.".into(),
+        );
+    };
+    if let Some(note) = waiting.first() {
+        let first = unrecorded(None, &waiting, &[], &seen);
+        let names = names_with(seen.iter().map(|seen| &seen.record), first.iter().copied());
+        let name = note.session.as_ref().map_or_else(
+            || session_view::TERMINAL.to_owned(),
+            |key| name_of(&names, key, note.host),
+        );
+        return Some(format!("{name} is active in the helper."));
+    }
+    let causes = match client.controller.pending_causes_within(MARKER_CHECK) {
+        Ok(causes) => causes,
+        Err(error) if error.code == crate::error::Code::Busy => return Some(error.error),
+        Err(error) => {
+            return Some(format!(
+                "Atlas could not check pending activity: {}",
+                error.error
+            ));
+        }
+    };
+    let own = client
+        .host_session
+        .as_ref()
+        .map(|session| session.key().as_str());
+    let now_ms = u64::try_from(now / 1_000_000).unwrap_or(u64::MAX);
+    let holder = client.controller.holder_note().filter(|note| {
+        !(note.process.is_this_one() && note.session.as_ref().map(|key| key.as_str()) == own)
+    });
+    let facts = SessionFacts {
+        pending: causes.iter().any(|cause| !cause.running),
+        agent_holds: false,
+        now,
+    };
+    live_from(
+        client,
+        facts,
+        output,
+        &seen,
+        &causes,
+        holder.as_ref(),
+        &waiting,
+    )
+    .into_iter()
+    .find(|listed| {
+        let key = listed.entry["key"].as_str().filter(|key| !key.is_empty());
+        listed.shown.at_work()
+            || (key != own
+                && listed.entry["ended"].is_null()
+                && now_ms.saturating_sub(listed.last_seen) <= crate::time::ms(SERVICE_IDLE))
+    })
+    .map(|listed| {
+        let name = listed.entry["name"].as_str().unwrap_or("Another session");
+        if listed.running_command {
+            return format!("{name} has a command still running in the helper.");
+        }
+        format!("{name} is active in the helper.")
+    })
+}
 
 /// The host sessions an app shows beside the helper's status, in its
 /// overview: those seen in the last hour, holding the helper, or with an
@@ -114,6 +195,7 @@ struct Listed {
     entry: Value,
     last_seen: u64,
     shown: session_view::Shown,
+    running_command: bool,
 }
 
 impl Listed {
@@ -162,16 +244,40 @@ fn live(client: &Client, facts: SessionFacts) -> Vec<Listed> {
         return Vec::new();
     };
     let seen = Store::at(output).recent();
-    let rows = activity_log::recent(output, SESSION_ROWS);
+    live_with(client, facts, output, &seen)
+}
+
+fn live_with(client: &Client, facts: SessionFacts, output: &Path, seen: &[Seen]) -> Vec<Listed> {
     let causes = client.controller.pending_causes().unwrap_or_default();
     let holder = client.controller.holder_note();
     let waiting = client.controller.waiting_notes();
+    live_from(
+        client,
+        facts,
+        output,
+        seen,
+        &causes,
+        holder.as_ref(),
+        &waiting,
+    )
+}
+
+fn live_from(
+    client: &Client,
+    facts: SessionFacts,
+    output: &Path,
+    seen: &[Seen],
+    causes: &[Cause],
+    holder: Option<&Note>,
+    waiting: &[Note],
+) -> Vec<Listed> {
+    let rows = activity_log::recent(output, SESSION_ROWS);
     let running = client.controller.running_notes();
     let scene = Scene {
         rows: &rows,
-        holder: holder.as_ref(),
-        waiting: &waiting,
-        causes: &causes,
+        holder,
+        waiting,
+        causes,
         pending: facts.pending,
         agent_holds: facts.agent_holds,
         now: facts.now,
@@ -187,7 +293,7 @@ fn live(client: &Client, facts: SessionFacts) -> Vec<Listed> {
     }
     // A session on its first command has no record until that command
     // ends: its note names it meanwhile, by the same rule as a record.
-    let first = unrecorded(holder.as_ref(), &waiting, &running, &seen);
+    let first = unrecorded(holder, waiting, &running, seen);
     let named = names_with(seen.iter().map(|seen| &seen.record), first.iter().copied());
 
     let mut listed: Vec<Listed> = seen
@@ -197,12 +303,14 @@ fn live(client: &Client, facts: SessionFacts) -> Vec<Listed> {
             let uncertain = unknown.get(&record.key).copied().unwrap_or(0);
             let shown = scene.shown(&Who::Host(record.key.clone()), record.ended_at().is_some());
             let wanted = now_ms.saturating_sub(record.last_seen) <= live_for
-                || shown.holds_helper
-                || shown.waiting_for.is_some()
+                || shown.at_work()
                 || uncertain > 0;
             (wanted && shown.live).then(|| Listed {
                 entry: host_session(seen, &named, uncertain, &shown, now_ms),
                 last_seen: record.last_seen,
+                running_command: causes
+                    .iter()
+                    .any(|cause| cause.command && cause.session.as_ref() == Some(&record.key)),
                 shown,
             })
         })
@@ -213,6 +321,9 @@ fn live(client: &Client, facts: SessionFacts) -> Vec<Listed> {
             entry: first_command(key, note, &named),
             last_seen: note.since,
             shown: scene.shown(&Who::Host(key.clone()), false),
+            running_command: causes
+                .iter()
+                .any(|cause| cause.command && cause.session.as_ref() == Some(key)),
         });
     }
     if let Some((started, last_seen)) = scene.terminal() {
@@ -220,6 +331,9 @@ fn live(client: &Client, facts: SessionFacts) -> Vec<Listed> {
             entry: terminal(started, last_seen, now_ms),
             last_seen,
             shown: scene.shown(&Who::Terminal, false),
+            running_command: causes
+                .iter()
+                .any(|cause| cause.command && cause.session.is_none()),
         });
     }
     listed.sort_by_key(|listed| (listed.shown.state, std::cmp::Reverse(listed.last_seen)));

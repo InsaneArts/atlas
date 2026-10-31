@@ -150,6 +150,7 @@ pub(super) async fn execute(
     command: Command,
     policy: &Policy,
     wait: Duration,
+    allow_disrupt: bool,
 ) -> Result<Value> {
     let actor = actor();
 
@@ -171,6 +172,7 @@ pub(super) async fn execute(
             client.actor = actor;
             client.doing = doing.clone();
             client.host_session = host.clone();
+            client.allow_disrupt = allow_disrupt;
             client.task = task.clone();
             client.controller = client.controller.labelled(host.as_ref());
             if waits {
@@ -199,7 +201,7 @@ pub(super) async fn execute(
         client()?.require_going().await?;
     }
 
-    let result = carry_out(&config, command, &client, host.as_ref()).await;
+    let result = carry_out(&config, command, &client, host.as_ref(), allow_disrupt).await;
 
     if kind.recorded(doing.as_ref())
         && let Ok(client) = client()
@@ -237,6 +239,7 @@ async fn carry_out(
     command: Command,
     client: &impl Fn() -> Result<Client>,
     host: Option<&HostSession>,
+    allow_disrupt: bool,
 ) -> Result<Value> {
     match command {
         Command::EnvironmentWorker { packet, apply } => environment::worker(&packet, apply),
@@ -292,15 +295,23 @@ async fn carry_out(
             check: false,
         } => {
             as_yourself("update")?;
-            update::update(config, allow_unnotarized, force, version).await
+            update::update(
+                config,
+                allow_unnotarized,
+                force,
+                version,
+                host,
+                allow_disrupt,
+            )
+            .await
         }
         Command::UpdateFinish => {
             as_yourself("update")?;
-            update::update_finish(config).await
+            update::update_finish(config, host, allow_disrupt).await
         }
         Command::Init => {
             as_yourself("init")?;
-            atlas::init::run(config).await
+            atlas::init::run(config, allow_disrupt).await
         }
         Command::Onboarding { step } => onboarding(config, step).await,
         Command::Agents { action } => {
@@ -337,12 +348,12 @@ async fn carry_out(
             let client = client()?;
             // Recovery ownership: the migration settles only the pending
             // mutations its own log records and refuses any other.
-            let ownership = client.controller.acquire(true)?;
+            let ownership = client.service_change(true).await?;
 
             if apply {
-                atlas::setup::migrate::apply(config, &ownership).await
+                atlas::setup::migrate::apply(config, &client, &ownership).await
             } else {
-                atlas::setup::migrate::rollback(config, &ownership).await
+                atlas::setup::migrate::rollback(config, &client, &ownership).await
             }
         }
         Command::Config => {
@@ -1373,7 +1384,7 @@ mod tests {
                 .unwrap();
         };
         let client = || Ok(client.clone());
-        let running = carry_out(Path::new("unused.toml"), command, &client, None);
+        let running = carry_out(Path::new("unused.toml"), command, &client, None, false);
         let (outcome, ()) = tokio::time::timeout(Duration::from_secs(5), async {
             tokio::join!(running, helper)
         })
@@ -1437,7 +1448,7 @@ mod tests {
     }
 
     #[test]
-    fn servers_helper_commands_and_setup_carry_no_host_session() {
+    fn servers_helper_commands_and_setup_previews_carry_no_host_session() {
         let attributed = |args: &[&str]| {
             Policy::of(&parse(args).unwrap().command.unwrap()).labelled(Actor::Agent)
         };
@@ -1453,7 +1464,7 @@ mod tests {
             &["elements-info", "1"],
             &["init"],
             &["uninstall"],
-            &["update"],
+            &["update", "--check"],
             &["setup"],
             &["switch"],
         ] {
@@ -1461,6 +1472,10 @@ mod tests {
         }
 
         for agents in [
+            &["update"][..],
+            &["update-finish"],
+            &["setup", "--apply"],
+            &["setup", "--rollback"],
             &["click", "1", "2"][..],
             &["type", "x"],
             &["screenshot"],

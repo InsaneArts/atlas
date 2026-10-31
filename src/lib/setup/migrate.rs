@@ -1109,10 +1109,15 @@ async fn carry_out(path: PathBuf, log: Log, recheck: bool) -> Result<Value> {
 
 /// Record and verify a first setup (see [`plan_fresh`]). Re-running on an
 /// applied setup re-verifies it, like [`apply`].
-pub async fn apply_fresh(config_path: &Path, ownership: &Ownership) -> Result<Value> {
+pub async fn apply_fresh(
+    config_path: &Path,
+    client: &Client,
+    ownership: &Ownership,
+) -> Result<Value> {
+    client.require_service_idle().await?;
     let (path, log) = recorded_log(config_path)?;
     let Some(start) = fresh_start(log, &path)? else {
-        return apply(config_path, ownership).await;
+        return apply(config_path, client, ownership).await;
     };
 
     let log = starting_log(&path, start, plan_fresh(config_path)).await?;
@@ -1274,7 +1279,8 @@ fn report(log: &Log, path: &Path, outcome: Result<()>) -> Value {
 
 /// Migrate, resume, or re-verify the managed private capture endpoint.
 /// Callers prove controller ownership (acquired for recovery) by passing it.
-pub async fn apply(config_path: &Path, _ownership: &Ownership) -> Result<Value> {
+pub async fn apply(config_path: &Path, client: &Client, _ownership: &Ownership) -> Result<Value> {
+    client.require_service_idle().await?;
     let (path, log) = recorded_log(config_path)?;
     let start = apply_start(log, &path)?;
     let log = starting_log(&path, start, plan(config_path)).await?;
@@ -1319,7 +1325,12 @@ pub async fn preflight_apply(config_path: &Path, updated_program: &Path) -> Resu
 
 /// Undo an applied or interrupted migration recorded in the log.
 /// Callers prove controller ownership (acquired for recovery) by passing it.
-pub async fn rollback(config_path: &Path, _ownership: &Ownership) -> Result<Value> {
+pub async fn rollback(
+    config_path: &Path,
+    client: &Client,
+    _ownership: &Ownership,
+) -> Result<Value> {
+    client.require_service_idle().await?;
     let (path, log) = recorded_log(config_path)?;
     let log = log.ok_or_else(|| problem("No setup migration is recorded"))?;
     if log.plan.label.is_empty() {

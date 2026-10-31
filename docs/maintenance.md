@@ -25,6 +25,28 @@ This checks release information without installing it. When a release is availab
 atlas update
 ```
 
+Atlas refuses before replacing the app when another session used Atlas within
+the last two minutes, holds or waits for control, or has a running command.
+It names the active session. A background job also blocks the update, even if
+its session has gone quiet or it belongs to the caller. An agent's own session
+does not block its update just because it used Atlas recently. Ended sessions
+and older idle sessions do not block it. The checks use bounded local records
+and wait at most two seconds for the helper's background-job list per check.
+If that list cannot be checked, Atlas refuses rather than assuming it is idle.
+
+Wait for the work to finish, or deliberately permit interrupting active sessions
+and background jobs:
+
+```sh
+atlas update --allow-disrupt
+```
+
+`--allow-disrupt` does not take control away from a viewer or a running command,
+and does not clear unknown outcomes. Those safeguards still apply. `--force`
+keeps its existing meaning: reinstall a release even when it is not newer.
+It does not permit interrupting active work. `atlas update --check` only checks
+release information and does not need the helper to be idle.
+
 The normal update verifies the archive checksum, Developer ID signature, notarization and bundle version. It replaces the app by swapping the complete bundle, then moves the helper's executable and services onto the new version. It also refreshes the bundled integrations. Restart or refresh your agent host as described in [Agent connections](agents.md).
 
 Cursor uses a copied local plugin. Atlas refreshes an owned older copy after the app update, and reports a connection failure separately if personal changes or an interrupted operation prevent that refresh. The app update can succeed while a host connection still needs attention. Atlas keeps changed or unrelated Cursor files; it does not overwrite them. Reconnect only Cursor with `atlas agents install --cursor`, then reload its window or start a new Agent session. `atlas agents remove --cursor` also works when the Cursor app and Agent CLI are no longer installed.
@@ -47,6 +69,12 @@ If the app was replaced but moving the helper onto it failed, Atlas keeps a hand
 Start with `atlas doctor --json` and read `nextSteps`. A logged-out helper needs you to log in once and switch back. Missing consent needs approval in the helper's System Settings. Neither case calls for deleting the account.
 
 When Atlas specifically asks for recovery, `atlas restart` confirms a new hidden helper before clearing an unknown action outcome. Take a screenshot first if the helper can answer, and inspect the result again afterward. Recovery is not a reason to replay the uncertain action. `atlas start-input` starts or resets the input service when that is the reported missing step.
+
+The same active-work check protects `restart`, replacement of a stale input
+service by `start-input`, and service replacement during `init` and setup
+apply or rollback. The app's recovery paths use it too. When you intend to
+interrupt active sessions or background jobs, run the needed CLI command with
+`--allow-disrupt`, for example `atlas restart --allow-disrupt`.
 
 For an interrupted setup or a managed-layout repair, `atlas setup` inspects the current state. `atlas setup --apply` applies or resumes the migration; `atlas setup --rollback` restores the previous job and configuration when such a migration has something to restore. Use these advanced operations for the setup issue Atlas reports. Guided first-time setup remains `atlas init` or the app's setup window.
 

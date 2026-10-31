@@ -293,13 +293,18 @@ pub(super) async fn resume(config: &crate::config::Config, pairing: Pairing) -> 
     let layout = setup::helper::Layout::new(helper.uid, helper.home);
     let mut agent = super::expected_agent(&layout, pairing.controller_uid)?;
     agent.program = signed_executable()?;
+    let client = crate::client::Client::new(config.clone())?;
+    let runtime = tokio::runtime::Handle::current();
     tokio::task::spawn_blocking(move || {
         drive(
             &controller,
             nix::unistd::Pid::from_raw(pid),
             stream,
             &pairing,
-            || verify(&pairing),
+            || {
+                runtime.block_on(client.require_service_idle())?;
+                verify(&pairing)
+            },
             agent,
             &layout.logs(),
         )

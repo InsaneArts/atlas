@@ -2,7 +2,8 @@
 //! helper, who waits for it and whose action may not have finished. One
 //! rule for the menu bar panel, the viewer, the chat apps' view and the
 //! agents' panes, so they never disagree. A session is a label for the
-//! person: nothing here is read by any check of who may act.
+//! person. Service replacement also uses this view to avoid interrupting
+//! active work; controller exclusion still decides who may act.
 use crate::{
     activity_log::{Op, Row},
     control::{Cause, Note},
@@ -211,6 +212,14 @@ impl Scene<'_> {
     /// oldest one naming a session are left out, as written before Atlas
     /// named sessions at all.
     pub(crate) fn terminal(&self) -> Option<(u64, u64)> {
+        if self
+            .causes
+            .iter()
+            .any(|cause| cause.command && cause.session.is_none())
+        {
+            let now = u64::try_from(self.now / 1_000_000).ok()?;
+            return Some((now, now));
+        }
         let named_since = self
             .rows
             .iter()

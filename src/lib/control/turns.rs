@@ -121,49 +121,98 @@ pub(super) fn waiting(folder: &Path) -> Vec<Note> {
         .collect()
 }
 
+/// Waiting notes for a service change, preserving failed or truncated reads.
+pub(super) fn checked_waiting(folder: &Path) -> Option<Vec<Note>> {
+    let (notes, complete) = read_notes(folder, false);
+    complete.then(|| notes.into_iter().map(|(_, note)| note).collect())
+}
+
 /// Each waiting command's note in `folder`, by its file name, passing over
 /// those [`waiters`] passes over; a note whose command has ended is removed
 /// when `tidy`.
 fn notes(folder: &Path, tidy: bool) -> Vec<(String, Note)> {
+    read_notes(folder, tidy).0
+}
+
+fn read_notes(folder: &Path, tidy: bool) -> (Vec<(String, Note)>, bool) {
+    match fs::symlink_metadata(folder) {
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            return (Vec::new(), true);
+        }
+        Err(_) => return (Vec::new(), false),
+        Ok(_) => {}
+    }
     if !own_folder(folder) {
-        return Vec::new();
+        return (Vec::new(), false);
     }
     let Ok(entries) = fs::read_dir(folder) else {
-        return Vec::new();
+        return (Vec::new(), false);
     };
+    collect_notes(entries, tidy)
+}
+
+fn collect_notes(
+    mut entries: impl Iterator<Item = std::io::Result<fs::DirEntry>>,
+    tidy: bool,
+) -> (Vec<(String, Note)>, bool) {
     let now = SystemTime::now();
     let oldest = now_ms().saturating_sub(crate::time::ms(STALE));
-
-    entries
-        .flatten()
-        .take(ENTRIES)
-        .filter_map(|entry| {
-            let name = entry.file_name().into_string().ok()?;
-            let stem = name.strip_suffix(".json")?;
-            if !crate::name::lower_hex(stem, NAME_LEN) {
-                return None;
+    let mut notes = Vec::new();
+    let mut complete = true;
+    for _ in 0..ENTRIES {
+        let Some(entry) = entries.next() else {
+            return (notes, complete);
+        };
+        let Ok(entry) = entry else {
+            complete = false;
+            continue;
+        };
+        let Ok(name) = entry.file_name().into_string() else {
+            continue;
+        };
+        let Some(stem) = name.strip_suffix(".json") else {
+            continue;
+        };
+        if !crate::name::lower_hex(stem, NAME_LEN) {
+            continue;
+        }
+        let path = entry.path();
+        let Some(note) = Note::read(&path) else {
+            complete = false;
+            continue;
+        };
+        if note.since < oldest {
+            continue;
+        }
+        let modified = fs::symlink_metadata(&path).and_then(|metadata| metadata.modified());
+        let touched = match modified {
+            Ok(modified) => now.duration_since(modified).map_or(true, |age| age < QUIET),
+            Err(_) => {
+                complete = false;
+                true
             }
-            let path = entry.path();
-            let note = Note::read(&path)?;
-            match note.process.state() {
-                State::Running => {}
-                State::Gone => {
-                    if tidy {
-                        let _ = fs::remove_file(&path);
-                    }
-                    return None;
+        };
+        if !touched {
+            continue;
+        }
+        match note.process.state() {
+            State::Running => {}
+            State::Gone => {
+                if tidy {
+                    let _ = fs::remove_file(&path);
                 }
-                State::Stopped | State::Unknown => return None,
+                continue;
             }
-            let touched = fs::symlink_metadata(&path)
-                .and_then(|metadata| metadata.modified())
-                .ok()
-                .and_then(|modified| now.duration_since(modified).ok())
-                .is_none_or(|age| age < QUIET);
-
-            (note.since >= oldest && touched).then_some((name, note))
-        })
-        .collect()
+            State::Stopped => continue,
+            State::Unknown => {
+                complete = false;
+                continue;
+            }
+        }
+        notes.push((name, note));
+    }
+    // Do not read an extra entry just to establish the end of a full budget.
+    (notes, false)
 }
 
 /// Make the waiting folder, private to this account, unless it is there.
@@ -307,11 +356,67 @@ mod tests {
         let notes = waiting(&folder);
         assert_eq!(notes.len(), 1);
         assert_eq!(notes[0].since, now - 1000);
+        assert_eq!(checked_waiting(&folder).unwrap(), notes);
         assert!(
             live.exists() && stale.exists() && gone.exists(),
             "a read for the apps removes nothing"
         );
         assert_eq!(waiters(&folder).len(), 1);
         assert!(!gone.exists(), "a waiter's own look tidies up");
+    }
+
+    #[test]
+    fn failed_directory_entries_count_toward_the_budget_and_leave_the_read_incomplete() {
+        let mut read = 0;
+        let entries = std::iter::from_fn(|| {
+            read += 1;
+            assert!(read <= ENTRIES, "the scan must not exceed its budget");
+            Some(Err(std::io::Error::other("unreadable entry")))
+        });
+        let (notes, complete) = collect_notes(entries, false);
+        assert_eq!(read, ENTRIES);
+        assert!(notes.is_empty());
+        assert!(!complete);
+
+        let (notes, complete) = collect_notes(
+            std::iter::once(Err(std::io::Error::other("unreadable entry"))),
+            false,
+        );
+        assert!(notes.is_empty());
+        assert!(!complete);
+    }
+
+    #[test]
+    fn expired_unknown_waiters_do_not_prevent_service_replacement() {
+        let directory = tempfile::tempdir().unwrap();
+        let folder = directory.path().join("waiting");
+        let other = Instance::new(1, [1, 0]);
+        assert_eq!(other.state(), State::Unknown);
+        let path = noted(&folder, other, now_ms() - crate::time::ms(STALE) - 1000);
+        assert!(checked_waiting(&folder).unwrap().is_empty());
+        assert!(path.exists(), "a service check does not remove notes");
+
+        let mut note = Note::read(&path).unwrap();
+        note.since = now_ms();
+        note.write(&path).unwrap();
+        assert!(checked_waiting(&folder).is_none(), "a fresh note refuses");
+
+        let file = OpenOptions::new().write(true).open(&path).unwrap();
+        file.set_modified(SystemTime::now() - QUIET - Duration::from_secs(1))
+            .unwrap();
+        assert!(checked_waiting(&folder).unwrap().is_empty());
+        assert!(path.exists());
+    }
+
+    #[test]
+    fn an_unknown_waiter_cannot_establish_idle_for_service_replacement() {
+        let directory = tempfile::tempdir().unwrap();
+        let folder = directory.path().join("waiting");
+        let other = Instance::new(1, [1, 0]);
+        assert_eq!(other.state(), State::Unknown);
+        let path = noted(&folder, other, now_ms());
+        assert!(waiting(&folder).is_empty());
+        assert!(checked_waiting(&folder).is_none());
+        assert!(path.exists());
     }
 }

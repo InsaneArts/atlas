@@ -13,7 +13,7 @@ use super::{
 };
 use crate::{
     error::{Code, Error, Result},
-    files::{open_lock, token},
+    files::{Held, Lock, lock_within, open_lock, token},
     host_session::Key,
 };
 use fs2::FileExt;
@@ -22,6 +22,7 @@ use std::{
     io::Write,
     os::unix::fs::OpenOptionsExt,
     path::{Path, PathBuf},
+    time::Duration,
 };
 
 /// How a pending change is recorded beside the marker.
@@ -50,6 +51,11 @@ impl Controller {
     /// no entries is an unknown outcome, as an unreadable one is.
     pub(super) fn unsettled(&self) -> Result<Unsettled> {
         let _lock = self.lock_marker()?;
+        self.read_unsettled()
+    }
+
+    /// Read unsettled state while the caller holds the marker lock.
+    pub(super) fn read_unsettled(&self) -> Result<Unsettled> {
         if !self.marker.try_exists()? {
             return Ok(Unsettled::Nothing);
         }
@@ -81,6 +87,32 @@ impl Controller {
         }
 
         let _lock = self.lock_marker()?;
+        self.read_pending_causes()
+    }
+
+    /// The same pending causes, refusing if the marker lock stays busy.
+    /// Service replacement must finish its activity check even when a writer
+    /// is suspended while holding the marker lock.
+    pub(crate) fn pending_causes_within(&self, wait: Duration) -> Result<Vec<Cause>> {
+        let _lock = self.lock_marker_within(wait)?;
+        self.read_pending_causes()
+    }
+
+    /// Take the marker lock with bounded patience, including when no marker exists.
+    pub(super) fn lock_marker_within(&self, wait: Duration) -> Result<File> {
+        self.make_directory()?;
+        let file = open_lock(&self.marker_lock)?;
+        lock_within(&file, Lock::Exclusive, wait).map_err(|Held| {
+            Error::new(
+                Code::Busy,
+                "Atlas could not check pending activity in time.",
+            )
+        })?;
+        Ok(file)
+    }
+
+    /// Read while the caller holds the marker lock.
+    fn read_pending_causes(&self) -> Result<Vec<Cause>> {
         let mut claimed: ByGeneration<Key> = by_generation::read(&self.causes);
         let marked = self.commands();
         Ok(pending(&self.marker)?

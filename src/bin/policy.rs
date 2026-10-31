@@ -135,9 +135,12 @@ fn attributed(command: &Command) -> bool {
             | Command::ElementsInfo { .. }
             | Command::Init
             | Command::Uninstall { .. }
-            | Command::Update { .. }
-            | Command::UpdateFinish
-            | Command::Setup { .. }
+            | Command::Update { check: true, .. }
+            | Command::Setup {
+                apply: false,
+                rollback: false,
+                ..
+            }
             | Command::SetupHelper { .. }
             | Command::Switch { .. }
             | Command::Onboarding { .. }

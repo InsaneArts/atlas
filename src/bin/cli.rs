@@ -18,6 +18,10 @@ pub(super) struct Cli {
     /// Print JSON (the default when the output is not a terminal).
     #[arg(long, global = true, help_heading = "Global options")]
     pub(super) json: bool,
+    /// Permit service restarts while other sessions or background jobs are active.
+    /// A controller or an unfinished action can still block the restart.
+    #[arg(long, global = true, help_heading = "Global options")]
+    pub(super) allow_disrupt: bool,
     /// Use another settings file.
     #[arg(
         long,
@@ -629,6 +633,7 @@ pub(super) enum Command {
     /// Restart the helper after something went wrong.
     ///
     /// Confirms a new hidden helper before clearing an action of unknown outcome.
+    /// Defers while another session is active; --allow-disrupt permits interrupting it.
     Restart,
     /// Log the helper out.
     ///
@@ -659,7 +664,7 @@ pub(super) enum Command {
     },
     /// Update Atlas, checking its signature first.
     ///
-    /// Verifies the release's checksum, Developer ID signature and version, then moves the helper onto it.
+    /// Verifies the release's checksum, Developer ID signature and version, then moves the helper onto it. Defers while another session or a background job is active; --allow-disrupt permits interrupting it.
     Update {
         /// Accept a signed release that is not notarized.
         #[arg(long)]
@@ -1190,6 +1195,27 @@ impl AppTarget {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn allowing_disruption_is_separate_from_reinstalling_an_older_release() {
+        let cli = parse(&["update", "--force"]).unwrap();
+        assert!(!cli.allow_disrupt);
+        assert!(matches!(
+            cli.command,
+            Some(Command::Update { force: true, .. })
+        ));
+
+        let cli = parse(&["update", "--allow-disrupt"]).unwrap();
+        assert!(cli.allow_disrupt);
+        assert!(matches!(
+            cli.command,
+            Some(Command::Update { force: false, .. })
+        ));
+
+        for command in ["restart", "start-input", "init", "setup", "update-finish"] {
+            assert!(parse(&[command, "--allow-disrupt"]).unwrap().allow_disrupt);
+        }
+    }
 
     fn parse(args: &[&str]) -> std::result::Result<Cli, clap::Error> {
         Cli::try_parse_from(std::iter::once("atlas").chain(args.iter().copied()))

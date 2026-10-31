@@ -50,7 +50,7 @@ where
 
 impl Client {
     pub async fn restart(&self) -> Result<Value> {
-        let _ownership = self.controller.acquire(true)?;
+        let _ownership = self.service_change(true).await?;
         let before = self.identity().await?;
 
         // Recovery goes through the input service; with none running and no

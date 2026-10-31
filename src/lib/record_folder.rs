@@ -85,6 +85,12 @@ pub(crate) struct RecordFolder<K> {
     names: PhantomData<K>,
 }
 
+/// A bounded listing and whether the folder was read to its end without errors.
+pub(crate) struct Listing<K> {
+    pub keys: Vec<K>,
+    pub complete: bool,
+}
+
 impl<K: RecordName> RecordFolder<K> {
     pub(crate) fn at(output: &Path, records: &'static Records) -> Self {
         Self {
@@ -118,30 +124,73 @@ impl<K: RecordName> RecordFolder<K> {
     }
 
     /// The keys of the newest `limit` records by when each was written, of
-    /// the first [`LISTED`] records in the folder, newest first. Entries
-    /// that are not `KEY.json` are never counted.
+    /// the first [`LISTED`] entries in the folder, newest first. Entries
+    /// that are not `KEY.json` consume the scan budget but are not returned.
     pub(crate) fn listed(&self, limit: usize) -> Vec<K> {
+        self.listing(limit).keys
+    }
+
+    /// Like [`Self::listed`], retaining uncertainty from a failed or bounded scan.
+    pub(crate) fn listing(&self, limit: usize) -> Listing<K> {
+        if fs::symlink_metadata(&self.directory)
+            .is_err_and(|error| error.kind() == std::io::ErrorKind::NotFound)
+        {
+            return Listing {
+                keys: Vec::new(),
+                complete: true,
+            };
+        }
         if !self.exists() {
-            return Vec::new();
+            return Listing {
+                keys: Vec::new(),
+                complete: false,
+            };
         }
         let Ok(entries) = fs::read_dir(&self.directory) else {
-            return Vec::new();
+            return Listing {
+                keys: Vec::new(),
+                complete: false,
+            };
         };
 
-        let mut named: Vec<(SystemTime, K)> = entries
-            .flatten()
-            .filter_map(|entry| {
-                let key = entry
-                    .file_name()
-                    .to_str()?
-                    .strip_suffix(".json")
-                    .and_then(K::parse)?;
-                Some((entry.metadata().ok()?.modified().ok()?, key))
-            })
-            .take(LISTED)
-            .collect();
+        Self::listed_from(entries, limit)
+    }
+
+    fn listed_from(
+        entries: impl Iterator<Item = std::io::Result<fs::DirEntry>>,
+        limit: usize,
+    ) -> Listing<K> {
+        let mut complete = true;
+        let mut scanned = 0;
+        let mut named = Vec::new();
+        for entry in entries.take(LISTED) {
+            scanned += 1;
+            let Ok(entry) = entry else {
+                complete = false;
+                continue;
+            };
+            let Some(key) = entry
+                .file_name()
+                .to_str()
+                .and_then(|name| name.strip_suffix(".json"))
+                .and_then(K::parse)
+            else {
+                continue;
+            };
+            let modified = entry.metadata().and_then(|metadata| metadata.modified());
+            let modified = modified.unwrap_or_else(|_| {
+                complete = false;
+                SystemTime::UNIX_EPOCH
+            });
+            named.push((modified, key));
+        }
         named.sort_by_key(|(modified, _)| std::cmp::Reverse(*modified));
-        named.into_iter().take(limit).map(|(_, key)| key).collect()
+        // Reaching the budget cannot prove there is no next entry.
+        complete &= scanned < LISTED && named.len() <= limit;
+        Listing {
+            keys: named.into_iter().take(limit).map(|(_, key)| key).collect(),
+            complete,
+        }
     }
 
     /// `key`'s record read as a `T`, when it is there and reads as one.
@@ -284,5 +333,74 @@ impl<K: RecordName> RecordFolder<K> {
 
     pub(crate) fn directory(&self) -> &Path {
         &self.directory
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn record_listing_bounds_unrelated_files_and_unreadable_entries() {
+        let directory = tempfile::tempdir().unwrap();
+        fs::write(directory.path().join("unrelated"), "").unwrap();
+        for unreadable in [false, true] {
+            let entries = std::iter::repeat_with(|| {
+                if unreadable {
+                    Err(std::io::Error::other("unreadable entry"))
+                } else {
+                    fs::read_dir(directory.path()).unwrap().next().unwrap()
+                }
+            })
+            .take(LISTED)
+            .chain(std::iter::once_with(|| {
+                panic!("read beyond the entry limit")
+            }));
+            let listing = RecordFolder::<Key>::listed_from(entries, 64);
+            assert!(listing.keys.is_empty());
+            assert!(!listing.complete);
+        }
+    }
+
+    #[test]
+    fn a_running_job_beyond_the_scan_budget_leaves_the_listing_incomplete() {
+        use crate::daemon::protocol::JobId;
+
+        let directory = tempfile::tempdir().unwrap();
+        let unrelated = directory.path().join("unrelated");
+        fs::write(&unrelated, "").unwrap();
+        let id = JobId::parse("7c2e91a04b3f").unwrap();
+        let job = directory.path().join(format!("{id}.json"));
+        fs::write(&job, r#"{"state":"running"}"#).unwrap();
+        let entry = |path: &Path| {
+            fs::read_dir(directory.path())
+                .unwrap()
+                .find(|entry| entry.as_ref().unwrap().path() == path)
+                .unwrap()
+        };
+        let entries = std::iter::repeat_with(|| entry(&unrelated))
+            .take(LISTED)
+            .chain(std::iter::once_with(|| entry(&job)));
+        let listing = RecordFolder::<JobId>::listed_from(entries, LISTED);
+        assert!(listing.keys.is_empty());
+        assert!(!listing.complete, "an omitted running job cannot mean idle");
+    }
+
+    #[test]
+    fn a_failed_entry_or_metadata_read_leaves_the_listing_incomplete() {
+        let failed = std::iter::once(Err(std::io::Error::other("scan failed")));
+        assert!(!RecordFolder::<Key>::listed_from(failed, LISTED).complete);
+
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("7c2e91a04b3f.json");
+        fs::write(&path, "{}").unwrap();
+        let entry = fs::read_dir(directory.path()).unwrap().next().unwrap();
+        fs::remove_file(path).unwrap();
+        let listing = RecordFolder::<crate::daemon::protocol::JobId>::listed_from(
+            std::iter::once(entry),
+            LISTED,
+        );
+        assert!(!listing.complete);
+        assert_eq!(listing.keys.len(), 1, "the unreadable record stays known");
     }
 }
