@@ -81,7 +81,7 @@ pub(crate) fn directory() -> Option<PathBuf> {
 pub(crate) fn client(directory: &Path) -> Client {
     let mut client = Client::new(Config {
         helper_uid: UID,
-        socket_path: directory.join("absent.sock"),
+        socket_path: directory.join("helper/absent.sock"),
         identity_probe: directory.join("absent-probe"),
         input_socket: directory.join("absent-input.sock"),
         output_dir: directory.join("output"),

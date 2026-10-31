@@ -181,6 +181,13 @@ fn collect_notes(
             complete = false;
             continue;
         };
+        let state = note.process.state();
+        if state == State::Gone {
+            if tidy {
+                let _ = fs::remove_file(&path);
+            }
+            continue;
+        }
         if note.since < oldest {
             continue;
         }
@@ -195,15 +202,9 @@ fn collect_notes(
         if !touched {
             continue;
         }
-        match note.process.state() {
+        match state {
             State::Running => {}
-            State::Gone => {
-                if tidy {
-                    let _ = fs::remove_file(&path);
-                }
-                continue;
-            }
-            State::Stopped => continue,
+            State::Gone | State::Stopped => continue,
             State::Unknown => {
                 complete = false;
                 continue;
@@ -363,6 +364,33 @@ mod tests {
         );
         assert_eq!(waiters(&folder).len(), 1);
         assert!(!gone.exists(), "a waiter's own look tidies up");
+    }
+
+    #[test]
+    fn tidying_removes_dead_waiters_even_when_their_notes_are_old_or_quiet() {
+        let directory = tempfile::tempdir().unwrap();
+        let folder = directory.path().join("waiting");
+        let gone = Instance::new(i32::MAX, [1, 0]);
+        assert_eq!(gone.state(), State::Gone);
+        let stale = noted(&folder, gone, now_ms() - crate::time::ms(STALE) - 1000);
+        let quiet = noted(&folder, gone, now_ms());
+        OpenOptions::new()
+            .write(true)
+            .open(&quiet)
+            .unwrap()
+            .set_modified(SystemTime::now() - QUIET - Duration::from_secs(1))
+            .unwrap();
+        assert!(checked_waiting(&folder).unwrap().is_empty());
+        assert!(
+            stale.exists() && quiet.exists(),
+            "a service check only reads"
+        );
+        assert!(waiters(&folder).is_empty());
+        assert!(
+            !stale.exists() && !quiet.exists(),
+            "a tidying scan removes both"
+        );
+        assert!(checked_waiting(&folder).unwrap().is_empty());
     }
 
     #[test]

@@ -270,7 +270,7 @@ mod tests {
         let settings = directory.path().join("config.toml");
         std::fs::write(
             &settings,
-            "helper_uid = 60001\nsocket_path = \"missing.sock\"\n\
+            "helper_uid = 60001\nsocket_path = \"helper/missing.sock\"\n\
              identity_probe = \"atlas\"\ninput_socket = \"input.sock\"\noutput_dir = \"runs\"\n",
         )
         .unwrap();
@@ -441,7 +441,7 @@ mod tests {
         let settings = dir.path().join("config.toml");
         std::fs::write(
             &settings,
-            "helper_uid = 60001\nsocket_path = \"missing.sock\"\n\
+            "helper_uid = 60001\nsocket_path = \"helper/missing.sock\"\n\
              identity_probe = \"atlas\"\ninput_socket = \"input.sock\"\n\
              output_dir = \"runs\"\n",
         )

@@ -54,7 +54,13 @@ impl Client {
             return Err(busy(message));
         }
 
-        if !self.transport.path.try_exists()? {
+        // The daemon creates its directory before accepting jobs and keeps
+        // it across shutdowns. Only an absent directory establishes a first
+        // setup; a missing socket can leave background jobs running.
+        if self.transport.path.parent().is_some_and(|directory| {
+            std::fs::symlink_metadata(directory)
+                .is_err_and(|error| error.kind() == std::io::ErrorKind::NotFound)
+        }) {
             return Ok(());
         }
 
@@ -67,12 +73,8 @@ impl Client {
     ) -> Result<()> {
         let jobs = match tokio::time::timeout(JOB_CHECK, read).await {
             Ok(Ok(jobs)) => jobs,
-            // A daemon from before background jobs cannot have any. A helper
-            // with no socket has no service to interrupt at that endpoint.
+            // A daemon from before background jobs cannot have any.
             Ok(Err(error)) if error.code == Code::Daemon && error.error == crate::jobs::OLDER => {
-                return Ok(());
-            }
-            Ok(Err(error)) if error.code == Code::Io && !self.transport.path.try_exists()? => {
                 return Ok(());
             }
             Ok(Err(error)) => {

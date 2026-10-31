@@ -91,7 +91,10 @@ pub(crate) fn service_blocker(client: &Client, now: u128) -> Option<String> {
     .into_iter()
     .find(|listed| {
         let key = listed.entry["key"].as_str().filter(|key| !key.is_empty());
-        listed.shown.at_work()
+        // Real waiters were checked above. Waiting for recovery in the
+        // session display alone must not prevent the caller from recovering.
+        listed.shown.holds_helper
+            || listed.running_command
             || (key != own
                 && listed.entry["ended"].is_null()
                 && now_ms.saturating_sub(listed.last_seen) <= crate::time::ms(SERVICE_IDLE))

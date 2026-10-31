@@ -99,6 +99,61 @@ async fn a_terminal_can_update_after_its_completed_screenshot() {
 }
 
 #[tokio::test]
+async fn recovery_can_take_control_after_the_callers_screenshot_with_an_unknown_outcome() {
+    for own in [None, Some(session("updater"))] {
+        let directory = tempfile::tempdir().unwrap();
+        let mut client = crate::test_support::client(directory.path());
+        let abandoned = client.controller.quarantine().unwrap();
+        let generation = abandoned.generation().to_owned();
+        drop(abandoned);
+        let now = crate::host_session::now_ms();
+        if let Some(own) = &own {
+            seen(&client, own, now, false);
+        }
+        client.controller = client.controller.labelled(own.as_ref());
+        client.host_session = own;
+        crate::activity_log::append(
+            client.output_dir().unwrap(),
+            &crate::activity_log::Row {
+                at: Some((u128::from(now) * 1_000_000).to_string()),
+                operation: Some(crate::activity_log::Op::Screenshot),
+                ok: Some(true),
+                actor: Some("agent".into()),
+                verb: Some("screenshot".into()),
+                session: client
+                    .host_session
+                    .as_ref()
+                    .map(|own| own.key().to_string()),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        let listed = crate::overview::live_host_sessions(
+            &client,
+            crate::overview::SessionFacts::local(&client.controller, u128::from(now) * 1_000_000),
+        )
+        .await;
+        assert_eq!(listed.len(), 1);
+        assert_eq!(listed[0]["waitingFor"], "recovery");
+        assert!(service_blocker(&client, u128::from(now) * 1_000_000).is_none());
+        assert_eq!(
+            client.service_change(false).await.unwrap_err().code,
+            Code::Uncertain
+        );
+        let ownership = tokio::time::timeout(Duration::from_secs(1), client.service_change(true))
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(client.controller.pending().unwrap(), [generation]);
+        assert_eq!(
+            client.controller.acquire(true).unwrap_err().code,
+            Code::Busy
+        );
+        drop(ownership);
+    }
+}
+
+#[tokio::test]
 async fn a_named_updater_defers_for_terminal_work_before_its_own_screenshot() {
     use crate::activity_log::{Op, Row};
 
@@ -212,6 +267,7 @@ async fn an_unnamed_waiter_without_activity_defers_named_and_unnamed_updaters() 
     client.host_session = Some(session("updater"));
     client.controller = client.controller.labelled(client.host_session.as_ref());
     let ownership = client.service_change(false).await.unwrap();
+    drop(client.controller.quarantine().unwrap());
     crate::test_support::waiting_note(&directory.path().join("state"), None);
     assert!(crate::activity_log::recent(client.output_dir().unwrap(), 1).is_empty());
     for host_session in [client.host_session.clone(), None] {
@@ -677,4 +733,58 @@ async fn checking_jobs_has_a_deadline_and_does_not_treat_a_blocked_read_as_idle(
         .require_jobs_idle(async { Err(Error::new(Code::Daemon, crate::jobs::OLDER)) })
         .await
         .unwrap();
+}
+
+#[tokio::test]
+async fn only_an_absent_daemon_directory_exempts_a_first_setup_from_checking_jobs() {
+    use std::{fs, os::unix::fs::symlink};
+
+    let directory = tempfile::tempdir().unwrap();
+    let mut client = crate::test_support::client(directory.path());
+    // First setup has already bootstrapped the shared executable.
+    fs::write(&client.config.identity_probe, "installed executable").unwrap();
+    let daemon = client.transport.path.parent().unwrap();
+    assert!(!daemon.exists());
+    drop(client.service_change(false).await.unwrap());
+
+    fs::create_dir(daemon).unwrap();
+    fs::create_dir(daemon.join("jobs")).unwrap();
+    fs::write(daemon.join("jobs/7c2e91a04b3f.json"), "unreadable job").unwrap();
+    let error = tokio::time::timeout(Duration::from_secs(1), client.service_change(false))
+        .await
+        .unwrap()
+        .unwrap_err();
+    assert_eq!(error.code, Code::Busy);
+    assert!(error.error.contains("could not check background jobs"));
+    assert!(client.controller.holder_note().is_none());
+
+    // A dangling directory link also cannot prove that setup is fresh.
+    fs::remove_dir_all(daemon).unwrap();
+    symlink(directory.path().join("missing"), daemon).unwrap();
+    assert_eq!(
+        client.require_service_idle().await.unwrap_err().code,
+        Code::Busy
+    );
+    fs::remove_file(daemon).unwrap();
+    fs::create_dir(daemon).unwrap();
+    client.allow_disrupt = true;
+    drop(client.service_change(false).await.unwrap());
+}
+
+#[tokio::test]
+async fn losing_the_socket_during_a_job_read_never_establishes_idle() {
+    let directory = tempfile::tempdir().unwrap();
+    let client = crate::test_support::client(directory.path());
+    std::fs::create_dir(client.transport.path.parent().unwrap()).unwrap();
+    // Only the endpoint's disappearance matters; no server needs to run.
+    std::fs::write(&client.transport.path, "endpoint").unwrap();
+    let error = client
+        .require_jobs_idle(async {
+            std::fs::remove_file(&client.transport.path).unwrap();
+            Err(Error::new(Code::Io, "The daemon shut down during the read"))
+        })
+        .await
+        .unwrap_err();
+    assert_eq!(error.code, Code::Busy);
+    assert!(error.error.contains("The daemon shut down during the read"));
 }

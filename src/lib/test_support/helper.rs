@@ -57,6 +57,7 @@ impl Helper {
         let mut client = super::client(directory);
         client.config.helper_uid = uid;
         client.transport.peer_uid = nix::unistd::getuid().as_raw();
+        std::fs::create_dir_all(client.transport.path.parent().unwrap()).unwrap();
 
         let helper = Self {
             listener: UnixListener::bind(&client.transport.path).unwrap(),
