@@ -121,6 +121,46 @@ pub(super) fn waiting(folder: &Path) -> Vec<Note> {
         .collect()
 }
 
+/// Display candidates without process inspection or cleanup.
+pub(super) fn candidates(folder: &Path) -> Vec<Note> {
+    candidates_at(folder, SystemTime::now())
+}
+
+pub(super) fn candidates_at(folder: &Path, now: SystemTime) -> Vec<Note> {
+    if !own_folder(folder) {
+        return Vec::new();
+    }
+    let Ok(entries) = fs::read_dir(folder) else {
+        return Vec::new();
+    };
+    let oldest = crate::time::ms(
+        now.duration_since(SystemTime::UNIX_EPOCH)
+            .unwrap_or_default(),
+    )
+    .saturating_sub(crate::time::ms(STALE));
+    let mut notes: Vec<_> = entries
+        .flatten()
+        .take(ENTRIES)
+        .filter_map(|entry| {
+            let name = entry.file_name().into_string().ok()?;
+            if !crate::name::lower_hex(name.strip_suffix(".json")?, NAME_LEN) {
+                return None;
+            }
+            let path = entry.path();
+            let note = Note::read(&path)?;
+            let touched = fs::symlink_metadata(&path)
+                .and_then(|metadata| metadata.modified())
+                .ok()
+                .and_then(|modified| now.duration_since(modified).ok())
+                .is_none_or(|age| age < QUIET);
+            (note.since >= oldest && touched).then_some(note)
+        })
+        .take(crate::host_session::liveness::BUDGET)
+        .collect();
+    notes.sort_by_key(|note| note.since);
+    notes
+}
+
 /// Each waiting command's note in `folder`, by its file name, passing over
 /// those [`waiters`] passes over; a note whose command has ended is removed
 /// when `tidy`.
@@ -313,5 +353,26 @@ mod tests {
         );
         assert_eq!(waiters(&folder).len(), 1);
         assert!(!gone.exists(), "a waiter's own look tidies up");
+    }
+
+    #[test]
+    fn display_candidates_require_recent_notes_and_recent_touches() {
+        let directory = tempfile::tempdir().unwrap();
+        let folder = directory.path().join("waiting");
+        let process = Instance::new(i32::MAX, [1, 0]);
+        let now_ms = 1_761_660_429_000;
+        let now = SystemTime::UNIX_EPOCH + Duration::from_millis(now_ms);
+        let oldest = now_ms - crate::time::ms(STALE);
+        let fresh = noted(&folder, process, oldest);
+        let quiet = noted(&folder, process, now_ms);
+        let stale = noted(&folder, process, oldest - 1);
+        for (path, age) in [(&fresh, QUIET / 2), (&quiet, QUIET), (&stale, QUIET / 2)] {
+            File::open(path).unwrap().set_modified(now - age).unwrap();
+        }
+
+        let candidates = candidates_at(&folder, now);
+        assert_eq!(candidates.len(), 1);
+        assert_eq!(candidates[0].since, oldest);
+        assert!(fresh.exists() && quiet.exists() && stale.exists());
     }
 }

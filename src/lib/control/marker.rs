@@ -13,7 +13,7 @@ use super::{
 };
 use crate::{
     error::{Code, Error, Result},
-    files::{open_lock, token},
+    files::{Held, Lock, lock_within, open_lock, token},
     host_session::Key,
 };
 use fs2::FileExt;
@@ -22,6 +22,7 @@ use std::{
     io::Write,
     os::unix::fs::OpenOptionsExt,
     path::{Path, PathBuf},
+    time::Duration,
 };
 
 /// How a pending change is recorded beside the marker.
@@ -72,6 +73,18 @@ impl Controller {
         Ok(file)
     }
 
+    fn lock_marker_within(&self, wait: Duration) -> Result<File> {
+        self.make_directory()?;
+        let file = open_lock(&self.marker_lock)?;
+        lock_within(&file, Lock::Exclusive, wait).map_err(|Held| {
+            Error::new(
+                Code::Busy,
+                "Another Atlas command is updating pending actions",
+            )
+        })?;
+        Ok(file)
+    }
+
     /// Every pending generation, whether a live process is still carrying
     /// it out, and the host session that claimed it when one is recorded;
     /// from one locked read of the marker, or none when there is no marker.
@@ -81,6 +94,20 @@ impl Controller {
         }
 
         let _lock = self.lock_marker()?;
+        self.read_causes()
+    }
+
+    /// Read one pending snapshot, waiting at most `wait` for its lock.
+    /// An absent marker creates neither its directory nor its lock.
+    pub fn pending_causes_within(&self, wait: Duration) -> Result<Vec<Cause>> {
+        if !self.marker.try_exists()? {
+            return Ok(Vec::new());
+        }
+        let _lock = self.lock_marker_within(wait)?;
+        self.read_causes()
+    }
+
+    fn read_causes(&self) -> Result<Vec<Cause>> {
         let mut claimed: ByGeneration<Key> = by_generation::read(&self.causes);
         let marked = self.commands();
         Ok(pending(&self.marker)?
@@ -111,9 +138,16 @@ impl Controller {
     /// Unresolved generations, the total and the commands still running,
     /// from one locked marker read.
     pub(crate) fn pending_snapshot(&self) -> Result<Snapshot> {
-        // Under the marker lock a finishing mutation cannot clear its entry
-        // between reading the marker and probing its claim.
         let _lock = self.lock_marker()?;
+        self.read_snapshot()
+    }
+
+    pub(crate) fn pending_snapshot_within(&self, wait: Duration) -> Result<Snapshot> {
+        let _lock = self.lock_marker_within(wait)?;
+        self.read_snapshot()
+    }
+
+    fn read_snapshot(&self) -> Result<Snapshot> {
         let pending = pending(&self.marker)?;
         let marked = self.commands();
         let total = pending.len();

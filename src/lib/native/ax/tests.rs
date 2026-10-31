@@ -37,16 +37,42 @@ fn a_sheet_is_the_window_of_what_it_holds() {
         height: 300.0,
     };
 
+    let listed = [crate::native::windows::Window {
+        number: 42,
+        pid: 812,
+        owner: None,
+        title: None,
+        layer: 0,
+        alpha: 1.0,
+        bounds: crate::native::windows::Bounds {
+            x: sheet.x,
+            y: sheet.y,
+            width: sheet.width,
+            height: sheet.height,
+        },
+    }];
     assert_eq!(
-        sheet_window(Some("AXSheet"), Some(&sheet), Some(window.clone())),
+        sheet_window(
+            Some("AXSheet"),
+            Some(&sheet),
+            Some(window.clone()),
+            &listed,
+            812
+        ),
         Some(sheet.clone())
     );
     assert_eq!(
-        sheet_window(Some("AXButton"), Some(&sheet), Some(window.clone())),
+        sheet_window(
+            Some("AXButton"),
+            Some(&sheet),
+            Some(window.clone()),
+            &listed,
+            812
+        ),
         Some(window.clone())
     );
     assert_eq!(
-        sheet_window(Some("AXSheet"), None, Some(window.clone())),
+        sheet_window(Some("AXSheet"), None, Some(window.clone()), &listed, 812),
         Some(window)
     );
 }
@@ -771,4 +797,71 @@ fn the_prefix_range_covers_the_limit_and_a_little_more() {
         let range = prefix_range(characters);
         assert_eq!((range.location, range.length), (0, length));
     }
+}
+
+#[test]
+fn an_unlisted_sheet_inherits_only_a_uniquely_listed_parent_frame() {
+    use crate::native::windows::{Bounds, Window};
+    let parent = Frame {
+        x: 100.0,
+        y: 100.0,
+        width: 400.0,
+        height: 300.0,
+    };
+    let sheet = Frame {
+        x: 80.0,
+        y: 120.0,
+        width: 500.0,
+        height: 180.0,
+    };
+    let listed = Window {
+        number: 42,
+        pid: 812,
+        owner: None,
+        title: None,
+        layer: 0,
+        alpha: 1.0,
+        bounds: Bounds {
+            x: parent.x,
+            y: parent.y,
+            width: parent.width,
+            height: parent.height,
+        },
+    };
+    assert_eq!(
+        sheet_window(
+            Some("AXSheet"),
+            Some(&sheet),
+            Some(parent.clone()),
+            std::slice::from_ref(&listed),
+            812
+        ),
+        Some(parent.clone())
+    );
+    assert_eq!(
+        sheet_window(
+            Some("AXSheet"),
+            Some(&sheet),
+            Some(parent.clone()),
+            &[],
+            812
+        ),
+        None
+    );
+    assert_eq!(
+        sheet_window(
+            Some("AXSheet"),
+            Some(&sheet),
+            Some(parent),
+            &[
+                listed.clone(),
+                Window {
+                    number: 43,
+                    ..listed
+                }
+            ],
+            812
+        ),
+        None
+    );
 }

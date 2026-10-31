@@ -87,9 +87,23 @@ pub fn elements(pid: i32, limits: Limits) -> Result<Snapshot> {
     // must reach; any it does not might hold an unseen match.
     let mut unvisited: Vec<CFRetained<AXUIElement>> = Vec::new();
 
+    let listed = match windows::windows() {
+        Ok(listed) => listed,
+        Err(_) => {
+            scan.stop(Stop::Unread);
+            Vec::new()
+        }
+    };
     menu_bar(&mut scan, &app, &mut roots);
-    open_menus(&mut scan, &app, pid, &mut roots, &mut unvisited);
-    let found = walk(&mut scan, roots, limits, &mut unvisited);
+    open_menus(&mut scan, &app, pid, &mut roots, &mut unvisited, &listed);
+    let found = walk(
+        &mut scan,
+        roots,
+        limits,
+        &mut unvisited,
+        &listed,
+        i64::from(pid),
+    );
 
     if !unvisited.is_empty() {
         scan.stop(Stop::Unread);
@@ -150,16 +164,9 @@ fn open_menus(
     pid: i32,
     roots: &mut Vec<Visit>,
     unvisited: &mut Vec<CFRetained<AXUIElement>>,
+    listed: &[windows::Window],
 ) {
-    let list = match windows::windows() {
-        Ok(list) => list,
-        Err(_) => {
-            scan.stop(Stop::Unread);
-            return;
-        }
-    };
-
-    let menus = list.into_iter().filter(|window| {
+    let menus = listed.iter().filter(|window| {
         window.pid == i64::from(pid) && window.layer == MENU_LAYER && window.alpha > 0.0
     });
     for menu in menus {
@@ -194,6 +201,8 @@ fn walk(
     roots: Vec<Visit>,
     limits: Limits,
     unvisited: &mut Vec<CFRetained<AXUIElement>>,
+    listed: &[windows::Window],
+    pid: i64,
 ) -> Vec<Element> {
     let open_menus: Vec<Frame> = roots
         .iter()
@@ -227,7 +236,15 @@ fn walk(
         scan.truncated.clear();
 
         let values = scan.batch(item);
-        let Some(element) = read(scan, &visit, values.as_ref(), found.len(), &open_menus) else {
+        let Some(element) = read(
+            scan,
+            &visit,
+            values.as_ref(),
+            found.len(),
+            &open_menus,
+            listed,
+            pid,
+        ) else {
             continue;
         };
         let window = element.window.clone();
@@ -277,6 +294,8 @@ fn read(
     values: Option<&Batch>,
     index: usize,
     open_menus: &[Frame],
+    listed: &[windows::Window],
+    pid: i64,
 ) -> Option<Element> {
     let item = &*visit.element;
     let from = Source::of(item, values);
@@ -297,7 +316,13 @@ fn read(
         }
     }
 
-    let window = sheet_window(role.as_deref(), frame.as_ref(), visit.window.clone());
+    let window = sheet_window(
+        role.as_deref(),
+        frame.as_ref(),
+        visit.window.clone(),
+        listed,
+        pid,
+    );
     let selectable = matches!(role.as_deref(), Some("AXRow" | "AXCell"));
     let subrole = scan.text(from, "AXSubrole");
     let title = scan.text(from, "AXTitle");
@@ -334,15 +359,25 @@ fn read(
 }
 
 /// The window frame an element is judged visible against: a sheet's own
-/// frame for the sheet and all it holds, since a sheet is a window of its own
-/// in front of the one it hangs from; otherwise the frame it inherited.
+/// frame when CG lists it separately; otherwise its inherited parent frame,
+/// when that frame uniquely identifies a listed window. No geometry guessing.
 pub(super) fn sheet_window(
     role: Option<&str>,
     frame: Option<&Frame>,
     inherited: Option<Frame>,
+    listed: &[windows::Window],
+    pid: i64,
 ) -> Option<Frame> {
     match (role, frame) {
-        (Some("AXSheet"), Some(frame)) => Some(frame.clone()),
+        (Some("AXSheet"), Some(frame)) => {
+            match windows::described(listed, pid, frame, None, windows::Kind::Other) {
+                windows::Listed::One(_) => Some(frame.clone()),
+                windows::Listed::Several => None,
+                windows::Listed::Missing => {
+                    inherited.filter(|frame| windows::owning_window(listed, pid, frame).is_some())
+                }
+            }
+        }
         _ => inherited,
     }
 }

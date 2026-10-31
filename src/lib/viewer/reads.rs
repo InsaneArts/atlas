@@ -105,7 +105,8 @@ impl Viewer {
             .iter()
             .map(|row| activity_row(row, now))
             .collect::<Vec<_>>();
-        let sessions = sessions_named(&records, rows.iter().map(|row| &row["session"]));
+        let sessions =
+            sessions_named(&client, &records, rows.iter().map(|row| &row["session"])).await;
         Ok(json!({"ok": true, "activity": rows, "sessions": sessions}))
     }
 
@@ -119,7 +120,16 @@ impl Viewer {
         client.output_dir()?;
         let now = crate::client::timestamp();
         let facts = crate::overview::SessionFacts::local(&client.controller, now);
-        let mut live = crate::overview::live_host_sessions(&client, facts).await;
+        let reading_client = client.clone();
+        let reading = tokio::task::spawn_blocking(move || {
+            crate::overview::SessionReading::collect(&reading_client)
+        })
+        .await
+        .ok()
+        .flatten();
+        let mut live = reading
+            .as_ref()
+            .map_or_else(Vec::new, |reading| reading.entries(facts));
         for entry in live.iter_mut().filter_map(Value::as_object_mut) {
             entry.remove("hostSession");
         }
@@ -131,7 +141,10 @@ impl Viewer {
             let store = Store::at(output);
             // The records status reads share: only those with copies left
             // are looked at again, for which app each copy is.
-            let seen = store.recent();
+            let seen = reading.as_ref().map_or_else(
+                || store.recent(),
+                |reading| std::sync::Arc::clone(&reading.seen),
+            );
             let records: Vec<_> = seen.iter().map(|seen| seen.record.clone()).collect();
             let rows = crate::activity_log::recent(output, ACTIVITY_ROWS);
             let captures = helper_info::captures(output, SHOTS)
@@ -159,7 +172,17 @@ impl Viewer {
                 tasks: &crate::task::store::Store::at(output).recent(),
                 now: u64::try_from(now / 1_000_000).unwrap_or(u64::MAX),
             }
-            .history()
+            .history_with(
+                &reading
+                    .as_ref()
+                    .map(|reading| reading.processes.clone())
+                    .unwrap_or_default(),
+                |key| {
+                    reading
+                        .as_ref()
+                        .is_some_and(|reading| reading.work(key, facts))
+                },
+            )
         })
         .await
         .unwrap_or_default();
@@ -187,8 +210,9 @@ impl Viewer {
             .await
             .map_err(|_| late())??;
 
+        let reading_client = client.clone();
         let opened = tokio::task::spawn_blocking(move || {
-            let Ok(output) = client.output_dir() else {
+            let Ok(output) = reading_client.output_dir() else {
                 return (HashMap::new(), Arc::from([]));
             };
             let tasks = crate::task::store::Store::at(output).recent();
@@ -208,7 +232,7 @@ impl Viewer {
             .values()
             .map(|origin| json!(origin.session))
             .collect();
-        let sessions = sessions_named(&records, opened_by.iter());
+        let sessions = sessions_named(&client, &records, opened_by.iter()).await;
 
         for app in apps.iter_mut().take(helper_info::ICON_CACHE) {
             if let Some(bundle) = app["bundle"].as_str().map(PathBuf::from)
@@ -257,7 +281,8 @@ impl Viewer {
         .await
         .unwrap_or_else(|_| (Vec::new(), Arc::from([])));
 
-        let sessions = sessions_named(&records, shots.iter().map(|shot| &shot["session"]));
+        let sessions =
+            sessions_named(&client, &records, shots.iter().map(|shot| &shot["session"])).await;
         // The folder they're in, so the app can show one in the Finder.
         let folder = client.output_dir().ok().map(Path::to_path_buf);
         Ok(json!({"ok": true, "screenshots": shots, "folder": folder, "sessions": sessions}))
@@ -446,24 +471,36 @@ pub(super) fn activity_row(row: &crate::activity_log::Row, now: u128) -> Value {
 /// Each host session `keys` name that a record still names, as the app
 /// shows it: its name, host and times. A key whose record is gone is left
 /// out, and its rows show no session.
-fn sessions_named<'a>(seen: &[Seen], keys: impl Iterator<Item = &'a Value>) -> Value {
-    let records = || seen.iter().map(|seen| &seen.record);
-    let named = names(records());
-    let wanted: BTreeSet<&str> = keys.filter_map(Value::as_str).collect();
-    let sessions: Map<String, Value> = records()
-        .filter(|record| wanted.contains(record.key.as_str()))
-        .map(|record| {
-            let session = json!({
-                "name": name_of(&named, &record.key, Some(record.host)),
-                "host": record.host,
-                "hostLabel": record.host.label(),
-                "started": record.started,
-                "ended": record.ended_at(),
-            });
-            (record.key.to_string(), session)
-        })
-        .collect();
-    Value::Object(sessions)
+async fn sessions_named<'a>(
+    client: &Client,
+    seen: &Arc<[Seen]>,
+    keys: impl Iterator<Item = &'a Value>,
+) -> Value {
+    let seen = Arc::clone(seen);
+    let wanted: BTreeSet<String> = keys.filter_map(Value::as_str).map(str::to_owned).collect();
+    let client = client.clone();
+    tokio::task::spawn_blocking(move || {
+        let records = || seen.iter().map(|seen| &seen.record);
+        let named = names(records());
+        let reading = crate::overview::SessionReading::collect(&client);
+        let processes = reading.as_ref().map(|reading| &reading.processes);
+        let now = crate::host_session::now_ms();
+        let facts = crate::overview::SessionFacts::local(&client.controller, u128::from(now) * 1_000_000);
+        let sessions: Map<String, Value> = records()
+            .filter(|record| wanted.contains(record.key.as_str()))
+            .map(|record| {
+                let work = reading.as_ref().is_some_and(|reading| reading.work(&record.key, facts));
+                let session = json!({
+                    "name": name_of(&named, &record.key, Some(record.host)),
+                    "host": record.host,
+                    "hostLabel": record.host.label(),
+                    "started": record.started,
+                    "ended": record.ended.or_else(|| processes.and_then(|processes| processes.lifetime(record, now, work).ended)),
+                });
+                (record.key.to_string(), session)
+            }).collect();
+        Value::Object(sessions)
+    }).await.unwrap_or_else(|_| json!({}))
 }
 
 /// Which host session took each screenshot the records list: the first

@@ -1,5 +1,6 @@
 //! Accessibility elements of one application, read *inside* the helper login:
-//! its windows and the menus it has open. Read-only and bounded: a global
+//! its windows and the menus it has open. Listings are read-only; bounded
+//! target preparation may request focus. A global
 //! messaging timeout and an overall deadline keep an unresponsive app from
 //! hanging the probe; depth, count, children fetched and string lengths are
 //! capped before anything is copied, and a long text is read only from its
@@ -8,6 +9,7 @@
 use objc2_application_services::AXError;
 
 mod batch;
+mod bring;
 mod ffi;
 mod keyboard;
 mod menus;
@@ -18,7 +20,8 @@ mod system;
 mod text;
 mod tree;
 
-pub(crate) use keyboard::{Focused, Judged, Keyboard, Unread, Within, keyboard};
+pub(crate) use bring::{bring, check_application, target_application};
+pub(crate) use keyboard::{Focused, Judged, Keyboard, Unread, Within, frontmost, keyboard};
 pub use model::{Element, Frame, Limits, Snapshot};
 pub use stop::Stop;
 pub(crate) use stop::{telling, why};

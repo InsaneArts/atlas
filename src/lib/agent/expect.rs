@@ -1,9 +1,9 @@
 //! Where an agent's input must land, and sending a batch there: an app, or
 //! a window and so its app, and the field with keyboard focus, found once
-//! control is held and checked by the helper before each action.
+//! control is held, brought forward and checked by the helper before input.
 use super::{
-    target::{Target, target_pid, target_pid_among},
-    windows::verified_window_list,
+    target::{Target, snapshot_expect, target_among, target_expect},
+    windows::verified_window_snapshot,
 };
 use crate::{
     actions::Expect,
@@ -14,7 +14,7 @@ use crate::{
 use serde_json::Value;
 
 /// Send `actions` as one batch. With an expectation, the app is found once
-/// control is held, and the helper refuses each action before it starts
+/// control is held. The helper brings its target forward, then refuses input
 /// unless it lands where expected: text and keys while the app, and the
 /// window and field when named, have keyboard focus, pointer actions where
 /// the app's own window, or the named one, is the top one.
@@ -81,24 +81,26 @@ impl Expected {
     /// describes: the app's process, or the named window's owner, refused
     /// when the window is not the named app's.
     pub(super) async fn resolve(&self, client: &Client, verified: &Verified) -> Result<Expect> {
-        let (pid, window) = match &self.place {
-            Place::App(app) => (target_pid(client, verified, app).await?, None),
+        let mut expect = match &self.place {
+            Place::App(app) => target_expect(client, verified, app).await,
             Place::Window { number, app } => {
-                let listed = verified_window_list(client, verified).await?;
-                let owner = window_owner(&listed, *number)?;
+                let listed = verified_window_snapshot(client, verified).await?;
+                let owner = window_owner(&listed.windows, *number)?;
                 if let Some(app) = app
-                    && target_pid_among(client, verified, app, &listed).await? != owner.pid
+                    && target_among(client, verified, app, Some(&listed))
+                        .await?
+                        .pid()
+                        != owner.pid
                 {
                     return Err(other_app(owner, app));
                 }
-                (owner.pid, Some(*number))
+                snapshot_expect(owner.pid, listed.starts.as_ref())
             }
-        };
-
-        let mut expect = Expect::new(pid)?;
-        if let Some(number) = window {
-            expect = expect.in_window(number)?;
+        }?;
+        if let Place::Window { number, .. } = &self.place {
+            expect = expect.in_window(*number)?;
         }
+
         if let Some(field) = &self.field {
             expect = expect.in_field(field)?;
         }

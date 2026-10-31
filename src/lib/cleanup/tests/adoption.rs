@@ -147,6 +147,41 @@ async fn an_agent_adopts_a_session_that_has_ended() {
 }
 
 #[tokio::test]
+async fn a_recent_read_protects_an_unreadable_neighbour_with_old_tasks_from_cleanup() {
+    let directory = tempfile::tempdir().unwrap();
+    let (client, neighbour) = ended_neighbour(directory.path());
+    let output = client.output_dir().unwrap();
+    let sessions = Sessions::at(output);
+    let unreadable = crate::host_session::Instance::new(1, [1, 0]);
+    assert_eq!(unreadable.state(), crate::process::State::Unknown);
+    let long_ago = sessions.read(neighbour.key()).unwrap().last_seen;
+    sessions
+        .update(&neighbour, long_ago, &client.controller, |record| {
+            record.host_process = Some(unreadable);
+            record.ended = None;
+        })
+        .unwrap();
+    let tasks = Tasks::at(output).of_session(neighbour.key());
+    assert_eq!(tasks.len(), 1);
+    assert!(tasks.iter().all(|task| task.updated == long_ago));
+
+    crate::host_session::store::touch(&client, &neighbour).unwrap();
+    let record = sessions.read(neighbour.key()).unwrap();
+    assert!(record.last_seen > long_ago);
+    assert_eq!(record.ended_at(), None);
+    assert!(scope::alive(&record));
+    assert!(may_adopt(Some(&record), &tasks).is_err());
+
+    let scope = Scope::of(&client, Some(neighbour.key()), None).unwrap();
+    let error = apply_scope(&client, &scope).await.unwrap_err();
+    assert_eq!(error.code, "input");
+    assert!(error.error.contains("may still be working"), "{error}");
+    assert_eq!(sessions.read(neighbour.key()).unwrap(), record);
+    assert_eq!(Tasks::at(output).of_session(neighbour.key()), tasks);
+    assert!(Receipts::at(output).of_session(neighbour.key()).is_empty());
+}
+
+#[tokio::test]
 async fn a_session_that_acts_while_adoption_waits_for_control_is_not_adopted() {
     use crate::host_session::store::{Kind, note};
 

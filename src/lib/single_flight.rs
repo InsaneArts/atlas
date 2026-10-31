@@ -8,21 +8,21 @@ use std::{
 };
 use tokio::time::Instant;
 
-/// One look for a helper, shared by every caller in this process: at most
-/// one runs at a time, and what it found is reused for `fresh_for`.
-pub(crate) struct Shared<T> {
+/// One slow look shared by callers, keyed by its complete inputs. At most
+/// one runs at a time; its result is reused for `fresh_for`.
+pub(crate) struct Shared<T, K = u32> {
     pub(crate) fresh_for: Duration,
-    kept: Mutex<Kept<T>>,
+    kept: Mutex<Kept<T, K>>,
 }
 
-struct Kept<T> {
-    /// The helper user ID the last look was for, what it found and when.
-    last: Option<(u32, T, Instant)>,
+struct Kept<T, K> {
+    /// The last look's key, result and completion time.
+    last: Option<(K, T, Instant)>,
     /// Whether a look runs now.
     running: bool,
 }
 
-impl<T: Clone + Send + 'static> Shared<T> {
+impl<T: Clone + Send + 'static, K: Eq + Clone + Send + 'static> Shared<T, K> {
     pub(crate) const fn new(fresh_for: Duration) -> Self {
         Self {
             fresh_for,
@@ -40,7 +40,7 @@ impl<T: Clone + Send + 'static> Shared<T> {
     /// is known for `uid` in time, or only a result too old to trust.
     pub(crate) async fn get(
         &'static self,
-        uid: u32,
+        uid: K,
         until: Instant,
         look: impl FnOnce() -> T + Send + 'static,
     ) -> Option<T> {
@@ -70,10 +70,46 @@ impl<T: Clone + Send + 'static> Shared<T> {
             _ => self.trusted(known),
         }
     }
+    /// One bounded synchronous look, sharing running ownership with `get`.
+    pub(crate) fn get_blocking(
+        &'static self,
+        key: K,
+        wait: Duration,
+        look: impl FnOnce() -> T + Send + 'static,
+    ) -> Option<T> {
+        let known = {
+            let mut kept = self.lock();
+            let last = kept.last.as_ref().filter(|(old, ..)| *old == key);
+            let fresh = last.is_some_and(|(.., taken)| taken.elapsed() < self.fresh_for);
+            let known = last.map(|(_, found, taken)| (found.clone(), *taken));
+            if fresh || kept.running {
+                return self.trusted(known);
+            }
+            kept.running = true;
+            known
+        };
+        let ending = Ending(self);
+        let (send, receive) = std::sync::mpsc::sync_channel(1);
+        let spawned = std::thread::Builder::new()
+            .name("session-liveness".into())
+            .spawn(move || {
+                let found = look();
+                ending.0.lock().last = Some((key, found.clone(), Instant::now()));
+                drop(ending);
+                let _ = send.send(found);
+            });
+        if spawned.is_err() {
+            return self.trusted(known);
+        }
+        receive
+            .recv_timeout(wait)
+            .ok()
+            .or_else(|| self.trusted(known))
+    }
 }
 
-impl<T> Shared<T> {
-    fn lock(&self) -> MutexGuard<'_, Kept<T>> {
+impl<T, K> Shared<T, K> {
+    fn lock(&self) -> MutexGuard<'_, Kept<T, K>> {
         self.kept.lock().unwrap_or_else(PoisonError::into_inner)
     }
 
@@ -87,9 +123,9 @@ impl<T> Shared<T> {
 }
 
 /// Marks a look as not running when dropped.
-struct Ending<T: 'static>(&'static Shared<T>);
+struct Ending<T: 'static, K: 'static>(&'static Shared<T, K>);
 
-impl<T> Drop for Ending<T> {
+impl<T, K> Drop for Ending<T, K> {
     fn drop(&mut self) {
         self.0.lock().running = false;
     }

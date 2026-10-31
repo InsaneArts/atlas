@@ -8,14 +8,15 @@ use crate::{
     control::Controller,
     host_session::{
         Key,
-        names::{name_of, names_with},
+        liveness::{Lifetime, Snapshot},
+        names::{name_of, names_with_left},
         record::Seen,
         store::Store,
     },
     session_view::{self, Scene, Who},
 };
 use serde_json::{Value, json};
-use std::collections::BTreeMap;
+use std::{collections::BTreeMap, sync::Arc};
 
 /// The most host sessions a status lists.
 const SESSIONS: usize = 8;
@@ -33,30 +34,40 @@ const SESSION_ROWS: usize = 64;
 /// speak of sessions at all and which one has the helper. The records and
 /// notes are read off the runtime.
 pub(crate) async fn add_host_sessions(status: &mut Value, client: &Client, now: u128) {
+    add_sessions_for(status, client, now, None).await;
+}
+
+pub(crate) async fn add_sessions_for(
+    status: &mut Value,
+    client: &Client,
+    now: u128,
+    own: Option<&Key>,
+) {
     let client = client.clone();
     let facts = SessionFacts::of(status, now);
-    let listed = tokio::task::spawn_blocking(move || host_sessions(&client, facts))
-        .await
-        .unwrap_or_default();
+    let has_own = own.is_some();
+    let own = own.cloned();
+    let (listed, own_entry) = tokio::task::spawn_blocking(move || {
+        let Some(reading) = SessionReading::collect(&client) else {
+            return (HostSessions::default(), None);
+        };
+        let own_entry = own.and_then(|key| {
+            reading
+                .entries(facts)
+                .into_iter()
+                .find(|entry| entry["key"].as_str() == Some(key.as_str()))
+        });
+        (reading.summary(facts), own_entry)
+    })
+    .await
+    .unwrap_or_default();
     status["overview"]["hostSessions"] = json!(listed.sessions);
     status["overview"]["moreSessions"] = json!(listed.more);
     status["overview"]["sessionsShown"] = json!(listed.shown);
     status["overview"]["holder"] = json!(listed.holder);
-}
-
-/// Every live host session, as [`add_host_sessions`] would list them with
-/// no limit, by `facts`: the viewer's session menu lists them all, and a
-/// pane finds its own among them. Read off the runtime.
-pub(crate) async fn live_host_sessions(client: &Client, facts: SessionFacts) -> Vec<Value> {
-    let client = client.clone();
-    tokio::task::spawn_blocking(move || {
-        live(&client, facts)
-            .into_iter()
-            .map(Listed::into_entry)
-            .collect()
-    })
-    .await
-    .unwrap_or_default()
+    if has_own && let Some(overview) = status["overview"].as_object_mut() {
+        overview.insert("ownSession".into(), own_entry.unwrap_or(Value::Null));
+    }
 }
 
 /// What a status says that the sessions' states depend on.
@@ -99,9 +110,9 @@ impl SessionFacts {
 #[derive(Default)]
 pub(super) struct HostSessions {
     pub(super) sessions: Vec<Value>,
-    /// How many more live sessions there are than are listed.
+    /// How many more relevant sessions there are than are listed.
     pub(super) more: usize,
-    /// Whether two or more are live.
+    /// Whether two or more sessions remain relevant.
     pub(super) shown: bool,
     /// The key of the one with the helper; empty for the commands no host
     /// named.
@@ -127,9 +138,7 @@ impl Listed {
     }
 }
 
-/// The sessions [`add_host_sessions`] lists, by `facts`.
-pub(super) fn host_sessions(client: &Client, facts: SessionFacts) -> HostSessions {
-    let listed = live(client, facts);
+fn summarize(listed: Vec<Listed>) -> HostSessions {
     let shown = session_view::sessions_shown(listed.iter().map(|listed| &listed.shown));
     let holder = listed
         .iter()
@@ -151,79 +160,149 @@ pub(super) fn host_sessions(client: &Client, facts: SessionFacts) -> HostSession
     }
 }
 
-/// Every live session by `facts`: those seen in the last hour, holding or
-/// waiting for the helper, or with an unknown outcome; those on their
-/// first command, from their notes; and the agents' commands no host
-/// named. Those needing the person first, then the one acting, those
-/// waiting and the idle, newest first within each. Ended ones are left
-/// out: the viewer's history lists them.
-fn live(client: &Client, facts: SessionFacts) -> Vec<Listed> {
-    let Ok(output) = client.output_dir() else {
-        return Vec::new();
-    };
-    let seen = Store::at(output).recent();
-    let rows = activity_log::recent(output, SESSION_ROWS);
-    let causes = client.controller.pending_causes().unwrap_or_default();
-    let holder = client.controller.holder_note();
-    let waiting = client.controller.waiting_notes();
-    let running = client.controller.running_notes();
-    let scene = Scene {
-        rows: &rows,
-        holder: holder.as_ref(),
-        waiting: &waiting,
-        causes: &causes,
-        pending: facts.pending,
-        agent_holds: facts.agent_holds,
-        now: facts.now,
-    };
+/// The records and bounded note candidates for one frozen reply.
+pub(crate) struct SessionReading {
+    pub(crate) seen: Arc<[Seen]>,
+    rows: Vec<crate::activity_log::Row>,
+    causes: Vec<crate::control::Cause>,
+    holder: Option<crate::control::Note>,
+    waiting: Vec<crate::control::Note>,
+    running: Vec<crate::control::Note>,
+    pub(crate) processes: Snapshot,
+}
 
-    let now_ms = u64::try_from(facts.now / 1_000_000).unwrap_or(u64::MAX);
-    let live_for = crate::time::ms(session_view::LIVE_FOR);
-    let mut unknown: BTreeMap<&Key, usize> = BTreeMap::new();
-    for cause in causes.iter().filter(|cause| !cause.running) {
-        if let Some(session) = &cause.session {
-            *unknown.entry(session).or_default() += 1;
+impl SessionReading {
+    pub(crate) fn collect(client: &Client) -> Option<Self> {
+        Self::collect_with(client, Snapshot::polled)
+    }
+
+    pub(super) fn collect_with(
+        client: &Client,
+        sample: impl FnOnce(&std::path::Path, Vec<crate::process::Instance>) -> Snapshot,
+    ) -> Option<Self> {
+        let output = client.output_dir().ok()?;
+        let seen = Store::at(output).recent();
+        let rows = activity_log::recent(output, SESSION_ROWS);
+        let causes = client
+            .controller
+            .pending_causes_within(std::time::Duration::from_millis(50))
+            .unwrap_or_default();
+        let holder = client.controller.holder_note();
+        let waiting = client.controller.waiting_candidates();
+        let running = client.controller.running_candidates();
+        let instances = holder
+            .iter()
+            .chain(&waiting)
+            .chain(&running)
+            .map(|note| note.process)
+            .chain(seen.iter().filter_map(|seen| seen.record.host_process))
+            .collect();
+        let processes = sample(output, instances);
+        let holder = holder.filter(|note| processes.running(note.process));
+        let waiting = waiting
+            .into_iter()
+            .filter(|note| processes.state(note.process) == crate::process::State::Running)
+            .collect();
+        let running = running
+            .into_iter()
+            .filter(|note| processes.running(note.process))
+            .collect();
+        Some(Self {
+            seen,
+            rows,
+            causes,
+            holder,
+            waiting,
+            running,
+            processes,
+        })
+    }
+
+    fn scene(&self, facts: SessionFacts) -> Scene<'_> {
+        Scene {
+            rows: &self.rows,
+            processes: &self.processes,
+            holder: self.holder.as_ref(),
+            waiting: &self.waiting,
+            running: &self.running,
+            causes: &self.causes,
+            pending: facts.pending,
+            agent_holds: facts.agent_holds,
+            now: facts.now,
         }
     }
-    // A session on its first command has no record until that command
-    // ends: its note names it meanwhile, by the same rule as a record.
-    let first = unrecorded(holder.as_ref(), &waiting, &running, &seen);
-    let named = names_with(seen.iter().map(|seen| &seen.record), first.iter().copied());
 
-    let mut listed: Vec<Listed> = seen
-        .iter()
-        .filter_map(|seen| {
-            let record = &seen.record;
-            let uncertain = unknown.get(&record.key).copied().unwrap_or(0);
-            let shown = scene.shown(&Who::Host(record.key.clone()), record.ended_at().is_some());
-            let wanted = now_ms.saturating_sub(record.last_seen) <= live_for
-                || shown.holds_helper
-                || shown.waiting_for.is_some()
-                || uncertain > 0;
-            (wanted && shown.live).then(|| Listed {
-                entry: host_session(seen, &named, uncertain, &shown, now_ms),
-                last_seen: record.last_seen,
-                shown,
+    pub(crate) fn work(&self, key: &Key, facts: SessionFacts) -> bool {
+        self.scene(facts).work(&Who::Host(key.clone()))
+    }
+
+    pub(super) fn summary(&self, facts: SessionFacts) -> HostSessions {
+        summarize(self.live(facts))
+    }
+
+    pub(crate) fn entries(&self, facts: SessionFacts) -> Vec<Value> {
+        self.live(facts)
+            .into_iter()
+            .map(Listed::into_entry)
+            .collect()
+    }
+}
+
+impl SessionReading {
+    fn live(&self, facts: SessionFacts) -> Vec<Listed> {
+        let seen = &self.seen;
+        let causes = &self.causes;
+        let holder = &self.holder;
+        let waiting = &self.waiting;
+        let running = &self.running;
+        let scene = self.scene(facts);
+        let now_ms = u64::try_from(facts.now / 1_000_000).unwrap_or(u64::MAX);
+        let mut unknown: BTreeMap<&Key, usize> = BTreeMap::new();
+        for cause in causes.iter().filter(|cause| !cause.running) {
+            if let Some(session) = &cause.session {
+                *unknown.entry(session).or_default() += 1;
+            }
+        }
+        // A session on its first command has no record until that command
+        // ends: its note names it meanwhile, by the same rule as a record.
+        let first = unrecorded(holder.as_ref(), waiting, running, seen);
+        let named = names_with_left(
+            seen.iter().map(|seen| &seen.record),
+            [],
+            first.iter().copied(),
+        );
+
+        let mut listed: Vec<Listed> = seen
+            .iter()
+            .filter_map(|seen| {
+                let record = &seen.record;
+                let uncertain = unknown.get(&record.key).copied().unwrap_or(0);
+                let (shown, lifetime) = scene.project(record);
+                shown.relevant().then(|| Listed {
+                    entry: host_session(seen, &named, uncertain, lifetime),
+                    last_seen: record.last_seen,
+                    shown,
+                })
             })
-        })
-        .collect();
-    for note in first {
-        let Some(key) = &note.session else { continue };
-        listed.push(Listed {
-            entry: first_command(key, note, &named),
-            last_seen: note.since,
-            shown: scene.shown(&Who::Host(key.clone()), false),
-        });
+            .collect();
+        for note in first {
+            let Some(key) = &note.session else { continue };
+            listed.push(Listed {
+                entry: first_command(key, note, &named),
+                last_seen: note.since,
+                shown: scene.shown(&Who::Host(key.clone()), false),
+            });
+        }
+        if let Some((started, last_seen)) = scene.terminal() {
+            listed.push(Listed {
+                entry: terminal(started, last_seen, now_ms),
+                last_seen,
+                shown: scene.shown(&Who::Terminal, false),
+            });
+        }
+        listed.sort_by_key(|listed| (listed.shown.state, std::cmp::Reverse(listed.last_seen)));
+        listed
     }
-    if let Some((started, last_seen)) = scene.terminal() {
-        listed.push(Listed {
-            entry: terminal(started, last_seen, now_ms),
-            last_seen,
-            shown: scene.shown(&Who::Terminal, false),
-        });
-    }
-    listed.sort_by_key(|listed| (listed.shown.state, std::cmp::Reverse(listed.last_seen)));
-    listed
 }
 
 /// The live notes, the holder's first, then the waiting commands' and the
@@ -235,11 +314,7 @@ fn unrecorded<'a>(
     running: &'a [crate::control::Note],
     seen: &[Seen],
 ) -> Vec<&'a crate::control::Note> {
-    let notes = holder
-        .filter(|note| note.live())
-        .into_iter()
-        .chain(waiting)
-        .chain(running);
+    let notes = holder.into_iter().chain(waiting).chain(running);
     let mut found: Vec<&crate::control::Note> = Vec::new();
     for note in notes {
         let Some(key) = &note.session else { continue };
@@ -255,24 +330,27 @@ fn unrecorded<'a>(
 /// Whether a live holder, waiting or running note names a session with no
 /// record yet among `seen`: a session on its first command.
 pub(crate) fn first_command_running(client: &Client, seen: &[Seen]) -> bool {
-    let holder = client.controller.holder_note();
-    let waiting = client.controller.waiting_notes();
-    let running = client.controller.running_notes();
-    !unrecorded(holder.as_ref(), &waiting, &running, seen).is_empty()
+    SessionReading::collect(client).is_some_and(|reading| {
+        !unrecorded(
+            reading.holder.as_ref(),
+            &reading.waiting,
+            &reading.running,
+            seen,
+        )
+        .is_empty()
+    })
 }
 
-/// One host session as [`add_host_sessions`] lists it, before the rest of
-/// how it is `shown`: one at work has neither ended nor gone quiet,
-/// whatever its record says.
+/// A record's frozen lifetime and activity metadata, before its shown
+/// work and recovery state are added.
 fn host_session(
     seen: &Seen,
     names: &BTreeMap<Key, String>,
     uncertain: usize,
-    shown: &session_view::Shown,
-    now: u64,
+    lifetime: Lifetime,
 ) -> Value {
     let record = &seen.record;
-    let at_work = shown.at_work();
+
     json!({
         "key": record.key,
         "host": record.host,
@@ -282,8 +360,8 @@ fn host_session(
         "hostSession": record.host_session,
         "started": record.started,
         "lastSeen": record.last_seen,
-        "ended": record.ended_at().filter(|_| !at_work),
-        "active": at_work || record.active(now),
+        "ended": lifetime.ended,
+        "active": lifetime.active,
         "uncertain": uncertain,
         "leftovers": {"copies": seen.copies_left, "plans": record.plans.len()},
     })

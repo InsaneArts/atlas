@@ -6,7 +6,7 @@ mod sessions;
 
 pub(crate) use activity::shown;
 pub(crate) use sessions::{
-    SessionFacts, add_host_sessions, first_command_running, live_host_sessions,
+    SessionFacts, SessionReading, add_host_sessions, add_sessions_for, first_command_running,
 };
 
 use crate::{
@@ -112,8 +112,9 @@ fn logins(uid: u32, silent: bool) -> (Vec<u32>, bool) {
 /// The controller's mutations of unknown outcome, and how many are pending
 /// in all. An unreadable marker is unknown, so it counts as unresolved.
 pub(crate) fn pending(controller: &Controller) -> (Pending, usize) {
-    let (unresolved, total, commands) =
-        controller.pending_snapshot().map_or((1, 1, 0), |snapshot| {
+    let (unresolved, total, commands) = controller
+        .pending_snapshot_within(Duration::from_millis(50))
+        .map_or((1, 1, 0), |snapshot| {
             (snapshot.unresolved.len(), snapshot.total, snapshot.commands)
         });
     let pending = Pending {

@@ -19,8 +19,8 @@ use unicode_segmentation::UnicodeSegmentation;
 pub(super) const TYPE_BATCH: usize = 64;
 
 /// How much text one `type` action holds: 16 characters. With a target the
-/// helper checks focus before each action, so at most this much can follow
-/// a focus change before Atlas sees it.
+/// helper prepares and checks focus before each part. At most this much can
+/// follow a focus change before Atlas sees it.
 pub(super) const TYPE_PART: usize = 16;
 
 pub fn click(x: f64, y: f64, which: Button, count: u8, modifiers: &[String]) -> Value {

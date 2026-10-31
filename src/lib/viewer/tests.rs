@@ -1705,7 +1705,7 @@ async fn sessions_json_never_carries_ids_paths_or_tokens() {
 }
 
 #[test]
-fn a_session_ends_an_hour_after_it_was_last_seen_and_is_listed_for_seven_days() {
+fn a_quiet_session_has_no_known_end_and_is_listed_for_seven_days() {
     use crate::host_session::{Host, HostSession, record::Record};
 
     let now = 1_793_170_000_000_u64;
@@ -1743,7 +1743,7 @@ fn a_session_ends_an_hour_after_it_was_last_seen_and_is_listed_for_seven_days() 
         .iter()
         .map(|past| json!(past.state).as_str().unwrap().to_owned())
         .collect();
-    assert_eq!(states, ["idle", "ended"], "a week and more is gone");
+    assert_eq!(states, ["idle", "idle"], "a week and more is gone");
     assert_eq!(history[1].ended_at, None, "it only went quiet");
     let plans: Vec<_> = history[0]
         .plans

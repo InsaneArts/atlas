@@ -484,12 +484,22 @@ fn argv(items: &[&str]) -> Vec<String> {
 }
 
 /// Serialize Atlas's multi-step local registrations without taking the host's own settings lock.
-fn connection_lock() -> Result<fs::File> {
+fn connection_lock() -> Result<ConnectionLock> {
     connection_lock_in(&std::env::temp_dir())
 }
 
+/// Releases the registration lock even if a forked child inherited its descriptor.
+#[derive(Debug)]
+pub(crate) struct ConnectionLock(fs::File);
+
+impl Drop for ConnectionLock {
+    fn drop(&mut self) {
+        let _ = fs2::FileExt::unlock(&self.0);
+    }
+}
+
 /// The connection lock in `directory`, also used by the Claude app's writer.
-pub(crate) fn connection_lock_in(directory: &Path) -> Result<fs::File> {
+pub(crate) fn connection_lock_in(directory: &Path) -> Result<ConnectionLock> {
     use fs2::FileExt;
     use std::os::unix::fs::OpenOptionsExt;
     let path = directory.join(format!("atlas-agents-{}.lock", nix::unistd::Uid::current()));
@@ -503,7 +513,7 @@ pub(crate) fn connection_lock_in(directory: &Path) -> Result<fs::File> {
         .map_err(|error| problem(format!("Could not open the agent connection lock: {error}")))?;
     file.try_lock_exclusive()
         .map_err(|error| problem(format!("Another agent connection is running: {error}")))?;
-    Ok(file)
+    Ok(ConnectionLock(file))
 }
 
 /// Whether an agent's tool is on this Mac.
@@ -830,6 +840,10 @@ pub async fn brief(config_path: &Path, session: Option<&HostSession>) -> String 
         return format!("Atlas {version}: run atlas doctor before using it.");
     };
 
+    if let Some(session) = session {
+        let _ = crate::host_session::store::touch(&client, session);
+    }
+
     let causes = client.controller.pending_causes().unwrap_or_default();
     if let Some(recovery) = Recovery::of(&causes, Asker::Agent(session.map(HostSession::key))) {
         return format!("Atlas {version}: {}", recovery.step());
@@ -865,6 +879,68 @@ pub async fn brief(config_path: &Path, session: Option<&HostSession>) -> String 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    #[allow(
+        unsafe_code,
+        reason = "The isolated fork child only calls pause until killed"
+    )]
+    fn a_connection_lock_is_released_even_when_a_forked_child_inherits_it() {
+        use nix::{
+            sys::{
+                signal::{Signal, kill},
+                wait::{WaitPidFlag, WaitStatus, waitpid},
+            },
+            unistd::{ForkResult, fork, pause},
+        };
+        use std::time::Instant;
+
+        if !crate::test_support::isolated(
+            "agents::tests::a_connection_lock_is_released_even_when_a_forked_child_inherits_it",
+        ) {
+            return;
+        }
+        let directory = tempfile::tempdir().unwrap();
+        let held = connection_lock_in(directory.path()).unwrap();
+        // SAFETY: The child only calls the async-signal-safe pause syscall;
+        // the parent kills and reaps it without running Rust cleanup there.
+        let child = match unsafe { fork() }.unwrap() {
+            ForkResult::Parent { child } => child,
+            ForkResult::Child => loop {
+                pause();
+            },
+        };
+
+        let refused = connection_lock_in(directory.path());
+        drop(held);
+        let released = connection_lock_in(directory.path());
+
+        let killed = kill(child, Signal::SIGKILL);
+        let deadline = Instant::now() + Duration::from_secs(2);
+        let reaped = loop {
+            match waitpid(child, Some(WaitPidFlag::WNOHANG)) {
+                Ok(WaitStatus::StillAlive) if Instant::now() < deadline => {
+                    std::thread::sleep(Duration::from_millis(5));
+                }
+                status => break status,
+            }
+        };
+        killed.unwrap();
+        assert_eq!(
+            reaped.unwrap(),
+            WaitStatus::Signaled(child, Signal::SIGKILL, false)
+        );
+        assert!(
+            refused
+                .unwrap_err()
+                .error
+                .contains("Another agent connection")
+        );
+        assert!(
+            released.is_ok(),
+            "the inherited descriptor kept the lock: {released:?}"
+        );
+    }
 
     #[test]
     fn the_plugin_is_found_in_each_agents_list() {

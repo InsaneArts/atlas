@@ -11,6 +11,7 @@ use crate::{
     helper_info::Capture,
     host_session::{
         Host, Key,
+        liveness::{Lifetime, Snapshot},
         names::{name_of, names},
         record::Record,
         store::IDLE_FOR,
@@ -29,9 +30,6 @@ pub(crate) const LIVE_FOR: Duration = Duration::from_secs(60 * 60);
 /// How recently a session acted for it to be waiting, with every other,
 /// for the person to recover.
 const RECOVERY_WAIT: Duration = Duration::from_secs(2 * 60);
-/// How recently an agent's row under way began for its session to stand
-/// for the one with the helper, when no holder note names one.
-const UNDER_WAY: Duration = Duration::from_secs(5);
 /// The name of the commands no host named.
 pub(crate) const TERMINAL: &str = "Terminal";
 /// The most sessions the viewer's history lists.
@@ -97,10 +95,13 @@ impl Who {
 pub(crate) struct Scene<'a> {
     /// The newest activity rows, newest first, as the log keeps them.
     pub rows: &'a [Row],
+    pub processes: &'a Snapshot,
     /// The holder note, whether or not its command still runs.
     pub holder: Option<&'a Note>,
     /// The notes of the commands waiting for control now.
     pub waiting: &'a [Note],
+    /// The independently verified notes of commands started with `run`.
+    pub running: &'a [Note],
     /// The pending changes and who claimed each.
     pub causes: &'a [Cause],
     /// Whether the status says an outcome is unknown.
@@ -117,9 +118,9 @@ pub(crate) struct Scene<'a> {
 #[derive(Clone, Debug, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub(crate) struct Shown {
-    /// Whether it counts among the sessions at work: not ended, or ended
-    /// with an action of its own whose outcome is unknown.
+    /// Host or proven command lifetime, independent of recovery attention.
     pub live: bool,
+    pub work_in_progress: bool,
     pub state: SessionState,
     pub holds_helper: bool,
     pub waiting_for: Option<WaitingFor>,
@@ -135,18 +136,14 @@ pub(crate) struct Shown {
 }
 
 impl Shown {
-    /// Whether it acts or waits: a command of it holds or waits for the
-    /// helper, or it acted just now and waits for recovery. Either way it
-    /// has neither ended nor gone quiet, whatever its record says.
-    pub(crate) fn at_work(&self) -> bool {
-        matches!(self.state, SessionState::Acting | SessionState::Waiting)
+    pub(crate) fn relevant(&self) -> bool {
+        self.live || self.state == SessionState::NeedsYou || self.work_in_progress
     }
 }
 
 impl Scene<'_> {
-    /// How `who` is shown, `ended` being whether its record says it ended.
-    /// An ended session waits for nothing; a command of it that holds or
-    /// waits for the helper shows it has not ended after all.
+    /// Current work and recovery attention for `who`, without reviving an
+    /// ended lifetime. Record-backed callers use the frozen projection.
     pub(crate) fn shown(&self, who: &Who, ended: bool) -> Shown {
         let holds = self.holder().as_ref() == Some(who);
         let newest = self.rows_of(who).next();
@@ -159,14 +156,11 @@ impl Scene<'_> {
                 .any(|cause| !cause.running && cause.session.as_ref() == Some(key)));
         // A command it started with `run` that still runs is its work
         // under way, whoever has control meanwhile.
-        let running = self
-            .causes
-            .iter()
-            .any(|cause| cause.command && who.names(cause.session.as_ref()));
-        let note = self
-            .waiting
-            .iter()
-            .find(|note| who.names(note.session.as_ref()));
+        let running = self.running(who);
+        let note = self.waiting.iter().find(|note| {
+            self.processes.state(note.process) == crate::process::State::Running
+                && who.names(note.session.as_ref())
+        });
         let recently = newest
             .and_then(|row| row.age(self.now))
             .is_some_and(|age| age < RECOVERY_WAIT.as_nanos());
@@ -194,9 +188,10 @@ impl Scene<'_> {
         let uncertain = needs_you.then(|| self.cause_row(who)).flatten();
 
         Shown {
-            live: state != SessionState::Ended,
+            live: !ended,
+            work_in_progress: holds || running || note.is_some(),
             state,
-            holds_helper: holds,
+            holds_helper: holds && !ended,
             waiting_for,
             waiting_seconds,
             latest: newest.map(|row| self.latest(row)),
@@ -234,39 +229,48 @@ impl Scene<'_> {
         }
     }
 
-    /// The session that has the helper: the one the holder note names
-    /// while its command runs; else the commands no host named while the
-    /// input service says an agent holds it; else the one whose row under
-    /// way began within [`UNDER_WAY`]. While an outcome is unknown no row
-    /// ever stands for a holder: a command killed mid-step leaves its row
-    /// under way, and only recovery runs until the outcome is settled.
+    /// Only a current named note proves its holder during recovery.
     fn holder(&self) -> Option<Who> {
         if let Some(key) = self
             .holder
-            .filter(|note| note.live())
+            .filter(|note| self.processes.running(note.process))
             .and_then(|note| note.session.as_ref())
         {
             return Some(Who::Host(key.clone()));
         }
-        if self.agent_holds {
-            return Some(Who::Terminal);
-        }
         if self.pending {
             return None;
         }
+        self.agent_holds.then_some(Who::Terminal)
+    }
 
-        let newest = self.rows.iter().find(|row| row.actor() != "viewer")?;
-        let begun = newest.under_way()
-            && newest
-                .age(self.now)
-                .is_some_and(|age| age < UNDER_WAY.as_nanos());
-        if !begun {
-            return None;
-        }
-        match newest.session.as_deref() {
-            None => Some(Who::Terminal),
-            Some(session) => Key::parse(session).map(Who::Host),
-        }
+    pub(crate) fn work(&self, who: &Who) -> bool {
+        self.holder().as_ref() == Some(who)
+            || self.waiting.iter().any(|note| {
+                self.processes.state(note.process) == crate::process::State::Running
+                    && who.names(note.session.as_ref())
+            })
+            || self.running(who)
+    }
+
+    fn running(&self, who: &Who) -> bool {
+        self.running
+            .iter()
+            .any(|note| self.processes.running(note.process) && who.names(note.session.as_ref()))
+            || self
+                .causes
+                .iter()
+                .any(|cause| cause.running && cause.command && who.names(cause.session.as_ref()))
+    }
+
+    pub(crate) fn project(&self, record: &Record) -> (Shown, Lifetime) {
+        let who = Who::Host(record.key.clone());
+        let now = u64::try_from(self.now / 1_000_000).unwrap_or(u64::MAX);
+        let lifetime = self.processes.lifetime(record, now, self.work(&who));
+        let mut shown = self.shown(&who, lifetime.ended.is_some());
+        shown.live = lifetime.live;
+        shown.holds_helper &= lifetime.live;
+        (shown, lifetime)
     }
 
     /// The row of `who` whose outcome is unknown: the oldest of its newest
@@ -322,8 +326,8 @@ pub(crate) struct Past {
     /// When it ended, as its record or its host's process says; none for
     /// one that only went quiet.
     pub ended_at: Option<u64>,
-    /// [`SessionState::Ended`] once ended or quiet for [`LIVE_FOR`], else
-    /// [`SessionState::Idle`]: the status says how a live one is doing.
+    /// Ended only when an end is known, otherwise Idle: current status
+    /// separately describes work and recovery attention.
     pub state: SessionState,
     /// How many actions it did.
     pub actions: u64,
@@ -383,9 +387,22 @@ pub(crate) struct HistorySource<'a> {
 impl HistorySource<'_> {
     /// The sessions last seen within the days records are kept for, newest
     /// first, at most [`HISTORY`].
+    #[cfg(test)]
     pub(crate) fn history(&self) -> Vec<Past> {
+        let processes = Snapshot::sample(
+            self.records.iter().filter_map(|record| record.host_process),
+            |instance| instance.state(),
+        );
+        self.history_with(&processes, |_| false)
+    }
+
+    pub(crate) fn history_with(
+        &self,
+        processes: &Snapshot,
+        work: impl Fn(&Key) -> bool,
+    ) -> Vec<Past> {
         let kept = crate::time::ms(IDLE_FOR);
-        let live_for = crate::time::ms(LIVE_FOR);
+
         let named = names(self.records);
 
         self.records
@@ -393,8 +410,8 @@ impl HistorySource<'_> {
             .filter(|record| self.now.saturating_sub(record.last_seen) <= kept)
             .take(HISTORY)
             .map(|record| {
-                let ended_at = record.ended_at();
-                let quiet = self.now.saturating_sub(record.last_seen) > live_for;
+                let lifetime = processes.lifetime(record, self.now, work(&record.key));
+                let ended_at = lifetime.ended;
                 let copies: Vec<PastCopy> = self
                     .copies
                     .get(&record.key)
@@ -411,7 +428,7 @@ impl HistorySource<'_> {
                     started_at: record.started,
                     last_seen_at: record.last_seen,
                     ended_at,
-                    state: if ended_at.is_some() || quiet {
+                    state: if ended_at.is_some() {
                         SessionState::Ended
                     } else {
                         SessionState::Idle
@@ -474,9 +491,9 @@ impl HistorySource<'_> {
     }
 }
 
-/// Whether the apps speak of sessions: two or more are live.
+/// Whether the apps speak of sessions: two or more remain relevant.
 pub(crate) fn sessions_shown<'a>(shown: impl IntoIterator<Item = &'a Shown>) -> bool {
-    shown.into_iter().filter(|shown| shown.live).count() >= 2
+    shown.into_iter().filter(|shown| shown.relevant()).count() >= 2
 }
 
 /// Whether `row`'s outcome may be unknown: refused as uncertain, or a

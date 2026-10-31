@@ -94,6 +94,9 @@ impl Actor {
 pub struct Client {
     pub config: Config,
     pub transport: Transport,
+    /// A local stand-in's socket peer, separate from its reported helper UID.
+    #[cfg(test)]
+    pub(crate) input_peer_uid: Option<u32>,
     pub controller: Controller,
     pub actor: Actor,
     /// What the command acting through this client does, for the log.
@@ -130,6 +133,8 @@ impl Client {
                 timeout: Duration::from_secs(30),
                 peer_uid: config.helper_uid,
             },
+            #[cfg(test)]
+            input_peer_uid: None,
             installed: BuildCache::default(),
             actor: Actor::Agent,
             doing: None,
