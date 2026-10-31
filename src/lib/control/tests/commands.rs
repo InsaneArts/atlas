@@ -162,6 +162,42 @@ fn an_unknown_outcome_beside_a_running_command_still_blocks_agents() {
 }
 
 #[test]
+fn settling_a_signalled_change_keeps_another_unknown_outcome_pending() {
+    if !crate::test_support::isolated(
+        "control::tests::commands::settling_a_signalled_change_keeps_another_unknown_outcome_pending",
+    ) {
+        return;
+    }
+    let directory = tempfile::tempdir().unwrap();
+    let first = Controller::at(crate::test_support::UID, directory.path());
+    let other = Controller::at(crate::test_support::UID, directory.path());
+    let unknown = first.quarantine().unwrap();
+    let generation = unknown.generation().to_owned();
+    drop(unknown);
+
+    let interrupt = crate::interrupt::Interrupt::new(Duration::from_millis(50));
+    let stopped = first.interrupted_by(interrupt.clone());
+    let acknowledged = stopped.quarantine().unwrap();
+    assert_ne!(acknowledged.generation(), generation);
+    interrupt.ask(nix::sys::signal::Signal::SIGTERM);
+    stopped.clear_if(&acknowledged).unwrap();
+    drop(acknowledged);
+
+    assert_eq!(other.pending().unwrap(), std::slice::from_ref(&generation));
+    assert_eq!(other.acquire(false).unwrap_err().code, "uncertain");
+    assert_eq!(
+        other.acquire_beside_commands().unwrap_err().code,
+        "uncertain"
+    );
+    assert_eq!(other.pending().unwrap(), [generation]);
+    let recovery = other.acquire(true).unwrap();
+    other.clear().unwrap();
+    drop(recovery);
+    assert!(other.pending().unwrap().is_empty());
+    assert!(other.acquire(false).is_ok());
+}
+
+#[test]
 fn recovery_keeps_a_running_command_and_its_mark() {
     if !crate::test_support::isolated(
         "control::tests::commands::recovery_keeps_a_running_command_and_its_mark",
