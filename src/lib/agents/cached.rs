@@ -65,33 +65,18 @@ pub(super) fn connect(
         for step in steps {
             run(agent, &step)?;
         }
-        if agent == Agent::Claude && user_enabled == Some(false) {
-            run(
-                agent,
-                &argv(&["plugin", "disable", super::PLUGIN, "--scope", "user"]),
-            )?;
-        }
     }
-    if agent == Agent::Claude && (mode == Mode::Install || user_enabled == Some(true)) {
-        if user_enablement()? != Some(true) {
+    if agent == Agent::Claude {
+        // An absent user entry leaves enablement to higher scopes. If installing
+        // added an entry, disable it through Claude rather than rewriting settings.
+        let desired = mode == Mode::Install || user_enabled == Some(true);
+        if user_enablement()?.unwrap_or(false) != desired {
+            let command = if desired { "enable" } else { "disable" };
             run(
                 agent,
-                &argv(&["plugin", "enable", super::PLUGIN, "--scope", "user"]),
+                &argv(&["plugin", command, super::PLUGIN, "--scope", "user"]),
             )?;
         }
-    } else if agent == Agent::Claude && user_enabled.is_none() {
-        let path = agent
-            .home()
-            .ok_or_else(|| unreadable(agent))?
-            .join("settings.json");
-        let mut settings: Value = serde_json::from_slice(&fs::read(&path)?)?;
-        if let Some(plugins) = settings
-            .get_mut("enabledPlugins")
-            .and_then(Value::as_object_mut)
-        {
-            plugins.remove(super::PLUGIN);
-        }
-        fs::write(path, serde_json::to_vec_pretty(&settings)?)?;
     }
 
     let source = agent.source().map_err(problem)?;
@@ -104,7 +89,10 @@ pub(super) fn connect(
             agent.display_name()
         )));
     }
-    if mode == Mode::Refresh && agent == Agent::Claude && user_enablement()? != user_enabled {
+    if mode == Mode::Refresh
+        && agent == Agent::Claude
+        && user_enablement()?.unwrap_or(false) != user_enabled.unwrap_or(false)
+    {
         return Err(problem(
             "Claude Code did not keep the Atlas plugin's user setting after refreshing",
         ));

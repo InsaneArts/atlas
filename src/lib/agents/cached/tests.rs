@@ -64,8 +64,10 @@ case "$*" in
     fi
     printf '{"enabledPlugins":{"atlas@atlas":true}}\n' > "$HOME/.claude/settings.json" ;;
   'plugin disable atlas@atlas --scope user')
+    if [ -f "$state/fail-disable" ]; then exit 1; fi
     if [ ! -f "$state/ignore-disable" ]; then
-      printf '{"enabledPlugins":{"atlas@atlas":false}}\n' > "$HOME/.claude/settings.json"
+      /usr/bin/sed 's/"atlas@atlas":true/"atlas@atlas":false/g' "$HOME/.claude/settings.json" > "$state/settings.json"
+      /bin/mv "$state/settings.json" "$HOME/.claude/settings.json"
     fi ;;
   'plugin install atlas@atlas --scope user'|'plugin add atlas@atlas')
     if [ "$host" = claude ] && [ -d "$cache" ]; then exit 0; fi
@@ -73,9 +75,13 @@ case "$*" in
     /bin/mkdir -p "${cache%/*}"
     if [ "$host" = codex ]; then
       printf '[plugins."atlas@atlas"]\nenabled = true\n' > "$HOME/.codex/config.toml"
-    else
+    elif [ ! -f "$state/keep-settings" ]; then
       /bin/mkdir -p "$HOME/.claude"
-      printf '{"enabledPlugins":{"atlas@atlas":true}}\n' > "$HOME/.claude/settings.json"
+      if [ -f "$state/settings-after-install.json" ]; then
+        /bin/cp "$state/settings-after-install.json" "$HOME/.claude/settings.json"
+      else
+        printf '{"enabledPlugins":{"atlas@atlas":true}}\n' > "$HOME/.claude/settings.json"
+      fi
     fi
     if [ -f "$state/user-installed.json" ]; then
       /bin/cp "$state/user-installed.json" "$state/installed.json"
@@ -398,8 +404,9 @@ fn claude_refresh_keeps_a_disabled_plugin_disabled() {
 }
 
 #[test]
-fn claude_refresh_keeps_enabled_and_absent_user_settings() {
-    if !isolated("agents::cached::tests::claude_refresh_keeps_enabled_and_absent_user_settings") {
+fn claude_refresh_restores_user_enablement_through_the_host() {
+    if !isolated("agents::cached::tests::claude_refresh_restores_user_enablement_through_the_host")
+    {
         return;
     }
     let fixture = Fixture::new(Agent::Claude);
@@ -428,7 +435,7 @@ fn claude_refresh_keeps_enabled_and_absent_user_settings() {
         let refreshed = crate::agents::refresh();
         assert_eq!(refreshed["agents"][0]["ok"], true, "{refreshed}");
         fixture.current();
-        assert_eq!(user_enablement().unwrap(), value);
+        assert_eq!(user_enablement().unwrap(), Some(value.unwrap_or(false)));
     }
     let changes = fs::read_to_string(fixture.state.join("changes")).unwrap();
     assert!(!changes.contains("plugin enable"), "{changes}");
@@ -437,7 +444,76 @@ fn claude_refresh_keeps_enabled_and_absent_user_settings() {
     let refreshed = crate::agents::refresh();
     assert_eq!(refreshed["agents"][0]["ok"], true, "{refreshed}");
     fixture.current();
-    assert_eq!(user_enablement().unwrap(), None);
+    assert_eq!(user_enablement().unwrap(), Some(false));
+}
+
+#[test]
+fn claude_refresh_leaves_unchanged_settings_untouched() {
+    if !isolated("agents::cached::tests::claude_refresh_leaves_unchanged_settings_untouched") {
+        return;
+    }
+    let fixture = Fixture::new(Agent::Claude);
+    assert_eq!(fixture.install()["ok"], true);
+    let settings = Agent::Claude.home().unwrap().join("settings.json");
+    fs::write(fixture.state.join("keep-settings"), "").unwrap();
+    for contents in [
+        Some("{\"permissions\": {\"allow\": [\"Read\"]}, \"enabledPlugins\": {}}\n"),
+        Some("{\"enabledPlugins\":{\"atlas@atlas\":false}, \"other\":true}\n"),
+        Some("{\"enabledPlugins\":{\"atlas@atlas\":true}, \"other\":true}\n"),
+        None,
+    ] {
+        if let Some(contents) = contents {
+            fs::write(&settings, contents).unwrap();
+        } else {
+            fs::remove_file(&settings).unwrap();
+        }
+        fixture.stale();
+        fs::write(fixture.state.join("changes"), "").unwrap();
+        let refreshed = crate::agents::refresh();
+        assert_eq!(refreshed["agents"][0]["ok"], true, "{refreshed}");
+        fixture.current();
+        assert_eq!(fs::read_to_string(&settings).ok().as_deref(), contents);
+        let changes = fs::read_to_string(fixture.state.join("changes")).unwrap();
+        assert!(!changes.contains("plugin enable"), "{changes}");
+        assert!(!changes.contains("plugin disable"), "{changes}");
+    }
+}
+
+#[test]
+fn claude_refresh_preserves_settings_saved_during_installation() {
+    if !isolated(
+        "agents::cached::tests::claude_refresh_preserves_settings_saved_during_installation",
+    ) {
+        return;
+    }
+    let fixture = Fixture::new(Agent::Claude);
+    assert_eq!(fixture.install()["ok"], true);
+    let settings = Agent::Claude.home().unwrap().join("settings.json");
+    fs::write(&settings, "{\"enabledPlugins\":{}}\n").unwrap();
+    let saved = "{\"enabledPlugins\":{\"atlas@atlas\":true,\"other@other\":true},\"permissions\":{\"allow\":[\"Read\"]}}\n";
+    fs::write(fixture.state.join("settings-after-install.json"), saved).unwrap();
+    fixture.stale();
+    fs::write(fixture.state.join("changes"), "").unwrap();
+
+    let refreshed = crate::agents::refresh();
+    assert_eq!(refreshed["agents"][0]["ok"], true, "{refreshed}");
+    fixture.current();
+    assert_eq!(
+        fs::read_to_string(&settings).unwrap(),
+        saved.replace("\"atlas@atlas\":true", "\"atlas@atlas\":false")
+    );
+    let changes = fs::read_to_string(fixture.state.join("changes")).unwrap();
+    assert!(
+        changes.contains("plugin disable atlas@atlas --scope user"),
+        "{changes}"
+    );
+
+    fs::write(&settings, "{\"enabledPlugins\":{}}\n").unwrap();
+    fs::write(fixture.state.join("fail-disable"), "").unwrap();
+    fixture.stale();
+    let failed = crate::agents::refresh();
+    assert_eq!(failed["agents"][0]["ok"], false, "{failed}");
+    assert_eq!(fs::read_to_string(&settings).unwrap(), saved);
 }
 
 #[test]
