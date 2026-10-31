@@ -185,8 +185,19 @@ impl Store {
         controller: &Controller,
         change: impl FnOnce(&mut Record),
     ) -> Result<()> {
+        self.update_within(session, now, controller, SESSIONS.lock_wait, change)
+    }
+
+    fn update_within(
+        &self,
+        session: &HostSession,
+        now: u64,
+        controller: &Controller,
+        wait: Duration,
+        change: impl FnOnce(&mut Record),
+    ) -> Result<()> {
         self.folder.make()?;
-        let _lock = self.folder.lock()?;
+        let _lock = self.folder.lock_within(wait)?;
 
         let existing = self.read(session.key());
         let made = existing.is_none();
@@ -208,7 +219,14 @@ impl Store {
         self.write(&record)?;
 
         if made {
-            let causes = controller.pending_causes().unwrap_or_default();
+            let causes = if wait.is_zero() {
+                let Ok(causes) = controller.pending_causes_within(wait) else {
+                    return Ok(());
+                };
+                causes
+            } else {
+                controller.pending_causes().unwrap_or_default()
+            };
             self.prune(&record.key, &causes);
         }
         Ok(())
@@ -373,12 +391,21 @@ pub fn note(
 
 /// Note that `session` runs a command now, whatever it does: a read too,
 /// and before it does anything, so a command killed partway still counts.
-/// Its record, when it has one, gets its last seen time and, when the
+/// A first use makes its record. It gets its last seen time and, when the
 /// host's process is one of this command's ancestors, that process (a
 /// resumed conversation runs in a new one), so it never reads as ended
 /// while that process runs. Best effort, and never waits.
 pub fn touch(client: &Client, session: &HostSession) -> Result<()> {
-    Store::at(client.output_dir()?).touch(session.key(), session.ancestor(), now_ms())
+    let store = Store::at(client.output_dir()?);
+    let ancestor = session.ancestor();
+    let now = now_ms();
+    if store.read(session.key()).is_none() {
+        store.update_within(session, now, &client.controller, Duration::ZERO, |record| {
+            record.touched(ancestor, now);
+        })
+    } else {
+        store.touch(session.key(), ancestor, now)
+    }
 }
 
 /// Forget, in every session's record, the plan a successful rollback in

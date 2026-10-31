@@ -82,11 +82,11 @@ impl Record {
     }
 
     /// When the session ended: as recorded, or at its last command once
-    /// the host process it names no longer runs.
+    /// the host process it names is confirmed gone.
     pub(crate) fn ended_at(&self) -> Option<u64> {
         self.ended.or_else(|| {
             self.host_process
-                .filter(|process| !process.running())
+                .filter(|process| process.state() == crate::process::State::Gone)
                 .map(|_| self.last_seen)
         })
     }

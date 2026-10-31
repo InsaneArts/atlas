@@ -62,6 +62,128 @@ fn service_changes_find_active_sessions_beyond_the_eight_shown_in_status() {
     );
 }
 
+#[test]
+fn service_changes_keep_recent_sessions_whose_process_state_is_unknown() {
+    let directory = tempfile::tempdir().unwrap();
+    let client = crate::test_support::client(directory.path());
+    let host = session("worker");
+    let now = crate::host_session::now_ms();
+    let process = crate::process::Instance::new(0, [1, 0]);
+    assert_eq!(process.state(), crate::process::State::Unknown);
+    Store::at(client.output_dir().unwrap())
+        .update(&host, now, &client.controller, |record| {
+            record.host_process = Some(process);
+        })
+        .unwrap();
+    assert_eq!(
+        service_blocker(&client, u128::from(now) * 1_000_000).as_deref(),
+        Some("worker is active in the helper.")
+    );
+    assert!(service_blocker(&client, u128::from(now + 120_001) * 1_000_000).is_none());
+    seen(&client, &host, now, true);
+    assert!(service_blocker(&client, u128::from(now) * 1_000_000).is_none());
+}
+
+#[test]
+fn service_changes_find_terminal_activity_before_many_newer_actions() {
+    use crate::activity_log::{Op, Row, append};
+
+    let directory = tempfile::tempdir().unwrap();
+    let mut client = crate::test_support::client(directory.path());
+    let own = session("updater");
+    let now = crate::host_session::now_ms();
+    client.host_session = Some(own.clone());
+    for index in 0..=65 {
+        append(
+            client.output_dir().unwrap(),
+            &Row {
+                at: Some((u128::from(now + index) * 1_000_000).to_string()),
+                operation: Some(Op::Screenshot),
+                ok: Some(true),
+                session: (index > 0).then(|| own.key().to_string()),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+    }
+    assert_eq!(
+        service_blocker(&client, u128::from(now + 120_000) * 1_000_000).as_deref(),
+        Some("Terminal is active in the helper.")
+    );
+    assert!(service_blocker(&client, u128::from(now + 120_001) * 1_000_000).is_none());
+}
+
+#[test]
+fn service_changes_refuse_incomplete_activity_reads() {
+    use crate::activity_log::{FILE, PREVIOUS};
+    use std::{fs, os::unix::fs::symlink};
+
+    let directory = tempfile::tempdir().unwrap();
+    let client = crate::test_support::client(directory.path());
+    let output = client.output_dir().unwrap();
+    let now = super::super::timestamp();
+    assert!(service_blocker(&client, now).is_none());
+    for name in [FILE, PREVIOUS] {
+        let path = output.join(name);
+        for contents in [
+            "broken JSON\n".to_owned(),
+            json!({"operation": "screenshot"}).to_string() + "\n",
+            " ".repeat(4 * 1024 * 1024 + 1),
+        ] {
+            fs::write(&path, contents).unwrap();
+            assert!(
+                service_blocker(&client, now)
+                    .unwrap()
+                    .contains("could not read every activity row")
+            );
+        }
+        fs::remove_file(&path).unwrap();
+        symlink(&path, &path).unwrap();
+        assert!(
+            service_blocker(&client, now)
+                .unwrap()
+                .contains("could not read every activity row")
+        );
+        fs::remove_file(&path).unwrap();
+        fs::create_dir(&path).unwrap();
+        assert!(service_blocker(&client, now).is_some());
+        fs::remove_dir(&path).unwrap();
+        nix::unistd::mkfifo(&path, nix::sys::stat::Mode::S_IRUSR).unwrap();
+        assert!(service_blocker(&client, now).is_some());
+        fs::remove_file(&path).unwrap();
+    }
+    assert!(service_blocker(&client, now).is_none());
+}
+
+#[test]
+fn rotated_activity_must_cover_the_service_idle_window() {
+    use crate::activity_log::{FILE, PREVIOUS};
+    use std::fs;
+
+    let directory = tempfile::tempdir().unwrap();
+    let mut client = crate::test_support::client(directory.path());
+    let own = session("updater");
+    client.host_session = Some(own.clone());
+    let now = crate::host_session::now_ms();
+    let row = |at| {
+        format!(
+            "{}\n",
+            json!({"operation": "screenshot", "at": (u128::from(at) * 1_000_000).to_string(),
+                "session": own.key()})
+        )
+    };
+    let output = client.output_dir().unwrap();
+    fs::write(output.join(FILE), row(now)).unwrap();
+    fs::write(output.join(PREVIOUS), row(now - 60_000)).unwrap();
+    assert!(
+        service_blocker(&client, u128::from(now) * 1_000_000)
+            .unwrap()
+            .contains("could not read every activity row")
+    );
+    fs::write(output.join(PREVIOUS), row(now - 120_000)).unwrap();
+    assert!(service_blocker(&client, u128::from(now) * 1_000_000).is_none());
+}
+
 #[tokio::test]
 async fn a_terminal_can_update_after_its_completed_screenshot() {
     let directory = tempfile::tempdir().unwrap();

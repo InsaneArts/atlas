@@ -55,7 +55,7 @@ impl Cache {
         &mut self,
         directory: &Path,
         limit: usize,
-        mut read: impl FnMut(File, &mut u64, &mut Vec<Row>) -> io::Result<()>,
+        mut read: impl FnMut(File, &mut u64, &mut Vec<Row>) -> io::Result<bool>,
     ) -> Vec<Row> {
         if limit == 0 {
             return Vec::new();

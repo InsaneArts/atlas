@@ -436,19 +436,21 @@ fn a_forged_id_naming_an_unrelated_process_neither_revives_nor_takes_a_record() 
 }
 
 #[test]
-fn a_touch_writes_only_what_changed_and_never_makes_a_record() {
+fn a_touch_makes_a_record_on_first_use_and_then_writes_only_what_changed() {
     let directory = tempfile::tempdir().unwrap();
     let client = client(directory.path());
     let store = store(&client);
-    let fresh = session("fresh").run_by(Some(parent()));
+    let fresh = session("fresh");
 
     touch(&client, &fresh).unwrap();
-    assert_eq!(store.read(fresh.key()), None, "no record is made");
+    let first = store.read(fresh.key()).unwrap();
+    assert!(first.counts.is_empty());
+    assert_eq!(first.host_process, None);
 
     noted(&client, &fresh, Kind::Other, "click", json!({"ok": true}));
     let written = store.read(fresh.key()).unwrap();
     store
-        .touch(fresh.key(), Some(parent()), written.last_seen + 1000)
+        .touch(fresh.key(), None, written.last_seen + 1000)
         .unwrap();
     assert_eq!(
         store.read(fresh.key()).unwrap(),
@@ -457,7 +459,7 @@ fn a_touch_writes_only_what_changed_and_never_makes_a_record() {
     );
 
     let later = written.last_seen + 60_000;
-    store.touch(fresh.key(), Some(parent()), later).unwrap();
+    store.touch(fresh.key(), None, later).unwrap();
     assert_eq!(store.read(fresh.key()).unwrap().last_seen, later);
 }
 

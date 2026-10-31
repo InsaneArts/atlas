@@ -492,6 +492,42 @@ pub fn recent(directory: &Path, limit: usize) -> Vec<Row> {
     snapshot::recent(directory, limit)
 }
 
+/// Every retained row since `since`, in milliseconds, or no answer when
+/// an unreadable or truncated log cannot establish that window's activity.
+pub(crate) fn checked_since(directory: &Path, since: u64) -> Option<Vec<Row>> {
+    let mut files = Vec::new();
+    let mut rotated = false;
+    for name in [FILE, PREVIOUS] {
+        let path = directory.join(name);
+        match crate::files::try_open_plain(&path).ok()? {
+            Some(file) => {
+                rotated |= name == PREVIOUS;
+                files.push(file);
+            }
+            None if fs::symlink_metadata(&path)
+                .is_err_and(|error| error.kind() == std::io::ErrorKind::NotFound) => {}
+            None => return None,
+        }
+    }
+    let mut room = READ_LIMIT;
+    let mut rows = Vec::new();
+    for file in files {
+        if !read_back(file, &mut room, &mut rows).ok()? {
+            return None;
+        }
+    }
+    if rows.iter().any(|row| row.at_ms().is_none())
+        || (rotated
+            && !rows
+                .iter()
+                .any(|row| row.at_ms().is_some_and(|at| at <= since)))
+    {
+        return None;
+    }
+    rows.retain(|row| row.at_ms().is_some_and(|at| at >= since));
+    Some(rows)
+}
+
 /// Select commands and complete personal input runs from ordered candidates.
 fn selected(candidates: &[Row], limit: usize) -> Vec<Row> {
     if limit == 0 {
@@ -513,8 +549,9 @@ fn selected(candidates: &[Row], limit: usize) -> Vec<Row> {
     rows
 }
 
-/// Read candidate rows in reverse append order, using at most `room` bytes.
-fn read_back(file: fs::File, room: &mut u64, rows: &mut Vec<Row>) -> std::io::Result<()> {
+/// Read candidate rows in reverse append order, using at most `room` bytes,
+/// and report whether every byte decoded into a row.
+fn read_back(file: fs::File, room: &mut u64, rows: &mut Vec<Row>) -> std::io::Result<bool> {
     let end = file.metadata()?.len();
     read_rows(file, end, room, rows)
 }
@@ -524,10 +561,11 @@ fn read_rows(
     mut end: u64,
     room: &mut u64,
     rows: &mut Vec<Row>,
-) -> std::io::Result<()> {
+) -> std::io::Result<bool> {
     // The start of the oldest line read so far, whose beginning is in the
     // part of the file before it.
     let mut partial = Vec::new();
+    let mut complete = true;
 
     while end > 0 && *room > 0 {
         let size = TAIL.min(end).min(*room);
@@ -555,12 +593,14 @@ fn read_rows(
         for line in bytes[whole..].split_inclusive(|byte| *byte == b'\n').rev() {
             // The writer acknowledges a row only once its newline is written.
             let Some(line) = line.strip_suffix(b"\n") else {
+                complete = false;
                 continue;
             };
             let Some(row) = serde_json::from_slice::<Value>(line)
                 .ok()
                 .and_then(|value| Row::parse(&value))
             else {
+                complete = false;
                 continue;
             };
             rows.push(row);
@@ -568,7 +608,7 @@ fn read_rows(
 
         end = start;
     }
-    Ok(())
+    Ok(complete && end == 0)
 }
 
 /// Gather `row` into the last selected personal input run,

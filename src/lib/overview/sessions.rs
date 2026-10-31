@@ -27,9 +27,9 @@ const SERVICE_IDLE: std::time::Duration = std::time::Duration::from_secs(2 * 60)
 /// How long the local service-change read waits for a marker writer.
 const MARKER_CHECK: std::time::Duration = std::time::Duration::from_millis(250);
 
-/// Who would be interrupted by a service replacement, from the same
-/// bounded read the session lists use. The caller's own session is left
-/// out for recent activity. Its waiting and running commands still defer
+/// Who would be interrupted by a service replacement, from checked session
+/// records and the full recent activity window. The caller's own session
+/// is left out for recent activity. Its waiting and running commands still defer
 /// replacement; the service change's own holder note does not.
 pub(crate) fn service_blocker(client: &Client, now: u128) -> Option<String> {
     let Ok(output) = client.output_dir() else {
@@ -78,6 +78,13 @@ pub(crate) fn service_blocker(client: &Client, now: u128) -> Option<String> {
         agent_holds: false,
         now,
     };
+    let Some(activity) =
+        activity_log::checked_since(output, now_ms.saturating_sub(crate::time::ms(SERVICE_IDLE)))
+    else {
+        return Some(
+            "Atlas could not read every activity row; another session may still be active.".into(),
+        );
+    };
     let rows = activity_log::recent(output, SESSION_ROWS);
     live_from(
         client,
@@ -110,13 +117,9 @@ pub(crate) fn service_blocker(client: &Client, now: u128) -> Option<String> {
         // The display omits unnamed rows older than the first named row.
         // Service replacement must still respect their recent activity.
         (own.is_some()
-            && rows.iter().any(|row| {
-                row.session.is_none()
-                    && row.actor() != "viewer"
-                    && row.at_ms().is_some_and(|at| {
-                        now_ms.saturating_sub(at) <= crate::time::ms(SERVICE_IDLE)
-                    })
-            }))
+            && activity
+                .iter()
+                .any(|row| row.session.is_none() && row.actor() != "viewer"))
         .then(|| format!("{} is active in the helper.", session_view::TERMINAL))
     })
 }
@@ -308,8 +311,8 @@ fn live_from(
             *unknown.entry(session).or_default() += 1;
         }
     }
-    // A session on its first command has no record until that command
-    // ends: its note names it meanwhile, by the same rule as a record.
+    // A session whose record has not been written is named by its command's
+    // note meanwhile, by the same rule as a record.
     let first = unrecorded(holder, waiting, &running, seen);
     let named = names_with(seen.iter().map(|seen| &seen.record), first.iter().copied());
 
