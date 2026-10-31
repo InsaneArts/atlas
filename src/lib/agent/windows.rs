@@ -45,11 +45,6 @@ impl WindowFilter {
     }
 }
 
-/// The helper's on-screen windows, front to back, through a read-only probe.
-async fn windows(client: &Client) -> Result<Vec<Window>> {
-    window_list(client, PROBE_LIMIT).await
-}
-
 /// The window list alone, with the helper probe bounded by `limit`.
 async fn window_list(client: &Client, limit: Duration) -> Result<Vec<Window>> {
     let probe = windows_probe(client, DockRead::Skip);
@@ -109,9 +104,11 @@ fn shown(reply: &Value) -> Result<Shown> {
 pub async fn list(client: &Client, filter: &WindowFilter) -> Result<Value> {
     let windows = if client.host_session.is_some() {
         let verified = client.verify().await?;
-        client.look(&verified, windows(client)).await?
+        let snapshot = window_snapshot(client, &verified, DockRead::Read).await?;
+        client.remember_look(&verified, Some(&snapshot)).await;
+        snapshot.windows
     } else {
-        windows(client).await?
+        window_list(client, PROBE_LIMIT).await?
     };
     let matching: Vec<_> = windows
         .into_iter()
@@ -228,11 +225,19 @@ impl Client {
         verified: &Verified,
         look: impl std::future::Future<Output = Result<T>>,
     ) -> Result<T> {
-        let Some(session) = &self.host_session else {
+        if self.host_session.is_none() {
             return look.await;
-        };
+        }
         let before = window_snapshot(self, verified, DockRead::Read).await.ok();
         let result = look.await?;
+        self.remember_look(verified, before.as_ref()).await;
+        Ok(result)
+    }
+
+    async fn remember_look(&self, verified: &Verified, before: Option<&Shown>) {
+        let Some(session) = &self.host_session else {
+            return;
+        };
         let after = window_snapshot(self, verified, DockRead::Plain).await.ok();
         let epoch = &verified.session().epoch;
         let display = &epoch.display;
@@ -250,6 +255,5 @@ impl Client {
         if let Ok(output) = self.output_dir() {
             last_capture::remember_windows(output, session.key().as_str(), &windows, epoch);
         }
-        Ok(result)
     }
 }

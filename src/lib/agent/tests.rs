@@ -3034,22 +3034,30 @@ async fn looks_share_optional_routing_and_finish_with_a_plain_list() {
                         }
                         other => panic!("unexpected probe: {other}"),
                     }
-                }).await.unwrap();
+                }).await;
+                if named && command == 2 && change == 6 {
+                    assert!(reply.is_err());
+                    assert_eq!(*reads.borrow(), vec!["--dock"]);
+                    assert_eq!(helper.proofs(), 1);
+                    assert!(client.remembered_windows().is_none());
+                    continue;
+                }
+                let reply = reply.unwrap();
                 assert_eq!(reply["ok"], true, "command {command}, change {change}");
                 let expected = if named {
-                    if command == 2 {
-                        vec!["--dock", "", "--plain"]
-                    } else {
-                        vec!["--dock", "--plain"]
-                    }
+                    vec!["--dock", "--plain"]
                 } else if command == 2 {
                     vec![""]
                 } else {
                     vec![]
                 };
                 assert_eq!(*reads.borrow(), expected);
-                if !named && command == 2 {
+                if command == 2 {
                     assert_eq!(helper.proofs(), 1);
+                    assert_eq!(
+                        reply["windows"],
+                        json!([window(42, 812, "Editor", 0), window(43, 812, "Editor", 0)])
+                    );
                 }
                 if named {
                     let memory = client.remembered_windows().unwrap();
