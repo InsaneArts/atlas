@@ -204,7 +204,7 @@ impl Scan {
     /// The element's value as text: strings bounded, numbers and booleans
     /// rendered. A text the batch counts as longer than the limit is read
     /// only from its start (see [`Batch::long_text`]). Nothing is asked of
-    /// an element whose batch stalled.
+    /// an element whose batch stalled, or whose value may be secure.
     pub(super) fn value(
         &mut self,
         element: &AXUIElement,
@@ -212,7 +212,10 @@ impl Scan {
         role: Option<&str>,
         subrole: Option<&str>,
     ) -> Option<String> {
-        if self.stalled(batch) {
+        if self.stalled(batch)
+            || role.is_none()
+            || [role, subrole].contains(&Some("AXSecureTextField"))
+        {
             return None;
         }
 

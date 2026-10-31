@@ -687,6 +687,9 @@ fn prepare<A: Backend>(
         .ok_or_else(|| refused("app", "The target app is no longer running"))?;
     reader.left()?;
     reader.owned(&app, expect.pid())?;
+    if expect.field().is_some() {
+        reader.text(&app, "AXRole")?;
+    }
     let point = match need {
         Need::Point(x, y) => Some((x, y)),
         Need::Drag { from, .. } => Some(from),

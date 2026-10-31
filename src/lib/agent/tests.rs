@@ -1546,6 +1546,19 @@ fn the_default_listing_names_each_element_by_its_click_point_and_size() {
 
     let mut bare = element("AXGroup", None, None);
     bare.index = 19;
+    assert_eq!(
+        listing(
+            812,
+            &scanned(vec![bare.clone()]),
+            &ElementFilter {
+                role: Some("AXGroup".into()),
+                name: None
+            },
+            50,
+            false,
+        )["elements"][0],
+        json!({"index": 19, "role": "AXGroup"})
+    );
 
     let listed = listing(
         812,
@@ -1566,7 +1579,6 @@ fn the_default_listing_names_each_element_by_its_click_point_and_size() {
                  "at": [410, 330], "size": [780, 560], "window": 0},
                 {"index": 18, "role": "AXStaticText", "name": "Status",
                  "at": [20, 20], "size": [20, 20], "window": 1},
-                {"index": 19, "role": "AXGroup"},
             ],
             "windows": [
                 {"x": 10, "y": 38, "width": 800, "height": 600},
@@ -1574,6 +1586,85 @@ fn the_default_listing_names_each_element_by_its_click_point_and_size() {
             ],
         })
     );
+}
+
+#[test]
+fn the_default_listing_omits_only_groups_without_information() {
+    let bare = shown(0, "AXGroup", None, None);
+    let mut groups = vec![bare.clone()];
+    let mut empty = bare.clone();
+    empty.index = 1;
+    empty.title = Some(String::new());
+    empty.value = Some(String::new());
+    groups.push(empty);
+    for index in 2..13 {
+        let mut group = bare.clone();
+        group.index = index;
+        match index {
+            2 => group.title = Some("Section".into()),
+            3 => group.description = Some("Settings".into()),
+            4 => group.identifier = Some("panel".into()),
+            5 => group.value = Some("0".into()),
+            6 => group.focused = Some(true),
+            7 => group.selected = Some(true),
+            8 => group.unreadable = vec!["AXTitle".into()],
+            9 => group.truncated = vec!["AXDescription".into()],
+            10 => group.enabled = Some(false),
+            11 => group.menu = true,
+            _ => group.mark = Some("✓".into()),
+        }
+        groups.push(group);
+    }
+    groups.push(shown(13, "AXButton", None, None));
+    let mut scan = scanned(groups);
+    let all = ElementFilter::default();
+    let listed = listing(1, &scan, &all, 50, false);
+    let indices: Vec<_> = listed["elements"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|element| element["index"].as_u64().unwrap())
+        .collect();
+    assert_eq!(indices, (2..14).collect::<Vec<_>>());
+    assert_eq!(listed["scanned"], 14);
+    assert_eq!(listed["matching"], 14);
+    let short = listing(1, &scan, &all, 2, false);
+    assert_eq!(short["more"], 12);
+    assert_eq!(
+        short["elements"],
+        json!([]),
+        "omitted groups are not replaced by later entries"
+    );
+    assert_eq!(
+        listing(1, &scan, &all, 50, true)["elements"],
+        json!(scan.elements)
+    );
+    assert_eq!(
+        listing(
+            1,
+            &scan,
+            &ElementFilter {
+                role: Some("AXGroup".into()),
+                name: None
+            },
+            50,
+            false
+        )["matching"],
+        13
+    );
+    assert_eq!(
+        listing(1, &scan, &named("panel"), 50, false)["elements"][0]["index"],
+        4
+    );
+    assert_eq!(
+        choose(&scan.elements[..8], &named("panel")).unwrap().index,
+        4
+    );
+    scan.incomplete = true;
+    scan.reasons.push(Stop::Count);
+    let limited = listing(1, &scan, &all, 50, false);
+    assert_eq!(limited["scanIncomplete"], true);
+    assert_eq!(limited["scan"]["reasons"], json!(["count"]));
 }
 
 #[test]

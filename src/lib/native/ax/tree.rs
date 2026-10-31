@@ -59,13 +59,15 @@ pub fn elements(pid: i32, limits: Limits) -> Result<Snapshot> {
         .ok_or_else(|| Error::new(Code::Elements, "No accessibility element for that process"))?;
 
     let mut scan = Scan::new(Instant::now() + limits.time);
+    // Some browsers build their page tree when the application's role is read.
+    let role = scan.text(Source::Element(&app), "AXRole");
     let windows = scan.children(&app, "AXWindows", limits.count);
     let windows_error = scan.last_error.take();
     let windows = scan.shown(&app, windows);
 
     // An app that answers nothing at all, not even its role, is unreachable;
     // report why, not "empty".
-    if windows.is_empty() && scan.text(Source::Element(&app), "AXRole").is_none() {
+    if windows.is_empty() && role.is_none() {
         let error = scan.last_error.or(windows_error);
         let exists = pid > 0
             && !matches!(
@@ -324,10 +326,15 @@ fn read(
         pid,
     );
     let selectable = matches!(role.as_deref(), Some("AXRow" | "AXCell"));
-    let subrole = scan.text(from, "AXSubrole");
     let title = scan.text(from, "AXTitle");
     let description = scan.text(from, "AXDescription");
-    let value = scan.value(item, values, role.as_deref(), subrole.as_deref());
+    scan.last_error = None;
+    let subrole = scan.text(from, "AXSubrole");
+    let value = if scan.last_error.is_none_or(|error| ABSENT.contains(&error)) {
+        scan.value(item, values, role.as_deref(), subrole.as_deref())
+    } else {
+        None
+    };
     let mut element = Element {
         index,
         depth: visit.depth,

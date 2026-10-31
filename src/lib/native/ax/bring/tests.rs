@@ -534,6 +534,21 @@ fn a_unique_enabled_field_is_focused_after_its_window() {
     assert_eq!(fake.writes.last(), Some(&(FIELD, Write::Flag("AXFocused"))));
 }
 
+#[test]
+fn a_cold_field_is_exposed_by_reading_the_application_role_before_resolution() {
+    let mut fake = Fake::new();
+    fake.lists.remove(&(WINDOW, "AXChildren"));
+    fake.on_ask = Some(|fake, element, name| {
+        if (element, name) == (APP, "AXRole") {
+            fake.lists.insert((WINDOW, "AXChildren"), vec![FIELD]);
+        } else if element == WINDOW {
+            assert!(fake.lists.contains_key(&(WINDOW, "AXChildren")));
+        }
+    });
+    fake.run(&named().in_field("Email").unwrap()).unwrap();
+    assert_eq!(fake.writes.last(), Some(&(FIELD, Write::Flag("AXFocused"))));
+}
+
 fn find_bar() -> Fake {
     let mut fake = Fake::new();
     fake.lists.insert((WINDOW, "AXChildren"), vec![4, 5]);

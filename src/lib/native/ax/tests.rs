@@ -191,6 +191,49 @@ fn a_scan_closes_at_its_deadline() {
 }
 
 #[test]
+fn the_application_role_is_read_before_its_windows_are_scanned() {
+    let source = include_str!("tree.rs");
+    let role = source
+        .find("scan.text(Source::Element(&app), \"AXRole\")")
+        .unwrap();
+    let windows = source.find("scan.children(&app, \"AXWindows\"").unwrap();
+    assert!(role < windows);
+    assert_eq!(
+        source
+            .matches("scan.text(Source::Element(&app), \"AXRole\")")
+            .count(),
+        1
+    );
+}
+
+#[test]
+fn secure_values_never_reach_either_value_getter() {
+    let system = system_wide();
+    for batch in [
+        None,
+        Some(answered(vec![(
+            "AXNumberOfCharacters",
+            CFNumber::new_isize(5000).into(),
+        )])),
+    ] {
+        for (role, subrole) in [
+            (Some("AXTextField"), Some("AXSecureTextField")),
+            (Some("AXSecureTextField"), None),
+            (None, None),
+        ] {
+            let mut scan = Scan::new(Instant::now());
+            let before = recorded(&scan);
+            assert_eq!(scan.value(&system, batch.as_ref(), role, subrole), None);
+            assert_eq!(
+                recorded(&scan),
+                before,
+                "a getter would record the expired deadline"
+            );
+        }
+    }
+}
+
+#[test]
 fn scan_stops_are_said_in_plain_words() {
     for stop in Stop::ALL {
         assert_eq!(Stop::parse(stop.word()), Some(stop));
