@@ -1,11 +1,11 @@
-//! What macOS says of this account's processes: a process's parent, command
-//! name and exact start, and this process's ancestors.
-use crate::process::{Own, Start, own};
+//! A bounded ancestry walk with each process's account and exact start.
+use crate::process::{Instance, Own, Start, own};
 
-/// What macOS says of one of this account's processes.
+/// What macOS says of one described process.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct Facts {
     pub parent: i32,
+    pub uid: u32,
     /// Its command name, at most 16 bytes as the kernel keeps it.
     pub command: String,
     pub start: Start,
@@ -15,18 +15,22 @@ pub(crate) struct Facts {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct Ancestor {
     pub pid: i32,
+    pub uid: u32,
+    pub instance: Instance,
+    pub parent: i32,
     pub command: String,
 }
 
 /// The facts of `pid`, when it is a live process of this account.
 pub(crate) fn process(pid: i32) -> Option<Facts> {
     match own(pid) {
-        Own::Found(info) => Some(Facts {
+        Own::Found(info) if info.uid == nix::unistd::geteuid().as_raw() => Some(Facts {
             parent: info.ppid,
+            uid: info.uid,
             command: info.name,
             start: info.instance.start,
         }),
-        Own::Gone | Own::Unknown => None,
+        Own::Found(_) | Own::Gone | Own::Unknown => None,
     }
 }
 
@@ -37,7 +41,7 @@ pub(crate) fn ancestors(limit: usize) -> Vec<Ancestor> {
 }
 
 /// [`ancestors`] from `first`, described by `describe`.
-fn ancestors_from(
+pub(crate) fn ancestors_from(
     first: i32,
     limit: usize,
     describe: impl Fn(i32) -> Option<Facts>,
@@ -51,6 +55,9 @@ fn ancestors_from(
         };
         found.push(Ancestor {
             pid,
+            uid: facts.uid,
+            instance: Instance::new(pid, facts.start),
+            parent: facts.parent,
             command: facts.command,
         });
         if pid == 1 {
@@ -144,6 +151,7 @@ mod tests {
 
         let looping = |pid: i32| {
             Some(Facts {
+                uid: nix::unistd::geteuid().as_raw(),
                 parent: if pid == 3 { 2 } else { 3 },
                 command: "sh".to_owned(),
                 start: [1, 0],

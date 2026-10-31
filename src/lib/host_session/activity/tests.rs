@@ -502,3 +502,42 @@ fn cli_activity_exposes_the_same_safe_app_labels_and_keys_as_the_viewer() {
         );
     }
 }
+
+#[test]
+fn a_first_read_has_its_folder_before_a_record_exists() {
+    let directory = tempfile::tempdir().unwrap();
+    let client = client(directory.path());
+    let own = session(Host::Claude, "first").in_folder(Some("parent"));
+    let before = fs::read_dir(client.output_dir().unwrap()).unwrap().count();
+    let reply = list(&client, Some(&own), Scope::Own, 10).unwrap();
+    assert_eq!(reply["session"]["name"], "Claude Code · parent");
+    assert!(Store::at(client.output_dir().unwrap()).all().is_empty());
+    assert_eq!(
+        fs::read_dir(client.output_dir().unwrap()).unwrap().count(),
+        before
+    );
+}
+
+#[test]
+fn an_apps_only_host_has_an_ended_session_after_exit() {
+    let directory = tempfile::tempdir().unwrap();
+    let client = client(directory.path());
+    let store = Store::at(client.output_dir().unwrap());
+    let process = Instance::new(i32::MAX, [1, 0]);
+    let own = session(Host::Codex, "apps").run_by(Some(process));
+    store
+        .touch(
+            &own,
+            Some(process),
+            super::super::now_ms(),
+            &client.controller,
+        )
+        .unwrap();
+    let reply = list(&client, None, Scope::Everyone, 10).unwrap();
+    let entry = &reply["sessions"][0];
+    assert!(entry["ended"].is_number());
+    assert_eq!(entry["live"], false);
+    assert_eq!(entry["active"], false);
+    assert_eq!(entry["holdsHelper"], false);
+    assert!(store.read(own.key()).unwrap().counts.is_empty());
+}

@@ -485,3 +485,170 @@ fn a_newcomer_waits_its_turn_but_the_person_and_a_stop_end_every_wait() {
     assert!(started.elapsed() < Duration::from_secs(2));
     fs::remove_file(ahead).unwrap();
 }
+
+#[test]
+fn a_bounded_pending_read_returns_when_the_marker_lock_is_held() {
+    let directory = tempfile::tempdir().unwrap();
+    let controller = Controller::at(crate::test_support::UID, directory.path());
+    drop(controller.quarantine().unwrap());
+    let held = controller.lock_marker().unwrap();
+    let began = std::time::Instant::now();
+    assert_eq!(
+        controller
+            .pending_causes_within(Duration::from_millis(10))
+            .unwrap_err()
+            .code,
+        "busy"
+    );
+    assert!(began.elapsed() < Duration::from_millis(250));
+    drop(held);
+    assert_eq!(
+        controller
+            .pending_causes_within(Duration::ZERO)
+            .unwrap()
+            .len(),
+        1
+    );
+}
+
+#[test]
+fn a_missing_marker_read_creates_nothing() {
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("absent");
+    let controller = Controller::at(crate::test_support::UID, &path);
+    assert!(
+        controller
+            .pending_causes_within(Duration::ZERO)
+            .unwrap()
+            .is_empty()
+    );
+    assert!(!path.exists());
+}
+
+#[test]
+fn a_bounded_pending_read_preserves_claim_classification() {
+    let directory = tempfile::tempdir().unwrap();
+    let controller =
+        Controller::at(crate::test_support::UID, directory.path()).labelled(Some(&session("own")));
+    let claim = controller.quarantine_command().unwrap();
+    let causes = controller.pending_causes_within(Duration::ZERO).unwrap();
+    assert_eq!(causes, controller.pending_causes().unwrap());
+    assert!(causes[0].running && causes[0].command);
+    drop(claim);
+    assert!(!controller.pending_causes_within(Duration::ZERO).unwrap()[0].running);
+}
+
+#[test]
+fn entry_attachment_does_not_wait_for_a_held_marker_lock_or_lose_pending_attribution() {
+    let directory = tempfile::tempdir().unwrap();
+    let mut client = crate::test_support::client(directory.path());
+    let pid = nix::unistd::getppid().as_raw();
+    let process = Instance::new(
+        pid,
+        crate::host_session::ancestry::process(pid).unwrap().start,
+    );
+    let own = session("owner")
+        .run_by(Some(process))
+        .in_folder(Some("parent"));
+    client.controller = client.controller.labelled(Some(&own));
+    let claim = client.controller.quarantine().unwrap();
+    let generation = claim.generation().to_owned();
+    drop(claim);
+    let lock = client.controller.lock_marker().unwrap();
+    let (send, receive) = std::sync::mpsc::channel();
+    let caller = client.clone();
+    let worker = std::thread::spawn(move || {
+        let result = crate::host_session::store::touch(&caller, &own);
+        send.send(result.map_err(|error| error.code)).unwrap();
+    });
+    let result = receive.recv_timeout(Duration::from_millis(250));
+    drop(lock);
+    worker.join().unwrap();
+    assert_eq!(result.unwrap().unwrap_err(), "busy");
+    assert!(
+        crate::host_session::store::Store::at(client.output_dir().unwrap())
+            .all()
+            .is_empty()
+    );
+    let causes = client.controller.pending_causes().unwrap();
+    assert_eq!(causes[0].generation, generation);
+    assert_eq!(causes[0].session, Some(session("owner").key().clone()));
+}
+
+#[test]
+fn display_note_candidates_never_sample_processes() {
+    let directory = tempfile::tempdir().unwrap();
+    let controller =
+        Controller::at(crate::test_support::UID, directory.path()).labelled(Some(&session("own")));
+    let hold = controller.acquire(true).unwrap();
+    let command = controller.quarantine_command().unwrap();
+    let ((holder, waiting, running), count) = crate::process::measure_states(|| {
+        (
+            controller.holder_note(),
+            controller.waiting_candidates(),
+            controller.running_candidates(),
+        )
+    });
+    assert_eq!(count, 0);
+    assert!(holder.is_some());
+    assert!(waiting.is_empty());
+    assert_eq!(running.len(), 1);
+    drop(command);
+    drop(hold);
+}
+
+#[test]
+fn waiting_display_candidates_keep_their_file_and_count_bounds() {
+    use std::time::SystemTime;
+
+    let directory = tempfile::tempdir().unwrap();
+    let controller = Controller::at(crate::test_support::UID, directory.path());
+    fs::DirBuilder::new()
+        .recursive(true)
+        .mode(0o700)
+        .create(&controller.waiting)
+        .unwrap();
+    let mut note = Note::now(Some(&session("own").label())).unwrap();
+    let now_ms = 1_761_660_429_000;
+    let now = SystemTime::UNIX_EPOCH + Duration::from_millis(now_ms);
+    note.since = now_ms;
+    for index in 0..200 {
+        note.process = Instance::new(i32::MAX - index, [1, 0]);
+        let path = controller.waiting.join(format!("{index:016x}.json"));
+        note.write(&path).unwrap();
+        fs::File::open(path)
+            .unwrap()
+            .set_modified(now - Duration::from_secs(1))
+            .unwrap();
+    }
+    fs::write(controller.waiting.join("not-a-note.json"), b"{}").unwrap();
+    let (candidates, count) =
+        crate::process::measure_states(|| turns::candidates_at(&controller.waiting, now));
+    assert_eq!(count, 0);
+    assert_eq!(candidates.len(), crate::host_session::liveness::BUDGET);
+    let (_, reads) = crate::process::measure_states(|| {
+        let candidates = turns::candidates_at(&controller.waiting, now);
+        let processes = crate::host_session::liveness::Snapshot::sample(
+            candidates.iter().map(|note| note.process),
+            |instance| instance.state(),
+        );
+        let scene = crate::session_view::Scene {
+            rows: &[],
+            processes: &processes,
+            holder: None,
+            waiting: &candidates,
+            causes: &[],
+            pending: false,
+            agent_holds: false,
+            now: u128::from(now_ms) * 1_000_000,
+        };
+        for _ in 0..200 {
+            let shown = scene.shown(
+                &crate::session_view::Who::Host(session("own").key().clone()),
+                false,
+            );
+            assert_eq!(shown.state, crate::session_view::SessionState::Idle);
+        }
+    });
+    assert_eq!(reads, crate::host_session::liveness::BUDGET);
+}

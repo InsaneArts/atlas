@@ -47,6 +47,7 @@ fn cause(session: Option<&Key>) -> Cause {
 fn scene(rows: &[Row]) -> Scene<'_> {
     Scene {
         rows,
+        processes: processes(),
         holder: None,
         waiting: &[],
         causes: &[],
@@ -54,6 +55,15 @@ fn scene(rows: &[Row]) -> Scene<'_> {
         agent_holds: false,
         now: NOW,
     }
+}
+
+fn processes() -> &'static Snapshot {
+    static SNAPSHOT: std::sync::OnceLock<Snapshot> = std::sync::OnceLock::new();
+    SNAPSHOT.get_or_init(|| {
+        Snapshot::sample([Instance::current().unwrap()], |_| {
+            crate::process::State::Running
+        })
+    })
 }
 
 #[test]
@@ -138,7 +148,7 @@ fn a_running_command_is_its_sessions_work_while_another_holds_the_helper() {
 }
 
 #[test]
-fn a_holder_note_whose_command_ended_holds_nothing_and_a_row_under_way_stands_for_it() {
+fn a_holder_note_whose_command_ended_and_an_unfinished_row_hold_nothing() {
     let (left, right) = (key("left"), key("right"));
     let rows = [
         row(Some(&right), 2, json!({"ok": null, "started": true})),
@@ -157,7 +167,7 @@ fn a_holder_note_whose_command_ended_holds_nothing_and_a_row_under_way_stands_fo
     );
     assert_eq!(
         scene.shown(&Who::Host(right), false).state,
-        SessionState::Acting
+        SessionState::Idle
     );
 
     let later = Scene {
@@ -326,9 +336,9 @@ fn a_row_under_way_holds_nothing_while_an_outcome_is_unknown() {
         agent_holds: true,
         ..nothing
     };
-    assert!(service.shown(&Who::Terminal, false).holds_helper);
+    assert!(!service.shown(&Who::Terminal, false).holds_helper);
 
-    // With no outcome unknown, a row under way stands for its holder.
+    // A past start does not prove that its command still holds control.
     let settled = Scene {
         causes: &[],
         pending: false,
@@ -336,7 +346,7 @@ fn a_row_under_way_holds_nothing_while_an_outcome_is_unknown() {
     };
     assert_eq!(
         settled.shown(&Who::Terminal, false).state,
-        SessionState::Acting
+        SessionState::Idle
     );
 }
 
@@ -499,7 +509,8 @@ fn an_ended_session_is_not_live_unless_it_still_matters_now() {
         SessionState::NeedsYou,
         "its unknown action outlives it"
     );
-    assert!(shown.live);
+    assert!(!shown.live);
+    assert!(shown.relevant());
 }
 
 #[test]
@@ -542,4 +553,132 @@ fn states_order_as_the_apps_list_them() {
     );
     assert_eq!(json!(SessionState::NeedsYou), "needsYou");
     assert_eq!(json!(WaitingFor::Recovery), "recovery");
+}
+
+#[test]
+fn pending_recovery_beats_an_uncorrelated_service_grant() {
+    for age in [0, 1, 4, 6] {
+        let rows = [row(None, age, json!({"started": true, "ok": null}))];
+        for pending in [false, true] {
+            let scene = Scene {
+                pending,
+                agent_holds: pending,
+                ..scene(&rows)
+            };
+            let shown = scene.shown(&Who::Terminal, false);
+            assert!(!shown.holds_helper);
+            assert_eq!(
+                shown.state,
+                if pending {
+                    SessionState::Waiting
+                } else {
+                    SessionState::Idle
+                }
+            );
+        }
+    }
+}
+
+#[test]
+fn a_live_named_holder_can_coexist_with_anothers_unknown_outcome() {
+    let (left, right) = (key("holder"), key("causer"));
+    let holder = note(Some(&left), 1);
+    let causes = [cause(Some(&right))];
+    let scene = Scene {
+        holder: Some(&holder),
+        causes: &causes,
+        pending: true,
+        agent_holds: true,
+        ..scene(&[])
+    };
+    assert!(scene.shown(&Who::Host(left), false).holds_helper);
+    let ended = scene.shown(&Who::Host(right), true);
+    assert!(!ended.live && !ended.holds_helper && ended.relevant());
+    assert_eq!(ended.state, SessionState::NeedsYou);
+}
+
+#[test]
+fn unknown_process_samples_leave_current_and_history_states_unended() {
+    use crate::{host_session::HostSession, process::State};
+    let instance = Instance::new(129, [1, 0]);
+    let record = Record::new(
+        &HostSession::new(Host::Codex, "unknown")
+            .unwrap()
+            .run_by(Some(instance)),
+        u64::try_from(NOW / 1_000_000).unwrap(),
+        None,
+    );
+    for processes in [
+        Snapshot::sample([instance], |_| State::Unknown),
+        Snapshot::default(),
+        Snapshot::sample((1..=129).map(|pid| Instance::new(pid, [1, 0])), |_| {
+            State::Running
+        }),
+    ] {
+        assert_eq!(processes.state(instance), State::Unknown);
+        let (shown, lifetime) = Scene {
+            processes: &processes,
+            ..scene(&[])
+        }
+        .project(&record);
+        let history = HistorySource {
+            records: std::slice::from_ref(&record),
+            rows: &[],
+            captures: &BTreeSet::new(),
+            copies: &BTreeMap::new(),
+            tasks: &[],
+            now: record.last_seen,
+        }
+        .history_with(&processes, |_| false);
+        assert_eq!(
+            (shown.state, history[0].state),
+            (SessionState::Idle, SessionState::Idle)
+        );
+        assert_eq!((lifetime.ended, history[0].ended_at), (None, None));
+        assert!(!shown.live && !shown.relevant() && !lifetime.active);
+    }
+}
+
+#[test]
+fn only_a_known_end_projects_to_ended_history() {
+    use crate::{host_session::HostSession, process::State};
+    let now = u64::try_from(NOW / 1_000_000).unwrap();
+    let instance = Instance::new(10, [1, 0]);
+    let legacy = Record::new(&HostSession::new(Host::Named, "quiet").unwrap(), now, None);
+    let mut explicit = legacy.clone();
+    explicit.ended = Some(now);
+    let gone = Record::new(
+        &HostSession::new(Host::Codex, "gone")
+            .unwrap()
+            .run_by(Some(instance)),
+        now,
+        None,
+    );
+    let processes = Snapshot::sample([instance], |_| State::Gone);
+    for (record, expected) in [
+        (legacy, SessionState::Idle),
+        (explicit, SessionState::Ended),
+        (gone, SessionState::Ended),
+    ] {
+        let now = now + crate::time::ms(LIVE_FOR) + 1;
+        let (shown, lifetime) = Scene {
+            processes: &processes,
+            now: u128::from(now) * 1_000_000,
+            ..scene(&[])
+        }
+        .project(&record);
+        let history = HistorySource {
+            records: std::slice::from_ref(&record),
+            rows: &[],
+            captures: &BTreeSet::new(),
+            copies: &BTreeMap::new(),
+            tasks: &[],
+            now,
+        }
+        .history_with(&processes, |_| false);
+        assert_eq!((shown.state, history[0].state), (expected, expected));
+        let ended = (expected == SessionState::Ended).then_some(record.last_seen);
+        assert_eq!((lifetime.ended, history[0].ended_at), (ended, ended));
+        assert!(!shown.live && !lifetime.active);
+    }
 }

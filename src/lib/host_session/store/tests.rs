@@ -354,6 +354,52 @@ fn a_claude_session_after_clear_links_to_the_one_before_and_ends_it() {
 }
 
 #[test]
+fn sessions_sharing_a_non_claude_host_process_remain_independently_active() {
+    for host in [Host::Codex, Host::Opencode, Host::Pi] {
+        let directory = tempfile::tempdir().unwrap();
+        let client = client(directory.path());
+        let process = parent();
+        let sessions: Vec<_> = ["first", "second", "third"]
+            .into_iter()
+            .map(|id| HostSession::new(host, id).unwrap().run_by(Some(process)))
+            .collect();
+
+        for session in &sessions {
+            touch(&client, session).unwrap();
+        }
+        for session in &sessions {
+            noted(&client, session, Kind::Other, "click", json!({"ok": true}));
+        }
+        for session in &sessions {
+            let record = store(&client).read(session.key()).unwrap();
+            assert_eq!(record.host_process, Some(process));
+            assert_eq!(record.previous, None);
+            assert_eq!(record.ended, None);
+            assert!(record.active(now_ms()));
+            assert_eq!(record.counts["click"], 1);
+        }
+    }
+}
+
+#[test]
+fn a_claude_clear_never_ends_another_host_sharing_the_process() {
+    let directory = tempfile::tempdir().unwrap();
+    let client = client(directory.path());
+    let process = parent();
+    let other = HostSession::new(Host::Opencode, "other")
+        .unwrap()
+        .run_by(Some(process));
+    noted(&client, &other, Kind::Other, "click", json!({"ok": true}));
+    let before = store(&client).read(other.key()).unwrap();
+
+    let claude = session("claude").run_by(Some(process));
+    touch(&client, &claude).unwrap();
+
+    assert_eq!(store(&client).read(other.key()).unwrap(), before);
+    assert_eq!(store(&client).read(claude.key()).unwrap().previous, None);
+}
+
+#[test]
 fn a_session_resumed_in_a_new_process_is_the_same_record_and_not_ended() {
     let directory = tempfile::tempdir().unwrap();
     let client = client(directory.path());
@@ -367,7 +413,7 @@ fn a_session_resumed_in_a_new_process_is_the_same_record_and_not_ended() {
         "its process is gone"
     );
 
-    let resumed = session("resumed").run_by(Instance::current());
+    let resumed = session("resumed").run_by(Some(parent()));
     noted(&client, &resumed, Kind::Other, "click", json!({"ok": true}));
     let record = store(&client).read(gone.key()).unwrap();
     assert_eq!(record.ended_at(), None);
@@ -436,19 +482,26 @@ fn a_forged_id_naming_an_unrelated_process_neither_revives_nor_takes_a_record() 
 }
 
 #[test]
-fn a_touch_writes_only_what_changed_and_never_makes_a_record() {
+fn a_verified_read_creates_lifetime_metadata_without_an_action() {
     let directory = tempfile::tempdir().unwrap();
     let client = client(directory.path());
     let store = store(&client);
     let fresh = session("fresh").run_by(Some(parent()));
 
     touch(&client, &fresh).unwrap();
-    assert_eq!(store.read(fresh.key()), None, "no record is made");
+    let metadata = store.read(fresh.key()).unwrap();
+    assert!(metadata.counts.is_empty());
+    assert!(metadata.screenshots.is_empty());
 
     noted(&client, &fresh, Kind::Other, "click", json!({"ok": true}));
     let written = store.read(fresh.key()).unwrap();
     store
-        .touch(fresh.key(), Some(parent()), written.last_seen + 1000)
+        .touch(
+            &fresh,
+            Some(parent()),
+            written.last_seen + 1000,
+            &client.controller,
+        )
         .unwrap();
     assert_eq!(
         store.read(fresh.key()).unwrap(),
@@ -457,7 +510,9 @@ fn a_touch_writes_only_what_changed_and_never_makes_a_record() {
     );
 
     let later = written.last_seen + 60_000;
-    store.touch(fresh.key(), Some(parent()), later).unwrap();
+    store
+        .touch(&fresh, Some(parent()), later, &client.controller)
+        .unwrap();
     assert_eq!(store.read(fresh.key()).unwrap().last_seen, later);
 }
 
@@ -474,23 +529,43 @@ fn a_session_ended_by_clear_stays_ended_unless_resumed_in_another_process() {
 
     let later = cleared.last_seen + 60_000;
     store(&client)
-        .touch(before.key(), Some(parent()), later)
+        .touch(&before, Some(parent()), later, &client.controller)
         .unwrap();
     assert_eq!(
         store(&client).read(before.key()).unwrap(),
         cleared,
         "the same process, so still ended"
     );
-    store(&client).touch(before.key(), None, later).unwrap();
+    store(&client)
+        .touch(&before, None, later, &client.controller)
+        .unwrap();
     assert_eq!(store(&client).read(before.key()).unwrap(), cleared);
 
     let resumed = Instance::current().unwrap();
     store(&client)
-        .touch(before.key(), Some(resumed), later)
+        .touch(&before, Some(resumed), later, &client.controller)
         .unwrap();
     let revived = store(&client).read(before.key()).unwrap();
-    assert_eq!(revived.ended, None, "resumed in a process of its own");
-    assert_eq!(revived.host_process, Some(resumed));
+    assert_eq!(revived, cleared, "another live root cannot take the record");
+}
+
+#[test]
+fn a_delayed_action_after_clear_does_not_revive_its_session() {
+    let directory = tempfile::tempdir().unwrap();
+    let client = client(directory.path());
+    let before = session("before").run_by(Some(parent()));
+    let after = session("after").run_by(Some(parent()));
+    noted(&client, &before, Kind::Other, "click", json!({"ok": true}));
+    noted(&client, &after, Kind::Other, "click", json!({"ok": true}));
+    let cleared = store(&client).read(before.key()).unwrap();
+    assert!(cleared.ended.is_some());
+
+    noted(&client, &before, Kind::Other, "click", json!({"ok": true}));
+
+    let delayed = store(&client).read(before.key()).unwrap();
+    assert_eq!(delayed.ended, cleared.ended);
+    assert_eq!(delayed.host_process, cleared.host_process);
+    assert_eq!(delayed.counts["click"], cleared.counts["click"] + 1);
 }
 
 #[test]
@@ -847,4 +922,90 @@ fn a_session_works_in_its_projects_folder_by_name_only() {
     if let Some(home) = std::env::var_os("HOME") {
         assert_eq!(project_folder(Path::new(&home)), None);
     }
+}
+
+#[test]
+fn an_unverified_read_does_not_create_or_revive_a_session() {
+    let directory = tempfile::tempdir().unwrap();
+    let client = client(directory.path());
+    let own = session("reader");
+    touch(&client, &own).unwrap();
+    assert!(store(&client).all().is_empty());
+}
+
+fn authoritative(id: &str, folder: Option<&str>) -> HostSession {
+    let mut own = session(id).run_by(Some(parent())).in_folder(folder);
+    own.folder_from_host = true;
+    own
+}
+
+#[test]
+fn an_authoritative_folder_replaces_a_legacy_child_folder() {
+    let directory = tempfile::tempdir().unwrap();
+    let client = client(directory.path());
+    let child = session("parent")
+        .run_by(Some(parent()))
+        .in_folder(Some("child"));
+    noted(&client, &child, Kind::Other, "click", json!({"ok": true}));
+    let before = store(&client).read(child.key()).unwrap();
+    assert!(!before.folder_from_host);
+    let root = authoritative("parent", Some("parent"));
+    touch(&client, &root).unwrap();
+    let after = store(&client).read(root.key()).unwrap();
+    assert_eq!(after.folder.as_deref(), Some("parent"));
+    assert!(after.folder_from_host);
+    assert_eq!(before.counts, after.counts);
+    assert_eq!(before.started, after.started);
+}
+
+#[test]
+fn version_one_records_default_to_an_unauthoritative_folder() {
+    let record = Record::new(&session("legacy"), 1, Some("child".into()));
+    let mut value = serde_json::to_value(record).unwrap();
+    value.as_object_mut().unwrap().remove("folderFromHost");
+    let read: Record = serde_json::from_value(value).unwrap();
+    assert_eq!(read.version, 1);
+    assert!(!read.folder_from_host);
+}
+
+#[test]
+fn a_failed_folder_read_keeps_only_an_authoritative_folder() {
+    for trusted in [false, true] {
+        let directory = tempfile::tempdir().unwrap();
+        let client = client(directory.path());
+        let mut root = authoritative("parent", Some("parent"));
+        root.folder_from_host = trusted;
+        touch(&client, &root).unwrap();
+        let failed = session("parent").run_by(Some(parent()));
+        touch(&client, &failed).unwrap();
+        let read = store(&client).read(root.key()).unwrap();
+        assert_eq!(read.folder.as_deref(), trusted.then_some("parent"));
+        assert_eq!(read.folder_from_host, trusted);
+    }
+}
+
+#[test]
+fn successful_home_or_root_suppression_is_authoritative() {
+    let directory = tempfile::tempdir().unwrap();
+    let client = client(directory.path());
+    let root = authoritative("root", None);
+    touch(&client, &root).unwrap();
+    let read = store(&client).read(root.key()).unwrap();
+    assert!(read.folder_from_host);
+    assert_eq!(read.folder, None);
+}
+
+#[test]
+fn an_old_command_cannot_replace_a_resumed_process() {
+    let directory = tempfile::tempdir().unwrap();
+    let client = client(directory.path());
+    let root = authoritative("resumed", Some("parent"));
+    touch(&client, &root).unwrap();
+    let old = session("resumed")
+        .run_by(Some(Instance::new(i32::MAX, [1, 0])))
+        .in_folder(Some("old"));
+    noted(&client, &old, Kind::Other, "click", json!({"ok": true}));
+    let read = store(&client).read(root.key()).unwrap();
+    assert_eq!(read.host_process, root.process());
+    assert_eq!(read.folder.as_deref(), Some("parent"));
 }

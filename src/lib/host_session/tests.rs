@@ -12,25 +12,32 @@ fn env(pairs: &[(&str, &str)]) -> impl Fn(&str) -> Option<String> + use<> {
     move |name| map.get(name).cloned()
 }
 
-fn knows(pid: i32) -> impl Fn(i32) -> Option<Facts> {
-    move |asked| {
-        (asked == pid).then(|| Facts {
-            parent: 1,
-            command: "claude".to_owned(),
-            start: [1_761_655_000, 412_233],
-        })
-    }
-}
-
 fn ancestor(pid: i32, command: &str) -> Ancestor {
     Ancestor {
         pid,
+        uid: nix::unistd::geteuid().as_raw(),
+        parent: 1,
+        instance: Instance::new(pid, [1_761_655_000, 412_233]),
         command: command.to_owned(),
     }
 }
 
 fn resolved(pairs: &[(&str, &str)], ancestors: Vec<Ancestor>) -> Option<HostSession> {
-    HostSession::resolve(env(pairs), || ancestors, knows(4242))
+    HostSession::resolve(
+        env(pairs),
+        || ancestors.clone(),
+        |pid| {
+            ancestors
+                .iter()
+                .find(|ancestor| ancestor.pid == pid)
+                .map(|ancestor| Facts {
+                    uid: nix::unistd::geteuid().as_raw(),
+                    parent: ancestor.parent,
+                    command: ancestor.command.clone(),
+                    start: ancestor.instance.start,
+                })
+        },
+    )
 }
 
 #[test]
@@ -40,7 +47,7 @@ fn a_claude_code_command_is_its_session_and_names_its_process() {
             ("CLAUDE_CODE_SESSION_ID", CLAUDE_ID),
             ("CLAUDE_PID", "4242"),
         ],
-        Vec::new(),
+        vec![ancestor(4242, "claude")],
     )
     .unwrap();
     let hex = hex(&Sha256::digest(format!("claude:{CLAUDE_ID}").as_bytes()));
@@ -81,7 +88,7 @@ fn codex_prefers_the_root_session_id_to_the_thread_id() {
 
     let thread = resolved(&[("CODEX_THREAD_ID", "thread")], Vec::new()).unwrap();
     assert_eq!(thread.key, Key::of(Host::Codex, "thread"));
-    assert_eq!(thread.process, None, "Codex names no process");
+    assert_eq!(thread.process, None, "no verified ancestor");
 }
 
 #[test]
@@ -157,7 +164,7 @@ fn the_nearest_host_wins_when_hosts_are_nested() {
     ];
     let codex = resolved(&pairs, codex_inside).unwrap();
     assert_eq!(codex.host, Host::Codex);
-    assert_eq!(codex.process, None, "only Claude Code's process is kept");
+    assert_eq!(codex.process, Some(ancestor(80, "codex").instance));
 
     let claude_inside = vec![
         ancestor(90, "zsh"),
@@ -201,14 +208,14 @@ fn nested_hosts_the_walk_cannot_place_name_no_session() {
 }
 
 #[test]
-fn ancestry_is_asked_only_when_two_hosts_are_present() {
+fn ancestry_is_asked_for_a_single_host_too() {
     let asked = RefCell::new(0);
     let ancestors = || {
         *asked.borrow_mut() += 1;
         Vec::new()
     };
     HostSession::resolve(env(&[("PI_SESSION_ID", "pi-1")]), ancestors, |_| None).unwrap();
-    assert_eq!(*asked.borrow(), 0);
+    assert_eq!(*asked.borrow(), 1);
 }
 
 #[test]
@@ -427,4 +434,109 @@ fn a_key_is_twelve_lowercase_hex_digits() {
     let through: Key = serde_json::from_value(serde_json::json!(key.as_str())).unwrap();
     assert_eq!(through, key);
     assert!(serde_json::from_value::<Key>(serde_json::json!("../x")).is_err());
+}
+
+#[test]
+fn every_unambiguously_identified_host_keeps_its_verified_process_instance() {
+    for (source, command) in [
+        ("CODEX_SESSION_ID", "codex"),
+        ("PI_SESSION_ID", "pi"),
+        ("ATLAS_OPENCODE_SESSION", "opencode"),
+    ] {
+        let root = ancestor(80, command);
+        let session =
+            resolved(&[(source, "root")], vec![ancestor(90, "sh"), root.clone()]).unwrap();
+        assert_eq!(session.process(), Some(root.instance));
+    }
+}
+
+#[test]
+fn a_node_host_hint_must_name_an_ancestor_of_this_account() {
+    for (source, hint) in [
+        ("PI_SESSION_ID", "ATLAS_PI_PID"),
+        ("ATLAS_OPENCODE_SESSION", "ATLAS_OPENCODE_PID"),
+    ] {
+        for pid in ["80", "81", "bad", "-1"] {
+            let session =
+                resolved(&[(source, "root"), (hint, pid)], vec![ancestor(80, "node")]).unwrap();
+            assert_eq!(session.process().is_some(), pid == "80");
+        }
+        let session = HostSession::resolve(
+            env(&[(source, "root"), (hint, "80")]),
+            || vec![ancestor(80, "node")],
+            |_| None,
+        )
+        .unwrap();
+        assert_eq!(session.process(), None);
+        let session = HostSession::resolve(
+            env(&[(source, "root"), (hint, "80")]),
+            || vec![ancestor(80, "node")],
+            |_| {
+                Some(Facts {
+                    uid: nix::unistd::geteuid().as_raw(),
+                    parent: 1,
+                    command: "node".into(),
+                    start: [2, 0],
+                })
+            },
+        )
+        .unwrap();
+        assert_eq!(session.process(), None);
+    }
+}
+
+#[test]
+fn a_root_codex_id_and_its_subagent_share_the_sole_verified_host() {
+    let walk = vec![ancestor(80, "codex")];
+    let root = resolved(
+        &[("CODEX_SESSION_ID", "root"), ("CODEX_THREAD_ID", "root")],
+        walk.clone(),
+    )
+    .unwrap();
+    let child = resolved(
+        &[("CODEX_SESSION_ID", "root"), ("CODEX_THREAD_ID", "child")],
+        walk,
+    )
+    .unwrap();
+    assert_eq!(root.key(), child.key());
+    assert_eq!(root.process(), child.process());
+    assert!(root.process().is_some());
+}
+
+#[test]
+fn independently_nested_codex_hosts_have_no_guessed_process_or_folder() {
+    let session = resolved(
+        &[("CODEX_SESSION_ID", "root")],
+        vec![ancestor(80, "codex"), ancestor(70, "codex")],
+    )
+    .unwrap()
+    .with_folder(|_| panic!("no selected host"), Some("/tmp/child".into()));
+    assert_eq!(session.process(), None);
+    assert_eq!(session.folder(), None);
+}
+
+#[test]
+fn an_incomplete_codex_walk_cannot_choose_a_root() {
+    let mut root = ancestor(80, "codex");
+    root.parent = 70;
+    let session = resolved(&[("CODEX_SESSION_ID", "root")], vec![root]).unwrap();
+    assert_eq!(session.process(), None);
+}
+
+#[test]
+fn a_subagent_uses_its_root_hosts_folder() {
+    let session = resolved(&[("CODEX_SESSION_ID", "root")], vec![ancestor(80, "codex")])
+        .unwrap()
+        .with_folder(|_| Some("/tmp/parent".into()), Some("/tmp/child".into()));
+    assert_eq!(session.folder(), Some("parent"));
+    assert!(session.folder_from_host);
+}
+
+#[test]
+fn a_failed_host_folder_read_never_uses_a_childs_folder() {
+    let session = resolved(&[("CODEX_SESSION_ID", "root")], vec![ancestor(80, "codex")])
+        .unwrap()
+        .with_folder(|_| None, Some("/tmp/child".into()));
+    assert_eq!(session.folder(), None);
+    assert!(!session.folder_from_host);
 }

@@ -63,7 +63,11 @@ export default {
               execute(join(root, 'scripts/status'), [], {
                 timeout: 5000,
                 maxBuffer: 16384,
-                env: { ...process.env, ATLAS_OPENCODE_SESSION: session },
+                env: {
+                  ...process.env,
+                  ATLAS_OPENCODE_SESSION: session,
+                  ATLAS_OPENCODE_PID: String(process.pid),
+                },
               }),
             )
             .then(({ stdout }) => stdout.trim())
@@ -111,6 +115,7 @@ export default {
       'shell.env': async ({ sessionID }, output) => {
         if (!sessionID || !plain.test(sessionID)) return;
         output.env.ATLAS_OPENCODE_SESSION = await rootFor(sessionID);
+        output.env.ATLAS_OPENCODE_PID = String(process.pid);
       },
       'tool.execute.before': async ({ tool }, { args }) => {
         if (tool === 'bash' && String(args?.command ?? '').includes('ATLAS_ACTOR')) {

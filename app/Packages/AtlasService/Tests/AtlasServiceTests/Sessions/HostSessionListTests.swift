@@ -92,4 +92,24 @@ struct HostSessionListTests {
     #expect(HostSessionRecord(key: "a1", name: "Pi · notes", host: .pi, cleanup: .incomplete).leftWork)
     #expect(!HostSessionRecord(key: "a1", name: "Pi · notes", host: .pi, cleanup: .complete).leftWork)
   }
+  @Test("the current list retains ended attention and work with truthful lifetimes")
+  func theCurrentListRetainsEndedAttentionAndWork() throws {
+    let data = Data(
+      #"{"live":[{"key":"a","name":"Codex","state":"needsYou","ended":1000,"live":true},{"key":"b","name":"Pi","state":"acting","ended":2000,"workInProgress":true}]}"#
+        .utf8
+    )
+    let list = try JSONDecoder()
+      .decode(HostSessionList.self, from: data)
+    #expect(list.live.map(\.isLive) == [false, false])
+    #expect(list.live.map(\.state) == [.needsYou, .acting])
+    #expect(list.live.last?.workInProgress == true)
+  }
+
+  @Test("a missing live list remains empty")
+  func aMissingLiveListRemainsEmpty() throws {
+    let list = try JSONDecoder()
+      .decode(HostSessionList.self, from: Data("{}".utf8))
+    #expect(list.live.isEmpty)
+  }
+
 }

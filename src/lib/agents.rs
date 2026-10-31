@@ -830,6 +830,10 @@ pub async fn brief(config_path: &Path, session: Option<&HostSession>) -> String 
         return format!("Atlas {version}: run atlas doctor before using it.");
     };
 
+    if let Some(session) = session {
+        let _ = crate::host_session::store::touch(&client, session);
+    }
+
     let causes = client.controller.pending_causes().unwrap_or_default();
     if let Some(recovery) = Recovery::of(&causes, Asker::Agent(session.map(HostSession::key))) {
         return format!("Atlas {version}: {}", recovery.step());

@@ -3,6 +3,14 @@
 use super::{activity::*, sessions::*, *};
 use std::{collections::BTreeMap, fs};
 
+fn host_sessions(client: &Client, facts: SessionFacts) -> HostSessions {
+    SessionReading::collect_with(client, |_, instances| {
+        crate::host_session::liveness::Snapshot::sample(instances, |instance| instance.state())
+    })
+    .unwrap()
+    .summary(facts)
+}
+
 /// The facts of a status with `pending` whether an outcome is unknown,
 /// at `now`.
 fn facts(pending: bool, now: u128) -> SessionFacts {
@@ -139,7 +147,7 @@ fn the_status_lists_recent_host_sessions_and_who_holds_the_helper() {
         "the one needing the person first, however long idle"
     );
     assert_eq!(sessions_listed[0]["state"], "needsYou");
-    assert_eq!(sessions_listed[0]["live"], true);
+    assert_eq!(sessions_listed[0]["live"], false);
     let first = &sessions_listed[1];
     assert_eq!(
         first["key"],
@@ -1069,4 +1077,211 @@ fn the_overview_counts_running_jobs() {
     assert_eq!(reason(&refused), Some("A background job was refused"));
     let refused = logged(json!({"ok": false, "code": "collect", "operation": "collect"}));
     assert_eq!(reason(&refused), Some("A file could not be collected"));
+}
+
+#[test]
+fn candidate_collection_and_projection_share_one_bounded_process_batch() {
+    use crate::host_session::{
+        Host, HostSession, Instance,
+        store::{Kind, note},
+    };
+    let directory = tempfile::tempdir().unwrap();
+    let client = crate::test_support::client(directory.path());
+    let own = HostSession::new(Host::Claude, "root")
+        .unwrap()
+        .run_by(Instance::current());
+    note(
+        &client,
+        &own,
+        Kind::Other,
+        Some(&crate::doing::Doing::new("click")),
+        &Ok(json!({"ok": true})),
+    )
+    .unwrap();
+    let controller = client.controller.clone().labelled(Some(&own));
+    let hold = controller.acquire(true).unwrap();
+    let ((reading, entries), samples) = crate::process::measure_states(|| {
+        let reading = SessionReading::collect_with(&client, |_, instances| {
+            crate::host_session::liveness::Snapshot::sample(instances, |instance| instance.state())
+        })
+        .unwrap();
+        let entries = reading.entries(facts(false, crate::client::timestamp()));
+        (reading, entries)
+    });
+    assert_eq!(samples, 1, "the holder and record share one exact identity");
+    assert_eq!(entries[0]["state"], "acting");
+    assert!(reading.processes.running(own.process().unwrap()));
+    drop(hold);
+}
+
+#[test]
+fn an_ended_causer_is_visible_without_being_live() {
+    use crate::host_session::{
+        Host, HostSession, Instance,
+        store::{Kind, note},
+    };
+    let directory = tempfile::tempdir().unwrap();
+    let client = crate::test_support::client(directory.path());
+    let own = HostSession::new(Host::Codex, "gone")
+        .unwrap()
+        .run_by(Some(Instance::new(i32::MAX, [1, 0])));
+    note(
+        &client,
+        &own,
+        Kind::Other,
+        Some(&crate::doing::Doing::new("click")),
+        &Ok(json!({"ok": true})),
+    )
+    .unwrap();
+    drop(
+        client
+            .controller
+            .clone()
+            .labelled(Some(&own))
+            .quarantine()
+            .unwrap(),
+    );
+    let listed = host_sessions(&client, facts(true, crate::client::timestamp()));
+    let entry = &listed.sessions[0];
+    assert!(entry["ended"].is_number());
+    assert_eq!(entry["live"], false);
+    assert_eq!(entry["active"], false);
+    assert_eq!(entry["state"], "needsYou");
+    assert_eq!(entry["uncertain"], 1);
+    assert_eq!(entry["holdsHelper"], false);
+}
+
+fn surviving_work(explicit: bool) {
+    use crate::host_session::{
+        Host, HostSession, Instance,
+        store::{Kind, note},
+    };
+    let directory = tempfile::tempdir().unwrap();
+    let client = crate::test_support::client(directory.path());
+    let process = Instance::new(i32::MAX, [1, 0]);
+    let own = HostSession::new(Host::Codex, "gone")
+        .unwrap()
+        .run_by(Some(process));
+    note(
+        &client,
+        &own,
+        Kind::Other,
+        Some(&crate::doing::Doing::new("run")),
+        &Ok(json!({"ok": true})),
+    )
+    .unwrap();
+    let output = client.output_dir().unwrap();
+    if explicit {
+        let path = output.join("sessions").join(format!("{}.json", own.key()));
+        let mut record: serde_json::Value =
+            serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
+        record["ended"] = json!(123);
+        fs::write(path, serde_json::to_vec(&record).unwrap()).unwrap();
+    }
+    let controller = client.controller.clone().labelled(Some(&own));
+    let claim = controller.quarantine_command().unwrap();
+    let read = || {
+        SessionReading::collect_with(&client, |_, instances| {
+            crate::host_session::liveness::Snapshot::sample(instances, |instance| instance.state())
+        })
+        .unwrap()
+    };
+    let reading = read();
+    let facts = facts(false, crate::client::timestamp());
+    let entries = reading.entries(facts);
+    let entry = entries
+        .iter()
+        .find(|entry| entry["key"] == own.key().as_str())
+        .unwrap();
+    assert_eq!(entry["state"], "acting");
+    assert_eq!(entry["live"], !explicit);
+    assert_eq!(entry["active"], !explicit);
+    assert_eq!(entry["workInProgress"], true);
+    assert_eq!(entry["holdsHelper"], false);
+    assert_eq!(
+        entry["ended"],
+        if explicit { json!(123) } else { Value::Null }
+    );
+    let activity = crate::host_session::activity::list(
+        &client,
+        Some(&own),
+        crate::host_session::activity::Scope::Own,
+        10,
+    )
+    .unwrap();
+    assert_eq!(activity["session"]["ended"], entry["ended"]);
+    assert_eq!(activity["session"]["live"], !explicit);
+    let records: Vec<_> = reading
+        .seen
+        .iter()
+        .map(|seen| seen.record.clone())
+        .collect();
+    let history = crate::session_view::HistorySource {
+        records: &records,
+        rows: &[],
+        captures: &Default::default(),
+        copies: &Default::default(),
+        tasks: &[],
+        now: crate::host_session::now_ms(),
+    }
+    .history_with(&reading.processes, |key| reading.work(key, facts));
+    assert_eq!(
+        serde_json::to_value(&history[0]).unwrap()["endedAt"],
+        entry["ended"]
+    );
+    drop(claim);
+    let reading = read();
+    let entries = reading.entries(facts);
+    assert!(
+        !entries
+            .iter()
+            .any(|entry| entry["key"] == own.key().as_str())
+    );
+    assert!(
+        controller
+            .pending_causes()
+            .unwrap()
+            .iter()
+            .any(|cause| cause.session.as_ref() == Some(own.key()))
+    );
+}
+
+#[test]
+fn a_gone_host_stays_live_while_its_verified_command_runs() {
+    surviving_work(false);
+}
+
+#[test]
+fn an_explicit_end_retains_surviving_work_without_reviving() {
+    surviving_work(true);
+}
+
+#[test]
+fn a_verified_idle_host_does_not_expire_while_it_runs() {
+    use crate::host_session::{Host, HostSession, Instance, record::Record};
+    let own = HostSession::new(Host::Codex, "idle")
+        .unwrap()
+        .run_by(Instance::current());
+    let record = Record::new(&own, 1, None);
+    for state in [
+        crate::process::State::Running,
+        crate::process::State::Stopped,
+    ] {
+        let processes = crate::host_session::liveness::Snapshot::sample(own.process(), |_| state);
+        let scene = crate::session_view::Scene {
+            rows: &[],
+            processes: &processes,
+            holder: None,
+            waiting: &[],
+            causes: &[],
+            pending: false,
+            agent_holds: false,
+            now: crate::client::timestamp(),
+        };
+        let (shown, lifetime) = scene.project(&record);
+        assert!(shown.live && shown.relevant());
+        assert_eq!(shown.state, crate::session_view::SessionState::Idle);
+        assert!(!lifetime.active);
+        assert_eq!(lifetime.ended, None);
+    }
 }

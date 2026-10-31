@@ -103,4 +103,61 @@ struct HostSessionDecodingTests {
     let reading = try status(["overview": ["activity": [["operation": "input", "ok": true], "not a row", 7]]])
     #expect(reading.overview.activity.map(\.operation) == ["input"])
   }
+  @Test("an ended session never decodes as live")
+  func anEndedSessionNeverDecodesAsLive() throws {
+    for fields: [String: Any] in [["ended": 1000], ["state": "ended"]] {
+      var entry: [String: Any] = ["key": "ended", "name": "Codex", "live": true, "holdsHelper": true]
+      entry.merge(fields) { _, new in new }
+      let session = try #require(status(["overview": ["hostSessions": [entry]]]).overview.hostSessions.first)
+      #expect(!session.isLive && !session.holdsHelper)
+      #expect(session.state == .ended)
+    }
+  }
+
+  @Test("an ended causer keeps its recovery details")
+  func anEndedCauserKeepsItsRecoveryDetails() throws {
+    let entry: [String: Any] = [
+      "key": "gone", "name": "Codex", "ended": 1000, "live": true, "state": "needsYou", "holdsHelper": true,
+      "uncertainRow": "row", "uncertainVerb": "click",
+    ]
+    let session = try #require(status(["overview": ["hostSessions": [entry]]]).overview.hostSessions.first)
+    #expect(!session.isLive && !session.holdsHelper)
+    #expect(session.state == .needsYou)
+    #expect(session.uncertainRow == "row" && session.uncertainVerb == "click")
+  }
+
+  @Test("a missing work flag does not prove surviving work")
+  func aMissingWorkFlagDoesNotProveSurvivingWork() throws {
+    for work: Any in [NSNull(), false, "true"] {
+      let entry: [String: Any] = [
+        "key": "gone", "name": "Codex", "ended": 1000, "live": true, "state": "acting", "holdsHelper": true,
+        "workInProgress": work,
+      ]
+      let session = try #require(status(["overview": ["hostSessions": [entry]]]).overview.hostSessions.first)
+      #expect(session.state == .ended && !session.isLive && !session.holdsHelper)
+      #expect(!session.workInProgress)
+    }
+  }
+
+  @Test("an explicit end retains proven work without becoming live")
+  func anExplicitEndRetainsProvenWorkWithoutBecomingLive() throws {
+    let entry: [String: Any] = [
+      "key": "gone", "name": "Codex", "ended": 1000, "live": true, "state": "acting", "holdsHelper": true,
+      "workInProgress": true,
+    ]
+    let decoded = try #require(status(["overview": ["hostSessions": [entry]]]).overview.hostSessions.first)
+    let made = ViewerStatus.HostSession(
+      key: "gone",
+      name: "Codex",
+      host: .other,
+      endedAt: Date(timeIntervalSince1970: 1),
+      workInProgress: true,
+      state: .acting,
+      holdsHelper: true
+    )
+    #expect(decoded == made)
+    #expect(decoded.state == .acting && decoded.workInProgress)
+    #expect(!decoded.isLive && !decoded.holdsHelper)
+  }
+
 }
