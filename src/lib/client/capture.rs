@@ -318,7 +318,6 @@ impl Client {
 
         self.remember_windows(
             &serde_json::from_value::<Vec<_>>(reply["windows"].take()).unwrap_or_default(),
-            &after.epoch.display,
         )?;
         Ok((
             Frame {

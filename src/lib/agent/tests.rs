@@ -1509,6 +1509,7 @@ fn a_click_chooses_one_visible_element() {
 fn scanned(elements: Vec<Element>) -> Scanned {
     Scanned {
         windows: vec![window(42, 812, "Editor", 0)],
+        dock: Default::default(),
         elements,
         incomplete: false,
         reasons: Vec::new(),

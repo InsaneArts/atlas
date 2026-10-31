@@ -14,7 +14,7 @@ use crate::{
     error::{Code, Error, Result},
     native::{
         ax::{self, Element, Frame, Stop},
-        windows::{Shown, Window, owning_window},
+        windows::{Bounds, Dock, Shown, Window, hit_windows, owning_window},
     },
     select::{ElementFilter, NameMatch, closeness, names, shown_name},
     transport::run_output,
@@ -34,6 +34,7 @@ const CANDIDATES: usize = 5;
 /// One scan of an app, as the probe reported it.
 pub(super) struct Scanned {
     pub(super) windows: Vec<Window>,
+    pub(super) dock: Dock,
     pub(super) elements: Vec<Element>,
     pub(super) incomplete: bool,
     /// Why it is incomplete, each reason once.
@@ -80,6 +81,7 @@ impl Scanned {
 
         Ok(Self {
             windows: serde_json::from_value(value["windows"].take()).unwrap_or_default(),
+            dock: serde_json::from_value(value["dock"].take()).unwrap_or_default(),
             elements,
             incomplete: value["truncated"] == true,
             reasons,
@@ -161,7 +163,12 @@ pub async fn elements(
     let verified = client.verify().await?;
     let pid = target_pid(client, &verified, target).await?;
     let scanned = app_elements(client, &verified, pid).await?;
-    client.remember_windows(&scanned.windows, &verified.session().epoch.display)?;
+    let display = &verified.session().epoch.display;
+    client.remember_windows(&hit_windows(
+        &scanned.windows,
+        &Bounds::display(display.width, display.height),
+        &scanned.dock,
+    ))?;
 
     Ok(listing(pid, &scanned, filter, max, full))
 }

@@ -98,6 +98,7 @@ fn elements_info(pid: i32) -> Result<Value> {
     let snapshot = atlas::native::ax::elements(pid, limits)?;
     Ok(json!({
         "ok": true,
+        "dock": atlas::native::ax::dock(&snapshot.windows, atlas::native::ax::DOCK_TIMEOUT),
         "elements": snapshot.elements,
         "windows": snapshot.windows,
         "truncated": snapshot.incomplete,

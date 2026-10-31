@@ -546,9 +546,8 @@ async fn screenshot(
         };
         validate()?;
 
-        // One read of the window list serves the crop and the report of
-        // windows off the display.
         let windows = list();
+        let dock = dock(windows.as_deref().unwrap_or_default());
         // The main display's corner is the origin of global points, so a
         // window's bounds are points of this display.
         let display = Region {
@@ -569,7 +568,7 @@ async fn screenshot(
                 let on_screen = windows
                     .as_ref()
                     .map_err(|_| failure(Code::Windows, "The window list is unavailable"))?;
-                let found = crop::app(on_screen, pid, &display, &dock(on_screen)).ok_or_else(|| {
+                let found = crop::app(on_screen, pid, &display, &dock).ok_or_else(|| {
                     failure(
                         Code::NoWindow,
                         format!(
@@ -593,9 +592,16 @@ async fn screenshot(
         let off_display = off_display_windows(windows.as_deref().unwrap_or_default());
 
         let cropped = area.map(|area| crop_keys(area, app, bundle_id));
+        let remembered = match (windows.as_ref(), list().as_ref()) {
+            (Ok(before), Ok(after)) if before == after => windows::hit_windows(
+                before,
+                &windows::Bounds::display(epoch.width, epoch.height),
+                &dock,
+            ),
+            _ => Vec::new(),
+        };
         validate()?;
-
-        Ok((shot, off_display, cropped, windows.unwrap_or_default()))
+        Ok((shot, off_display, cropped, remembered))
     })
     .await;
     match taken {
@@ -1319,6 +1325,38 @@ mod tests {
         daemon.bundle_id = fake_bundle_id;
         daemon.dock = |_| windows::Dock::Icons(Vec::new());
         Arc::new(daemon)
+    }
+
+    #[tokio::test]
+    async fn a_capture_remembers_nothing_when_its_window_lists_disagree() {
+        use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+        static CAPTURED: AtomicBool = AtomicBool::new(false);
+        static CHANGE: AtomicUsize = AtomicUsize::new(0);
+        let daemon = with_windows(
+            |display, area, limit| {
+                CAPTURED.store(true, Ordering::SeqCst);
+                synthetic(display, area, limit)
+            },
+            || {
+                let mut windows = fake_windows()?;
+                if CAPTURED.load(Ordering::SeqCst) {
+                    match CHANGE.load(Ordering::SeqCst) {
+                        1 => windows.reverse(),
+                        2 => windows[0].bounds.x += 1.0,
+                        3 => return Err(Error::new(Code::Windows, "unavailable")),
+                        _ => {}
+                    }
+                }
+                Ok(windows)
+            },
+        );
+        for change in 0..4 {
+            CAPTURED.store(false, Ordering::SeqCst);
+            CHANGE.store(change, Ordering::SeqCst);
+            let reply = screenshot(&daemon, None, false, None).await;
+            assert_eq!(reply["ok"], true);
+            assert_eq!(reply["windows"].as_array().unwrap().is_empty(), change != 0);
+        }
     }
 
     fn sides(area: CGRect) -> (f64, f64, f64, f64) {

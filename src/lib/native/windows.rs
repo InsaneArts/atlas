@@ -87,6 +87,39 @@ pub struct Window {
     pub bounds: Bounds,
 }
 
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub(crate) struct HitWindow {
+    pub number: i64,
+    pub pid: i64,
+    pub layer: i64,
+    pub bounds: Bounds,
+}
+
+/// Visible hit regions, front to back, without window or application names.
+pub(crate) fn hit_windows(windows: &[Window], display: &Bounds, dock: &Dock) -> Vec<HitWindow> {
+    windows
+        .iter()
+        .filter(|window| window.alpha > 0.0)
+        .flat_map(|window| {
+            let bounds = if window.layer > 0 && window.passes_through(display) {
+                if window.is_dock() {
+                    dock.areas(&window.bounds)
+                } else {
+                    Vec::new()
+                }
+            } else {
+                vec![window.bounds.clone()]
+            };
+            bounds.into_iter().map(|bounds| HitWindow {
+                number: window.number,
+                pid: window.pid,
+                layer: window.layer,
+                bounds,
+            })
+        })
+        .collect()
+}
+
 impl Window {
     /// Whether this is the menu bar, the Window Server's window that shows
     /// the frontmost app's titles.
@@ -783,10 +816,17 @@ mod tests {
         // Each fixture window is its own process.
         for windows in &fixtures {
             for screen in &screens {
+                let hits = hit_windows(windows, &display(), screen.dock());
                 for x in (0..1000).step_by(25) {
                     for y in (0..800).step_by(25) {
                         let (x, y) = (f64::from(x), f64::from(y));
                         let top = top_at(windows, x, y, screen).map(|window| window.number);
+                        assert_eq!(
+                            hits.iter()
+                                .find(|window| window.bounds.contains(x, y))
+                                .map(|window| window.number),
+                            top
+                        );
                         for ordinary in windows.iter().filter(|window| window.layer == 0) {
                             let clear = unobstructed(windows, ordinary.number, x, y, screen);
                             let at = format!(

@@ -4,7 +4,7 @@
 use crate::{
     client::{Client, Run, Verified},
     error::{Code, Error, Result},
-    native::windows::{Shown, Window},
+    native::windows::{Bounds, Shown, Window, hit_windows},
     ui::text::same_text,
 };
 use serde_json::{Value, json};
@@ -98,8 +98,19 @@ fn shown(reply: &Value) -> Result<Shown> {
 
 pub async fn list(client: &Client, filter: &WindowFilter) -> Result<Value> {
     let verified = client.verify().await?;
-    let windows = verified_window_snapshot(client, &verified).await?.windows;
-    client.remember_windows(&windows, &verified.session().epoch.display)?;
+    let reply = client
+        .run(
+            windows_probe(client, DockRead::Read),
+            Run::inspect().within(PROBE_LIMIT).pinned(&verified),
+        )
+        .await?;
+    let Shown { windows, dock, .. } = shown(&reply)?;
+    let display = &verified.session().epoch.display;
+    client.remember_windows(&hit_windows(
+        &windows,
+        &Bounds::display(display.width, display.height),
+        &dock,
+    ))?;
     let matching: Vec<_> = windows
         .into_iter()
         .filter(|window| filter.matches(window))

@@ -1,8 +1,9 @@
 //! The latest screenshot of each target (the whole screen, an app's windows
 //! or a region, at one size), so a capture with the same pixels can point at
-//! that file instead of saving the same picture again.
+//! that file instead of saving the same picture again, and the latest
+//! pointer hit regions observed by each host session.
 //!
-//! The record (`last-captures.json`, beside the screenshots) only says where
+//! The record (`last-captures.json`, beside the screenshots) says where
 //! to look: an earlier file counts as the same picture only once its own
 //! bytes on disk hash to the new capture's. A lost, damaged or stale record
 //! can therefore only cost a new file, never claim a match that is not one.
@@ -11,9 +12,10 @@ use crate::{
     config::write_atomic,
     daemon::protocol::{Crop, Region},
     digest,
-    error::Result,
+    error::{Code, Error, Result},
     files::write_private,
     helper_info::capture_time,
+    native::windows::HitWindow,
     session::Epoch,
 };
 use fs2::FileExt;
@@ -62,6 +64,21 @@ struct Entry {
     region: Option<Region>,
     epoch: Value,
     at: String,
+}
+
+pub(crate) fn remember_windows(output: &Path, key: &str, windows: &[HitWindow]) -> Result<()> {
+    let _lock = locked(output)
+        .ok_or_else(|| Error::new(Code::State, "The capture record is unavailable"))?;
+    let mut targets = read(output);
+    targets.insert(
+        format!("session:{key}"),
+        json!({"windows": windows, "at": timestamp().to_string()}),
+    );
+    write(output, targets)
+}
+
+pub(crate) fn remembered_windows(output: &Path, key: &str) -> Option<Vec<HitWindow>> {
+    serde_json::from_value(read(output).remove(&format!("session:{key}"))?["windows"].take()).ok()
 }
 
 /// What a capture shows and at what size: captures compare only with the
@@ -113,6 +130,7 @@ pub(crate) fn keep(
     let epoch = recorded_epoch(&frame.epoch);
     let earlier = targets
         .get(key)
+        .and_then(|entry| serde_json::from_value::<Entry>(entry.clone()).ok())
         .filter(|entry| {
             entry.sha256 == hash
                 && entry.epoch == epoch
@@ -141,7 +159,7 @@ pub(crate) fn keep(
         epoch,
         at: timestamp().to_string(),
     };
-    targets.insert(key.to_owned(), entry);
+    targets.insert(key.to_owned(), serde_json::to_value(entry)?);
     // A record that cannot be written only costs the next match.
     let _ = write(output, targets);
 
@@ -174,7 +192,7 @@ fn locked(output: &Path) -> Option<fs::File> {
     if !lock.metadata().ok()?.is_file() {
         return None;
     }
-    FileExt::lock_exclusive(&lock).ok()?;
+    FileExt::try_lock_exclusive(&lock).ok()?;
 
     Some(lock)
 }
@@ -205,10 +223,8 @@ fn verified(output: &Path, file: &str, hash: &str) -> Option<PathBuf> {
     (metadata.is_file() && age < FRESH && digest::file_sha256(&path)? == hash).then_some(path)
 }
 
-/// The record's targets; a missing, oversized, unreadable or unknown record
-/// counts as empty, and an entry that cannot be read or does not name a
-/// screenshot file is left out.
-fn read(output: &Path) -> BTreeMap<String, Entry> {
+/// A missing, oversized, unreadable or unknown record counts as empty.
+fn read(output: &Path) -> BTreeMap<String, Value> {
     let Some(file) = crate::files::open_plain(&output.join(RECORD)) else {
         return BTreeMap::new();
     };
@@ -219,33 +235,35 @@ fn read(output: &Path) -> BTreeMap<String, Entry> {
         return BTreeMap::new();
     }
 
-    let Ok(Value::Object(mut record)) = serde_json::from_slice::<Value>(&bytes) else {
+    let Ok(mut record) = serde_json::from_slice::<Value>(&bytes) else {
         return BTreeMap::new();
     };
-    if record.get("version").and_then(Value::as_u64) != Some(VERSION) {
+    if record["version"].as_u64() != Some(VERSION) {
         return BTreeMap::new();
     }
-    let Some(Value::Object(targets)) = record.remove("targets") else {
-        return BTreeMap::new();
-    };
-
-    targets
-        .into_iter()
-        .filter_map(|(key, entry)| Some((key, serde_json::from_value::<Entry>(entry).ok()?)))
-        .filter(|(_, entry)| capture_time(&entry.file).is_some())
-        .collect()
+    serde_json::from_value(record["targets"].take()).unwrap_or_default()
 }
 
-/// Write the newest [`TARGETS`] targets as the record, in one rename.
-fn write(output: &Path, targets: BTreeMap<String, Entry>) -> Result<()> {
-    let mut entries: Vec<(String, Entry)> = targets.into_iter().collect();
-    entries.sort_by_key(|(_, entry)| std::cmp::Reverse(entry.at.parse::<u128>().unwrap_or(0)));
+/// Write the newest targets within the record's count and byte limits.
+fn write(output: &Path, targets: BTreeMap<String, Value>) -> Result<()> {
+    let mut entries: Vec<_> = targets.into_iter().collect();
+    entries.sort_by_key(|(_, entry)| {
+        std::cmp::Reverse(
+            entry["at"]
+                .as_str()
+                .and_then(|at| at.parse::<u128>().ok())
+                .unwrap_or(0),
+        )
+    });
     entries.truncate(TARGETS);
-
-    let targets: BTreeMap<String, Entry> = entries.into_iter().collect();
-    let record = json!({"version": VERSION, "targets": targets});
-
-    write_atomic(&output.join(RECORD), &serde_json::to_vec(&record)?, 0o600)
+    loop {
+        let targets: BTreeMap<_, _> = entries.iter().map(|(key, entry)| (key, entry)).collect();
+        let bytes = serde_json::to_vec(&json!({"version": VERSION, "targets": targets}))?;
+        if bytes.len() as u64 <= RECORD_LIMIT {
+            return write_atomic(&output.join(RECORD), &bytes, 0o600);
+        }
+        entries.pop();
+    }
 }
 
 #[cfg(test)]
@@ -568,6 +586,42 @@ mod tests {
         let targets = kept["targets"].as_object().unwrap();
         assert_eq!(targets.len(), TARGETS);
         assert!((8..TARGETS + 8).all(|index| targets.contains_key(&format!("app:{index} full"))));
+    }
+
+    #[test]
+    fn window_memory_shares_the_capture_lock_and_retention_without_waiting() {
+        let dir = tempfile::tempdir().unwrap();
+        let kept = keep(dir.path(), "screen full", &screen(), None, false).unwrap();
+        for index in 0..TARGETS + 1 {
+            remember_windows(dir.path(), &index.to_string(), &[]).unwrap();
+        }
+        assert!(remembered_windows(dir.path(), "0").is_none());
+        assert_eq!(
+            remembered_windows(dir.path(), &TARGETS.to_string()),
+            Some(vec![])
+        );
+        keep(dir.path(), "screen full", &screen(), None, false).unwrap();
+        assert_eq!(
+            remembered_windows(dir.path(), &TARGETS.to_string()),
+            Some(vec![])
+        );
+        assert_eq!(
+            record(dir.path())["targets"].as_object().unwrap().len(),
+            TARGETS
+        );
+        assert!(kept.path.exists());
+        let lock = locked(dir.path()).unwrap();
+        assert!(remember_windows(dir.path(), "locked", &[]).is_err());
+        drop(lock);
+        let large = HitWindow {
+            number: 42,
+            pid: 812,
+            layer: 0,
+            bounds: crate::native::windows::Bounds::display(1000.0, 800.0),
+        };
+        remember_windows(dir.path(), "large", &vec![large; 1024]).unwrap();
+        assert!(remembered_windows(dir.path(), "large").is_none());
+        assert!(fs::metadata(dir.path().join(RECORD)).unwrap().len() <= RECORD_LIMIT);
     }
 
     #[test]

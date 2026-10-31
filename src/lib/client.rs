@@ -33,8 +33,8 @@ use crate::{
     doing::Doing,
     error::{Code, Error, Result},
     host_session::HostSession,
-    native::windows::Window,
-    session::{Display, Session, has_capability, require_hidden},
+    native::windows::HitWindow,
+    session::{Session, has_capability, require_hidden},
     task::Task,
     transport::{Transport, run_output},
 };
@@ -127,21 +127,20 @@ pub fn timestamp() -> u128 {
 }
 
 impl Client {
-    fn window_memory(&self) -> Option<std::path::PathBuf> {
-        let key = self.host_session.as_ref()?.key();
-        let output = self.output_dir().ok()?;
-        Some(output.join(format!("sessions/{key}.windows")))
-    }
-
-    pub(crate) fn remember_windows(&self, windows: &[Window], display: &Display) -> Result<()> {
-        if let Some(path) = self.window_memory() {
-            crate::config::save_private(&path, &serde_json::to_vec(&(windows, display))?)?;
+    pub(crate) fn remember_windows(&self, windows: &[HitWindow]) -> Result<()> {
+        if let Some(session) = &self.host_session
+            && let Ok(output) = self.output_dir()
+        {
+            crate::last_capture::remember_windows(output, session.key().as_str(), windows)?;
         }
         Ok(())
     }
 
-    pub(crate) fn remembered_windows(&self) -> Option<(Vec<Window>, Display)> {
-        serde_json::from_slice(&crate::files::read_own(&self.window_memory()?, 1 << 20)?).ok()
+    pub(crate) fn remembered_windows(&self) -> Option<Vec<HitWindow>> {
+        crate::last_capture::remembered_windows(
+            &self.config.output_dir,
+            self.host_session.as_ref()?.key().as_str(),
+        )
     }
 
     /// Construction only validates; reads such as status never write; doctor
