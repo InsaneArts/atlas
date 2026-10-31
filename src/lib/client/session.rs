@@ -146,7 +146,7 @@ impl Client {
                     && status["inputService"]["pid"] == input_pid
                     && status["inputService"]["ready"] == false
                 {
-                    self.upgrade_input(&status)
+                    self.upgrade_input_for(&status, true)
                         .await
                         .map_err(Error::uncertain)?;
                     self.controller.clear().map_err(Error::uncertain)?;

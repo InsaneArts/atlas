@@ -39,7 +39,7 @@ impl Client {
         self.require_service_idle_for(false).await
     }
 
-    async fn require_service_idle_for(&self, recovery: bool) -> Result<()> {
+    pub(super) async fn require_service_idle_for(&self, recovery: bool) -> Result<()> {
         if self.allow_disrupt {
             return Ok(());
         }

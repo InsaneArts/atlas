@@ -330,6 +330,184 @@ async fn only_recovery_of_the_callers_unknown_outcome_can_pass_recent_work_and_w
 }
 
 #[tokio::test]
+async fn recovery_replaces_stale_input_during_restart_despite_recent_work_and_waiters() {
+    use serde_json::Value;
+    use tokio::{
+        io::{AsyncBufReadExt, AsyncWriteExt, BufReader},
+        net::UnixListener,
+    };
+
+    for own in [None, Some(session("recovering"))] {
+        for waiter in [false, true] {
+            let directory = tempfile::Builder::new().tempdir_in("/tmp").unwrap();
+            let mut client = crate::test_support::client(directory.path());
+            client.host_session = own.clone();
+            client.controller = client.controller.labelled(own.as_ref());
+            client.transport.peer_uid = nix::unistd::getuid().as_raw();
+            client.input_peer_uid = Some(client.transport.peer_uid);
+            std::fs::write(&client.config.identity_probe, b"installed build").unwrap();
+            let build = client.installed_build().unwrap();
+            let other = session("worker");
+            seen(&client, &other, crate::host_session::now_ms(), false);
+            if waiter {
+                let holder = client
+                    .controller
+                    .clone()
+                    .labelled(Some(&other))
+                    .acquire(true)
+                    .unwrap();
+                crate::test_support::waiting_note(&directory.path().join("state"), Some(&other));
+                drop(holder);
+            }
+            drop(client.controller.quarantine().unwrap());
+            let pending = client.controller.pending().unwrap();
+            assert_eq!(pending.len(), 1);
+
+            std::fs::create_dir_all(client.transport.path.parent().unwrap()).unwrap();
+            let daemon = UnixListener::bind(&client.transport.path).unwrap();
+            let mut input = UnixListener::bind(&client.config.input_socket).unwrap();
+            let previous_pid = i32::MAX as u32;
+            assert!(!super::super::service::process_exists(previous_pid));
+            let mut capture_pid = 123;
+            let mut replaced = false;
+            let mut changes = Vec::new();
+            let serve = async {
+                loop {
+                    let (native, (peer, _)) = tokio::select! {
+                        peer = daemon.accept() => (false, peer.unwrap()),
+                        peer = input.accept() => (true, peer.unwrap()),
+                    };
+                    let mut peer = BufReader::new(peer);
+                    let mut line = String::new();
+                    peer.read_line(&mut line).await.unwrap();
+                    let request: Value = serde_json::from_str(&line).unwrap();
+                    let proof = json!({
+                        "ok": true, "uid": client.config.helper_uid,
+                        "hasGraphicAccess": true, "onConsole": false,
+                        "parentPID": capture_pid, "securitySessionID": 42,
+                        "displayID": 7, "width": 100, "height": 100,
+                    });
+                    let reply = match (native, request["op"].as_str().unwrap()) {
+                        (false, "hello") => json!({
+                            "ok": true, "user": {"uid": client.config.helper_uid},
+                            "daemon": {"pid": capture_pid},
+                            "session": {"managerName": "Aqua", "onConsole": false},
+                            "display": {"width": 100, "height": 100, "scale": 1},
+                        }),
+                        (true, "hello") => json!({
+                            "ok": true, "pid": if replaced { 456 } else { previous_pid },
+                            "protocolVersion": 1, "accessibility": true,
+                            "ready": capture_pid == 123 || replaced,
+                            "session": proof, "controlActive": false, "heldInput": false,
+                            "build": if replaced { build.as_str() } else { "old build" },
+                            "capabilities": [crate::session::SHUTDOWN],
+                        }),
+                        (false, "job") => {
+                            json!({"ok": true, "op": "job", "action": "show", "jobs": []})
+                        }
+                        (false, "run") if request["argv"][1] == "session-info" => {
+                            crate::test_support::completed(&proof.to_string())
+                        }
+                        (true, "reset") => {
+                            assert_eq!(request["epoch"]["processId"], previous_pid);
+                            changes.push("reset");
+                            json!({"ok": true, "released": true})
+                        }
+                        (false, "restart") => {
+                            assert_eq!(
+                                client.controller.acquire(true).unwrap_err().code,
+                                Code::Busy
+                            );
+                            assert!(pending.iter().all(|claim| {
+                                client.controller.pending().unwrap().contains(claim)
+                            }));
+                            changes.push("restart");
+                            capture_pid = 124;
+                            json!({"ok": true})
+                        }
+                        (true, "shutdown") => {
+                            assert_eq!(request["pid"], previous_pid);
+                            assert_eq!(
+                                client.controller.acquire(true).unwrap_err().code,
+                                Code::Busy
+                            );
+                            changes.push("shutdown");
+                            std::fs::remove_file(&client.config.input_socket).unwrap();
+                            json!({"ok": true})
+                        }
+                        (false, "run") => {
+                            assert_eq!(request["argv"][1], "-c");
+                            assert_eq!(
+                                client.controller.acquire(true).unwrap_err().code,
+                                Code::Busy
+                            );
+                            changes.push("spawn");
+                            input = UnixListener::bind(&client.config.input_socket).unwrap();
+                            replaced = true;
+                            crate::test_support::completed("456\n")
+                        }
+                        _ => panic!("unexpected request: {request}"),
+                    };
+                    peer.get_mut()
+                        .write_all(format!("{reply}\n").as_bytes())
+                        .await
+                        .unwrap();
+                }
+            };
+            let outcome = tokio::time::timeout(Duration::from_secs(5), async {
+                tokio::select! {
+                    outcome = client.restart() => outcome,
+                    _ = serve => unreachable!(),
+                }
+            })
+            .await
+            .unwrap()
+            .unwrap();
+            assert_eq!(outcome["ok"], true);
+            assert_eq!(outcome["inputReplaced"], true);
+            assert_eq!(outcome["session"]["daemon"]["pid"], 124);
+            assert!(crate::session::input_current(
+                &outcome["session"],
+                client.config.helper_uid,
+                456,
+            ));
+            assert_eq!(changes, ["reset", "restart", "shutdown", "spawn"]);
+            assert!(client.controller.pending().unwrap().is_empty());
+            assert!(client.controller.holder_note().is_none());
+            if waiter {
+                assert_eq!(client.controller.checked_waiting_notes().unwrap().len(), 1);
+            }
+        }
+    }
+}
+
+#[tokio::test]
+async fn an_ordinary_input_upgrade_still_refuses_recent_work_with_the_callers_unknown_outcome() {
+    let directory = tempfile::tempdir().unwrap();
+    let mut client = crate::test_support::client(directory.path());
+    client.host_session = Some(session("recovering"));
+    client.controller = client.controller.labelled(client.host_session.as_ref());
+    drop(client.controller.quarantine().unwrap());
+    let pending = client.controller.pending().unwrap();
+    seen(
+        &client,
+        &session("worker"),
+        crate::host_session::now_ms(),
+        false,
+    );
+    let _ownership = client.controller.acquire(true).unwrap();
+
+    let error = tokio::time::timeout(Duration::from_secs(1), client.upgrade_input(&json!({})))
+        .await
+        .unwrap()
+        .unwrap_err();
+    assert_eq!(error.code, Code::Busy);
+    assert_eq!(error.error, "worker is active in the helper.");
+    assert!(!error.uncertain);
+    assert_eq!(client.controller.pending().unwrap(), pending);
+}
+
+#[tokio::test]
 async fn recovery_of_the_callers_unknown_outcome_still_refuses_a_running_command() {
     let directory = tempfile::tempdir().unwrap();
     let mut client = crate::test_support::client(directory.path());

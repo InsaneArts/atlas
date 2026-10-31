@@ -98,7 +98,11 @@ impl Client {
     /// executable through its authenticated shutdown. The replacement stays
     /// a pending mutation until it is ready, current and holds nothing.
     pub(super) async fn upgrade_input(&self, status: &Value) -> Result<Value> {
-        self.require_service_idle().await?;
+        self.upgrade_input_for(status, false).await
+    }
+
+    pub(super) async fn upgrade_input_for(&self, status: &Value, recovery: bool) -> Result<Value> {
+        self.require_service_idle_for(recovery).await?;
         let native = &status["inputService"];
 
         if !status["installedBuild"].is_string() {

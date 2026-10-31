@@ -112,6 +112,9 @@ pub struct Client {
     /// Where the person's input through a viewer gathers before it is
     /// logged; none for every other client, whose rows are written at once.
     pub(crate) person_input: Option<record::PersonInput>,
+    /// The account serving a test's temporary input socket.
+    #[cfg(test)]
+    input_peer_uid: Option<u32>,
     installed: BuildCache,
 }
 
@@ -142,6 +145,8 @@ impl Client {
             allow_disrupt: false,
             task: None,
             person_input: None,
+            #[cfg(test)]
+            input_peer_uid: None,
             config,
         })
     }

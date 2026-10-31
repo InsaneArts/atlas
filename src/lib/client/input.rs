@@ -65,10 +65,13 @@ fn checks_all(native: &Value, expect: &Expect) -> bool {
 
 impl Client {
     pub(crate) fn input_transport(&self) -> Transport {
+        let peer_uid = self.config.helper_uid;
+        #[cfg(test)]
+        let peer_uid = self.input_peer_uid.unwrap_or(peer_uid);
         Transport {
             path: self.config.input_socket.clone(),
             timeout: Duration::from_secs(5),
-            peer_uid: self.config.helper_uid,
+            peer_uid,
         }
     }
 
