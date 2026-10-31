@@ -41,12 +41,13 @@ while [[ ! -e $1 && -d ${1:h} ]]; do /bin/sleep 0.01; done
 pub(crate) fn interrupted_executor(test: &str, mode: &str) -> tempfile::TempDir {
     let directory = tempfile::tempdir().unwrap();
     fs::write(directory.path().join("opener"), b"temporary opener").unwrap();
+    let errors = directory.path().join("caller.stderr");
     let mut caller = rerun(test)
         .arg("--nocapture")
         .env("ATLAS_MUTATION_TEST_DIRECTORY", directory.path())
         .env("ATLAS_MUTATION_TEST_MODE", mode)
         .stdout(Stdio::null())
-        .stderr(Stdio::null())
+        .stderr(fs::File::create(&errors).unwrap())
         .spawn()
         .unwrap();
     for _ in 0..500 {
@@ -83,7 +84,8 @@ pub(crate) fn interrupted_executor(test: &str, mode: &str) -> tempfile::TempDir 
     }
     assert!(
         paused && exited,
-        "the stand-in pauses and then exits: {mode}"
+        "the stand-in pauses and then exits: {mode}; paused: {paused}, exited: {exited}\n{}",
+        fs::read_to_string(&errors).unwrap(),
     );
     assert!(
         held_during_dispatch,

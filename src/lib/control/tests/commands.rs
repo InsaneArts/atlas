@@ -144,6 +144,11 @@ fn an_orphaned_privileged_executor_is_never_taken_for_a_command() {
 
 #[test]
 fn an_unknown_outcome_beside_a_running_command_still_blocks_agents() {
+    if !crate::test_support::isolated(
+        "control::tests::commands::an_unknown_outcome_beside_a_running_command_still_blocks_agents",
+    ) {
+        return;
+    }
     let directory = tempfile::tempdir().unwrap();
     let (running, other) = pair(directory.path());
     let _command = running.quarantine_command().unwrap();
@@ -237,6 +242,11 @@ fn a_labelled_command_is_noted_while_it_runs_and_forgotten_once_it_stops() {
 
 #[test]
 fn a_malformed_command_list_fails_closed() {
+    if !crate::test_support::isolated(
+        "control::tests::commands::a_malformed_command_list_fails_closed",
+    ) {
+        return;
+    }
     let directory = tempfile::tempdir().unwrap();
     let (running, other) = pair(directory.path());
     let _command = running.quarantine_command().unwrap();
@@ -312,6 +322,11 @@ fn left_behind(directory: &Path) -> usize {
 
 #[test]
 fn a_change_interrupted_while_recorded_keeps_a_running_command_pending() {
+    if !crate::test_support::isolated(
+        "control::tests::commands::a_change_interrupted_while_recorded_keeps_a_running_command_pending",
+    ) {
+        return;
+    }
     let directory = tempfile::tempdir().unwrap();
     let (running, other) = pair(directory.path());
     let command = running.quarantine_command().unwrap();
@@ -338,6 +353,11 @@ fn a_change_interrupted_while_recorded_keeps_a_running_command_pending() {
 
 #[test]
 fn a_settlement_interrupted_while_recorded_keeps_a_running_command_pending() {
+    if !crate::test_support::isolated(
+        "control::tests::commands::a_settlement_interrupted_while_recorded_keeps_a_running_command_pending",
+    ) {
+        return;
+    }
     let directory = tempfile::tempdir().unwrap();
     let (running, other) = pair(directory.path());
     let command = running.quarantine_command().unwrap();
