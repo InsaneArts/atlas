@@ -440,6 +440,26 @@ struct ViewerPresenterActivityTests {
     #expect(ViewerPresenter.activity(snapshot).days.isEmpty)
   }
 
+  @Test("an unreadable focus refusal says Atlas could not read the app in front")
+  func anUnreadableFocusRefusalSaysAtlasCouldNotReadTheAppInFront() throws {
+    let log = [
+      ActivityFixtures.row(
+        id: "unreadable",
+        says: "didn't type in Notes",
+        outcome: .notSent,
+        ageSeconds: 1,
+        reason: "Atlas couldn't read which app was in front",
+        verb: "type",
+        app: "Notes"
+      )
+    ]
+    let snapshot = try ViewerActivityFixtures.onActivity(log, sessions: [])
+    let step = try #require(ViewerActivityFixtures.steps(ViewerPresenter.activity(snapshot)).first)
+    #expect(step.mark == .notSent)
+    #expect(step.kind == .typing)
+    #expect(step.problem?.why == "Atlas couldn't read which app was in front.")
+  }
+
   @Test("a personal moment's follow-up names the person after its step has removed the actor prefix")
   func personalFollowUpsKeepTheirActor() throws {
     let log = [

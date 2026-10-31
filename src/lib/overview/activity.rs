@@ -28,7 +28,7 @@ pub(super) fn reason(row: &Row) -> Option<&'static str> {
         },
         Failure::Code(Code::SessionChanged) => "The helper's screen changed meanwhile",
         Failure::Code(Code::FocusChanged) if focus == Some("unreadable") => {
-            "Atlas couldn't tell which app was in front"
+            "Atlas couldn't read which app was in front"
         }
         Failure::Code(Code::FocusChanged) if focus == Some("window") => {
             "Another window was in front"
