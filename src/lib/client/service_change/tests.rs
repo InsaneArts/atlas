@@ -939,7 +939,10 @@ async fn an_unnamed_waiter_without_activity_defers_named_and_unnamed_updaters() 
             .unwrap()
             .unwrap_err();
         assert_eq!(error.code, Code::Busy);
-        assert_eq!(error.error, "Terminal is active in the helper.");
+        assert_eq!(
+            service_blocker_with_state(&client, false, crate::process::State::Running).as_deref(),
+            Some("Terminal is active in the helper.")
+        );
         assert_eq!(
             client.controller.acquire(false).unwrap_err().code,
             Code::Busy
@@ -1274,10 +1277,14 @@ async fn the_callers_own_session_can_update_after_its_running_command_ends() {
     client.controller = client.controller.clone().labelled(Some(&host));
     client.host_session = Some(host);
     let command = client.controller.quarantine_command().unwrap();
-    let error = client.require_service_idle().await.unwrap_err();
+    let error = tokio::time::timeout(Duration::from_secs(1), client.require_service_idle())
+        .await
+        .unwrap()
+        .unwrap_err();
+    assert_eq!(error.code, Code::Busy);
     assert_eq!(
-        error.error,
-        "updater has a command still running in the helper."
+        service_blocker_with_state(&client, false, crate::process::State::Running).as_deref(),
+        Some("updater has a command still running in the helper.")
     );
     client.controller.clear_if(&command).unwrap();
     drop(command);
