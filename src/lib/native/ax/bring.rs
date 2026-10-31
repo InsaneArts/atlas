@@ -28,6 +28,9 @@ const ELEMENTS: usize = 1500;
 const DEPTH: usize = 14;
 
 pub(super) trait Backend: Ask {
+    fn pause(&mut self, duration: Duration) {
+        std::thread::sleep(duration);
+    }
     fn app(&mut self, pid: i64) -> Option<Self::Element>;
     fn windows(&mut self) -> Result<Vec<Window>>;
     /// A complete, typed list, or an error. Never a truncated prefix.
@@ -86,6 +89,7 @@ impl Backend for Live {
         let count = match ffi::count(element, &name) {
             Ok(count) if count >= 0 && count as usize <= limit => count,
             Err(error) if ABSENT.contains(&error) => return Ok(Vec::new()),
+            Err(error) => return Err(Unread::Malformed.reading(error)),
             _ => return Err(Unread::Malformed.error()),
         };
         bound()?;
@@ -93,10 +97,12 @@ impl Backend for Live {
             return Ok(Vec::new());
         }
         let values = ffi::copy_values(element, &name, count)
-            .map_err(|_| Unread::Failed.error())?
+            .map_err(|error| Unread::Failed.reading(error))?
             .ok_or_else(|| Unread::Malformed.error())?;
         bound()?;
-        if values.len() != count as usize || ffi::count(element, &name) != Ok(count) {
+        if values.len() != count as usize
+            || ffi::count(element, &name).map_err(|error| Unread::Failed.reading(error))? != count
+        {
             return Err(Unread::Failed.error());
         }
         let result = values
@@ -122,14 +128,14 @@ impl Backend for Live {
             Write::Flag(name) => match ffi::settable(element, &CFString::from_static_str(name)) {
                 Ok(value) => Ok(value),
                 Err(error) if ABSENT.contains(&error) => Ok(false),
-                Err(_) => Err(Unread::Failed.error()),
+                Err(error) => Err(Unread::Failed.reading(error)),
             },
             Write::Raise => {
                 let names = match ffi::actions(element) {
                     Ok(Some(names)) => names,
                     Ok(None) => return Ok(false),
                     Err(AXError::ActionUnsupported | AXError::NotImplemented) => return Ok(false),
-                    Err(_) => return Err(Unread::Failed.error()),
+                    Err(error) => return Err(Unread::Failed.reading(error)),
                 };
                 supports_raise(&names, deadline, Instant::now)
             }
@@ -973,16 +979,20 @@ fn settle<A: Backend>(
         let error = match result {
             Ok(role) => return Ok(role),
             Err(error) if error.details.get("unread").is_some_and(|why| why == "slow") => {
-                return Err(last_refusal.unwrap_or(error));
+                if !target.changed || target.reader.left().is_err() {
+                    return Err(last_refusal.unwrap_or(error));
+                }
+                last_refusal.take().unwrap_or(error)
             }
             Err(error) => error,
         };
         if !target.changed
-            || error.code != Code::FocusChanged
-            || !matches!(
-                error.details.get("reason").and_then(|value| value.as_str()),
-                Some("app" | "window" | "point" | "field")
-            )
+            || !(error.details.get("unread").is_some_and(|why| why == "slow")
+                || (error.code == Code::FocusChanged
+                    && matches!(
+                        error.details.get("reason").and_then(|value| value.as_str()),
+                        Some("app" | "window" | "point" | "field")
+                    )))
             || target.reader.left().is_err()
         {
             return Err(error);
@@ -990,7 +1000,7 @@ fn settle<A: Backend>(
         // A refused destination never authorizes input. Keep its actual reason
         // if waiting for a focus request to take effect exhausts the deadline.
         last_refusal = Some(error);
-        std::thread::sleep(
+        target.reader.ask.pause(
             Duration::from_millis(10)
                 .min(deadline.saturating_duration_since(target.reader.ask.now())),
         );
