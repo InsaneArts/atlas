@@ -1208,6 +1208,164 @@ fn an_app_only_point_selects_its_own_frontmost_window_before_raising() {
 }
 
 #[test]
+fn an_uncovered_pointer_target_receives_app_and_window_focus_before_input() {
+    for need in [
+        Need::Point(30.0, 60.0),
+        Need::Drag {
+            from: (30.0, 60.0),
+            to: (40.0, 70.0),
+        },
+    ] {
+        for expect in [named(), Expect::new(812).unwrap()] {
+            for (active, window) in [(false, WINDOW), (true, 3), (true, WINDOW)] {
+                let mut fake = pointer_target();
+                fake.frontmost.set(active);
+                fake.observed_window.set(window);
+                let deadline = fake.now.get() + Duration::from_millis(450);
+                let mut observation = fake.clone();
+                let mut reads = 0;
+                let mut verify = |number, until| {
+                    reads += 1;
+                    assert!(reads <= 3);
+                    verify_pointer(&mut observation, &expect, need, number, until)
+                };
+                let target = prepare(
+                    &mut fake,
+                    &expect,
+                    need,
+                    deadline,
+                    &|| Ok(()),
+                    &mut |number| verify(number, deadline).is_ok(),
+                )
+                .unwrap();
+                assert_eq!(target.number, Some(42));
+                let already_active = active && window == WINDOW;
+                assert_eq!(target.changed, !already_active);
+                assert_eq!(
+                    settle(target, &expect, deadline, &|| Ok(()), &mut verify).unwrap(),
+                    None
+                );
+                assert!(fake.frontmost.get());
+                assert_eq!(fake.observed_window.get(), WINDOW);
+                if already_active {
+                    assert!(fake.writes.is_empty());
+                } else {
+                    assert_eq!(
+                        fake.writes,
+                        [
+                            (APP, Write::Flag("AXFrontmost")),
+                            (WINDOW, Write::Raise),
+                            (WINDOW, Write::Flag("AXMain")),
+                            (WINDOW, Write::Flag("AXFocused")),
+                        ]
+                    );
+                }
+            }
+        }
+    }
+}
+
+#[test]
+fn an_uncovered_pointer_target_must_keep_app_and_window_focus_during_settlement() {
+    for lose_app in [false, true] {
+        for lose_on_read in [1, 2] {
+            let mut fake = pointer_target();
+            fake.frontmost.set(true);
+            let expect = named();
+            let need = Need::Point(30.0, 60.0);
+            let deadline = fake.now.get() + Duration::from_millis(450);
+            let mut observation = fake.clone();
+            let target = prepare(
+                &mut fake,
+                &expect,
+                need,
+                deadline,
+                &|| Ok(()),
+                &mut |number| {
+                    verify_pointer(&mut observation, &expect, need, number, deadline).is_ok()
+                },
+            )
+            .unwrap();
+            assert!(!target.changed);
+            let mut reads = 0;
+            let error = settle(target, &expect, deadline, &|| Ok(()), |number, until| {
+                reads += 1;
+                assert!(reads <= 2);
+                if reads == lose_on_read {
+                    if lose_app {
+                        observation.frontmost.set(false);
+                    } else {
+                        observation.observed_window.set(3);
+                    }
+                }
+                verify_pointer(&mut observation, &expect, need, number, until)
+            })
+            .unwrap_err();
+            assert_eq!(error.code, Code::FocusChanged);
+            assert_eq!(
+                error.details["reason"],
+                if lose_app { "app" } else { "window" }
+            );
+            assert_eq!(reads, lose_on_read);
+            assert!(fake.writes.is_empty());
+        }
+    }
+}
+
+fn pointer_target() -> Fake {
+    let mut fake = Fake::new();
+    fake.window(3);
+    fake.answers
+        .insert((3, "AXPosition"), Answer::Point(500.0, 30.0));
+    let mut other = fake.windows[0].clone();
+    other.number = 43;
+    other.bounds.x = 500.0;
+    fake.windows.insert(0, other);
+    fake.lists.insert((APP, "AXWindows"), vec![WINDOW, 3]);
+    fake.on_ask = Some(|fake, element, attribute| {
+        if (element, attribute) == (APP, "AXFocusedWindow") {
+            fake.answers.insert(
+                (element, attribute),
+                Answer::Element(fake.observed_window.get()),
+            );
+        }
+    });
+    fake.after_write = Some(|fake| match fake.writes.last().copied().unwrap() {
+        (APP, Write::Flag("AXFrontmost")) => fake.frontmost.set(true),
+        (WINDOW, Write::Flag("AXFocused")) => fake.observed_window.set(WINDOW),
+        _ => {}
+    });
+    fake
+}
+
+fn verify_pointer(
+    fake: &mut Fake,
+    expect: &Expect,
+    need: Need,
+    number: Option<i64>,
+    deadline: Instant,
+) -> Result<Option<&'static str>> {
+    let keyboard = super::super::keyboard::read(
+        &mut *fake,
+        &APP,
+        deadline,
+        super::super::Judged {
+            window: true,
+            field: false,
+        },
+    )?;
+    crate::native::focus::tests::verify_pointer(
+        expect,
+        need,
+        number,
+        if fake.frontmost.get() { 812 } else { 900 },
+        keyboard,
+        fake.windows.clone(),
+        deadline,
+    )
+}
+
+#[test]
 fn an_app_only_point_without_a_candidate_makes_no_writes() {
     let mut fake = Fake::new();
     let deadline = fake.now.get() + Duration::from_millis(450);

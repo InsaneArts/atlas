@@ -322,11 +322,14 @@ pub(super) fn prepare(
         return Ok(None);
     }
     ax::bring(expect, need, deadline, &guard, |number, until| {
-        let selected = match number {
-            Some(number) if expect.window() != Some(number) => expect.clone().in_window(number)?,
-            _ => expect.clone(),
-        };
-        check(&selected, need, display, until)
+        prepared(
+            expect,
+            need,
+            number,
+            display,
+            &mut Live::until(until),
+            until,
+        )
     })
     .map_err(|error| {
         if error.code == Code::Native {
@@ -335,6 +338,26 @@ pub(super) fn prepare(
             error
         }
     })
+}
+
+/// A visible control may need a click just to activate its window. Prove
+/// activation as well as reachability before skipping writes or settling.
+fn prepared(
+    expect: &Expect,
+    need: Need,
+    number: Option<i64>,
+    display: &Bounds,
+    look: &mut impl Look,
+    deadline: Instant,
+) -> Result<Option<&'static str>> {
+    let selected = match number {
+        Some(number) if expect.window() != Some(number) => expect.clone().in_window(number)?,
+        _ => expect.clone(),
+    };
+    if matches!(need, Need::Point(..) | Need::Drag { .. }) {
+        require(&selected, Need::Keys, display, look, deadline)?;
+    }
+    require(&selected, need, display, look, deadline)
 }
 
 /// Refuse with `focus-changed` unless `expect` holds for `need` as `look`

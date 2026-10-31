@@ -140,6 +140,21 @@ pub(in crate::native) fn verify_keyboard(
     require(expect, Need::Keys, &display(), &mut look, deadline)
 }
 
+pub(in crate::native) fn verify_pointer(
+    expect: &Expect,
+    need: Need,
+    number: Option<i64>,
+    focused: i64,
+    keyboard: Keyboard,
+    listed: Vec<Window>,
+    deadline: Instant,
+) -> Result<Option<&'static str>> {
+    let mut look = Seen::focused(Some(focused))
+        .showing(listed)
+        .typing_in(keyboard);
+    prepared(expect, need, number, &display(), &mut look, deadline)
+}
+
 /// The refusal's code, reason and what it found, as an agent reads them.
 fn refusal(outcome: Result<Option<&str>>) -> serde_json::Value {
     let error = outcome.unwrap_err();
