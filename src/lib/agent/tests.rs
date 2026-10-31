@@ -364,7 +364,10 @@ async fn resolved(expected: Option<Expected>) -> (Result<Expect>, usize) {
         .serve(
             async {
                 let verified = client.verify().await?;
-                expected.resolve(&client, &verified).await
+                expected
+                    .resolve(&client, &verified)
+                    .await
+                    .map(Option::unwrap)
             },
             two_apps(&lists),
         )

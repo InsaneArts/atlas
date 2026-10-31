@@ -128,7 +128,10 @@ pub async fn type_text(client: &Client, text: &str, expected: Option<&Expected>)
     let _typing = interrupt.step();
     let verified = client.verify().await?;
     let check = match expected {
-        Some(expected) => Some(Check::Required(expected.resolve(client, &verified).await?)),
+        Some(expected) => expected
+            .resolve(client, &verified)
+            .await?
+            .map(Check::Required),
         None => None,
     };
     let epoch = verified.session().epoch.clone();

@@ -12,7 +12,7 @@ use crate::{
     config::write_atomic,
     daemon::protocol::{Crop, Region},
     digest,
-    error::{Code, Error, Result},
+    error::Result,
     files::write_private,
     helper_info::capture_time,
     native::windows::HitWindow,
@@ -28,7 +28,7 @@ use std::{
     io::Read,
     os::unix::fs::OpenOptionsExt,
     path::{Path, PathBuf},
-    time::Duration,
+    time::{Duration, Instant},
 };
 
 const RECORD: &str = "last-captures.json";
@@ -66,19 +66,26 @@ struct Entry {
     at: String,
 }
 
-pub(crate) fn remember_windows(output: &Path, key: &str, windows: &[HitWindow]) -> Result<()> {
-    let _lock = locked(output)
-        .ok_or_else(|| Error::new(Code::State, "The capture record is unavailable"))?;
+#[derive(Debug, Deserialize)]
+pub(crate) struct Observation {
+    pub windows: Vec<HitWindow>,
+    pub epoch: Value,
+}
+
+pub(crate) fn remember_windows(output: &Path, key: &str, windows: &[HitWindow], epoch: &Epoch) {
+    let Some(_lock) = locked(output) else {
+        return;
+    };
     let mut targets = read(output);
     targets.insert(
         format!("session:{key}"),
-        json!({"windows": windows, "at": timestamp().to_string()}),
+        json!({"windows": windows, "epoch": recorded_epoch(epoch), "at": timestamp().to_string()}),
     );
-    write(output, targets)
+    let _ = write(output, targets);
 }
 
-pub(crate) fn remembered_windows(output: &Path, key: &str) -> Option<Vec<HitWindow>> {
-    serde_json::from_value(read(output).remove(&format!("session:{key}"))?["windows"].take()).ok()
+pub(crate) fn remembered_windows(output: &Path, key: &str) -> Option<Observation> {
+    serde_json::from_value(read(output).remove(&format!("session:{key}"))?).ok()
 }
 
 /// What a capture shows and at what size: captures compare only with the
@@ -192,13 +199,19 @@ fn locked(output: &Path) -> Option<fs::File> {
     if !lock.metadata().ok()?.is_file() {
         return None;
     }
-    FileExt::try_lock_exclusive(&lock).ok()?;
+    let deadline = Instant::now() + Duration::from_millis(50);
+    while let Err(error) = FileExt::try_lock_exclusive(&lock) {
+        if error.kind() != std::io::ErrorKind::WouldBlock || Instant::now() >= deadline {
+            return None;
+        }
+        std::thread::sleep(Duration::from_millis(5));
+    }
 
     Some(lock)
 }
 
 /// The display epoch a capture was taken in, as the record keeps it.
-fn recorded_epoch(epoch: &Epoch) -> Value {
+pub(crate) fn recorded_epoch(epoch: &Epoch) -> Value {
     json!({
         "uid": epoch.uid,
         "securitySessionId": epoch.security_session_id,
@@ -589,20 +602,71 @@ mod tests {
     }
 
     #[test]
-    fn window_memory_shares_the_capture_lock_and_retention_without_waiting() {
+    fn window_memory_waits_briefly_for_a_writer_and_skips_a_busy_or_unwritable_record() {
+        let dir = tempfile::tempdir().unwrap();
+        let lock = locked(dir.path()).unwrap();
+        let writer = std::thread::spawn(move || {
+            std::thread::sleep(Duration::from_millis(10));
+            drop(lock);
+        });
+        remember_windows(dir.path(), "waited", &[], &epoch());
+        writer.join().unwrap();
+        assert!(remembered_windows(dir.path(), "waited").is_some());
+
+        let lock = locked(dir.path()).unwrap();
+        let output = dir.path().to_owned();
+        let (finished, result) = std::sync::mpsc::channel();
+        let writer = std::thread::spawn(move || {
+            remember_windows(&output, "busy", &[], &epoch());
+            finished.send(()).unwrap();
+        });
+        result.recv_timeout(Duration::from_secs(1)).unwrap();
+        assert!(remembered_windows(dir.path(), "busy").is_none());
+        drop(lock);
+        writer.join().unwrap();
+        fs::remove_file(dir.path().join(RECORD)).unwrap();
+        fs::create_dir(dir.path().join(RECORD)).unwrap();
+        remember_windows(dir.path(), "unwritable", &[], &epoch());
+        assert!(remembered_windows(dir.path(), "unwritable").is_none());
+    }
+
+    #[test]
+    fn malformed_window_memory_is_ignored() {
+        let dir = tempfile::tempdir().unwrap();
+        for entry in [
+            json!(false),
+            json!(1),
+            json!("bad"),
+            json!([]),
+            json!({}),
+            json!({"windows": false, "epoch": {}}),
+        ] {
+            fs::write(
+                dir.path().join(RECORD),
+                json!({"version": VERSION, "targets": {"session:one": entry}}).to_string(),
+            )
+            .unwrap();
+            assert!(remembered_windows(dir.path(), "one").is_none());
+        }
+    }
+
+    #[test]
+    fn window_memory_shares_the_capture_lock_and_retention() {
         let dir = tempfile::tempdir().unwrap();
         let kept = keep(dir.path(), "screen full", &screen(), None, false).unwrap();
         for index in 0..TARGETS + 1 {
-            remember_windows(dir.path(), &index.to_string(), &[]).unwrap();
+            remember_windows(dir.path(), &index.to_string(), &[], &epoch());
         }
         assert!(remembered_windows(dir.path(), "0").is_none());
         assert_eq!(
-            remembered_windows(dir.path(), &TARGETS.to_string()),
+            remembered_windows(dir.path(), &TARGETS.to_string())
+                .map(|observation| observation.windows),
             Some(vec![])
         );
         keep(dir.path(), "screen full", &screen(), None, false).unwrap();
         assert_eq!(
-            remembered_windows(dir.path(), &TARGETS.to_string()),
+            remembered_windows(dir.path(), &TARGETS.to_string())
+                .map(|observation| observation.windows),
             Some(vec![])
         );
         assert_eq!(
@@ -610,16 +674,13 @@ mod tests {
             TARGETS
         );
         assert!(kept.path.exists());
-        let lock = locked(dir.path()).unwrap();
-        assert!(remember_windows(dir.path(), "locked", &[]).is_err());
-        drop(lock);
         let large = HitWindow {
             number: 42,
             pid: 812,
             layer: 0,
             bounds: crate::native::windows::Bounds::display(1000.0, 800.0),
         };
-        remember_windows(dir.path(), "large", &vec![large; 1024]).unwrap();
+        remember_windows(dir.path(), "large", &vec![large; 1024], &epoch());
         assert!(remembered_windows(dir.path(), "large").is_none());
         assert!(fs::metadata(dir.path().join(RECORD)).unwrap().len() <= RECORD_LIMIT);
     }

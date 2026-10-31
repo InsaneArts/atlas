@@ -139,9 +139,17 @@ pub(super) const WITHHELD_NEXT: &str = "Ask the person to unlock the Mac: apps h
 
 /// The accessibility elements of process `pid`, scanned in the helper
 /// `verified` describes, which the caller verified just before.
-async fn app_elements(client: &Client, verified: &Verified, pid: i64) -> Result<Scanned> {
+async fn app_elements(
+    client: &Client,
+    verified: &Verified,
+    pid: i64,
+    routing: bool,
+) -> Result<Scanned> {
     let probe = client.config.identity_probe.to_string_lossy().into_owned();
-    let argv = vec![probe, "elements-info".into(), pid.to_string()];
+    let mut argv = vec![probe, "elements-info".into(), pid.to_string()];
+    if routing {
+        argv.push("--routing".into());
+    }
     let reply = client.run(argv, Run::inspect().pinned(verified)).await?;
     let value = run_output(&reply, 8 << 20)
         .ok()
@@ -162,13 +170,16 @@ pub async fn elements(
 ) -> Result<Value> {
     let verified = client.verify().await?;
     let pid = target_pid(client, &verified, target).await?;
-    let scanned = app_elements(client, &verified, pid).await?;
+    let scanned = app_elements(client, &verified, pid, true).await?;
     let display = &verified.session().epoch.display;
-    client.remember_windows(&hit_windows(
-        &scanned.windows,
-        &Bounds::display(display.width, display.height),
-        &scanned.dock,
-    ))?;
+    client.remember_windows(
+        &hit_windows(
+            &scanned.windows,
+            &Bounds::display(display.width, display.height),
+            &scanned.dock,
+        ),
+        &verified.session().epoch,
+    );
 
     Ok(listing(pid, &scanned, filter, max, full))
 }
@@ -536,7 +547,7 @@ pub async fn click_element(
     let verified = client.verify().await?;
     let expect = target_expect(client, &verified, target).await?;
     let pid = expect.pid();
-    let scanned = app_elements(client, &verified, pid).await?;
+    let scanned = app_elements(client, &verified, pid, false).await?;
     let epoch = verified.session().epoch.clone();
     if scanned.incomplete {
         return Err(scanned.refusal());

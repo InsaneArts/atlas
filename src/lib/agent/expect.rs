@@ -9,6 +9,7 @@ use crate::{
     actions::Expect,
     client::{Check, Client, Verified},
     error::{Code, Error, Result},
+    last_capture::{Observation, recorded_epoch},
     native::windows::{DOCK_LAYER, Window},
 };
 use serde_json::Value;
@@ -20,19 +21,27 @@ use serde_json::Value;
 /// the app's own window, or the named one, is the top one.
 pub async fn act(client: &Client, expected: Option<&Expected>, actions: &Value) -> Result<Value> {
     let remembered = Expected::remembered(client, expected, actions);
-    let Some(expected) = remembered.as_ref().or(expected) else {
+    if remembered.is_none() && expected.is_none() {
         return client.input(actions, None, None).await;
-    };
+    }
 
     let ownership = client.controller.acquire_beside_commands()?;
     let verified = client.verify().await?;
-    let expect = expected.resolve(client, &verified).await?;
+    let inferred = match remembered {
+        Some(remembered) => remembered.resolve(client, &verified).await?,
+        None => None,
+    };
+    let expect = match (inferred, expected) {
+        (Some(expect), _) => Some(expect),
+        (None, Some(expected)) => expected.resolve(client, &verified).await?,
+        (None, None) => None,
+    };
     client
         .input_owned(
             &ownership,
             actions,
             &verified.session().epoch,
-            Some(Check::Required(expect)),
+            expect.map(Check::Required),
         )
         .await
 }
@@ -44,6 +53,7 @@ pub async fn act(client: &Client, expected: Option<&Expected>, actions: &Value) 
 pub struct Expected {
     place: Place,
     field: Option<String>,
+    observation: Option<(i64, Value)>,
 }
 
 /// The app, or the window, an agent's input must reach.
@@ -61,6 +71,7 @@ impl Expected {
             Some(Self {
                 place: Place::App(app),
                 field: None,
+                ..
             }) => Some(app.clone()),
             Some(_) => return None,
             None => None,
@@ -73,12 +84,14 @@ impl Expected {
             "drag" => (action["fromX"].as_f64()?, action["fromY"].as_f64()?),
             _ => return None,
         };
-        let windows = client.remembered_windows()?;
+        let Observation { windows, epoch } = client.remembered_windows()?;
         let window = windows.iter().find(|window| window.bounds.contains(x, y))?;
         if !(0..DOCK_LAYER).contains(&window.layer) {
             return None;
         }
-        Self::new(app, Some(window.number), None).ok().flatten()
+        let mut expected = Self::new(app, Some(window.number), None).ok().flatten()?;
+        expected.observation = Some((window.pid, epoch));
+        Some(expected)
     }
 
     /// The expectation of `app`, `window` and `field`, as many as are
@@ -100,17 +113,39 @@ impl Expected {
             (None, None) => return Ok(None),
         };
 
-        Ok(Some(Self { place, field }))
+        Ok(Some(Self {
+            place,
+            field,
+            observation: None,
+        }))
     }
 
     /// What the helper is asked to check, found in the helper `verified`
     /// describes: the app's process, or the named window's owner, refused
-    /// when the window is not the named app's.
-    pub(super) async fn resolve(&self, client: &Client, verified: &Verified) -> Result<Expect> {
+    /// when the window is not the named app's. A stale observation infers nothing.
+    pub(super) async fn resolve(
+        &self,
+        client: &Client,
+        verified: &Verified,
+    ) -> Result<Option<Expect>> {
+        if self
+            .observation
+            .as_ref()
+            .is_some_and(|(_, epoch)| *epoch != recorded_epoch(&verified.session().epoch))
+        {
+            return Ok(None);
+        }
         let mut expect = match &self.place {
             Place::App(app) => target_expect(client, verified, app).await,
             Place::Window { number, app } => {
                 let listed = verified_window_snapshot(client, verified).await?;
+                if self.observation.as_ref().is_some_and(|(pid, _)| {
+                    !listed.windows.iter().any(|window| {
+                        window.number == *number && window.pid == *pid && window.is_apps()
+                    })
+                }) {
+                    return Ok(None);
+                }
                 let owner = window_owner(&listed.windows, *number)?;
                 if let Some(app) = app
                     && target_among(client, verified, app, Some(&listed))
@@ -131,7 +166,7 @@ impl Expected {
             expect = expect.in_field(field)?;
         }
 
-        Ok(expect)
+        Ok(Some(expect))
     }
 }
 
@@ -207,14 +242,26 @@ mod tests {
         }
     }
 
+    fn epoch() -> crate::session::Epoch {
+        crate::session::Epoch {
+            uid: crate::test_support::UID,
+            capture_pid: 123,
+            input_pid: 0,
+            display: display(),
+            security_session_id: 42,
+            display_id: 7,
+        }
+    }
+
     fn remember(client: &Client, windows: &[Window]) {
-        client
-            .remember_windows(&hit_windows(
+        client.remember_windows(
+            &hit_windows(
                 windows,
                 &Bounds::display(display().width, display().height),
                 &Dock::Unread,
-            ))
-            .unwrap();
+            ),
+            &epoch(),
+        );
     }
 
     fn number(client: &Client, expected: Option<&Expected>, actions: &Value) -> Option<i64> {
@@ -240,6 +287,106 @@ mod tests {
             assert_eq!(number(&client, None, &action), Some(42));
         }
         assert_eq!(number(&client, None, &move_to(500.0, 500.0)), None);
+    }
+
+    #[tokio::test]
+    async fn point_actions_infer_only_the_observed_owner_in_the_observed_epoch() {
+        use crate::test_support::{Helper, UID, completed};
+        use tokio::{
+            io::{AsyncBufReadExt, AsyncWriteExt, BufReader},
+            net::UnixListener,
+        };
+
+        for change in 0..11 {
+            for app in [None, Some(Target::Pid(812))] {
+                let directory = tempfile::tempdir().unwrap();
+                let (client, helper) = Helper::client(directory.path(), UID);
+                let client = session(&client, "one");
+                let listener = UnixListener::bind(&client.config.input_socket).unwrap();
+                let sent = std::cell::RefCell::new(Vec::new());
+                let native = async {
+                    loop {
+                        let (peer, _) = listener.accept().await.unwrap();
+                        let mut peer = BufReader::new(peer);
+                        let mut line = String::new();
+                        peer.read_line(&mut line).await.unwrap();
+                        let request: Value = serde_json::from_str(&line).unwrap();
+                        let reply = if request["op"] == "hello" {
+                            json!({"ok":true,"pid":456,"protocolVersion":1,"ready":true,"accessibility":true,
+                                "capabilities":[crate::session::FOCUS_APP,crate::session::FOCUS_DOCK,crate::session::FOCUS_WINDOW],
+                                "session":{"ok":true,"uid":UID,"onConsole":false,"hasGraphicAccess":true,
+                                    "securitySessionID":42,"displayID":7,"width":100,"height":100}})
+                        } else {
+                            if request["op"] == "input" {
+                                sent.borrow_mut().push(request["expect"].clone());
+                            }
+                            json!({"ok":true,"performed":1,"expect":request["expect"]})
+                        };
+                        peer.get_mut()
+                            .write_all(format!("{reply}\n").as_bytes())
+                            .await
+                            .unwrap();
+                    }
+                };
+                let operation = helper.serve(
+                    async {
+                        let verified = client.verify().await.unwrap();
+                        let mut epoch = verified.session().epoch.clone();
+                        match change {
+                            3 => epoch.uid += 1,
+                            4 => epoch.capture_pid += 1,
+                            5 => epoch.input_pid += 1,
+                            6 => epoch.security_session_id += 1,
+                            7 => epoch.display_id += 1,
+                            8 => epoch.display.width += 1.0,
+                            9 => epoch.display.height += 1.0,
+                            10 => epoch.display.scale += 1.0,
+                            _ => {}
+                        }
+                        client.remember_windows(
+                            &hit_windows(
+                                &[window(42, 10.0)],
+                                &Bounds::display(100.0, 100.0),
+                                &Dock::Unread,
+                            ),
+                            &epoch,
+                        );
+                        let expected = Expected::new(app.clone(), None, None).unwrap();
+                        act(&client, expected.as_ref(), &move_to(30.0, 40.0))
+                            .await
+                            .unwrap();
+                    },
+                    |request| {
+                        if request["op"] == "apps" {
+                            return Some(json!({"ok":true,"apps":[{"pid":812,"name":"Editor"}]}));
+                        }
+                        assert_eq!(request["argv"][1], "windows-info");
+                        assert!(
+                            client.controller.acquire(false).is_err(),
+                            "validation holds ownership"
+                        );
+                        let mut current = window(42, 10.0);
+                        if change == 1 {
+                            current.pid = 900;
+                        }
+                        let windows = if change == 2 { vec![] } else { vec![current] };
+                        Some(completed(&json!({"ok":true,"windows":windows}).to_string()))
+                    },
+                );
+                tokio::select! {
+                    () = operation => {},
+                    () = native => unreachable!(),
+                }
+                let expected = if change == 0 {
+                    json!({"pid":812,"window":42})
+                } else if app.is_some() {
+                    json!({"pid":812})
+                } else {
+                    Value::Null
+                };
+                assert_eq!(*sent.borrow(), [expected], "change {change}, app {app:?}");
+            }
+        }
     }
 
     #[test]
@@ -336,9 +483,7 @@ mod tests {
             Dock::Unread,
             Dock::Icons(vec![]),
         ] {
-            client
-                .remember_windows(&hit_windows(&windows, &display, &dock))
-                .unwrap();
+            client.remember_windows(&hit_windows(&windows, &display, &dock), &epoch());
             let screen = crate::native::windows::Screen::new(display.clone(), dock);
             let top = crate::native::windows::top_at(&windows, 30.0, 40.0, &screen).unwrap();
             assert_eq!(

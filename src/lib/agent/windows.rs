@@ -106,11 +106,14 @@ pub async fn list(client: &Client, filter: &WindowFilter) -> Result<Value> {
         .await?;
     let Shown { windows, dock, .. } = shown(&reply)?;
     let display = &verified.session().epoch.display;
-    client.remember_windows(&hit_windows(
-        &windows,
-        &Bounds::display(display.width, display.height),
-        &dock,
-    ))?;
+    client.remember_windows(
+        &hit_windows(
+            &windows,
+            &Bounds::display(display.width, display.height),
+            &dock,
+        ),
+        &verified.session().epoch,
+    );
     let matching: Vec<_> = windows
         .into_iter()
         .filter(|window| filter.matches(window))

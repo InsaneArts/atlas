@@ -83,7 +83,11 @@ pub(super) enum Command {
         dock: bool,
     },
     #[command(hide = true)]
-    ElementsInfo { pid: i32 },
+    ElementsInfo {
+        pid: i32,
+        #[arg(long)]
+        routing: bool,
+    },
     /// The helper daemon inside the helper login (started by its LaunchAgent).
     #[command(hide = true)]
     HelperServe {

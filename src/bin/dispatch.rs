@@ -93,22 +93,45 @@ fn windows_info(dock: bool) -> Result<Value> {
 }
 
 #[cfg(target_os = "macos")]
-fn elements_info(pid: i32) -> Result<Value> {
-    let limits = atlas::native::ax::Limits::default();
-    let snapshot = atlas::native::ax::elements(pid, limits)?;
-    Ok(json!({
+fn elements_info(pid: i32, routing: bool) -> Result<Value> {
+    use atlas::native::{ax, windows};
+    elements_info_with(
+        routing,
+        || ax::elements(pid, ax::Limits::default()),
+        windows::windows,
+        |windows| ax::dock(windows, ax::DOCK_TIMEOUT),
+    )
+}
+
+#[cfg(target_os = "macos")]
+fn elements_info_with(
+    routing: bool,
+    scan: impl FnOnce() -> Result<atlas::native::ax::Snapshot>,
+    mut list: impl FnMut() -> Result<Vec<atlas::native::windows::Window>>,
+    dock: impl FnOnce(&[atlas::native::windows::Window]) -> atlas::native::windows::Dock,
+) -> Result<Value> {
+    let before = routing.then(&mut list);
+    let snapshot = scan()?;
+    let mut info = json!({
         "ok": true,
-        "dock": atlas::native::ax::dock(&snapshot.windows, atlas::native::ax::DOCK_TIMEOUT),
         "elements": snapshot.elements,
-        "windows": snapshot.windows,
         "truncated": snapshot.incomplete,
         "reasons": snapshot.stops,
         "errors": snapshot.errors,
-    }))
+    });
+    if let Some(before) = before {
+        let dock = dock(before.as_deref().unwrap_or_default());
+        info["windows"] = match (before, list()) {
+            (Ok(before), Ok(after)) if before == after => json!(before),
+            _ => json!([]),
+        };
+        info["dock"] = json!(dock);
+    }
+    Ok(info)
 }
 
 #[cfg(not(target_os = "macos"))]
-fn elements_info(_: i32) -> Result<Value> {
+fn elements_info(_: i32, _: bool) -> Result<Value> {
     Err(Error::new(
         Code::Platform,
         "Accessibility elements require macOS",
@@ -292,7 +315,7 @@ async fn carry_out(
         Command::SessionInfo => atlas::native::session_info(),
         Command::PermissionsInfo => Ok(atlas::daemon::facts::permissions_now()),
         Command::WindowsInfo { dock } => windows_info(dock),
-        Command::ElementsInfo { pid } => elements_info(pid),
+        Command::ElementsInfo { pid, routing } => elements_info(pid, routing),
         Command::HelperServe { .. } => {
             unreachable!("main serves the helper daemon on its own thread")
         }
@@ -969,6 +992,76 @@ mod tests {
     use super::*;
     use crate::cli::Cli;
     use clap::Parser;
+
+    #[cfg(target_os = "macos")]
+    fn empty_scan() -> Result<atlas::native::ax::Snapshot> {
+        Ok(atlas::native::ax::Snapshot {
+            windows: vec![],
+            elements: vec![],
+            incomplete: false,
+            stops: Default::default(),
+            errors: Default::default(),
+        })
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn elements_remember_no_routing_when_a_window_moves_during_traversal() {
+        use atlas::native::windows::{Bounds, Dock, Window};
+        let x = std::cell::Cell::new(0.0);
+        let read = || {
+            Ok(vec![Window {
+                number: 42,
+                pid: 812,
+                owner: None,
+                title: None,
+                layer: 0,
+                alpha: 1.0,
+                bounds: Bounds {
+                    x: x.get(),
+                    y: 0.0,
+                    width: 100.0,
+                    height: 100.0,
+                },
+            }])
+        };
+        let stable = elements_info_with(true, empty_scan, read, |_| Dock::Unread).unwrap();
+        assert_eq!(stable["windows"][0]["number"], 42);
+        let moved = elements_info_with(
+            true,
+            || {
+                x.set(100.0);
+                empty_scan()
+            },
+            read,
+            |_| Dock::Unread,
+        )
+        .unwrap();
+        assert_eq!(moved["ok"], true);
+        assert_eq!(moved["windows"], json!([]));
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn internal_element_scans_skip_routing_reads_and_serialization() {
+        let info = elements_info_with(
+            false,
+            empty_scan,
+            || panic!("no routing list"),
+            |_| panic!("no Dock scan"),
+        )
+        .unwrap();
+        assert!(info.get("windows").is_none());
+        assert!(info.get("dock").is_none());
+        for (arguments, routing) in [
+            (vec!["elements-info", "812"], false),
+            (vec!["elements-info", "812", "--routing"], true),
+        ] {
+            assert!(
+                matches!(parse(&arguments).unwrap().command, Some(Command::ElementsInfo { routing: value, .. }) if value == routing)
+            );
+        }
+    }
 
     fn parse(args: &[&str]) -> std::result::Result<Cli, clap::Error> {
         Cli::try_parse_from(std::iter::once("atlas").chain(args.iter().copied()))
