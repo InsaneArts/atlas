@@ -70,7 +70,7 @@ fn pruning_removes_only_old_capture_files() {
 fn native_client() -> (tempfile::TempDir, Client, UnixListener, Session) {
     let dir = tempfile::Builder::new().tempdir_in("/tmp").unwrap();
     let mut client = client_in(dir.path());
-    client.controller = Controller::at(60001, &dir.path().join("state"));
+    client.controller = Controller::at(crate::test_support::UID, &dir.path().join("state"));
     client.config.helper_uid = nix::unistd::getuid().as_raw();
     client.transport = client.input_transport();
     let listener = UnixListener::bind(&client.config.input_socket).unwrap();
@@ -540,7 +540,7 @@ fn stoppable(client: &mut Client) -> Interrupt {
 /// agent's command has.
 fn another(client: &Client, dir: &Path) -> Client {
     let mut other = client.clone();
-    other.controller = Controller::at(60001, &dir.join("state"));
+    other.controller = Controller::at(crate::test_support::UID, &dir.join("state"));
     other
 }
 
@@ -599,6 +599,116 @@ async fn a_stop_while_input_is_under_way_lets_the_batch_finish_and_settles_it() 
     answer(&mut release, json!({"ok": true})).await;
     assert_eq!(caller.await.unwrap()["ok"], true);
     assert!(client.controller.pending().unwrap().is_empty());
+}
+
+#[tokio::test]
+async fn a_signalled_input_settles_only_after_its_batch_and_release_are_known() {
+    if !crate::test_support::isolated(
+        "client::tests::a_signalled_input_settles_only_after_its_batch_and_release_are_known",
+    ) {
+        return;
+    }
+    for signal in [Signal::SIGTERM, Signal::SIGHUP, Signal::SIGINT] {
+        for (batch_reply, release_reply) in [
+            (
+                Some(json!({"ok": true, "performed": 2})),
+                Some(json!({"ok": true})),
+            ),
+            (Some(json!({"ok": true, "performed": 2})), None),
+            (
+                Some(json!({"ok": false, "uncertain": true, "error": "unknown"})),
+                Some(json!({"ok": true})),
+            ),
+            (None, None),
+        ] {
+            tokio::time::timeout(Duration::from_secs(4), async {
+                let (dir, mut client, listener, session) = native_client();
+                let interrupt = stoppable(&mut client);
+                let other = another(&client, dir.path());
+                let mut caller = Box::pin(standalone_input(&client, &session));
+                let mut acquire = dispatched(&mut caller, &listener, "acquire").await;
+                answer(&mut acquire, json!({"ok": true})).await;
+                let mut input = dispatched(&mut caller, &listener, "input").await;
+                let generation = other.controller.pending().unwrap();
+                assert_eq!(generation.len(), 1);
+
+                let known_batch = batch_reply
+                    .as_ref()
+                    .is_some_and(|reply| reply["ok"] == true);
+                let known_release = release_reply.is_some();
+                if !known_batch || known_release {
+                    interrupt.ask(signal);
+                }
+                let outcome = if let Some(reply) = batch_reply {
+                    answer(&mut input, reply).await;
+                    let mut release = dispatched(&mut caller, &listener, "release").await;
+                    assert_eq!(other.controller.pending().unwrap(), generation);
+                    for recovery in [false, true] {
+                        assert_eq!(
+                            other.controller.acquire(recovery).unwrap_err().code,
+                            Code::Busy
+                        );
+                    }
+                    if known_batch && !known_release {
+                        interrupt.ask(signal);
+                    }
+                    if let Some(reply) = release_reply {
+                        answer(&mut release, reply).await;
+                    } else {
+                        assert!(tokio::time::timeout(SOON, caller.as_mut()).await.is_err());
+                        assert_eq!(other.controller.pending().unwrap(), generation);
+                    }
+                    caller.await
+                } else {
+                    let outcome = caller.await;
+                    let mut line = String::new();
+                    assert_eq!(input.read_line(&mut line).await.unwrap(), 0);
+                    let (release, _) = listener.accept().await.unwrap();
+                    BufReader::new(release).read_line(&mut line).await.unwrap();
+                    assert_eq!(
+                        serde_json::from_str::<Value>(&line).unwrap()["op"],
+                        "release"
+                    );
+                    outcome
+                };
+
+                if known_batch && known_release {
+                    assert_eq!(outcome.unwrap()["ok"], true);
+                    assert!(other.controller.pending().unwrap().is_empty());
+                    assert!(other.controller.acquire(false).is_ok());
+                } else {
+                    if !known_release {
+                        let error = outcome.unwrap_err();
+                        assert_eq!(error.code, Code::Interrupted);
+                        assert!(error.uncertain);
+                    } else {
+                        assert!(outcome.as_ref().map_or_else(
+                            |error| error.uncertain,
+                            |reply| reply["uncertain"] == true,
+                        ));
+                    }
+                    assert_eq!(other.controller.pending().unwrap(), generation);
+                    for observer in [other, another(&client, dir.path())] {
+                        assert_eq!(
+                            observer.controller.acquire(false).unwrap_err().code,
+                            Code::Uncertain
+                        );
+                        assert_eq!(
+                            observer
+                                .controller
+                                .acquire_beside_commands()
+                                .unwrap_err()
+                                .code,
+                            Code::Uncertain
+                        );
+                    }
+                    recovery_settles_the_abandoned_claim(&another(&client, dir.path()));
+                }
+            })
+            .await
+            .expect("the caller and fake peer must finish within four seconds");
+        }
+    }
 }
 
 #[tokio::test]
