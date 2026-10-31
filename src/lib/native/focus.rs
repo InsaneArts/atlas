@@ -355,7 +355,7 @@ fn prepared(
         _ => expect.clone(),
     };
     if matches!(need, Need::Point(..) | Need::Drag { .. }) {
-        require(&selected, Need::Keys, display, look, deadline)?;
+        active(&selected, need, look)?;
     }
     require(&selected, need, display, look, deadline)
 }
@@ -374,7 +374,7 @@ fn require(
 ) -> Result<Option<&'static str>> {
     let outcome = match need {
         Need::Nothing => return Ok(None),
-        Need::Keys => keys(expect, look),
+        Need::Keys => active(expect, need, look),
         Need::Point(x, y) => point(expect, (x, y), Spot::At, display, look).map(|()| None),
         Need::Drag { from, to } => point(expect, from, Spot::At, display, look)
             .and_then(|()| point(expect, to, Spot::Drop, display, look))
@@ -393,14 +393,13 @@ fn require(
     outcome
 }
 
-/// Keys go ahead only while the app has keyboard focus and, when named,
-/// the window and the field, whose role is then said. The window list is
-/// read only to name another app that has it, or to tell which window has
-/// it.
-fn keys(expect: &Expect, look: &mut impl Look) -> Result<Option<&'static str>> {
+/// Prove the app has keyboard focus and, when named, the window and the
+/// field, whose role is then said. Keys also require the whole window to
+/// be uncovered; pointer preparation checks coverage at its points.
+fn active(expect: &Expect, need: Need, look: &mut impl Look) -> Result<Option<&'static str>> {
     let focused = look.focused().map_err(|_| unreadable())?;
     if focused.is_none() && look.app_focused(expect.pid()).map_err(unread_by)? {
-        return inside(expect, look);
+        return inside(expect, need, look);
     }
     let Some(pid) = focused else {
         return Err(refused(
@@ -410,7 +409,7 @@ fn keys(expect: &Expect, look: &mut impl Look) -> Result<Option<&'static str>> {
         ));
     };
     if pid == expect.pid() {
-        return inside(expect, look);
+        return inside(expect, need, look);
     }
 
     let found = Found::named(pid, look.windows().unwrap_or_default());
@@ -424,7 +423,7 @@ fn keys(expect: &Expect, look: &mut impl Look) -> Result<Option<&'static str>> {
 /// With the app in focus, the window and the field it names, judged from
 /// one read of where the app's focus is; once they pass, the named field's
 /// role.
-fn inside(expect: &Expect, look: &mut impl Look) -> Result<Option<&'static str>> {
+fn inside(expect: &Expect, need: Need, look: &mut impl Look) -> Result<Option<&'static str>> {
     if expect.window().is_none() && expect.field().is_none() {
         return Ok(None);
     }
@@ -437,7 +436,7 @@ fn inside(expect: &Expect, look: &mut impl Look) -> Result<Option<&'static str>>
     let verdict = match expect.window() {
         Some(wanted) => {
             let listed = look.windows().map_err(|_| unreadable())?;
-            in_window(wanted, expect.pid(), &keyboard, listed)
+            in_window(wanted, expect.pid(), &keyboard, listed, need)
         }
         None => Verdict::Pass,
     }
@@ -504,10 +503,10 @@ impl Verdict {
 /// Whether window `wanted` of app `pid` has keyboard focus with no sheet
 /// over it: the app's focused window is that window, the one listed window
 /// it can be ([`number`]); it holds the focused element with no sheet
-/// between them; and no shown window of the app's is in front of it at its
-/// layer or above. A sheet named by its own number is a window like any
-/// other.
-fn in_window(wanted: i64, pid: i64, keyboard: &Keyboard, listed: &[Window]) -> Verdict {
+/// between them; and, for keys, no shown window of the app's is in front
+/// of it at its layer or above. A sheet named by its own number is a
+/// window like any other.
+fn in_window(wanted: i64, pid: i64, keyboard: &Keyboard, listed: &[Window], need: Need) -> Verdict {
     let Some(window) = &keyboard.window else {
         return Verdict::Refused(
             Reason::Window,
@@ -526,7 +525,7 @@ fn in_window(wanted: i64, pid: i64, keyboard: &Keyboard, listed: &[Window]) -> V
             if keyboard.within == Within::Sheet {
                 return over(wanted);
             }
-            if covered(listed, pid, number) {
+            if need == Need::Keys && covered(listed, pid, number) {
                 return Verdict::Refused(
                     Reason::Window,
                     format!("Another window of the app is in front of window {wanted}"),

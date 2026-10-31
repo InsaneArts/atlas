@@ -789,6 +789,67 @@ fn a_window_of_the_app_in_front_at_a_higher_layer_is_refused_as_another_window()
     );
 }
 
+#[test]
+fn pointer_preparation_accepts_an_exposed_point_beside_an_overlapping_floating_panel() {
+    for need in [
+        Need::Point(120.0, 120.0),
+        Need::Drag {
+            from: (120.0, 120.0),
+            to: (130.0, 130.0),
+        },
+    ] {
+        let panel = Window {
+            layer: 3,
+            ..numbered(4130, APP, Some("Fonts"), (150.0, 150.0, 200.0, 200.0))
+        };
+        let mut look = inside_with(typing(field("Email")), vec![panel, document()]);
+        assert_eq!(
+            prepared(
+                &expect(),
+                need,
+                Some(DOCUMENT),
+                &display(),
+                &mut look,
+                later(),
+            )
+            .unwrap(),
+            None
+        );
+        assert_eq!(look.focus_reads, 1);
+        assert_eq!(look.keyboard_reads, 1);
+    }
+}
+
+#[test]
+fn pointer_preparation_refuses_a_point_covered_by_a_same_app_floating_panel() {
+    for need in [
+        Need::Point(200.0, 200.0),
+        Need::Drag {
+            from: (200.0, 200.0),
+            to: (120.0, 120.0),
+        },
+    ] {
+        let panel = Window {
+            layer: 3,
+            ..numbered(4130, APP, Some("Fonts"), (150.0, 150.0, 200.0, 200.0))
+        };
+        let mut look = inside_with(typing(field("Email")), vec![panel, document()]);
+        let error = prepared(
+            &in_document(),
+            need,
+            Some(DOCUMENT),
+            &display(),
+            &mut look,
+            later(),
+        )
+        .unwrap_err();
+        assert_eq!(error.code, Code::FocusChanged);
+        assert_eq!(error.details["reason"], "window");
+        assert_eq!(error.details["found"]["window"], 4130);
+        assert!(error.error.contains("at that point"));
+    }
+}
+
 /// A floating panel and a document at the same place, with titles
 /// that do not tell them apart: the panel's subrole says which one has
 /// focus, and the document is never taken for the panel.

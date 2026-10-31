@@ -1316,10 +1316,14 @@ fn pointer_target() -> Fake {
     let mut fake = Fake::new();
     fake.window(3);
     fake.answers
-        .insert((3, "AXPosition"), Answer::Point(500.0, 30.0));
+        .insert((3, "AXPosition"), Answer::Point(200.0, 30.0));
+    fake.answers
+        .insert((3, "AXSubrole"), Answer::Text("AXFloatingWindow".into()));
+    fake.answers.insert((3, "AXModal"), Answer::Flag(false));
     let mut other = fake.windows[0].clone();
     other.number = 43;
-    other.bounds.x = 500.0;
+    other.layer = 3;
+    other.bounds.x = 200.0;
     fake.windows.insert(0, other);
     fake.lists.insert((APP, "AXWindows"), vec![WINDOW, 3]);
     fake.on_ask = Some(|fake, element, attribute| {
