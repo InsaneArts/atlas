@@ -1,9 +1,9 @@
 import AppKit
 import AsyncSupportTesting
-import AtlasUI
 import Testing
 
 @testable import AtlasApp
+@testable import AtlasUI
 
 @Suite("CardScroll selection lifecycle", .serialized, AppKitState())
 @MainActor
@@ -13,10 +13,14 @@ struct CardScrollSelectionTests {
     let selected = PreviewStates.viewerShotsMany
     let host = ViewerHost(selected, animatesArrivals: false, reduceMotion: true)
     let list = try #require(CardScrollTests.list(in: host))
+    let document = try #require(list.documentView)
+    func isRevealed() -> Bool {
+      let end = document.frame.height - list.contentView.bounds.height
+      let offset = list.contentView.bounds.minY
+      return offset > .zero && offset > end - Spacing.l && offset <= end
+    }
     host.show(CardScrollTests.stepped(selected))
-    await CardScrollTests.settle(host)
-    let revealed = list.contentView.bounds.minY
-    #expect(revealed > 0)
+    try await Self.render(host, until: isRevealed)
 
     var cleared = selected
     var shots = try #require({ if case .screenshots(let shots) = cleared.pane { shots } else { nil } }())
@@ -27,26 +31,13 @@ struct CardScrollSelectionTests {
     }
     cleared.pane = .screenshots(shots)
     host.show(cleared)
-    await CardScrollTests.settle(host)
+    try await Self.render(host, until: isRevealed)
     list.contentView.scroll(to: .zero)
     list.reflectScrolledClipView(list.contentView)
-    await CardScrollTests.settle(host)
-    #expect(list.contentView.bounds.minY == 0)
+    try await Self.render(host) { list.contentView.bounds.minY == 0 }
 
     host.show(CardScrollTests.stepped(selected))
-    let deadline = ContinuousClock.now
-      .advanced(by: Ceiling.work)
-    var end = try #require(list.documentView).frame.height - list.contentView.bounds.height
-    var offset = list.contentView.bounds.minY
-    while !(offset > end - 16 && offset <= end), ContinuousClock.now < deadline {
-      await CardScrollTests.settle(host)
-      end = try #require(list.documentView).frame.height - list.contentView.bounds.height
-      offset = list.contentView.bounds.minY
-    }
-    #expect(
-      offset > end - 16 && offset <= end,
-      "reselected tile scrolled to \(offset) of \(end), previously \(revealed)"
-    )
+    try await Self.render(host, until: isRevealed)
   }
 
   @Test("clearing the selection before its placement lands cancels the placement")
@@ -91,5 +82,15 @@ struct CardScrollSelectionTests {
     held.clock.advance(by: HeldScrollPlacements.delay)
     await held.finish()
     #expect(held.executions == 1, "the uncancelled placement executes on release")
+  }
+
+  private static func render(_ host: ViewerHost, until done: () -> Bool) async throws {
+    let deadline = ContinuousClock.now
+      .advanced(by: Ceiling.work)
+    repeat {
+      host.render()
+      await afterQueuedWork()
+    } while !done() && ContinuousClock.now < deadline
+    try #require(done(), "the list never reached the expected scroll position")
   }
 }
