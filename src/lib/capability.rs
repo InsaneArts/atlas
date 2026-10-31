@@ -221,13 +221,22 @@ pub fn native_dialogs(status: &Value, uid: u32) -> Value {
 /// the default unknown.
 pub fn doctor(status: Value, uid: u32) -> Value {
     let native = native_dialogs(&status, uid);
-    let mut report = crate::session::diagnose(status, uid);
+    with_capabilities(crate::session::diagnose(status, uid), native)
+}
+
+fn with_capabilities(mut report: Value, native: Value) -> Value {
     report["capabilities"]["nativeDialogs"] = native;
 
     report["capabilities"]["webContent"] = json!({
         "state": "unknown",
         "reason": WEB_CONTENT,
     });
+
+    let mut warnings = report["warnings"].as_array().cloned().unwrap_or_default();
+    warnings.push(json!(compact_warning(
+        report["capabilities"]["nativeDialogs"]["state"].as_str()
+    )));
+    report["warnings"] = json!(warnings);
 
     report
 }
@@ -252,11 +261,7 @@ fn compact_warning(state: Option<&str>) -> String {
 /// display. `doctor --verbose` keeps everything for diagnosis.
 pub fn summary(mut report: Value) -> Value {
     if report["ready"] == true {
-        let mut warnings = report["warnings"].as_array().cloned().unwrap_or_default();
-        warnings.push(json!(compact_warning(
-            report["capabilities"]["nativeDialogs"]["state"].as_str()
-        )));
-
+        let warnings = report["warnings"].as_array().cloned().unwrap_or_default();
         return json!({"ok": true, "ready": true, "warnings": warnings});
     }
 
@@ -1141,30 +1146,31 @@ mod tests {
     }
 
     fn report(ready: bool, warnings: Value, native: &str) -> Value {
-        json!({
-            "ok": true,
-            "ready": ready,
-            "canObserve": true,
-            "capabilities": {
-                "observe": true,
-                "input": ready,
-                "nativeDialogs": {"state": native},
-                "webContent": {"state": "unknown"},
-            },
-            "checks": [{"kind": "input", "ok": ready}],
-            "nextSteps": if ready { json!([]) } else { json!(["Run atlas start-input."]) },
-            "warnings": warnings,
-            "absence": "loggedOut",
-            "account": "atlas",
-            "session": {
-                "user": {"name": "atlas", "uid": 502},
-                "display": {"width": 1920, "height": 1080},
-            },
-        })
+        with_capabilities(
+            json!({
+                "ok": true,
+                "ready": ready,
+                "canObserve": true,
+                "capabilities": {
+                    "observe": true,
+                    "input": ready,
+                },
+                "checks": [{"kind": "input", "ok": ready}],
+                "nextSteps": if ready { json!([]) } else { json!(["Run atlas start-input."]) },
+                "warnings": warnings,
+                "absence": "loggedOut",
+                "account": "atlas",
+                "session": {
+                    "user": {"name": "atlas", "uid": 502},
+                    "display": {"width": 1920, "height": 1080},
+                },
+            }),
+            json!({"state": native}),
+        )
     }
 
     #[test]
-    fn a_ready_doctor_warns_about_unqualified_panels_and_webkit_in_one_compact_line() {
+    fn a_doctor_warns_about_panels_and_webkit_once_in_each_format() {
         for (state, native) in [
             (
                 "unknown",
@@ -1180,13 +1186,33 @@ mod tests {
                 "Native Save/Open passed a dated check, not a connection check.",
             ),
         ] {
-            let summed = summary(report(true, json!([]), state));
-            assert_eq!(
-                summed,
-                json!({"ok":true, "ready":true,
-                "warnings":[format!("{native} {WEB_CONTENT}")]})
-            );
-            assert!(summed.to_string().len() < 384);
+            for ready in [false, true] {
+                let full = report(ready, json!([]), state);
+                let warning = format!("{native} {WEB_CONTENT}");
+                assert_eq!(full["warnings"], json!([warning]));
+                for verbose in [false, true] {
+                    let rendered = crate::ui::render::render(
+                        &crate::ui::render::View::Doctor { verbose },
+                        &full,
+                    );
+                    assert_eq!(
+                        rendered.out.matches(&warning).count(),
+                        1,
+                        "{}",
+                        rendered.out
+                    );
+                    assert_eq!(rendered.out.matches(native).count(), 1, "{}", rendered.out);
+                }
+                let summed = summary(full);
+                assert_eq!(summed["warnings"], json!([warning]));
+                if ready {
+                    assert_eq!(
+                        summed,
+                        json!({"ok":true, "ready":true, "warnings":[warning]})
+                    );
+                    assert!(summed.to_string().len() < 384);
+                }
+            }
         }
     }
 
@@ -1225,7 +1251,10 @@ mod tests {
         assert_eq!(summed["display"], json!({"width": 1920, "height": 1080}));
         assert_eq!(summed["checks"], json!([{"kind": "input", "ok": false}]));
         assert_eq!(summed["nextSteps"], json!(["Run atlas start-input."]));
-        assert_eq!(summed["warnings"], json!(["The display changed."]));
+        assert_eq!(
+            summed["warnings"],
+            json!(["The display changed.", compact_warning(Some("failed"))])
+        );
         assert_eq!(summed["capabilities"]["nativeDialogs"]["state"], "failed");
         assert_eq!(summed["absence"], "loggedOut");
         assert_eq!(summed["account"], "atlas");

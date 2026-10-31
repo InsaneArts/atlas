@@ -1567,6 +1567,10 @@ async fn a_disabled_named_control_refuses_before_any_input_or_native_preparation
                 &[],
             ),
             |request| {
+                if request["op"] == "apps" {
+                    assert_eq!(reads, 0, "no app lookup after scanning");
+                    return Some(json!({"ok": true, "apps": [{"pid": std::process::id(), "name": "TextEdit"}]}));
+                }
                 assert_eq!(
                     request["op"], "run",
                     "no input or other mutation: {request}"
