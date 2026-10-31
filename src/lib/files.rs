@@ -239,8 +239,8 @@ pub fn open_plain(path: &Path) -> Option<File> {
     try_open_plain(path).ok().flatten()
 }
 
-/// Like [`open_plain`], preserving I/O failures so a caller can avoid caching
-/// an incomplete read. A missing path or a non-plain file has no contents.
+/// Like [`open_plain`], preserving I/O failures and refused files. Only a
+/// missing path has no contents.
 pub(crate) fn try_open_plain(path: &Path) -> std::io::Result<Option<File>> {
     let file = match OpenOptions::new()
         .read(true)
@@ -251,7 +251,13 @@ pub(crate) fn try_open_plain(path: &Path) -> std::io::Result<Option<File>> {
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
         Err(error) => return Err(error),
     };
-    Ok(file.metadata()?.is_file().then_some(file))
+    if !file.metadata()?.is_file() {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            "The path is not a plain file",
+        ));
+    }
+    Ok(Some(file))
 }
 
 /// What the plain file at `path` holds, when it is this account's and at

@@ -55,6 +55,21 @@ struct ViewerClientFetchTests {
     }
   }
 
+  @Test("an unreadable activity log keeps the service error and code instead of reading as an empty log")
+  func unreadableActivity() async throws {
+    let refusal = Data(#"{"ok": false, "code": "io", "error": "The activity log could not be read."}"#.utf8)
+    let refused = try client(.reply(status: 503, body: refusal))
+    await #expect(throws: ServiceError("The activity log could not be read.", code: "io")) {
+      try await refused.activity()
+    }
+    let missing = try client(.reply(status: 200, body: Data(#"{"ok": true, "activity": []}"#.utf8)))
+    #expect(try await missing.activity() == ActivityLog())
+    let unreadable = try client(.reply(status: 503, body: Data()))
+    await #expect(throws: ServiceError("The activity log could not be read.")) {
+      try await unreadable.activity()
+    }
+  }
+
   @Test("a request that times out says the helper did not answer, and a cancelled one says it was cancelled")
   func timeoutsAndCancellationsReadApart() async throws {
     let late = try client(.failure(.timedOut))

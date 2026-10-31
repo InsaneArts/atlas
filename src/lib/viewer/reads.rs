@@ -90,19 +90,15 @@ impl Viewer {
     pub(super) async fn activity(&self) -> Result<Value> {
         let client = self.client();
         // A folder that can't be read is said, never shown as no activity.
-        client.output_dir()?;
-        let reading_client = client.clone();
+        let directory = client.output_dir()?.to_path_buf();
+        let unreadable = || Error::new(Code::Io, "The activity log could not be read.");
         let (rows, records) = tokio::task::spawn_blocking(move || {
-            reading_client
-                .output_dir()
-                .map(|directory| {
-                    let rows = crate::activity_log::recent(directory, ACTIVITY_ROWS);
-                    (rows, Store::at(directory).recent())
-                })
-                .unwrap_or_else(|_| (Vec::new(), Arc::from([])))
+            let rows = crate::activity_log::try_recent(&directory, ACTIVITY_ROWS)?;
+            Ok::<_, std::io::Error>((rows, Store::at(&directory).recent()))
         })
         .await
-        .unwrap_or_else(|_| (Vec::new(), Arc::from([])));
+        .map_err(|_| unreadable())?
+        .map_err(|_| unreadable())?;
 
         let now = crate::client::timestamp();
         let rows = rows

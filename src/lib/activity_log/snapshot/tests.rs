@@ -76,12 +76,16 @@ fn a_failed_read_is_retried_even_when_the_file_revision_does_not_change() {
     fs::write(dir.path().join(FILE), log(&[1, 2])).unwrap();
     let probe = Observation::watch(dir.path());
     let mut cache = Cache { kept: None };
-    let partial = cache.recent_using(dir.path(), 5, |file, room, rows| {
+    let partial = cache.read_using(dir.path(), 5, |file, room, rows| {
         read_back(file, room, rows)?;
         rows.truncate(1);
         Err(io::Error::other("transient read failure"))
     });
-    assert_eq!(times(&partial), ["2"]);
+    assert_eq!(times(&partial.rows), ["2"]);
+    assert_eq!(
+        partial.checked().unwrap_err().to_string(),
+        "transient read failure"
+    );
     assert!(cache.kept.is_none());
     assert_eq!(times(&cache.recent(dir.path(), 5)), ["2", "1"]);
     assert_eq!(probe.threads().len(), 2);
@@ -108,6 +112,104 @@ fn an_open_failure_is_not_cached_as_a_missing_log() {
         cache.kept.is_some(),
         "a genuinely missing log may be cached"
     );
+}
+
+#[test]
+fn missing_logs_and_malformed_rows_are_successful_reads() {
+    let dir = tempfile::tempdir().unwrap();
+    assert!(super::super::try_recent(dir.path(), 5).unwrap().is_empty());
+    fs::write(
+        dir.path().join(PREVIOUS),
+        "not json\n{}\n".to_owned() + &log(&[1]) + "{\"operation\":",
+    )
+    .unwrap();
+    assert_eq!(
+        times(&super::super::try_recent(dir.path(), 5).unwrap()),
+        ["1"]
+    );
+    fs::write(dir.path().join(FILE), log(&[2])).unwrap();
+    assert_eq!(
+        times(&super::super::try_recent(dir.path(), 5).unwrap()),
+        ["2", "1"]
+    );
+}
+
+#[test]
+fn either_refused_log_fails_the_read_and_leaves_status_rows_available() {
+    for name in [FILE, PREVIOUS] {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join(name);
+        let other = if name == FILE { PREVIOUS } else { FILE };
+        fs::write(dir.path().join(other), log(&[1])).unwrap();
+        fs::write(&path, log(&[2])).unwrap();
+        assert_eq!(
+            times(&super::super::try_recent(dir.path(), 5).unwrap()),
+            ["2", "1"]
+        );
+
+        fs::remove_file(&path).unwrap();
+        fs::create_dir(&path).unwrap();
+        assert!(super::super::try_recent(dir.path(), 5).is_err());
+        assert_eq!(times(&super::super::recent(dir.path(), 5)), ["1"]);
+        fs::remove_dir(&path).unwrap();
+        std::os::unix::fs::symlink(dir.path().join(other), &path).unwrap();
+        assert!(super::super::try_recent(dir.path(), 5).is_err());
+        assert_eq!(times(&super::super::recent(dir.path(), 5)), ["1"]);
+
+        fs::remove_file(&path).unwrap();
+        fs::write(&path, log(&[3])).unwrap();
+        assert_eq!(
+            times(&super::super::try_recent(dir.path(), 5).unwrap()),
+            ["3", "1"]
+        );
+    }
+}
+
+#[test]
+fn read_permission_changes_are_checked_even_with_a_warm_snapshot() {
+    use std::os::unix::fs::PermissionsExt;
+
+    // Root can read files without their read bit, unlike the app's account.
+    if nix::unistd::getuid().is_root() {
+        return;
+    }
+    for name in [FILE, PREVIOUS] {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join(name);
+        fs::write(&path, log(&[1])).unwrap();
+        assert_eq!(super::super::try_recent(dir.path(), 5).unwrap().len(), 1);
+        fs::set_permissions(&path, fs::Permissions::from_mode(0o000)).unwrap();
+        let error = super::super::try_recent(dir.path(), 5).unwrap_err();
+        assert_eq!(error.kind(), io::ErrorKind::PermissionDenied);
+        assert!(super::super::recent(dir.path(), 5).is_empty());
+        fs::set_permissions(&path, fs::Permissions::from_mode(0o600)).unwrap();
+        assert_eq!(super::super::try_recent(dir.path(), 5).unwrap().len(), 1);
+    }
+}
+
+#[test]
+fn a_pipe_is_refused_without_waiting_for_a_writer_or_reading_its_contents() {
+    use std::os::unix::fs::OpenOptionsExt;
+
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join(FILE);
+    nix::unistd::mkfifo(
+        &path,
+        nix::sys::stat::Mode::S_IRUSR | nix::sys::stat::Mode::S_IWUSR,
+    )
+    .unwrap();
+    // Keep both ends open so even a mistakenly blocking open fails fast.
+    let _ends = fs::OpenOptions::new()
+        .read(true)
+        .write(true)
+        .custom_flags(libc::O_NONBLOCK)
+        .open(&path)
+        .unwrap();
+    assert_eq!(
+        super::super::try_recent(dir.path(), 5).unwrap_err().kind(),
+        io::ErrorKind::InvalidInput
+    );
+    assert!(super::super::recent(dir.path(), 5).is_empty());
 }
 
 #[test]

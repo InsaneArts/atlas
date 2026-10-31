@@ -86,6 +86,28 @@ struct ViewerPanesModelTests {
     viewer.close()
   }
 
+  @Test("Activity keeps a read failure after an empty reading and clears it only after a successful reading")
+  func activityReadFailuresPersist() async {
+    let service = ScriptedService()
+    let viewer = ViewerController.scripted(service)
+    defer { viewer.close() }
+    let model = viewer.panesModel
+    let generation = model.work.generation
+    await model.readActivity(generation)
+    #expect(viewer.panes.activity.log == ActivityLog())
+    service.fail.insert("activity")
+    await model.readActivity(generation)
+    let failure = viewer.panes.activity.failure
+    #expect(failure != nil)
+    #expect(ViewerPresenter.activity(viewer.snapshot).empty?.headline == ViewerWords.activityFailed)
+    await model.readActivity(generation)
+    #expect(viewer.panes.activity.failure == failure)
+    service.fail.remove("activity")
+    await model.readActivity(generation)
+    #expect(viewer.panes.activity.failure == nil)
+    #expect(ViewerPresenter.activity(viewer.snapshot).empty?.headline == ViewerWords.noActivity)
+  }
+
   @Test("each row's time counts back from when the log arrived, never from after the screenshots' reply")
   func activityTimesCountFromTheLog() async throws {
     let service = ScriptedService()
