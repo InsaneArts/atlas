@@ -2983,8 +2983,8 @@ async fn looks_share_optional_routing_and_finish_with_a_plain_list() {
     use std::cell::RefCell;
 
     for named in [false, true] {
-        for command in 0..3 {
-            for change in 0..8 {
+        for command in 0..4 {
+            for change in 0..9 {
                 let directory = tempfile::tempdir().unwrap();
                 let (mut client, helper) = Helper::client(directory.path(), UID);
                 if named {
@@ -2995,16 +2995,21 @@ async fn looks_share_optional_routing_and_finish_with_a_plain_list() {
                     match command {
                         0 => client.capture(Size::Full, Some(&Crop::App { pid: 812 }), false).await,
                         1 => elements(&client, &Target::Pid(812), &ElementFilter::default(), 10, false).await,
-                        _ => list(&client, &WindowFilter::default()).await,
+                        2 => list(&client, &WindowFilter::default()).await,
+                        _ => client.capture(Size::Full, None, false).await,
                     }
                 }, |request| {
                     if request["op"] == "screenshot" {
-                        return Some(json!({
+                        let mut reply = json!({
                             "ok": true, "png": STANDARD.encode(crate::native::capture::sample_png(10, 10)),
                             "width": 10, "height": 10,
-                            "region": {"x": 0, "y": 0, "width": 10, "height": 10},
-                            "app": {"pid": 812, "name": "Editor"}, "overlapping": [],
-                        }));
+                        });
+                        if request["pid"] == 812 {
+                            reply["region"] = json!({"x": 0, "y": 0, "width": 10, "height": 10});
+                            reply["app"] = json!({"pid": 812, "name": "Editor"});
+                            reply["overlapping"] = json!([]);
+                        }
+                        return Some(reply);
                     }
                     if request["op"] == "apps" {
                         return Some(json!({"ok": true, "apps": [{"pid": 812, "name": "Editor"}], "starts": {"812": [123,456]}}));
@@ -3025,6 +3030,7 @@ async fn looks_share_optional_routing_and_finish_with_a_plain_list() {
                                     4 => windows[0].title = Some("A new title".into()),
                                     5 => windows[0].alpha = 0.0,
                                     7 => windows[0].alpha = 0.5,
+                                    8 => windows.insert(0, window(99, 900, "SystemUIServer", 25)),
                                     _ => {}
                                 }
                             }
@@ -3061,7 +3067,7 @@ async fn looks_share_optional_routing_and_finish_with_a_plain_list() {
                 }
                 if named {
                     let memory = client.remembered_windows().unwrap();
-                    assert_eq!(memory.windows.is_empty(), !matches!(change, 0 | 4 | 7));
+                    assert_eq!(memory.windows.is_empty(), !matches!(change, 0 | 4 | 7 | 8));
                 } else {
                     assert!(client.remembered_windows().is_none());
                 }

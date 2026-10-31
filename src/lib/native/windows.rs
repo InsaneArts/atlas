@@ -127,18 +127,15 @@ pub(crate) fn hit_windows(
         .collect()
 }
 
-/// Whether two ordered window lists route points to the same windows.
+/// Whether two ordered window lists route points to the same visible app windows.
 pub(crate) fn same_routing(before: &[Window], after: &[Window]) -> bool {
-    fn route(window: &Window) -> (i64, i64, i64, &Bounds, bool) {
-        (
-            window.number,
-            window.pid,
-            window.layer,
-            &window.bounds,
-            window.alpha > 0.0,
-        )
+    fn routes(windows: &[Window]) -> impl Iterator<Item = (i64, i64, i64, &Bounds)> {
+        windows
+            .iter()
+            .filter(|window| window.is_apps() && window.alpha > 0.0)
+            .map(|window| (window.number, window.pid, window.layer, &window.bounds))
     }
-    before.iter().map(route).eq(after.iter().map(route))
+    routes(before).eq(routes(after))
 }
 
 impl Window {
@@ -497,6 +494,27 @@ mod tests {
             }
             assert_eq!(same_routing(&before, &after), matches!(change, 1 | 2));
             assert_eq!(same_routing(&after, &before), matches!(change, 1 | 2));
+        }
+    }
+
+    #[test]
+    fn routing_ignores_system_layers_and_invisible_windows() {
+        let before = vec![placed(42, 0, None, 1.0), placed(43, 3, None, 1.0)];
+        for (layer, alpha) in [
+            (DOCK_LAYER, 1.0),
+            (MENU_BAR_LAYER, 1.0),
+            (MENU_LAYER, 1.0),
+            (25, 1.0),
+            (-1, 1.0),
+            (0, 0.0),
+            (3, 0.0),
+        ] {
+            let mut after = before.clone();
+            after.insert(0, placed(99, layer, None, alpha));
+            assert!(same_routing(&before, &after));
+            assert!(same_routing(&after, &before));
+            after.swap(0, 1);
+            assert!(same_routing(&before, &after));
         }
     }
 
