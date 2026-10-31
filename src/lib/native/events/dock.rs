@@ -5,6 +5,8 @@ use crate::{
     error::{Code, Error, Result},
     native::{ax, windows::Bounds},
 };
+use objc2_application_services::AXError;
+use objc2_core_foundation::CFString;
 
 pub(super) struct Down {
     point: Point,
@@ -13,96 +15,72 @@ pub(super) struct Down {
     count: u8,
 }
 
-#[derive(Debug, PartialEq)]
-enum Continuation {
-    Wait,
-    Press,
-    Drag,
-}
-
 impl Down {
-    fn continuation(
-        &self,
-        phase: PointerPhase,
-        point: Point,
-        button: Button,
-    ) -> Result<Continuation> {
+    fn ready(&self, phase: PointerPhase, point: Point, button: Button) -> Result<bool> {
         match phase {
-            PointerPhase::Down => Err(Error::new(
-                Code::Input,
-                "Release the held mouse button first",
-            )),
-            PointerPhase::Up if button != self.button => Err(Error::new(
-                Code::Input,
-                "Mouse button does not match the active gesture",
-            )),
-            PointerPhase::Up => Ok(Continuation::Press),
-            PointerPhase::Move if point == self.point => Ok(Continuation::Wait),
-            PointerPhase::Move => Ok(Continuation::Drag),
+            PointerPhase::Down => Err(Error::new(Code::Input, "A mouse button is already held")),
+            PointerPhase::Up if button != self.button => {
+                Err(Error::new(Code::Input, "Mouse button mismatch"))
+            }
+            PointerPhase::Move => Ok(point != self.point),
+            PointerPhase::Up => Ok(true),
         }
     }
 }
 
 impl Engine {
-    pub(super) async fn dock_click(&mut self, point: Point, press: bool) -> Result<bool> {
-        self.check()?;
+    async fn dock_click(&mut self, point: Point, press: bool) -> Result<bool> {
         let display = Bounds::display(self.epoch.width, self.epoch.height);
         let guard = self.preparation_guard();
-        let on_dock = tokio::task::spawn_blocking(move || {
-            ax::dock_click(display, point.x, point.y, press, guard)
+        let on_dock = tokio::task::spawn_blocking(move || -> Result<bool> {
+            guard()?;
+            let Some(item) = ax::dock_item(display, point.x, point.y)? else {
+                return Ok(false);
+            };
+            if press {
+                guard()?;
+                press_result(ax::act(&item, &CFString::from_static_str("AXPress")))?;
+            }
+            Ok(true)
         })
         .await
-        .unwrap_or_else(|_| {
-            Err(Error::new(
-                Code::Uncertain,
-                "The Dock worker did not report its outcome",
-            )
-            .uncertain())
-        })?;
+        .map_err(|_| Error::new(Code::Uncertain, "Dock press outcome unknown").uncertain())??;
         if on_dock && press {
             self.posted += 1;
+            self.dock_pressed = true;
         }
-        self.check()?;
-        drop(
-            self.grant
-                .as_ref()
-                .ok_or_else(|| Error::new(Code::LeaseLost, "Input has no controller"))?
-                .authorize()?,
-        );
+        self.preparation_guard()()?;
         Ok(on_dock)
     }
 
-    pub(super) async fn dock_pointer(
+    pub(super) async fn pointer(
         &mut self,
         phase: PointerPhase,
         point: Point,
         button: Button,
         modifiers: &[String],
         count: u8,
-    ) -> Result<bool> {
+    ) -> Result<()> {
         if let Some(down) = &self.dock_down {
-            match down.continuation(phase, point, button)? {
-                Continuation::Press => {
-                    self.dock_down = None;
-                    // Resolve again: the Dock may have moved or magnified since down.
-                    if !self.dock_click(point, true).await? {
-                        return Err(Error::new(Code::Input, "The Dock moved; no click was sent"));
-                    }
-                    return Ok(true);
-                }
-                Continuation::Wait => return Ok(true),
-                Continuation::Drag => {
-                    let down = self.dock_down.take().expect("the deferred press exists");
-                    self.pointer(
-                        PointerPhase::Down,
-                        down.point,
-                        down.button,
-                        &down.modifiers,
-                        down.count,
-                    )
-                    .await?;
-                }
+            if !down.ready(phase, point, button)? {
+                return Ok(());
             }
+            let down = self.dock_down.take().expect("the deferred down exists");
+            if matches!(phase, PointerPhase::Up) {
+                // Resolve again: the Dock may have moved or magnified since down.
+                if !self.dock_click(point, true).await? {
+                    return Err(Error::new(Code::Input, "The Dock moved; no click was sent"));
+                }
+                return Ok(());
+            }
+            self.post_pointer(
+                PointerPhase::Down,
+                down.point,
+                down.button,
+                &down.modifiers,
+                down.count,
+            )
+            .await?;
         } else if matches!(phase, PointerPhase::Down)
             && self.held.is_none()
             && self.dock_click(point, false).await?
@@ -113,15 +91,38 @@ impl Engine {
                 modifiers: modifiers.to_vec(),
                 count,
             });
-            return Ok(true);
+            return Ok(());
         }
-        Ok(false)
+        self.post_pointer(phase, point, button, modifiers, count)
+            .await
+    }
+}
+
+fn press_result(status: AXError) -> Result<()> {
+    if status == AXError::Success {
+        Ok(())
+    } else {
+        Err(Error::new(Code::Uncertain, "The Dock did not acknowledge the press").uncertain())
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_failed_dock_press_stays_uncertain() {
+        for status in [
+            AXError::CannotComplete,
+            AXError::Failure,
+            AXError::InvalidUIElement,
+        ] {
+            let error = press_result(status).unwrap_err();
+            assert!(error.uncertain);
+            assert_eq!(error.code, Code::Uncertain);
+        }
+        assert!(press_result(AXError::Success).is_ok());
+    }
 
     #[test]
     fn a_viewer_dock_press_waits_for_release_and_movement_returns_to_dragging() {
@@ -131,28 +132,21 @@ mod tests {
             modifiers: Vec::new(),
             count: 1,
         };
-        assert_eq!(
-            down.continuation(PointerPhase::Move, down.point, Button::Left)
-                .unwrap(),
-            Continuation::Wait
-        );
-        assert_eq!(
-            down.continuation(PointerPhase::Up, down.point, Button::Left)
-                .unwrap(),
-            Continuation::Press
-        );
-        assert_eq!(
-            down.continuation(PointerPhase::Move, Point { x: 45.0, y: 50.0 }, Button::Left)
-                .unwrap(),
-            Continuation::Drag
+        assert!(
+            !down
+                .ready(PointerPhase::Move, down.point, Button::Left)
+                .unwrap()
         );
         assert!(
-            down.continuation(PointerPhase::Up, down.point, Button::Right)
-                .is_err()
+            down.ready(PointerPhase::Up, down.point, Button::Left)
+                .unwrap()
         );
         assert!(
-            down.continuation(PointerPhase::Down, down.point, Button::Left)
-                .is_err()
+            down.ready(PointerPhase::Move, Point { x: 45.0, y: 50.0 }, Button::Left)
+                .unwrap()
         );
+        for phase in [PointerPhase::Down, PointerPhase::Up] {
+            assert!(down.ready(phase, down.point, Button::Right).is_err());
+        }
     }
 }

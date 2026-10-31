@@ -1864,32 +1864,16 @@ async fn an_input_change_stays_pending_only_while_its_outcome_is_unknown() {
         "known outcomes clear"
     );
 
-    let lost = Error::new(Code::Transport, "reply lost").uncertain();
-    assert!(
-        client
-            .pending_until_known(async { Err::<(), _>(lost) })
-            .await
-            .is_err()
-    );
-    assert_eq!(
-        client.controller.unresolved().unwrap().len(),
-        1,
-        "an unknown one stays"
-    );
-
-    let press = Error::new(Code::Uncertain, "The Dock did not acknowledge the press").uncertain();
-    assert!(
-        client
-            .pending_until_known(async { Err::<(), _>(press) })
-            .await
-            .unwrap_err()
-            .uncertain
-    );
-    assert_eq!(
-        client.controller.unresolved().unwrap().len(),
-        2,
-        "the unacknowledged Dock press stays pending too"
-    );
+    for (index, code) in [Code::Transport, Code::Uncertain].into_iter().enumerate() {
+        let unknown = Error::new(code, "The mutation was not acknowledged").uncertain();
+        assert!(
+            client
+                .pending_until_known(async { Err::<(), _>(unknown) })
+                .await
+                .is_err()
+        );
+        assert_eq!(client.controller.unresolved().unwrap().len(), index + 1);
+    }
 }
 
 #[test]

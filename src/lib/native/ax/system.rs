@@ -52,39 +52,32 @@ const DOCK_CHILDREN: usize = 16;
 /// one that cannot all be read in time is [`Dock::Unread`]; either covers
 /// all of its window.
 pub fn dock(windows: &[windows::Window], timeout: Duration) -> Dock {
-    read_dock(windows, timeout).map_or(Dock::Unread, |(_, dock, _)| dock)
-}
-
-type List = (CFRetained<AXUIElement>, windows::Bounds);
-
-fn read_dock(windows: &[windows::Window], timeout: Duration) -> Result<(Scan, Dock, Vec<List>)> {
-    let mut scan = Scan::new(Instant::now() + timeout);
-    let unread = || refused("The Dock could not be read");
     let Some(pid) = windows
         .iter()
         .find(|window| window.is_dock())
         .map(|window| window.pid)
     else {
-        return Ok((scan, Dock::Icons(Vec::new()), Vec::new()));
+        return Dock::Icons(Vec::new());
     };
     let Ok(pid) = libc::pid_t::try_from(pid) else {
-        return Err(unread());
+        return Dock::Unread;
     };
 
     let Some(app) = ffi::application(pid) else {
-        return Err(unread());
+        return Dock::Unread;
     };
     // This one element's messaging timeout bounds each read below; nothing
     // else in the process is affected.
     if ffi::set_timeout(&app, timeout) != AXError::Success {
-        return Err(unread());
+        return Dock::Unread;
     }
 
+    let mut scan = Scan::new(Instant::now() + timeout);
     let mut lists = Vec::new();
     let mut other = false;
     for child in scan.children(&app, "AXChildren", DOCK_CHILDREN) {
         let Some(role) = scan.text(Source::Element(&child), "AXRole") else {
-            return Err(unread());
+            return Dock::Unread;
         };
         if role != "AXList" {
             // Mission Control's spaces bar and the like take clicks too.
@@ -93,212 +86,98 @@ fn read_dock(windows: &[windows::Window], timeout: Duration) -> Result<(Scan, Do
         }
 
         let Some(frame) = scan.frame(Source::Element(&child)) else {
-            return Err(unread());
+            return Dock::Unread;
         };
-        lists.push((
-            child,
-            windows::Bounds {
-                x: frame.x,
-                y: frame.y,
-                width: frame.width,
-                height: frame.height,
-            },
-        ));
+        lists.push(windows::Bounds {
+            x: frame.x,
+            y: frame.y,
+            width: frame.width,
+            height: frame.height,
+        });
     }
 
     if scan.incomplete {
-        return Err(unread());
+        return Dock::Unread;
     }
     if other || lists.is_empty() {
-        return Ok((scan, Dock::Other, lists));
+        return Dock::Other;
     }
 
-    let dock = Dock::Icons(lists.iter().map(|(_, frame)| frame.clone()).collect());
-    Ok((scan, dock, lists))
+    Dock::Icons(lists)
 }
 
-/// Probe a pointer press, or press one Dock item. AX references stay on this
-/// worker; the caller keeps the input engine locked until it joins.
-pub(crate) fn dock_click(
+/// Find a pressable Dock item, or leave ordinary points to pointer input.
+pub(crate) fn dock_item(
     display: windows::Bounds,
     x: f64,
     y: f64,
-    press: bool,
-    guard: impl Fn() -> Result<()>,
-) -> Result<bool> {
-    guard()?;
+) -> Result<Option<CFRetained<AXUIElement>>> {
     let windows = windows::windows()?;
-    let (mut scan, dock, lists) = read_dock(&windows, DOCK_TIMEOUT)?;
-    let screen = windows::Screen::new(display, dock);
-    route_click(&windows, &screen, x, y, || {
-        if !press {
-            return Ok(());
-        }
-        if !matches!(screen.dock(), Dock::Icons(_)) {
-            return Err(refused("The Dock is showing an overlay"));
-        }
-        let mut items = Vec::new();
-        for (list, _) in lists {
-            for item in scan.children(&list, "AXChildren", 256) {
-                let frame = scan
-                    .frame(Source::Element(&item))
-                    .ok_or_else(|| refused("The Dock items could not be read"))?;
-                items.push((
-                    item,
-                    windows::Bounds {
-                        x: frame.x,
-                        y: frame.y,
-                        width: frame.width,
-                        height: frame.height,
-                    },
-                ));
-            }
-        }
-        if scan.incomplete || !scan.open() {
-            return Err(refused("The Dock items could not be read"));
-        }
-
-        press_item(&items, x, y, |item| {
-            let name = CFString::from_static_str("AXPress");
-            let supported = ffi::actions(item).ok().flatten().is_some_and(|names| {
-                names.len() <= 64
-                    && names
-                        .iter()
-                        .any(|action| action.downcast_ref::<CFString>() == Some(&*name))
-            });
-            if !supported || !scan.open() {
-                return Err(refused("That part of the Dock is not a pressable item"));
-            }
-            if ffi::set_timeout(item, DOCK_TIMEOUT) != AXError::Success {
-                return Err(refused("The Dock item could not be prepared"));
-            }
-            guard()?;
-            press_result(ffi::act(item, &name))
-        })?;
-        Ok(())
-    })
-}
-
-fn route_click(
-    windows: &[windows::Window],
-    screen: &windows::Screen,
-    x: f64,
-    y: f64,
-    press: impl FnOnce() -> Result<()>,
-) -> Result<bool> {
-    if !windows::top_at(windows, x, y, screen).is_some_and(windows::Window::is_dock) {
-        return Ok(false);
+    let screen = windows::Screen::new(display, dock(&windows, DOCK_TIMEOUT));
+    let Some(window) = windows::top_at(&windows, x, y, &screen).filter(|w| w.is_dock()) else {
+        return Ok(None);
+    };
+    let refused = || Error::new(Code::Input, "No pressable Dock item; no click was sent");
+    if !matches!(screen.dock(), Dock::Icons(_)) {
+        return Err(refused());
     }
-    press()?;
-    Ok(true)
-}
-
-fn press_item<T>(
-    items: &[(T, windows::Bounds)],
-    x: f64,
-    y: f64,
-    press: impl FnOnce(&T) -> Result<()>,
-) -> Result<()> {
-    let mut matching = items.iter().filter(|(_, frame)| frame.contains(x, y));
-    let item = matching
-        .next()
-        .filter(|_| matching.next().is_none())
-        .ok_or_else(|| refused("There is no single Dock item at that point"))?;
-    press(&item.0)
-}
-
-fn press_result(status: AXError) -> Result<()> {
-    if status == AXError::Success {
-        Ok(())
-    } else {
-        Err(Error::new(Code::Uncertain, "The Dock did not acknowledge the press").uncertain())
+    let app = libc::pid_t::try_from(window.pid)
+        .ok()
+        .and_then(ffi::application)
+        .ok_or_else(refused)?;
+    if ffi::set_timeout(&app, DOCK_TIMEOUT) != AXError::Success {
+        return Err(refused());
     }
+    let item = ffi::element_at(&app, x as f32, y as f32)
+        .ok()
+        .flatten()
+        .ok_or_else(refused)?;
+    if ffi::set_timeout(&item, DOCK_TIMEOUT) != AXError::Success {
+        return Err(refused());
+    }
+    let mut scan = Scan::new(Instant::now() + DOCK_TIMEOUT);
+    let frame = scan.frame(Source::Element(&item));
+    let press = CFString::from_static_str("AXPress");
+    let supported = ffi::actions(&item).ok().flatten().is_some_and(|names| {
+        names.len() <= 64
+            && names
+                .iter()
+                .any(|name| name.downcast_ref::<CFString>() == Some(&*press))
+    });
+    if !scan.open() || !pressable_at(frame, supported, x, y) {
+        return Err(refused());
+    }
+    Ok(Some(item))
 }
 
-fn refused(why: &str) -> Error {
-    Error::new(Code::Input, format!("{why}; no click was sent"))
+fn pressable_at(frame: Option<super::Frame>, supported: bool, x: f64, y: f64) -> bool {
+    supported
+        && frame.is_some_and(|f| x >= f.x && y >= f.y && x < f.x + f.width && y < f.y + f.height)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
 
-    fn bounds(x: f64, y: f64, width: f64, height: f64) -> windows::Bounds {
-        windows::Bounds {
-            x,
-            y,
-            width,
-            height,
-        }
-    }
-
     #[test]
-    fn a_dock_item_is_pressed_the_shelf_refuses_and_other_points_post() {
-        let display = bounds(0.0, 0.0, 1000.0, 800.0);
-        let listed = vec![windows::Window {
-            number: 1,
-            pid: 2,
-            owner: Some("Dock".into()),
-            title: None,
-            layer: 20,
-            alpha: 1.0,
-            bounds: display.clone(),
-        }];
-        let screen = windows::Screen::new(
-            display,
-            Dock::Icons(vec![bounds(300.0, 740.0, 400.0, 50.0)]),
-        );
-        let items = [
-            ("Finder", bounds(300.0, 740.0, 50.0, 50.0)),
-            ("Notes", bounds(360.0, 740.0, 50.0, 50.0)),
-        ];
-        for (x, y, wanted) in [
-            (380.0, 760.0, "Notes"),
-            (355.0, 760.0, "refused"),
-            (290.0, 760.0, "refused"),
-            (100.0, 100.0, "posted"),
-        ] {
-            let mut pressed = None;
-            let outcome = route_click(&listed, &screen, x, y, || {
-                press_item(&items, x, y, |item| {
-                    pressed = Some(*item);
-                    Ok(())
-                })
-            });
-            let actual = match outcome {
-                Ok(true) => pressed.unwrap(),
-                Ok(false) => {
-                    assert_eq!(pressed, None);
-                    "posted"
-                }
-                Err(error) => {
-                    assert!(!error.uncertain);
-                    assert_eq!(pressed, None);
-                    "refused"
-                }
-            };
-            assert_eq!(actual, wanted);
-        }
-    }
-
-    #[test]
-    fn a_failed_dock_press_is_uncertain_and_never_retried() {
-        let items = [(1, bounds(0.0, 0.0, 50.0, 50.0))];
-        for status in [
-            AXError::CannotComplete,
-            AXError::Failure,
-            AXError::InvalidUIElement,
-        ] {
-            let mut calls = 0;
-            let error = press_item(&items, 20.0, 20.0, |_| {
-                calls += 1;
-                press_result(status)
+    fn dock_gaps_and_separators_are_not_pressable() {
+        let frame = || {
+            Some(super::super::Frame {
+                x: 1120.0,
+                y: 920.0,
+                width: 16.0,
+                height: 40.0,
             })
-            .unwrap_err();
-            assert!(error.uncertain);
-            assert_eq!(error.code, Code::Uncertain);
-            assert_eq!(calls, 1);
-        }
-        assert!(press_result(AXError::Success).is_ok());
+        };
+        assert!(pressable_at(frame(), true, 1128.0, 940.0));
+        assert!(
+            !pressable_at(frame(), true, 1138.0, 940.0),
+            "gap beside an item"
+        );
+        assert!(
+            !pressable_at(frame(), false, 1128.0, 940.0),
+            "separator without AXPress"
+        );
+        assert!(!pressable_at(None, true, 1138.0, 940.0));
     }
 }
