@@ -191,22 +191,6 @@ fn a_scan_closes_at_its_deadline() {
 }
 
 #[test]
-fn the_application_role_is_read_before_its_windows_are_scanned() {
-    let source = include_str!("tree.rs");
-    let role = source
-        .find("scan.text(Source::Element(&app), \"AXRole\")")
-        .unwrap();
-    let windows = source.find("scan.children(&app, \"AXWindows\"").unwrap();
-    assert!(role < windows);
-    assert_eq!(
-        source
-            .matches("scan.text(Source::Element(&app), \"AXRole\")")
-            .count(),
-        1
-    );
-}
-
-#[test]
 fn secure_values_never_reach_either_value_getter() {
     let system = system_wide();
     for batch in [

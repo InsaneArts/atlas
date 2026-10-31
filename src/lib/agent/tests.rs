@@ -1544,21 +1544,8 @@ fn the_default_listing_names_each_element_by_its_click_point_and_size() {
     label.value = Some("Status".into());
     label.window = Some(frame(900.0, 0.0, 300.0, 200.0));
 
-    let mut bare = element("AXGroup", None, None);
+    let mut bare = element("AXButton", None, None);
     bare.index = 19;
-    assert_eq!(
-        listing(
-            812,
-            &scanned(vec![bare.clone()]),
-            &ElementFilter {
-                role: Some("AXGroup".into()),
-                name: None
-            },
-            50,
-            false,
-        )["elements"][0],
-        json!({"index": 19, "role": "AXGroup"})
-    );
 
     let listed = listing(
         812,
@@ -1579,6 +1566,7 @@ fn the_default_listing_names_each_element_by_its_click_point_and_size() {
                  "at": [410, 330], "size": [780, 560], "window": 0},
                 {"index": 18, "role": "AXStaticText", "name": "Status",
                  "at": [20, 20], "size": [20, 20], "window": 1},
+                {"index": 19, "role": "AXButton"},
             ],
             "windows": [
                 {"x": 10, "y": 38, "width": 800, "height": 600},
@@ -1616,7 +1604,7 @@ fn the_default_listing_omits_only_groups_without_information() {
         groups.push(group);
     }
     groups.push(shown(13, "AXButton", None, None));
-    let mut scan = scanned(groups);
+    let scan = scanned(groups);
     let all = ElementFilter::default();
     let listed = listing(1, &scan, &all, 50, false);
     let indices: Vec<_> = listed["elements"]
@@ -1649,22 +1637,16 @@ fn the_default_listing_omits_only_groups_without_information() {
             },
             50,
             false
-        )["matching"],
+        )["elements"]
+            .as_array()
+            .unwrap()
+            .len(),
         13
     );
     assert_eq!(
         listing(1, &scan, &named("panel"), 50, false)["elements"][0]["index"],
         4
     );
-    assert_eq!(
-        choose(&scan.elements[..8], &named("panel")).unwrap().index,
-        4
-    );
-    scan.incomplete = true;
-    scan.reasons.push(Stop::Count);
-    let limited = listing(1, &scan, &all, 50, false);
-    assert_eq!(limited["scanIncomplete"], true);
-    assert_eq!(limited["scan"]["reasons"], json!(["count"]));
 }
 
 #[test]

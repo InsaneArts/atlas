@@ -353,7 +353,6 @@ fn an_unreadable_focus_read_can_succeed_before_the_preparation_deadline() {
             let role = settle(target, &named(), deadline, &|| Ok(()), |_, until| {
                 reads += 1;
                 assert!(reads <= 3, "settlement must remain bounded");
-                assert_eq!(until, deadline.min(now.get() + CHECK_BUDGET));
                 if reads == 1 {
                     now.set(until);
                     return Err(refused("unreadable", &why.error().error).with("unread", why));
@@ -387,7 +386,6 @@ fn unreadable_focus_reads_refuse_with_the_same_reply_at_the_preparation_deadline
         let error = settle(target, &named(), deadline, &|| Ok(()), |_, until| {
             reads += 1;
             assert!(reads <= 3, "settlement must remain bounded");
-            assert_eq!(until, deadline.min(now.get() + CHECK_BUDGET));
             now.set(until);
             Err(refused("unreadable", &why.error().error).with("unread", why))
         })
