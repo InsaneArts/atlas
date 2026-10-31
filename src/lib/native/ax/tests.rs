@@ -8,7 +8,7 @@ use super::{
     scan::{SELECTORS, Scan},
     telling,
     text::{TEXT_LIMIT, TEXT_ROLES, bounded_string, prefix_range, prefix_text},
-    tree::{sheet_window, unreachable},
+    tree::{reachable, sheet_window, unreachable},
     why,
 };
 use objc2_application_services::{AXError, AXUIElement};
@@ -191,6 +191,33 @@ fn a_scan_closes_at_its_deadline() {
 }
 
 #[test]
+fn secure_values_never_reach_either_value_getter() {
+    let system = system_wide();
+    for batch in [
+        None,
+        Some(answered(vec![(
+            "AXNumberOfCharacters",
+            CFNumber::new_isize(5000).into(),
+        )])),
+    ] {
+        for (role, subrole) in [
+            (Some("AXTextField"), Some("AXSecureTextField")),
+            (Some("AXSecureTextField"), None),
+            (None, None),
+        ] {
+            let mut scan = Scan::new(Instant::now());
+            let before = recorded(&scan);
+            assert_eq!(scan.value(&system, batch.as_ref(), role, subrole), None);
+            assert_eq!(
+                recorded(&scan),
+                before,
+                "a getter would record the expired deadline"
+            );
+        }
+    }
+}
+
+#[test]
 fn scan_stops_are_said_in_plain_words() {
     for stop in Stop::ALL {
         assert_eq!(Stop::parse(stop.word()), Some(stop));
@@ -258,6 +285,33 @@ fn strings_are_cut_between_characters() {
     assert_eq!(text, "a".repeat(199));
     let (text, _) = bound(&format!("{}e\u{301}tail", "a".repeat(198)));
     assert_eq!(text, format!("{}e\u{301}", "a".repeat(198)));
+}
+
+#[test]
+fn a_failed_role_read_keeps_its_error_when_the_app_has_no_windows() {
+    for windows_error in [None].into_iter().chain(ABSENT.map(Some)) {
+        let error = reachable(Err(AXError::CannotComplete), false, windows_error).unwrap_err();
+        assert_eq!(error, Some(AXError::CannotComplete));
+        let error = unreachable(error, true, true);
+        assert_eq!(error.code, "elements");
+        assert!(error.error.contains("not responding"));
+        assert!(error.error.contains("try again"));
+    }
+}
+
+#[test]
+fn window_errors_take_precedence_and_either_answer_makes_an_app_reachable() {
+    assert_eq!(
+        reachable(
+            Err(AXError::CannotComplete),
+            false,
+            Some(AXError::APIDisabled)
+        ),
+        Err(Some(AXError::APIDisabled))
+    );
+    assert_eq!(reachable(Err(AXError::CannotComplete), true, None), Ok(()));
+    assert_eq!(reachable(Ok(true), false, None), Ok(()));
+    assert_eq!(reachable(Ok(false), false, None), Err(None));
 }
 
 /// Only a missing permission is called one: a busy app, or a process ID

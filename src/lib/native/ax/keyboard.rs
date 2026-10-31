@@ -80,6 +80,14 @@ pub(crate) enum Unread {
 }
 
 impl Unread {
+    pub(super) fn reading(self, status: AXError) -> Error {
+        match status {
+            AXError::CannotComplete => Self::Slow,
+            _ => self,
+        }
+        .error()
+    }
+
     /// The error a read that could not tell, for this reason, ends with.
     pub(crate) fn error(self) -> Error {
         let said = match self {
@@ -185,7 +193,7 @@ impl<A: Ask> Reader<A> {
         attribute: &'static str,
     ) -> Result<Answer<A::Element>> {
         match self.asked(element, attribute)? {
-            Answer::Failed(_) => Err(Unread::Failed.error()),
+            Answer::Failed(status) => Err(Unread::Failed.reading(status)),
             answer => Ok(answer),
         }
     }
@@ -211,7 +219,7 @@ impl<A: Ask> Reader<A> {
                 failed.push(attribute);
                 Ok(None)
             }
-            Answer::Failed(_) => Err(Unread::Failed.error()),
+            Answer::Failed(status) => Err(Unread::Failed.reading(status)),
             answer => text(answer),
         }
     }
@@ -796,7 +804,7 @@ mod tests {
             failed.set(element, attribute, Answer::Failed(AXError::CannotComplete));
             assert_eq!(
                 unread(read_with(&mut failed, budget())),
-                "failed",
+                "slow",
                 "{element} {attribute}"
             );
         }
@@ -846,7 +854,7 @@ mod tests {
             "AXDescription",
             Answer::Failed(AXError::CannotComplete),
         );
-        assert_eq!(unread(read_with(&mut stalled, budget())), "failed");
+        assert_eq!(unread(read_with(&mut stalled, budget())), "slow");
     }
 
     #[test]

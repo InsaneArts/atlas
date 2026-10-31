@@ -39,6 +39,11 @@ atlas environment rollback --help
 
 Use `doctor` to decide whether a task can start. Use the observation commands to decide what to do inside an app. A screenshot's pixels are not necessarily display points: the display point for pixel (px, py) is `origin` + pixel × `pointsPerPixel`, and `origin` is 0,0 for a full screenshot.
 
+Read web pages with `atlas elements --app "Google Chrome" --name LABEL`; use named
+clicks and `type --field LABEL`, and screenshots to check visibility. Secure field
+values are omitted. Default listings omit empty groups before applying `--max`; only `scanned`
+counts them. `--full` and filters keep them. `scanIncomplete` and `scan` report unread content or limits.
+
 ### Act in the helper
 
 | Command   | Use it to                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                          |
