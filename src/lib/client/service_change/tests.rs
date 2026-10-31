@@ -27,16 +27,16 @@ fn service_changes_defer_for_two_minutes_but_not_for_the_callers_own_session() {
     let now = crate::host_session::now_ms();
     seen(&client, &own, now, false);
     client.host_session = Some(own);
-    assert!(service_blocker(&client, u128::from(now) * 1_000_000).is_none());
+    assert!(service_blocker(&client, false, u128::from(now) * 1_000_000).is_none());
 
     seen(&client, &other, now, false);
     assert_eq!(
-        service_blocker(&client, u128::from(now + 120_000) * 1_000_000).as_deref(),
+        service_blocker(&client, false, u128::from(now + 120_000) * 1_000_000).as_deref(),
         Some("worker is active in the helper.")
     );
-    assert!(service_blocker(&client, u128::from(now + 120_001) * 1_000_000).is_none());
+    assert!(service_blocker(&client, false, u128::from(now + 120_001) * 1_000_000).is_none());
     seen(&client, &other, now, true);
-    assert!(service_blocker(&client, u128::from(now) * 1_000_000).is_none());
+    assert!(service_blocker(&client, false, u128::from(now) * 1_000_000).is_none());
 }
 
 #[test]
@@ -57,7 +57,7 @@ fn service_changes_find_active_sessions_beyond_the_eight_shown_in_status() {
     }
     seen(&client, &session("worker"), now, false);
     assert_eq!(
-        service_blocker(&client, u128::from(now) * 1_000_000).as_deref(),
+        service_blocker(&client, false, u128::from(now) * 1_000_000).as_deref(),
         Some("worker is active in the helper.")
     );
 }
@@ -76,12 +76,12 @@ fn service_changes_keep_recent_sessions_whose_process_state_is_unknown() {
         })
         .unwrap();
     assert_eq!(
-        service_blocker(&client, u128::from(now) * 1_000_000).as_deref(),
+        service_blocker(&client, false, u128::from(now) * 1_000_000).as_deref(),
         Some("worker is active in the helper.")
     );
-    assert!(service_blocker(&client, u128::from(now + 120_001) * 1_000_000).is_none());
+    assert!(service_blocker(&client, false, u128::from(now + 120_001) * 1_000_000).is_none());
     seen(&client, &host, now, true);
-    assert!(service_blocker(&client, u128::from(now) * 1_000_000).is_none());
+    assert!(service_blocker(&client, false, u128::from(now) * 1_000_000).is_none());
 }
 
 #[test]
@@ -107,10 +107,10 @@ fn service_changes_find_terminal_activity_before_many_newer_actions() {
         .unwrap();
     }
     assert_eq!(
-        service_blocker(&client, u128::from(now + 120_000) * 1_000_000).as_deref(),
+        service_blocker(&client, false, u128::from(now + 120_000) * 1_000_000).as_deref(),
         Some("Terminal is active in the helper.")
     );
-    assert!(service_blocker(&client, u128::from(now + 120_001) * 1_000_000).is_none());
+    assert!(service_blocker(&client, false, u128::from(now + 120_001) * 1_000_000).is_none());
 }
 
 #[test]
@@ -122,7 +122,7 @@ fn service_changes_refuse_incomplete_activity_reads() {
     let client = crate::test_support::client(directory.path());
     let output = client.output_dir().unwrap();
     let now = super::super::timestamp();
-    assert!(service_blocker(&client, now).is_none());
+    assert!(service_blocker(&client, false, now).is_none());
     for name in [FILE, PREVIOUS] {
         let path = output.join(name);
         for contents in [
@@ -132,7 +132,7 @@ fn service_changes_refuse_incomplete_activity_reads() {
         ] {
             fs::write(&path, contents).unwrap();
             assert!(
-                service_blocker(&client, now)
+                service_blocker(&client, false, now)
                     .unwrap()
                     .contains("could not read every activity row")
             );
@@ -140,19 +140,19 @@ fn service_changes_refuse_incomplete_activity_reads() {
         fs::remove_file(&path).unwrap();
         symlink(&path, &path).unwrap();
         assert!(
-            service_blocker(&client, now)
+            service_blocker(&client, false, now)
                 .unwrap()
                 .contains("could not read every activity row")
         );
         fs::remove_file(&path).unwrap();
         fs::create_dir(&path).unwrap();
-        assert!(service_blocker(&client, now).is_some());
+        assert!(service_blocker(&client, false, now).is_some());
         fs::remove_dir(&path).unwrap();
         nix::unistd::mkfifo(&path, nix::sys::stat::Mode::S_IRUSR).unwrap();
-        assert!(service_blocker(&client, now).is_some());
+        assert!(service_blocker(&client, false, now).is_some());
         fs::remove_file(&path).unwrap();
     }
-    assert!(service_blocker(&client, now).is_none());
+    assert!(service_blocker(&client, false, now).is_none());
 }
 
 #[test]
@@ -176,12 +176,12 @@ fn rotated_activity_must_cover_the_service_idle_window() {
     fs::write(output.join(FILE), row(now)).unwrap();
     fs::write(output.join(PREVIOUS), row(now - 60_000)).unwrap();
     assert!(
-        service_blocker(&client, u128::from(now) * 1_000_000)
+        service_blocker(&client, false, u128::from(now) * 1_000_000)
             .unwrap()
             .contains("could not read every activity row")
     );
     fs::write(output.join(PREVIOUS), row(now - 120_000)).unwrap();
-    assert!(service_blocker(&client, u128::from(now) * 1_000_000).is_none());
+    assert!(service_blocker(&client, false, u128::from(now) * 1_000_000).is_none());
 }
 
 #[tokio::test]
@@ -210,12 +210,12 @@ async fn a_terminal_can_update_after_its_completed_screenshot() {
     let mut named = client.clone();
     named.host_session = Some(session("updater"));
     assert_eq!(
-        service_blocker(&named, u128::from(now) * 1_000_000).as_deref(),
+        service_blocker(&named, false, u128::from(now) * 1_000_000).as_deref(),
         Some("Terminal is active in the helper.")
     );
     seen(&client, &session("worker"), now, false);
     assert_eq!(
-        service_blocker(&client, u128::from(now) * 1_000_000).as_deref(),
+        service_blocker(&client, false, u128::from(now) * 1_000_000).as_deref(),
         Some("worker is active in the helper.")
     );
 }
@@ -225,6 +225,7 @@ async fn recovery_can_take_control_after_the_callers_screenshot_with_an_unknown_
     for own in [None, Some(session("updater"))] {
         let directory = tempfile::tempdir().unwrap();
         let mut client = crate::test_support::client(directory.path());
+        client.controller = client.controller.labelled(own.as_ref());
         let abandoned = client.controller.quarantine().unwrap();
         let generation = abandoned.generation().to_owned();
         drop(abandoned);
@@ -232,7 +233,6 @@ async fn recovery_can_take_control_after_the_callers_screenshot_with_an_unknown_
         if let Some(own) = &own {
             seen(&client, own, now, false);
         }
-        client.controller = client.controller.labelled(own.as_ref());
         client.host_session = own;
         crate::activity_log::append(
             client.output_dir().unwrap(),
@@ -256,8 +256,12 @@ async fn recovery_can_take_control_after_the_callers_screenshot_with_an_unknown_
         )
         .await;
         assert_eq!(listed.len(), 1);
-        assert_eq!(listed[0]["waitingFor"], "recovery");
-        assert!(service_blocker(&client, u128::from(now) * 1_000_000).is_none());
+        if client.host_session.is_some() {
+            assert_eq!(listed[0]["state"], "needsYou");
+        } else {
+            assert_eq!(listed[0]["waitingFor"], "recovery");
+        }
+        assert!(service_blocker(&client, false, u128::from(now) * 1_000_000).is_none());
         assert_eq!(
             client.service_change(false).await.unwrap_err().code,
             Code::Uncertain
@@ -273,6 +277,137 @@ async fn recovery_can_take_control_after_the_callers_screenshot_with_an_unknown_
         );
         drop(ownership);
     }
+}
+
+#[tokio::test]
+async fn only_recovery_of_the_callers_unknown_outcome_can_pass_recent_work_and_waiters() {
+    for own in [None, Some(session("recovering"))] {
+        for waiter in [false, true] {
+            let directory = tempfile::tempdir().unwrap();
+            let mut client = crate::test_support::client(directory.path());
+            client.host_session = own.clone();
+            client.controller = client.controller.labelled(own.as_ref());
+            let other = session("worker");
+            seen(&client, &other, crate::host_session::now_ms(), false);
+            if waiter {
+                let holder = client
+                    .controller
+                    .clone()
+                    .labelled(Some(&other))
+                    .acquire(true)
+                    .unwrap();
+                crate::test_support::waiting_note(&directory.path().join("state"), Some(&other));
+                drop(holder);
+                assert_eq!(client.controller.checked_waiting_notes().unwrap().len(), 1);
+            }
+            let abandoned = client.controller.quarantine().unwrap();
+            let generation = abandoned.generation().to_owned();
+            drop(abandoned);
+            assert!(!client.controller.pending_causes().unwrap()[0].running);
+
+            let update = tokio::time::timeout(Duration::from_secs(1), client.service_change(false))
+                .await
+                .unwrap()
+                .unwrap_err();
+            assert_eq!(update.code, Code::Busy);
+            assert_eq!(update.error, "worker is active in the helper.");
+            let ownership =
+                tokio::time::timeout(Duration::from_secs(1), client.service_change(true))
+                    .await
+                    .unwrap()
+                    .unwrap();
+            assert_eq!(client.controller.pending().unwrap(), [generation]);
+            assert_eq!(
+                client.controller.acquire(true).unwrap_err().code,
+                Code::Busy
+            );
+            if waiter {
+                assert_eq!(client.controller.checked_waiting_notes().unwrap().len(), 1);
+            }
+            drop(ownership);
+        }
+    }
+}
+
+#[tokio::test]
+async fn recovery_of_the_callers_unknown_outcome_still_refuses_a_running_command() {
+    let directory = tempfile::tempdir().unwrap();
+    let mut client = crate::test_support::client(directory.path());
+    client.host_session = Some(session("recovering"));
+    client.controller = client.controller.labelled(client.host_session.as_ref());
+    drop(client.controller.quarantine().unwrap());
+    let other = client.controller.clone().labelled(Some(&session("worker")));
+    let command = other.quarantine_command().unwrap();
+    let pending = client.controller.pending().unwrap();
+
+    let error = tokio::time::timeout(Duration::from_secs(1), client.service_change(true))
+        .await
+        .unwrap()
+        .unwrap_err();
+    assert_eq!(error.code, Code::Busy);
+    assert_eq!(
+        error.error,
+        "worker has a command still running in the helper."
+    );
+    assert_eq!(client.controller.pending().unwrap(), pending);
+    other.clear_if(&command).unwrap();
+}
+
+#[tokio::test]
+async fn recovery_refuses_another_sessions_unknown_outcome_even_when_it_is_quiet() {
+    for own in [None, Some(session("recovering"))] {
+        for pending_session in [None, Some(session("worker"))] {
+            if own.is_none() && pending_session.is_none() {
+                continue;
+            }
+            let directory = tempfile::tempdir().unwrap();
+            let mut client = crate::test_support::client(directory.path());
+            client.host_session = own.clone();
+            client.controller = client.controller.labelled(own.as_ref());
+            drop(
+                client
+                    .controller
+                    .clone()
+                    .labelled(pending_session.as_ref())
+                    .quarantine()
+                    .unwrap(),
+            );
+            let pending = client.controller.pending().unwrap();
+            let error = tokio::time::timeout(Duration::from_secs(1), client.service_change(true))
+                .await
+                .unwrap()
+                .unwrap_err();
+            assert_eq!(error.code, Code::Busy);
+            assert!(error.error.contains("that session must recover it"));
+            assert_eq!(client.controller.pending().unwrap(), pending);
+            assert!(client.controller.holder_note().is_none());
+        }
+    }
+}
+
+#[tokio::test]
+async fn recovery_refuses_when_pending_state_cannot_be_read() {
+    let directory = tempfile::tempdir().unwrap();
+    let mut client = crate::test_support::client(directory.path());
+    client.host_session = Some(session("recovering"));
+    client.controller = client.controller.labelled(client.host_session.as_ref());
+    drop(client.controller.quarantine().unwrap());
+    let marker = std::fs::read_dir(directory.path().join("state"))
+        .unwrap()
+        .map(|entry| entry.unwrap().path())
+        .find(|path| path.to_string_lossy().ends_with(".uncertain.json"))
+        .unwrap();
+    std::fs::remove_file(&marker).unwrap();
+    std::fs::create_dir(&marker).unwrap();
+
+    let error = tokio::time::timeout(Duration::from_secs(1), client.service_change(true))
+        .await
+        .unwrap()
+        .unwrap_err();
+    assert_eq!(error.code, Code::Busy);
+    assert!(error.error.contains("could not check pending activity"));
+    assert!(marker.is_dir());
+    assert!(client.controller.holder_note().is_none());
 }
 
 #[tokio::test]
@@ -327,10 +462,22 @@ async fn a_named_updater_defers_for_terminal_work_before_its_own_screenshot() {
     assert_eq!(error.error, "Terminal is active in the helper.");
     assert!(client.controller.holder_note().is_none());
     assert_eq!(
-        service_blocker(&client, u128::from(terminal_at + 120_000) * 1_000_000).as_deref(),
+        service_blocker(
+            &client,
+            false,
+            u128::from(terminal_at + 120_000) * 1_000_000
+        )
+        .as_deref(),
         Some("Terminal is active in the helper.")
     );
-    assert!(service_blocker(&client, u128::from(terminal_at + 120_001) * 1_000_000).is_none());
+    assert!(
+        service_blocker(
+            &client,
+            false,
+            u128::from(terminal_at + 120_001) * 1_000_000
+        )
+        .is_none()
+    );
 }
 
 #[test]
@@ -345,11 +492,11 @@ fn a_holder_on_its_first_command_defers_service_changes_until_it_lets_go() {
         .acquire(false)
         .unwrap();
     assert_eq!(
-        service_blocker(&client, super::super::timestamp()).as_deref(),
+        service_blocker(&client, false, super::super::timestamp()).as_deref(),
         Some("worker is active in the helper.")
     );
     drop(holder);
-    assert!(service_blocker(&client, super::super::timestamp()).is_none());
+    assert!(service_blocker(&client, false, super::super::timestamp()).is_none());
 }
 
 #[test]
@@ -362,12 +509,12 @@ fn a_running_command_defers_service_changes_even_when_its_session_went_quiet() {
     let controller = client.controller.clone().labelled(Some(&host));
     let command = controller.quarantine_command().unwrap();
     assert_eq!(
-        service_blocker(&client, u128::from(now) * 1_000_000).as_deref(),
+        service_blocker(&client, false, u128::from(now) * 1_000_000).as_deref(),
         Some("worker has a command still running in the helper.")
     );
     controller.clear_if(&command).unwrap();
     drop(command);
-    assert!(service_blocker(&client, u128::from(now) * 1_000_000).is_none());
+    assert!(service_blocker(&client, false, u128::from(now) * 1_000_000).is_none());
 }
 
 #[test]
@@ -376,7 +523,7 @@ fn an_unnamed_running_command_is_named_terminal_without_an_activity_row() {
     let client = crate::test_support::client(directory.path());
     let command = client.controller.quarantine_command().unwrap();
     assert_eq!(
-        service_blocker(&client, super::super::timestamp()).as_deref(),
+        service_blocker(&client, false, super::super::timestamp()).as_deref(),
         Some("Terminal has a command still running in the helper.")
     );
     client.controller.clear_if(&command).unwrap();

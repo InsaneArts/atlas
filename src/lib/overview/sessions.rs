@@ -30,8 +30,10 @@ const MARKER_CHECK: std::time::Duration = std::time::Duration::from_millis(250);
 /// Who would be interrupted by a service replacement, from checked session
 /// records and the full recent activity window. The caller's own session
 /// is left out for recent activity. Its waiting and running commands still defer
-/// replacement; the service change's own holder note does not.
-pub(crate) fn service_blocker(client: &Client, now: u128) -> Option<String> {
+/// replacement; the service change's own holder note does not. Recovering the
+/// caller's unknown outcome ignores recent activity and waiters, which cannot
+/// act until recovery finishes.
+pub(crate) fn service_blocker(client: &Client, recovery: bool, now: u128) -> Option<String> {
     let Ok(output) = client.output_dir() else {
         return Some("Atlas could not check which sessions are active.".into());
     };
@@ -46,15 +48,6 @@ pub(crate) fn service_blocker(client: &Client, now: u128) -> Option<String> {
             "Atlas could not read every waiting command; a command may still be active.".into(),
         );
     };
-    if let Some(note) = waiting.first() {
-        let first = unrecorded(None, &waiting, &[], &seen);
-        let names = names_with(seen.iter().map(|seen| &seen.record), first.iter().copied());
-        let name = note.session.as_ref().map_or_else(
-            || session_view::TERMINAL.to_owned(),
-            |key| name_of(&names, key, note.host),
-        );
-        return Some(format!("{name} is active in the helper."));
-    }
     let causes = match client.controller.pending_causes_within(MARKER_CHECK) {
         Ok(causes) => causes,
         Err(error) if error.code == crate::error::Code::Busy => return Some(error.error),
@@ -69,12 +62,32 @@ pub(crate) fn service_blocker(client: &Client, now: u128) -> Option<String> {
         .host_session
         .as_ref()
         .map(|session| session.key().as_str());
+    let pending = causes.iter().any(|cause| !cause.running);
+    if recovery
+        && causes
+            .iter()
+            .any(|cause| !cause.running && cause.session.as_ref().map(|key| key.as_str()) != own)
+    {
+        return Some(
+            "Another session has an unknown outcome; that session must recover it.".into(),
+        );
+    }
+    let recovering_own = recovery && pending;
+    if !recovering_own && let Some(note) = waiting.first() {
+        let first = unrecorded(None, &waiting, &[], &seen);
+        let names = names_with(seen.iter().map(|seen| &seen.record), first.iter().copied());
+        let name = note.session.as_ref().map_or_else(
+            || session_view::TERMINAL.to_owned(),
+            |key| name_of(&names, key, note.host),
+        );
+        return Some(format!("{name} is active in the helper."));
+    }
     let now_ms = u64::try_from(now / 1_000_000).unwrap_or(u64::MAX);
     let holder = client.controller.holder_note().filter(|note| {
         !(note.process.is_this_one() && note.session.as_ref().map(|key| key.as_str()) == own)
     });
     let facts = SessionFacts {
-        pending: causes.iter().any(|cause| !cause.running),
+        pending,
         agent_holds: false,
         now,
     };
@@ -98,11 +111,10 @@ pub(crate) fn service_blocker(client: &Client, now: u128) -> Option<String> {
     .into_iter()
     .find(|listed| {
         let key = listed.entry["key"].as_str().filter(|key| !key.is_empty());
-        // Real waiters were checked above. Waiting for recovery in the
-        // session display alone must not prevent the caller from recovering.
         listed.shown.holds_helper
             || listed.running_command
-            || (key != own
+            || (!recovering_own
+                && key != own
                 && listed.entry["ended"].is_null()
                 && now_ms.saturating_sub(listed.last_seen) <= crate::time::ms(SERVICE_IDLE))
     })
@@ -116,7 +128,8 @@ pub(crate) fn service_blocker(client: &Client, now: u128) -> Option<String> {
     .or_else(|| {
         // The display omits unnamed rows older than the first named row.
         // Service replacement must still respect their recent activity.
-        (own.is_some()
+        (!recovering_own
+            && own.is_some()
             && activity
                 .iter()
                 .any(|row| row.session.is_none() && row.actor() != "viewer"))

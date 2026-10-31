@@ -24,11 +24,11 @@ impl Client {
     /// work before waiting and again under the lock. Permission to interrupt
     /// sessions never bypasses exclusion or settles pending changes.
     pub async fn service_change(&self, recovery: bool) -> Result<Ownership> {
-        self.require_service_idle().await?;
+        self.require_service_idle_for(recovery).await?;
         let ownership = self
             .controller
             .acquire_for_service_change(recovery, MARKER_CHECK)?;
-        self.require_service_idle().await?;
+        self.require_service_idle_for(recovery).await?;
         Ok(ownership)
     }
 
@@ -36,6 +36,10 @@ impl Client {
     /// is active, unless the person permits disruption. Callers already
     /// holding controller exclusion can check without taking it again.
     pub async fn require_service_idle(&self) -> Result<()> {
+        self.require_service_idle_for(false).await
+    }
+
+    async fn require_service_idle_for(&self, recovery: bool) -> Result<()> {
         if self.allow_disrupt {
             return Ok(());
         }
@@ -45,6 +49,7 @@ impl Client {
             client.output_dir()?;
             Ok::<_, Error>(crate::overview::service_blocker(
                 &client,
+                recovery,
                 super::timestamp(),
             ))
         })
