@@ -971,6 +971,18 @@ fn settle<A: Backend>(
         target.reader.deadline = deadline;
         let error = match result {
             Ok(role) => return Ok(role),
+            Err(error)
+                if error.code == Code::FocusChanged
+                    && error
+                        .details
+                        .get("reason")
+                        .is_some_and(|why| why == "unreadable")
+                    && target.reader.left().is_ok()
+                    && Instant::now() < deadline =>
+            {
+                last_refusal = Some(error);
+                continue;
+            }
             Err(error) if error.details.get("unread").is_some_and(|why| why == "slow") => {
                 return Err(last_refusal.unwrap_or(error));
             }

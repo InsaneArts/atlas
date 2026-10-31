@@ -333,6 +333,77 @@ fn settling_keeps_its_check_short_even_with_a_longer_preparation_deadline() {
 }
 
 #[test]
+fn an_unreadable_focus_read_can_succeed_before_the_preparation_deadline() {
+    for changed in [false, true] {
+        for why in [Unread::Failed, Unread::Slow] {
+            let mut fake = Fake::new();
+            let deadline = fake.now.get() + crate::native::focus::PREPARE_BUDGET;
+            let now = fake.now.clone();
+            let target = prepare(
+                &mut fake,
+                &named(),
+                Need::Keys,
+                deadline - SETTLE_BUDGET,
+                &|| Ok(()),
+                &mut |_| !changed,
+            )
+            .unwrap();
+            let writes = target.reader.ask.writes.clone();
+            let mut reads = 0;
+            let role = settle(target, &named(), deadline, &|| Ok(()), |_, until| {
+                reads += 1;
+                assert!(reads <= 3, "settlement must remain bounded");
+                assert_eq!(until, deadline.min(now.get() + CHECK_BUDGET));
+                if reads == 1 {
+                    now.set(until);
+                    return Err(refused("unreadable", &why.error().error).with("unread", why));
+                }
+                Ok(Some("AXTextField"))
+            })
+            .unwrap();
+            assert_eq!(role, Some("AXTextField"));
+            assert_eq!(reads, 3);
+            assert_eq!(fake.writes, writes);
+        }
+    }
+}
+
+#[test]
+fn unreadable_focus_reads_refuse_with_the_same_reply_at_the_preparation_deadline() {
+    for why in [Unread::Failed, Unread::Slow] {
+        let mut fake = Fake::new();
+        let deadline = fake.now.get() + crate::native::focus::PREPARE_BUDGET;
+        let now = fake.now.clone();
+        let target = prepare(
+            &mut fake,
+            &named(),
+            Need::Keys,
+            deadline - SETTLE_BUDGET,
+            &|| Ok(()),
+            &mut |_| true,
+        )
+        .unwrap();
+        let mut reads = 0;
+        let error = settle(target, &named(), deadline, &|| Ok(()), |_, until| {
+            reads += 1;
+            assert!(reads <= 3, "settlement must remain bounded");
+            assert_eq!(until, deadline.min(now.get() + CHECK_BUDGET));
+            now.set(until);
+            Err(refused("unreadable", &why.error().error).with("unread", why))
+        })
+        .unwrap_err();
+        assert_eq!(reads, 3);
+        assert_eq!(now.get(), deadline);
+        assert_eq!(
+            serde_json::to_value(error).unwrap(),
+            serde_json::to_value(refused("unreadable", &why.error().error).with("unread", why))
+                .unwrap()
+        );
+        assert!(fake.writes.is_empty());
+    }
+}
+
+#[test]
 fn windows_swapping_positions_during_resolution_refuse_before_any_write() {
     let mut fake = Fake::new();
     fake.window(3);
