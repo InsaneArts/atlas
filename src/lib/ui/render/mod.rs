@@ -294,9 +294,13 @@ pub fn card(message: &str, code: Option<Code>, uncertain: bool) -> String {
     card_with(message, fix)
 }
 
-/// [`card`] for a failed `result`: a focus refusal says what to do as JSON
-/// output says it, by what was in the way and what was sent first.
+/// [`card`] for a failed `result`: keep its supplied next step, or advise
+/// on a focus refusal by what was in the way and what was sent first.
 pub(super) fn advised_card(message: &str, result: &Value) -> String {
+    if let Some(next) = result["next"].as_str() {
+        return card_with(message, Some(&text::printable(next)));
+    }
+
     match hints::focus_advice(result) {
         Some(advice) => card_with(message, Some(&advice)),
         None => card(

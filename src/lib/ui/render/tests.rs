@@ -124,6 +124,21 @@ fn errors_say_what_happened_and_what_to_do() {
 }
 
 #[test]
+fn a_disabled_control_keeps_its_next_step_in_human_output() {
+    console::set_colors_enabled(false);
+
+    let refused = Error::new(
+        Code::Input,
+        "The selected control is disabled; no click was sent",
+    )
+    .with("next", hints::DISABLED_CONTROL);
+    let expected = format!("✗ {}\n  → {}", refused.error, hints::DISABLED_CONTROL);
+
+    assert_eq!(error(&refused), expected);
+    assert_eq!(show(View::Generic, json!(refused)), Rendered::err(expected));
+}
+
+#[test]
 fn a_screenshot_names_its_file_and_size() {
     let shown = show(
         View::Capture,
