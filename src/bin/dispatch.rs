@@ -151,6 +151,7 @@ pub(super) async fn execute(
     command: Command,
     policy: &Policy,
     wait: Duration,
+    allow_disrupt: bool,
 ) -> Result<Value> {
     let actor = actor();
 
@@ -158,7 +159,6 @@ pub(super) async fn execute(
     // controller's configuration. A command that talks to the helper loads
     // it before anything else.
     let doing = policy.doing.clone();
-    let kind = policy.kind;
     let changes = policy.changes_helper;
     let waits = policy.waits(actor);
     let host = if policy.labelled(actor) {
@@ -179,6 +179,7 @@ pub(super) async fn execute(
             client.actor = actor;
             client.doing = doing.clone();
             client.host_session = host.clone();
+            client.allow_disrupt = allow_disrupt;
             client.task = task.clone();
             client.controller = client.controller.labelled(host.as_ref());
             if waits {
@@ -193,9 +194,32 @@ pub(super) async fn execute(
         })
     };
 
+    execute_with(
+        &config,
+        command,
+        policy,
+        host.as_ref(),
+        &client,
+        allow_disrupt,
+    )
+    .await
+}
+
+/// Execute with the attributed session and its configured client.
+async fn execute_with(
+    config: &Path,
+    command: Command,
+    policy: &Policy,
+    host: Option<&HostSession>,
+    client: &impl Fn() -> Result<Client>,
+    allow_disrupt: bool,
+) -> Result<Value> {
+    let doing = policy.doing.as_ref();
+    let kind = policy.kind;
+
     // Its session is seen at once, whatever the command does or however it
     // ends: a label, so a record that cannot be written changes nothing.
-    if let Some(host) = &host
+    if let Some(host) = host
         && let Ok(client) = client()
     {
         let _ = host_session::store::touch(&client, host);
@@ -203,21 +227,21 @@ pub(super) async fn execute(
 
     // The person's stop refuses an agent's change at its start; one already
     // under way is the input service's to cut off.
-    if changes {
+    if policy.changes_helper {
         client()?.require_going().await?;
     }
 
-    let result = carry_out(&config, command, &client, host.as_ref()).await;
+    let result = carry_out(config, command, client, host, allow_disrupt).await;
 
-    if kind.recorded(doing.as_ref())
+    if kind.recorded(doing)
         && let Ok(client) = client()
     {
-        note_outcome(&client, host.as_ref(), kind, doing.as_ref(), &result);
+        note_outcome(&client, host, kind, doing, &result);
     }
 
     // A refusal that can name the other session, or say whose an unknown
     // outcome is, says so.
-    host_session::explain::reply(result, || client().ok(), host.as_ref())
+    host_session::explain::reply(result, || client().ok(), host)
 }
 
 /// Note what a command of `kind`, doing `doing`, left for its session to
@@ -245,6 +269,7 @@ async fn carry_out(
     command: Command,
     client: &impl Fn() -> Result<Client>,
     host: Option<&HostSession>,
+    allow_disrupt: bool,
 ) -> Result<Value> {
     match command {
         Command::EnvironmentWorker { packet, apply } => environment::worker(&packet, apply),
@@ -300,15 +325,23 @@ async fn carry_out(
             check: false,
         } => {
             as_yourself("update")?;
-            update::update(config, allow_unnotarized, force, version).await
+            update::update(
+                config,
+                allow_unnotarized,
+                force,
+                version,
+                host,
+                allow_disrupt,
+            )
+            .await
         }
         Command::UpdateFinish => {
             as_yourself("update")?;
-            update::update_finish(config).await
+            update::update_finish(config, host, allow_disrupt).await
         }
         Command::Init => {
             as_yourself("init")?;
-            atlas::init::run(config).await
+            atlas::init::run(config, allow_disrupt).await
         }
         Command::Onboarding { step } => onboarding(config, step).await,
         Command::Agents { action } => {
@@ -345,12 +378,12 @@ async fn carry_out(
             let client = client()?;
             // Recovery ownership: the migration settles only the pending
             // mutations its own log records and refuses any other.
-            let ownership = client.controller.acquire(true)?;
+            let ownership = client.service_change(true).await?;
 
             if apply {
-                atlas::setup::migrate::apply(config, &ownership).await
+                atlas::setup::migrate::apply(config, &client, &ownership).await
             } else {
-                atlas::setup::migrate::rollback(config, &ownership).await
+                atlas::setup::migrate::rollback(config, &client, &ownership).await
             }
         }
         Command::Config => {
@@ -939,6 +972,142 @@ mod tests {
         Cli::try_parse_from(std::iter::once("atlas").chain(args.iter().copied()))
     }
 
+    #[tokio::test]
+    async fn a_sessions_first_read_is_seen_even_when_the_helper_is_unavailable() {
+        use atlas::host_session::Host;
+
+        let dir = tempfile::tempdir().unwrap();
+        let mut client = Client::new(Config {
+            helper_uid: 60001,
+            socket_path: dir.path().join("helper.sock"),
+            identity_probe: dir.path().join("probe"),
+            input_socket: dir.path().join("input.sock"),
+            output_dir: dir.path().join("out"),
+        })
+        .unwrap();
+        let host = HostSession::new(Host::Named, "worker").unwrap();
+        client.controller =
+            atlas::control::Controller::at(60001, &dir.path().join("state")).labelled(Some(&host));
+        client.host_session = Some(host.clone());
+        let command = parse(&["apps"]).unwrap().command.unwrap();
+        let policy = Policy::of(&command);
+        assert!(policy.labelled(Actor::Agent));
+        let result = tokio::time::timeout(
+            Duration::from_secs(1),
+            execute_with(
+                &dir.path().join("settings.toml"),
+                command,
+                &policy,
+                Some(&host),
+                &|| Ok(client.clone()),
+                false,
+            ),
+        )
+        .await
+        .unwrap();
+        assert!(result.is_err());
+        let own = HostSession::new(Host::Named, "updater").unwrap();
+        client.controller = client.controller.labelled(Some(&own));
+        client.host_session = Some(own);
+        let error = tokio::time::timeout(Duration::from_secs(1), client.service_change(false))
+            .await
+            .unwrap()
+            .unwrap_err();
+        assert_eq!(error.code, Code::Busy);
+        assert_eq!(error.error, "worker is active in the helper.");
+    }
+
+    #[tokio::test]
+    async fn a_sessions_first_read_defers_another_sessions_service_change() {
+        use atlas::host_session::Host;
+        use base64::{Engine, engine::general_purpose::STANDARD};
+        use tokio::{
+            io::{AsyncBufReadExt, AsyncWriteExt, BufReader},
+            net::UnixListener,
+        };
+
+        let dir = tempfile::Builder::new().tempdir_in("/tmp").unwrap();
+        let mut client = Client::new(Config {
+            helper_uid: 60001,
+            socket_path: dir.path().join("helper.sock"),
+            identity_probe: dir.path().join("probe"),
+            input_socket: dir.path().join("input.sock"),
+            output_dir: dir.path().join("out"),
+        })
+        .unwrap();
+        let host = HostSession::new(Host::Named, "worker").unwrap();
+        client.controller =
+            atlas::control::Controller::at(60001, &dir.path().join("state")).labelled(Some(&host));
+        client.host_session = Some(host.clone());
+        client.transport.peer_uid = nix::unistd::getuid().as_raw();
+        let command = parse(&["apps"]).unwrap().command.unwrap();
+        let policy = Policy::of(&command);
+        assert!(policy.labelled(Actor::Agent));
+        let listener = UnixListener::bind(&client.transport.path).unwrap();
+        let helper = async {
+            let proof = json!({"ok": true, "uid": 60001, "hasGraphicAccess": true,
+                "parentPID": 123, "onConsole": false, "securitySessionID": 42,
+                "displayID": 7, "width": 100, "height": 100});
+            for (operation, reply) in [
+                (
+                    "hello",
+                    json!({"ok": true, "user": {"uid": 60001}, "daemon": {"pid": 123},
+                        "session": {"managerName": "Aqua", "onConsole": false},
+                        "display": {"width": 100, "height": 100, "scale": 1}}),
+                ),
+                (
+                    "run",
+                    json!({"ok": true, "exitCode": 0, "timedOut": false,
+                        "events": [{"event": "output", "data": STANDARD.encode(proof.to_string())}]}),
+                ),
+                ("apps", json!({"ok": true, "apps": []})),
+            ] {
+                let (peer, _) = listener.accept().await.unwrap();
+                let mut peer = BufReader::new(peer);
+                let mut line = String::new();
+                peer.read_line(&mut line).await.unwrap();
+                assert_eq!(
+                    serde_json::from_str::<Value>(&line).unwrap()["op"],
+                    operation
+                );
+                peer.get_mut()
+                    .write_all(format!("{reply}\n").as_bytes())
+                    .await
+                    .unwrap();
+            }
+        };
+        let factory = || Ok(client.clone());
+        let config = dir.path().join("settings.toml");
+        let (result, ()) = tokio::time::timeout(Duration::from_secs(2), async {
+            tokio::join!(
+                execute_with(&config, command, &policy, Some(&host), &factory, false,),
+                helper
+            )
+        })
+        .await
+        .unwrap();
+        assert_eq!(result.unwrap()["ok"], true);
+        assert!(
+            !client
+                .output_dir()
+                .unwrap()
+                .join(atlas::activity_log::FILE)
+                .exists()
+        );
+
+        let mut updater = client.clone();
+        let own = HostSession::new(Host::Named, "updater").unwrap();
+        updater.controller = updater.controller.labelled(Some(&own));
+        updater.host_session = Some(own);
+        let error = tokio::time::timeout(Duration::from_secs(1), updater.service_change(false))
+            .await
+            .unwrap()
+            .unwrap_err();
+        assert_eq!(error.code, Code::Busy);
+        assert_eq!(error.error, "worker is active in the helper.");
+        assert!(updater.controller.holder_note().is_none());
+    }
+
     #[test]
     fn a_rollback_a_command_finished_is_settled_in_the_task_that_claimed_the_plan() {
         let dir = tempfile::tempdir().unwrap();
@@ -1381,7 +1550,7 @@ mod tests {
                 .unwrap();
         };
         let client = || Ok(client.clone());
-        let running = carry_out(Path::new("unused.toml"), command, &client, None);
+        let running = carry_out(Path::new("unused.toml"), command, &client, None, false);
         let (outcome, ()) = tokio::time::timeout(Duration::from_secs(5), async {
             tokio::join!(running, helper)
         })
@@ -1445,7 +1614,7 @@ mod tests {
     }
 
     #[test]
-    fn servers_helper_commands_and_setup_carry_no_host_session() {
+    fn servers_helper_commands_and_setup_previews_carry_no_host_session() {
         let attributed = |args: &[&str]| {
             Policy::of(&parse(args).unwrap().command.unwrap()).labelled(Actor::Agent)
         };
@@ -1461,7 +1630,7 @@ mod tests {
             &["elements-info", "1"],
             &["init"],
             &["uninstall"],
-            &["update"],
+            &["update", "--check"],
             &["setup"],
             &["switch"],
         ] {
@@ -1469,6 +1638,10 @@ mod tests {
         }
 
         for agents in [
+            &["update"][..],
+            &["update-finish"],
+            &["setup", "--apply"],
+            &["setup", "--rollback"],
             &["click", "1", "2"][..],
             &["type", "x"],
             &["screenshot"],

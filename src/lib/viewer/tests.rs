@@ -134,6 +134,13 @@ async fn posted(viewer: &Arc<Viewer>, route: &str, body: &Value) -> (u16, Value)
     (status, serde_json::from_slice(&body).unwrap())
 }
 
+pub(crate) async fn recover_from_app(client: Client) -> Value {
+    let viewer = http::configured(client, "127.0.0.1:0".to_owned(), None);
+    let (status, outcome) = posted(&viewer, "recover", &json!({})).await;
+    assert_eq!(status, 200, "{outcome}");
+    outcome
+}
+
 #[tokio::test]
 async fn the_cleanup_routes_preview_and_apply_as_the_person() {
     use crate::{

@@ -51,6 +51,11 @@ impl Controller {
     /// no entries is an unknown outcome, as an unreadable one is.
     pub(super) fn unsettled(&self) -> Result<Unsettled> {
         let _lock = self.lock_marker()?;
+        self.read_unsettled()
+    }
+
+    /// Read unsettled state while the caller holds the marker lock.
+    pub(super) fn read_unsettled(&self) -> Result<Unsettled> {
         if !self.marker.try_exists()? {
             return Ok(Unsettled::Nothing);
         }
@@ -73,13 +78,14 @@ impl Controller {
         Ok(file)
     }
 
-    fn lock_marker_within(&self, wait: Duration) -> Result<File> {
+    /// Take the marker lock with bounded patience, including when no marker exists.
+    pub(super) fn lock_marker_within(&self, wait: Duration) -> Result<File> {
         self.make_directory()?;
         let file = open_lock(&self.marker_lock)?;
         lock_within(&file, Lock::Exclusive, wait).map_err(|Held| {
             Error::new(
                 Code::Busy,
-                "Another Atlas command is updating pending actions",
+                "Atlas could not check pending activity in time.",
             )
         })?;
         Ok(file)
@@ -103,6 +109,12 @@ impl Controller {
         if !self.marker.try_exists()? {
             return Ok(Vec::new());
         }
+        let _lock = self.lock_marker_within(wait)?;
+        self.read_causes()
+    }
+
+    /// Service replacement must check for a writer even before a marker exists.
+    pub(crate) fn pending_causes_for_service_change(&self, wait: Duration) -> Result<Vec<Cause>> {
         let _lock = self.lock_marker_within(wait)?;
         self.read_causes()
     }

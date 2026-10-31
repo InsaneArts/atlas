@@ -317,6 +317,7 @@ async fn a_worker_killed_after_replacing_a_file_stays_pending_until_recovery() {
     let plan = sandbox.plan(vec![sandbox.payload("file", b"replacement")]);
     let mut client = crate::test_support::client(&sandbox.root);
     client.transport.peer_uid = nix::unistd::getuid().as_raw();
+    fs::create_dir_all(client.transport.path.parent().unwrap()).unwrap();
     let listener = UnixListener::bind(&client.transport.path).unwrap();
     let stage = stage_in(&sandbox.root, &plan.id);
     let helper = helper_name(nix::unistd::getuid().as_raw()).unwrap();
@@ -1428,6 +1429,7 @@ async fn a_request_that_was_never_sent_leaves_nothing() {
 async fn an_environment_request_reads_the_helper_only_once_it_has_control() {
     let sandbox = Sandbox::new();
     let client = crate::test_support::client(&sandbox.root);
+    fs::create_dir_all(client.transport.path.parent().unwrap()).unwrap();
     let daemon = tokio::net::UnixListener::bind(&client.transport.path).unwrap();
     let _held = client.controller.acquire(false).unwrap();
 

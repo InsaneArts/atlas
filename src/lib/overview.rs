@@ -5,8 +5,11 @@ mod activity;
 mod sessions;
 
 pub(crate) use activity::shown;
+#[cfg(test)]
+pub(crate) use sessions::service_blocker_with;
 pub(crate) use sessions::{
     SessionFacts, SessionReading, add_host_sessions, add_sessions_for, first_command_running,
+    service_blocker,
 };
 
 use crate::{

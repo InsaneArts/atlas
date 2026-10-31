@@ -120,16 +120,41 @@ impl Store {
     }
 
     /// The newest `limit` records by when each was written, of the first
-    /// [`LISTED`] records in the folder, newest `lastSeen` first.
+    /// [`LISTED`] entries in the folder, newest `lastSeen` first.
     fn listed(&self, limit: usize) -> Vec<Record> {
-        let mut records: Vec<Record> = self
-            .folder
-            .listed(limit)
-            .iter()
-            .filter_map(|key| self.read(key))
-            .collect();
+        self.scanned(limit).0
+    }
+
+    /// The bounded read, retaining failed record reads and listing uncertainty.
+    fn scanned(&self, limit: usize) -> (Vec<Record>, bool) {
+        let listing = self.folder.listing(limit);
+        let mut complete = listing.complete;
+        let mut records = Vec::new();
+        for key in listing.keys {
+            match self.read(&key) {
+                Some(record) => records.push(record),
+                None => complete = false,
+            }
+        }
         records.sort_by_key(|record| std::cmp::Reverse(record.last_seen));
+        (records, complete)
+    }
+
+    /// An uncached session read for service replacement. A missing folder is
+    /// empty; a failed or truncated read cannot establish that sessions are idle.
+    pub(crate) fn checked_recent(&self) -> Option<Vec<Seen>> {
+        let (records, complete) = self.scanned(MAX_RECORDS);
+        complete.then(|| self.seen(records))
+    }
+
+    fn seen(&self, records: Vec<Record>) -> Vec<Seen> {
         records
+            .into_iter()
+            .map(|record| Seen {
+                copies_left: self.copies_left(&record).len(),
+                record,
+            })
+            .collect()
     }
 
     /// [`Store::all`] with each record's copy folders still there counted,
@@ -145,15 +170,8 @@ impl Store {
         kept: &Mutex<Option<Cached<Seen>>>,
         read: impl FnOnce(&Self) -> Vec<Record>,
     ) -> Arc<[Seen]> {
-        self.folder.cached(kept, COPIES_FRESH, || {
-            read(self)
-                .into_iter()
-                .map(|record| Seen {
-                    copies_left: self.copies_left(&record).len(),
-                    record,
-                })
-                .collect()
-        })
+        self.folder
+            .cached(kept, COPIES_FRESH, || self.seen(read(self)))
     }
 
     /// Change `session`'s record under the store's lock, making it when
@@ -196,11 +214,9 @@ impl Store {
         now: u64,
         controller: &Controller,
     ) -> Result<()> {
-        if let Some(mut record) = self.read(session.key()) {
-            if !record.touched(session, ancestor, now) {
-                return Ok(());
-            }
-        } else if ancestor.is_none() {
+        if let Some(mut record) = self.read(session.key())
+            && !record.touched(session, ancestor, now)
+        {
             return Ok(());
         }
         let causes = controller.pending_causes_within(Duration::ZERO)?;
@@ -210,8 +226,8 @@ impl Store {
             if record.touched(session, ancestor, now) {
                 self.write(&record)?;
             }
-        } else if let Some(process) = ancestor {
-            let record = self.started_record(session, Some(process), now)?;
+        } else {
+            let record = self.started_record(session, ancestor, now)?;
             self.write(&record)?;
             self.prune(&record.key, &causes);
         }
@@ -374,9 +390,10 @@ pub fn note(
     })
 }
 
-/// Attach verified lifetime metadata before any command, including a read,
-/// without counting an action. A new process can resume a record only once
-/// its earlier root is gone. Best effort, with zero-wait locks.
+/// Note any command before dispatch, including a first read, without counting
+/// an action. Only a verified ancestor may attach or replace lifetime metadata;
+/// an existing root must be confirmed gone before replacement. Best effort,
+/// with zero-wait locks.
 pub fn touch(client: &Client, session: &HostSession) -> Result<()> {
     Store::at(client.output_dir()?).touch(session, session.ancestor(), now_ms(), &client.controller)
 }

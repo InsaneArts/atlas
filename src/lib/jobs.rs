@@ -27,7 +27,7 @@ use serde_json::{Map, Value, json};
 use std::time::{Duration, Instant};
 
 /// What an older helper daemon is told it cannot do.
-const OLDER: &str = "The helper is running an older Atlas that cannot keep background jobs; run atlas restart, then try again";
+pub(crate) const OLDER: &str = "The helper is running an older Atlas that cannot keep background jobs; run atlas restart, then try again";
 /// How often a stop looks at the job while it waits for it to end.
 const POLL: Duration = Duration::from_millis(200);
 /// How long a stop waits beyond its grace for the job to end.
@@ -738,7 +738,7 @@ pub(crate) async fn of_session(
 }
 
 /// Every job as the helper shows it now, or why it cannot say.
-async fn shown_all(client: &Client) -> Result<Vec<Shown>> {
+pub(crate) async fn shown_all(client: &Client) -> Result<Vec<Shown>> {
     let daemon = Transport {
         timeout: Duration::from_secs(10),
         ..client.transport.clone()
@@ -747,16 +747,24 @@ async fn shown_all(client: &Client) -> Result<Vec<Shown>> {
         .call(&json!({"op": "job", "action": "show"}))
         .await
         .map_err(Error::certain)?;
+
+    shown_from(&reply)
+}
+
+fn shown_from(reply: &Value) -> Result<Vec<Shown>> {
     if reply["ok"] == true {
-        return Ok(match JobReply::deserialize(&reply) {
-            Ok(JobReply::Show(Showing::Every { jobs })) => jobs,
-            _ => Vec::new(),
-        });
+        return match JobReply::deserialize(reply) {
+            Ok(JobReply::Show(Showing::Every { jobs })) => Ok(jobs),
+            _ => Err(Error::new(
+                Code::Protocol,
+                "The helper did not report its background jobs",
+            )),
+        };
     }
     if reply["code"] == "bad-request" {
         return Err(Error::new(Code::Daemon, OLDER));
     }
-    Err(refused(&reply))
+    Err(refused(reply))
 }
 
 /// The task's record's entry for a job the helper shows as `job`.

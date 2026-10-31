@@ -50,7 +50,7 @@ where
 
 impl Client {
     pub async fn restart(&self) -> Result<Value> {
-        let _ownership = self.controller.acquire(true)?;
+        let _ownership = self.service_change(true).await?;
         let before = self.identity().await?;
 
         // Recovery goes through the input service; with none running and no
@@ -146,7 +146,7 @@ impl Client {
                     && status["inputService"]["pid"] == input_pid
                     && status["inputService"]["ready"] == false
                 {
-                    self.upgrade_input(&status)
+                    self.upgrade_input_for(&status, true)
                         .await
                         .map_err(Error::uncertain)?;
                     self.controller.clear().map_err(Error::uncertain)?;

@@ -153,7 +153,14 @@ fn main() -> ExitCode {
 
             interrupt
                 .unless_stopped(async {
-                    let result = dispatch::execute(config.clone(), command, &policy, wait).await;
+                    let result = dispatch::execute(
+                        config.clone(),
+                        command,
+                        &policy,
+                        wait,
+                        cli.allow_disrupt,
+                    )
+                    .await;
 
                     // Being stopped: the stop ends Atlas in a moment and says
                     // so, so what the cut-short command gave is not reported.

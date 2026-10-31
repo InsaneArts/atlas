@@ -123,3 +123,6 @@ fn unanswered() -> Error {
 
 #[cfg(test)]
 mod tests;
+
+#[cfg(test)]
+pub(crate) use tests::recover_from_app;

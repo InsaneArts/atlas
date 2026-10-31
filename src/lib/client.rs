@@ -11,6 +11,7 @@ mod mutate;
 mod record;
 mod run;
 mod service;
+mod service_change;
 mod session;
 mod stop;
 #[cfg(test)]
@@ -102,8 +103,12 @@ pub struct Client {
     /// What the command acting through this client does, for the log.
     pub doing: Option<Doing>,
     /// The host session the command acting through this client comes from,
-    /// for the activity log and the session record; never for a decision.
+    /// for activity attribution and to exclude its own recent activity
+    /// when checking whether a service replacement would interrupt others.
     pub host_session: Option<HostSession>,
+    /// Whether the person permits service replacement while sessions or
+    /// background jobs are active. Controller exclusion still applies.
+    pub allow_disrupt: bool,
     /// The task of that session the command belongs to, for its rows and
     /// the task's record; never for a decision.
     pub task: Option<Task>,
@@ -139,6 +144,7 @@ impl Client {
             actor: Actor::Agent,
             doing: None,
             host_session: None,
+            allow_disrupt: false,
             task: None,
             person_input: None,
             config,

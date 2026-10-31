@@ -19,6 +19,9 @@ Global options:
       --json
           Print JSON (the default when the output is not a terminal)
 
+      --allow-disrupt
+          Permit service restarts while other sessions or background jobs are active. A controller or an unfinished action can still block the restart
+
       --config <FILE>
           Use another settings file
 ```
@@ -43,6 +46,9 @@ Options:
 Global options:
       --json
           Print JSON (the default when the output is not a terminal)
+
+      --allow-disrupt
+          Permit service restarts while other sessions or background jobs are active. A controller or an unfinished action can still block the restart
 
       --config <FILE>
           Use another settings file
@@ -78,6 +84,9 @@ Global options:
       --json
           Print JSON (the default when the output is not a terminal)
 
+      --allow-disrupt
+          Permit service restarts while other sessions or background jobs are active. A controller or an unfinished action can still block the restart
+
       --config <FILE>
           Use another settings file
 
@@ -107,6 +116,9 @@ Global options:
       --json
           Print JSON (the default when the output is not a terminal)
 
+      --allow-disrupt
+          Permit service restarts while other sessions or background jobs are active. A controller or an unfinished action can still block the restart
+
       --config <FILE>
           Use another settings file
 ```
@@ -130,6 +142,9 @@ Global options:
       --json
           Print JSON (the default when the output is not a terminal)
 
+      --allow-disrupt
+          Permit service restarts while other sessions or background jobs are active. A controller or an unfinished action can still block the restart
+
       --config <FILE>
           Use another settings file
 ```
@@ -152,6 +167,9 @@ Options:
 Global options:
       --json
           Print JSON (the default when the output is not a terminal)
+
+      --allow-disrupt
+          Permit service restarts while other sessions or background jobs are active. A controller or an unfinished action can still block the restart
 
       --config <FILE>
           Use another settings file
@@ -192,6 +210,9 @@ Global options:
       --json
           Print JSON (the default when the output is not a terminal)
 
+      --allow-disrupt
+          Permit service restarts while other sessions or background jobs are active. A controller or an unfinished action can still block the restart
+
       --config <FILE>
           Use another settings file
 ```
@@ -231,6 +252,9 @@ Global options:
       --json
           Print JSON (the default when the output is not a terminal)
 
+      --allow-disrupt
+          Permit service restarts while other sessions or background jobs are active. A controller or an unfinished action can still block the restart
+
       --config <FILE>
           Use another settings file
 ```
@@ -264,6 +288,9 @@ Options:
 Global options:
       --json
           Print JSON (the default when the output is not a terminal)
+
+      --allow-disrupt
+          Permit service restarts while other sessions or background jobs are active. A controller or an unfinished action can still block the restart
 
       --config <FILE>
           Use another settings file
@@ -301,6 +328,9 @@ Global options:
       --json
           Print JSON (the default when the output is not a terminal)
 
+      --allow-disrupt
+          Permit service restarts while other sessions or background jobs are active. A controller or an unfinished action can still block the restart
+
       --config <FILE>
           Use another settings file
 ```
@@ -330,6 +360,9 @@ Options:
 Global options:
       --json
           Print JSON (the default when the output is not a terminal)
+
+      --allow-disrupt
+          Permit service restarts while other sessions or background jobs are active. A controller or an unfinished action can still block the restart
 
       --config <FILE>
           Use another settings file
@@ -375,6 +408,9 @@ Global options:
       --json
           Print JSON (the default when the output is not a terminal)
 
+      --allow-disrupt
+          Permit service restarts while other sessions or background jobs are active. A controller or an unfinished action can still block the restart
+
       --config <FILE>
           Use another settings file
 
@@ -402,6 +438,9 @@ Global options:
       --json
           Print JSON (the default when the output is not a terminal)
 
+      --allow-disrupt
+          Permit service restarts while other sessions or background jobs are active. A controller or an unfinished action can still block the restart
+
       --config <FILE>
           Use another settings file
 ```
@@ -420,6 +459,9 @@ Options:
 Global options:
       --json
           Print JSON (the default when the output is not a terminal)
+
+      --allow-disrupt
+          Permit service restarts while other sessions or background jobs are active. A controller or an unfinished action can still block the restart
 
       --config <FILE>
           Use another settings file
@@ -452,6 +494,9 @@ Options:
 Global options:
       --json
           Print JSON (the default when the output is not a terminal)
+
+      --allow-disrupt
+          Permit service restarts while other sessions or background jobs are active. A controller or an unfinished action can still block the restart
 
       --config <FILE>
           Use another settings file
@@ -514,6 +559,9 @@ Global options:
       --json
           Print JSON (the default when the output is not a terminal)
 
+      --allow-disrupt
+          Permit service restarts while other sessions or background jobs are active. A controller or an unfinished action can still block the restart
+
       --config <FILE>
           Use another settings file
 
@@ -558,6 +606,9 @@ Global options:
       --json
           Print JSON (the default when the output is not a terminal)
 
+      --allow-disrupt
+          Permit service restarts while other sessions or background jobs are active. A controller or an unfinished action can still block the restart
+
       --config <FILE>
           Use another settings file
 
@@ -598,6 +649,9 @@ Global options:
       --json
           Print JSON (the default when the output is not a terminal)
 
+      --allow-disrupt
+          Permit service restarts while other sessions or background jobs are active. A controller or an unfinished action can still block the restart
+
       --config <FILE>
           Use another settings file
 
@@ -627,6 +681,9 @@ Options:
 Global options:
       --json
           Print JSON (the default when the output is not a terminal)
+
+      --allow-disrupt
+          Permit service restarts while other sessions or background jobs are active. A controller or an unfinished action can still block the restart
 
       --config <FILE>
           Use another settings file
@@ -680,6 +737,9 @@ Global options:
       --json
           Print JSON (the default when the output is not a terminal)
 
+      --allow-disrupt
+          Permit service restarts while other sessions or background jobs are active. A controller or an unfinished action can still block the restart
+
       --config <FILE>
           Use another settings file
 
@@ -730,6 +790,9 @@ Global options:
       --json
           Print JSON (the default when the output is not a terminal)
 
+      --allow-disrupt
+          Permit service restarts while other sessions or background jobs are active. A controller or an unfinished action can still block the restart
+
       --config <FILE>
           Use another settings file
 
@@ -764,6 +827,9 @@ Global options:
       --json
           Print JSON (the default when the output is not a terminal)
 
+      --allow-disrupt
+          Permit service restarts while other sessions or background jobs are active. A controller or an unfinished action can still block the restart
+
       --config <FILE>
           Use another settings file
 
@@ -795,6 +861,9 @@ Options:
 Global options:
       --json
           Print JSON (the default when the output is not a terminal)
+
+      --allow-disrupt
+          Permit service restarts while other sessions or background jobs are active. A controller or an unfinished action can still block the restart
 
       --config <FILE>
           Use another settings file
@@ -828,6 +897,9 @@ Global options:
       --json
           Print JSON (the default when the output is not a terminal)
 
+      --allow-disrupt
+          Permit service restarts while other sessions or background jobs are active. A controller or an unfinished action can still block the restart
+
       --config <FILE>
           Use another settings file
 
@@ -860,6 +932,9 @@ Options:
 Global options:
       --json
           Print JSON (the default when the output is not a terminal)
+
+      --allow-disrupt
+          Permit service restarts while other sessions or background jobs are active. A controller or an unfinished action can still block the restart
 
       --config <FILE>
           Use another settings file
@@ -899,6 +974,9 @@ Global options:
       --json
           Print JSON (the default when the output is not a terminal)
 
+      --allow-disrupt
+          Permit service restarts while other sessions or background jobs are active. A controller or an unfinished action can still block the restart
+
       --config <FILE>
           Use another settings file
 
@@ -933,6 +1011,9 @@ Global options:
       --json
           Print JSON (the default when the output is not a terminal)
 
+      --allow-disrupt
+          Permit service restarts while other sessions or background jobs are active. A controller or an unfinished action can still block the restart
+
       --config <FILE>
           Use another settings file
 
@@ -964,6 +1045,9 @@ Options:
 Global options:
       --json
           Print JSON (the default when the output is not a terminal)
+
+      --allow-disrupt
+          Permit service restarts while other sessions or background jobs are active. A controller or an unfinished action can still block the restart
 
       --config <FILE>
           Use another settings file
@@ -1002,6 +1086,9 @@ Global options:
       --json
           Print JSON (the default when the output is not a terminal)
 
+      --allow-disrupt
+          Permit service restarts while other sessions or background jobs are active. A controller or an unfinished action can still block the restart
+
       --config <FILE>
           Use another settings file
 ```
@@ -1023,6 +1110,9 @@ Options:
 Global options:
       --json
           Print JSON (the default when the output is not a terminal)
+
+      --allow-disrupt
+          Permit service restarts while other sessions or background jobs are active. A controller or an unfinished action can still block the restart
 
       --config <FILE>
           Use another settings file
@@ -1055,6 +1145,9 @@ Global options:
       --json
           Print JSON (the default when the output is not a terminal)
 
+      --allow-disrupt
+          Permit service restarts while other sessions or background jobs are active. A controller or an unfinished action can still block the restart
+
       --config <FILE>
           Use another settings file
 ```
@@ -1086,6 +1179,9 @@ Global options:
       --json
           Print JSON (the default when the output is not a terminal)
 
+      --allow-disrupt
+          Permit service restarts while other sessions or background jobs are active. A controller or an unfinished action can still block the restart
+
       --config <FILE>
           Use another settings file
 ```
@@ -1116,6 +1212,9 @@ Global options:
       --json
           Print JSON (the default when the output is not a terminal)
 
+      --allow-disrupt
+          Permit service restarts while other sessions or background jobs are active. A controller or an unfinished action can still block the restart
+
       --config <FILE>
           Use another settings file
 
@@ -1144,6 +1243,9 @@ Options:
 Global options:
       --json
           Print JSON (the default when the output is not a terminal)
+
+      --allow-disrupt
+          Permit service restarts while other sessions or background jobs are active. A controller or an unfinished action can still block the restart
 
       --config <FILE>
           Use another settings file
@@ -1187,6 +1289,9 @@ Global options:
       --json
           Print JSON (the default when the output is not a terminal)
 
+      --allow-disrupt
+          Permit service restarts while other sessions or background jobs are active. A controller or an unfinished action can still block the restart
+
       --config <FILE>
           Use another settings file
 ```
@@ -1212,6 +1317,9 @@ Options:
 Global options:
       --json
           Print JSON (the default when the output is not a terminal)
+
+      --allow-disrupt
+          Permit service restarts while other sessions or background jobs are active. A controller or an unfinished action can still block the restart
 
       --config <FILE>
           Use another settings file
@@ -1243,6 +1351,9 @@ Global options:
       --json
           Print JSON (the default when the output is not a terminal)
 
+      --allow-disrupt
+          Permit service restarts while other sessions or background jobs are active. A controller or an unfinished action can still block the restart
+
       --config <FILE>
           Use another settings file
 ```
@@ -1265,6 +1376,9 @@ Options:
 Global options:
       --json
           Print JSON (the default when the output is not a terminal)
+
+      --allow-disrupt
+          Permit service restarts while other sessions or background jobs are active. A controller or an unfinished action can still block the restart
 
       --config <FILE>
           Use another settings file
@@ -1289,6 +1403,9 @@ Options:
 Global options:
       --json
           Print JSON (the default when the output is not a terminal)
+
+      --allow-disrupt
+          Permit service restarts while other sessions or background jobs are active. A controller or an unfinished action can still block the restart
 
       --config <FILE>
           Use another settings file
@@ -1315,6 +1432,9 @@ Options:
 Global options:
       --json
           Print JSON (the default when the output is not a terminal)
+
+      --allow-disrupt
+          Permit service restarts while other sessions or background jobs are active. A controller or an unfinished action can still block the restart
 
       --config <FILE>
           Use another settings file
@@ -1347,6 +1467,9 @@ Global options:
       --json
           Print JSON (the default when the output is not a terminal)
 
+      --allow-disrupt
+          Permit service restarts while other sessions or background jobs are active. A controller or an unfinished action can still block the restart
+
       --config <FILE>
           Use another settings file
 ```
@@ -1371,6 +1494,9 @@ Options:
 Global options:
       --json
           Print JSON (the default when the output is not a terminal)
+
+      --allow-disrupt
+          Permit service restarts while other sessions or background jobs are active. A controller or an unfinished action can still block the restart
 
       --config <FILE>
           Use another settings file
@@ -1401,6 +1527,9 @@ Options:
 Global options:
       --json
           Print JSON (the default when the output is not a terminal)
+
+      --allow-disrupt
+          Permit service restarts while other sessions or background jobs are active. A controller or an unfinished action can still block the restart
 
       --config <FILE>
           Use another settings file
@@ -1436,6 +1565,9 @@ Global options:
       --json
           Print JSON (the default when the output is not a terminal)
 
+      --allow-disrupt
+          Permit service restarts while other sessions or background jobs are active. A controller or an unfinished action can still block the restart
+
       --config <FILE>
           Use another settings file
 ```
@@ -1462,6 +1594,9 @@ Global options:
       --json
           Print JSON (the default when the output is not a terminal)
 
+      --allow-disrupt
+          Permit service restarts while other sessions or background jobs are active. A controller or an unfinished action can still block the restart
+
       --config <FILE>
           Use another settings file
 
@@ -1475,7 +1610,7 @@ Examples:
 ```text
 Restart the helper after something went wrong.
 
-Confirms a new hidden helper before clearing an action of unknown outcome.
+Confirms a new hidden helper before clearing an action of unknown outcome. Defers while another session is active; --allow-disrupt permits interrupting it.
 
 Usage: atlas restart [OPTIONS]
 
@@ -1486,6 +1621,9 @@ Options:
 Global options:
       --json
           Print JSON (the default when the output is not a terminal)
+
+      --allow-disrupt
+          Permit service restarts while other sessions or background jobs are active. A controller or an unfinished action can still block the restart
 
       --config <FILE>
           Use another settings file
@@ -1514,6 +1652,9 @@ Global options:
       --json
           Print JSON (the default when the output is not a terminal)
 
+      --allow-disrupt
+          Permit service restarts while other sessions or background jobs are active. A controller or an unfinished action can still block the restart
+
       --config <FILE>
           Use another settings file
 
@@ -1537,6 +1678,9 @@ Global options:
       --json
           Print JSON (the default when the output is not a terminal)
 
+      --allow-disrupt
+          Permit service restarts while other sessions or background jobs are active. A controller or an unfinished action can still block the restart
+
       --config <FILE>
           Use another settings file
 ```
@@ -1546,7 +1690,7 @@ Global options:
 ```text
 Update Atlas, checking its signature first.
 
-Verifies the release's checksum, Developer ID signature and version, then moves the helper onto it.
+Verifies the release's checksum, Developer ID signature and version, then moves the helper onto it. Defers while another session or a background job is active; --allow-disrupt permits interrupting it.
 
 Usage: atlas update [OPTIONS]
 
@@ -1569,6 +1713,9 @@ Options:
 Global options:
       --json
           Print JSON (the default when the output is not a terminal)
+
+      --allow-disrupt
+          Permit service restarts while other sessions or background jobs are active. A controller or an unfinished action can still block the restart
 
       --config <FILE>
           Use another settings file
@@ -1600,6 +1747,9 @@ Global options:
       --json
           Print JSON (the default when the output is not a terminal)
 
+      --allow-disrupt
+          Permit service restarts while other sessions or background jobs are active. A controller or an unfinished action can still block the restart
+
       --config <FILE>
           Use another settings file
 
@@ -1622,6 +1772,9 @@ Options:
 Global options:
       --json
           Print JSON (the default when the output is not a terminal)
+
+      --allow-disrupt
+          Permit service restarts while other sessions or background jobs are active. A controller or an unfinished action can still block the restart
 
       --config <FILE>
           Use another settings file
@@ -1653,6 +1806,9 @@ Global options:
       --json
           Print JSON (the default when the output is not a terminal)
 
+      --allow-disrupt
+          Permit service restarts while other sessions or background jobs are active. A controller or an unfinished action can still block the restart
+
       --config <FILE>
           Use another settings file
 ```
@@ -1671,6 +1827,9 @@ Options:
 Global options:
       --json
           Print JSON (the default when the output is not a terminal)
+
+      --allow-disrupt
+          Permit service restarts while other sessions or background jobs are active. A controller or an unfinished action can still block the restart
 
       --config <FILE>
           Use another settings file
@@ -1699,6 +1858,9 @@ Options:
 Global options:
       --json
           Print JSON (the default when the output is not a terminal)
+
+      --allow-disrupt
+          Permit service restarts while other sessions or background jobs are active. A controller or an unfinished action can still block the restart
 
       --config <FILE>
           Use another settings file

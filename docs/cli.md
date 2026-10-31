@@ -112,6 +112,14 @@ See [Maintenance](maintenance.md) before updating, removing or repairing Atlas. 
 
 `--config FILE` selects a settings file and takes precedence over `ATLAS_CONFIG`. `--json` requests JSON output. Both are global options, so you can put them before or after a subcommand, but before the `--` that begins a child command's arguments.
 
+`--allow-disrupt` permits service replacement while other sessions or background
+jobs are active. It applies to updates, restarts and setup repairs; it preserves
+controller exclusion and pending-outcome checks. Without it, another session's
+Atlas use within two minutes, a holder, a waiter, a running command or a
+background job defers replacement. The caller's own recent activity is excluded.
+`update --force` only permits reinstalling a release that is not newer. See
+[Maintenance](maintenance.md) for examples.
+
 Ordinary command results are readable text in a terminal and JSON when redirected or piped. `ATLAS_JSON` can override that default; explicit `--json` wins. Help, version and `atlas agents status --brief` output are text, and `atlas agent-guide` prints Markdown. Interactive setup and commands that open a UI are not a stream of JSON results.
 
 In JSON mode, each result is one line of JSON. A returned action result goes to stdout, including a result with `ok: false`. Command, configuration and connection errors go to stderr. On failure, read both streams. Do not assume an empty stdout means nothing happened. Every failure carries `next`, one sentence on what to do about it, and `busy` carries `holder`: `person` or `agent`. Commands that change the helper first wait up to 30 seconds for another Atlas command, in the order they began (`--wait SECONDS` or `ATLAS_WAIT`, up to 600, 0 for none), and `busy` then carries `waited`, the seconds waited. They never wait while the person has control or has stopped agents. `busy` names the agent session that has control in `heldBy`, `focus-changed` the session that last used the app in front in `lastUsedBy`, and the `uncertain` refusal says in `yours` whether the unknown action was this session's.

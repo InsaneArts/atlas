@@ -353,6 +353,26 @@ impl Controller {
         })
     }
 
+    /// Take control for service replacement, refusing a stalled marker writer
+    /// even when interruption of other sessions is permitted.
+    pub(crate) fn acquire_for_service_change(
+        &self,
+        recovery: bool,
+        marker_wait: Duration,
+    ) -> Result<Ownership> {
+        let lock = self.take_lock()?;
+        let _marker = self.lock_marker_within(marker_wait)?;
+        if recovery {
+            self.read_nothing_running()?;
+        } else {
+            Self::require_unsettled_beside(
+                self.read_unsettled().unwrap_or(Unsettled::Unknown),
+                Beside::Nothing,
+            )?;
+        }
+        Ok(self.owning(lock))
+    }
+
     /// [`Controller::acquire`] for an agent's own action, going on beside
     /// commands still running under their own claims.
     pub fn acquire_beside_commands(&self) -> Result<Ownership> {
@@ -454,6 +474,12 @@ impl Controller {
         notes
     }
 
+    /// Waiting notes only when the bounded read accounted for every entry.
+    /// An incomplete read cannot establish that service replacement is idle.
+    pub(crate) fn checked_waiting_notes(&self) -> Option<Vec<Note>> {
+        turns::checked_waiting(&self.waiting)
+    }
+
     /// The notes of the commands agents started with `run` that still run,
     /// oldest first: such a command holds no control while it runs, so
     /// only its note names a session on its first command. For apps to
@@ -541,7 +567,12 @@ impl Controller {
         }
 
         // A marker that cannot be read is an unknown outcome.
-        match (self.unsettled().unwrap_or(Unsettled::Unknown), beside) {
+        Self::require_unsettled_beside(self.unsettled().unwrap_or(Unsettled::Unknown), beside)
+    }
+
+    /// Apply the acquisition rules to state read under the marker lock.
+    fn require_unsettled_beside(unsettled: Unsettled, beside: Beside) -> Result<()> {
+        match (unsettled, beside) {
             (Unsettled::Nothing, _) | (Unsettled::Commands, Beside::Commands) => Ok(()),
             (Unsettled::Commands, Beside::Nothing) => {
                 Err(busy_command(Purpose::Change(Beside::Nothing)))
@@ -558,6 +589,11 @@ impl Controller {
     /// Recovery never settles either.
     fn require_nothing_running(&self) -> Result<()> {
         let _lock = self.lock_marker()?;
+        self.read_nothing_running()
+    }
+
+    /// Check running claims while the caller holds the marker lock.
+    fn read_nothing_running(&self) -> Result<()> {
         let pending = pending(&self.marker)?;
         let marked = self.commands();
         if pending

@@ -504,7 +504,7 @@ pub(crate) fn install_job(
 /// restart stays pending until a new daemon is seen; if that never happens
 /// it is left for recovery, like any action of unknown outcome.
 async fn restart_daemon(client: &Client, config: &Config) -> Result<()> {
-    let _exclusion = client.controller.acquire(true)?;
+    let _exclusion = client.service_change(true).await?;
     let before = client.status().await["daemon"]["pid"].clone();
     let transport = crate::transport::Transport {
         path: config.socket_path.clone(),
@@ -571,7 +571,7 @@ async fn replace_job(
     layout: &Layout,
     run: impl Fn(&Request) -> Result<Value>,
 ) -> Result<()> {
-    let _exclusion = client.controller.acquire(true)?;
+    let _exclusion = client.service_change(true).await?;
     let before = client.status().await["daemon"]["pid"].clone();
     let pending = client.controller.quarantine()?;
 
@@ -850,7 +850,7 @@ pub(crate) fn missing(status: &Value) -> Vec<&'static str> {
 }
 
 /// Guide the person from an installed app to a ready helper.
-pub async fn run(config_path: &Path) -> Result<Value> {
+pub async fn run(config_path: &Path, allow_disrupt: bool) -> Result<Value> {
     if !ui::interactive() {
         return Err(problem("init is a guided setup; run it in a terminal"));
     }
@@ -871,7 +871,9 @@ pub async fn run(config_path: &Path) -> Result<Value> {
     let name = helper.name.clone();
     // Whether an earlier run already finished setup (decides the first-run steps).
     let settled_before = setup::migrate::settled(helper.uid);
-    let client = Client::new(config.clone())?;
+    let mut client = Client::new(config.clone())?;
+    client.host_session = crate::host_session::HostSession::from_env();
+    client.allow_disrupt = allow_disrupt;
 
     client.bootstrap_probe()?;
 
@@ -1315,13 +1317,10 @@ async fn start_helper(
             .ok_or_else(|| problem("This account cannot be resolved"))?;
         let (agent, layout) = helper_agent(helper, executable)?;
 
-        prepare_and_install(
-            &client.controller,
-            &controller.name,
-            agent,
-            &layout.logs(),
-            |request| as_helper(executable, helper, request, expected),
-        )?;
+        prepare_and_install(client, &controller.name, agent, &layout.logs(), |request| {
+            as_helper(executable, helper, request, expected)
+        })
+        .await?;
 
         spinner.set("Starting the helper…");
         let answered =
@@ -1353,6 +1352,13 @@ pub(crate) fn setup_transaction<T>(
     act: impl FnOnce() -> Result<T>,
 ) -> Result<T> {
     let _ownership = controller.acquire(true)?;
+    setup_transaction_held(controller, act)
+}
+
+fn setup_transaction_held<T>(
+    controller: &crate::control::Controller,
+    act: impl FnOnce() -> Result<T>,
+) -> Result<T> {
     let pending = controller.quarantine()?;
     let _executors = crate::control::ExecutorClaims::new(std::slice::from_ref(&pending))?;
     let outcome = act();
@@ -1363,14 +1369,15 @@ pub(crate) fn setup_transaction<T>(
 }
 
 /// Prepare and install under one claim, including rollback dispatches.
-fn prepare_and_install(
-    controller: &crate::control::Controller,
+async fn prepare_and_install(
+    client: &Client,
     controller_name: &str,
     agent: Agent,
     logs: &Path,
     run: impl Fn(&Request) -> Result<Value>,
 ) -> Result<Value> {
-    setup_transaction(controller, || {
+    let _ownership = client.service_change(true).await?;
+    setup_transaction_held(&client.controller, || {
         run(&Request::Prepare {
             uid: agent.uid,
             controller: controller_name.to_owned(),
@@ -1499,7 +1506,7 @@ async fn verify_step(client: &Client, config: &Config, config_path: &Path) -> Re
         let _spinner = Spinner::new("Starting input and checking everything…");
         client.start_input().await?;
         let ownership = client.controller.acquire(true)?;
-        let recorded = setup::migrate::apply_fresh(config_path, &ownership).await?;
+        let recorded = setup::migrate::apply_fresh(config_path, client, &ownership).await?;
         if recorded["ok"] != true {
             return Err(problem(format!(
                 "Setup could not be verified: {}",
@@ -1582,6 +1589,62 @@ mod tests {
         }
     }
 
+    #[tokio::test]
+    async fn helper_installation_and_restarts_defer_before_dispatching_active_work() {
+        use crate::host_session::{Host, HostSession, store::Store};
+
+        let directory = tempfile::tempdir().unwrap();
+        let client = crate::test_support::client(directory.path());
+        let host = HostSession::new(Host::Named, "worker").unwrap();
+        Store::at(client.output_dir().unwrap())
+            .update(
+                &host,
+                crate::host_session::now_ms(),
+                &client.controller,
+                |_| {},
+            )
+            .unwrap();
+        let helper = setup::Account {
+            uid: 7001,
+            name: "helper".into(),
+            home: directory.path().join("home"),
+        };
+        let layout = Layout::new(helper.uid, helper.home.clone());
+        let agent = Agent {
+            label: LABEL.into(),
+            program: directory.path().join("atlas"),
+            uid: helper.uid,
+            controller_uid: nix::unistd::getuid().as_raw(),
+            socket: layout.socket(),
+        };
+        let checked = async {
+            let error =
+                prepare_and_install(&client, "controller", agent.clone(), &layout.logs(), |_| {
+                    panic!("dispatched setup while active")
+                })
+                .await
+                .unwrap_err();
+            assert_eq!(error.error, "worker is active in the helper.");
+            let error = replace_job(&client, &helper, agent, &layout, |_| {
+                panic!("replaced a job while active")
+            })
+            .await
+            .unwrap_err();
+            assert_eq!(error.code, Code::Busy);
+            assert_eq!(
+                restart_daemon(&client, &client.config)
+                    .await
+                    .unwrap_err()
+                    .code,
+                Code::Busy
+            );
+        };
+        tokio::time::timeout(Duration::from_secs(1), checked)
+            .await
+            .unwrap();
+        assert!(client.controller.pending().unwrap().is_empty());
+    }
+
     #[test]
     fn preparing_and_installing_a_helper_excludes_teardown_after_the_caller_dies() {
         if !crate::test_support::isolated(
@@ -1639,8 +1702,7 @@ mod tests {
             Ok(json!({"ok": true, "jobs": {LABEL: {"plistSha256": "b".repeat(64)}}}))
         };
         if matches!(mode.as_str(), "prepare" | "fresh-install") {
-            let _ =
-                prepare_and_install(&client.controller, "controller", agent, &layout.logs(), run);
+            let _ = prepare_and_install(&client, "controller", agent, &layout.logs(), run).await;
         } else {
             let _ = replace_job(&client, &helper, agent, &layout, run).await;
         }

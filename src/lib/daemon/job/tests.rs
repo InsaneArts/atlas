@@ -458,6 +458,38 @@ fn shown(jobs: &Jobs) -> Value {
 }
 
 #[test]
+fn listing_jobs_refuses_when_the_bounded_scan_cannot_account_for_every_record() {
+    let table = Table::with(vec![leader()]);
+    let (directory, jobs) = jobs_with(&record(), &table);
+    let folder = directory.path().join("jobs");
+    for index in 0..crate::record_folder::LISTED {
+        std::fs::write(folder.join(format!("unrelated-{index}")), "").unwrap();
+    }
+    let reply = jobs.show(None);
+    assert_eq!(reply["ok"], false);
+    assert_eq!(reply["reason"], "unobserved");
+    assert!(
+        reply["error"]
+            .as_str()
+            .unwrap()
+            .contains("may still be running")
+    );
+    assert_eq!(jobs.show(Some(&record().id))["job"]["state"], "running");
+}
+
+#[test]
+fn listing_jobs_refuses_when_the_records_folder_cannot_be_scanned() {
+    let table = Table::with(vec![leader()]);
+    let (directory, jobs) = jobs_with(&record(), &table);
+    let folder = directory.path().join("jobs");
+    std::fs::rename(&folder, directory.path().join("kept-jobs")).unwrap();
+    std::fs::write(folder, "not a folder").unwrap();
+    let reply = jobs.show(None);
+    assert_eq!(reply["ok"], false);
+    assert_eq!(reply["reason"], "unobserved");
+}
+
+#[test]
 fn an_identity_refusal_followed_by_a_stop_never_signals() {
     // The PID's group is another's now: its leader moved to a group whose
     // ID is not its own PID.

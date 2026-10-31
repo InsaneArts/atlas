@@ -1555,7 +1555,7 @@ pub async fn finish(config_path: &Path) -> Result<Value> {
     client.start_input().await?;
 
     let ownership = client.controller.acquire(true)?;
-    let recorded = setup::migrate::apply_fresh(config_path, &ownership).await?;
+    let recorded = setup::migrate::apply_fresh(config_path, &client, &ownership).await?;
     drop(ownership);
 
     if recorded["ok"] != true {

@@ -385,7 +385,16 @@ impl Jobs {
                 Some(read) => vec![read],
                 None => return unknown(id),
             },
-            None => state.store.records(),
+            None => {
+                let (records, complete) = state.store.scanned_records();
+                if !complete {
+                    return JobFailure::new(
+                        JobRefusal::Unobserved,
+                        "Atlas could not read every background job record; a job may still be running.",
+                    ).into_value();
+                }
+                records
+            }
         };
         let mut views = Vec::new();
         for read in reads {

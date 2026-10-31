@@ -492,6 +492,7 @@ fn a_verified_read_creates_lifetime_metadata_without_an_action() {
     let metadata = store.read(fresh.key()).unwrap();
     assert!(metadata.counts.is_empty());
     assert!(metadata.screenshots.is_empty());
+    assert_eq!(metadata.host_process, Some(parent()));
 
     noted(&client, &fresh, Kind::Other, "click", json!({"ok": true}));
     let written = store.read(fresh.key()).unwrap();
@@ -925,12 +926,21 @@ fn a_session_works_in_its_projects_folder_by_name_only() {
 }
 
 #[test]
-fn an_unverified_read_does_not_create_or_revive_a_session() {
+fn an_unverified_first_read_records_activity_without_claiming_a_process() {
     let directory = tempfile::tempdir().unwrap();
     let client = client(directory.path());
-    let own = session("reader");
-    touch(&client, &own).unwrap();
-    assert!(store(&client).all().is_empty());
+    for own in [
+        session("reader"),
+        session("forged").run_by(Instance::current()),
+    ] {
+        assert_eq!(own.ancestor(), None);
+        touch(&client, &own).unwrap();
+        let record = store(&client).read(own.key()).unwrap();
+        assert_eq!(record.host_process, None);
+        assert!(record.counts.is_empty());
+        assert!(record.screenshots.is_empty());
+        assert_eq!(record.ended, None);
+    }
 }
 
 fn authoritative(id: &str, folder: Option<&str>) -> HostSession {
