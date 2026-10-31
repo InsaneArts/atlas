@@ -16,7 +16,7 @@ use serde::Deserialize;
 use serde_json::{Value, json};
 use std::{
     collections::BTreeSet,
-    path::PathBuf,
+    path::{Path, PathBuf},
     sync::{
         Arc, Mutex as StdMutex, RwLock,
         atomic::{AtomicBool, Ordering},
@@ -399,36 +399,9 @@ impl Service {
         // A stop is the person's: it works whatever the session or
         // permission, and resuming only lets agents ask again.
         if operation == Operation::Hold {
-            let on = request["on"] == true;
-            let kept = if on {
-                use std::os::unix::fs::OpenOptionsExt;
-                std::fs::OpenOptions::new()
-                    .create(true)
-                    .write(true)
-                    .truncate(false)
-                    .mode(0o644)
-                    .custom_flags(libc::O_NOFOLLOW)
-                    .open(&self.stop_marker)
-                    .map(drop)
-            } else {
-                match std::fs::remove_file(&self.stop_marker) {
-                    Err(error) if error.kind() != std::io::ErrorKind::NotFound => Err(error),
-                    _ => Ok(()),
-                }
-            };
-
-            // A resume whose marker stays would come back at the next
-            // restart: agents stay stopped until it can be removed.
-            if !on && kept.is_err() {
-                return Err(Error::new(
-                    Code::Native,
-                    "Agents could not be resumed: the helper could not clear the stop",
-                ));
-            }
-
-            self.gate.hold(on)?;
+            let reply = hold(&self.gate, &self.stop_marker, request)?;
             self.cleanup().await?;
-            return Ok(json!({ "ok": true, "held": on, "kept": kept.is_ok() }));
+            return Ok(reply);
         }
 
         if operation == Operation::Release {
@@ -591,6 +564,40 @@ impl Service {
         cancellation.armed = false;
         Ok(reply)
     }
+}
+
+fn hold(gate: &Gate, stop_marker: &Path, request: &Value) -> Result<Value> {
+    let on = request["on"]
+        .as_bool()
+        .ok_or_else(|| Error::new(Code::Input, "Hold requires a boolean on"))?;
+    let kept = if on {
+        use std::os::unix::fs::OpenOptionsExt;
+        std::fs::OpenOptions::new()
+            .create(true)
+            .write(true)
+            .truncate(false)
+            .mode(0o644)
+            .custom_flags(libc::O_NOFOLLOW)
+            .open(stop_marker)
+            .map(drop)
+    } else {
+        match std::fs::remove_file(stop_marker) {
+            Err(error) if error.kind() != std::io::ErrorKind::NotFound => Err(error),
+            _ => Ok(()),
+        }
+    };
+
+    // A resume whose marker stays would come back at the next
+    // restart: agents stay stopped until it can be removed.
+    if !on && kept.is_err() {
+        return Err(Error::new(
+            Code::Native,
+            "Agents could not be resumed: the helper could not clear the stop",
+        ));
+    }
+
+    gate.hold(on)?;
+    Ok(json!({ "ok": true, "held": on, "kept": kept.is_ok() }))
 }
 
 fn agent_target(gate: &Gate, expect: Option<&Expect>) -> Result<()> {
@@ -1021,12 +1028,44 @@ async fn reply(stream: &mut UnixStream, result: Result<Value>) -> Result<()> {
 mod tests {
     use super::{
         Action, CAPABILITIES, Duration, Error, Expect, Gate, MAX_REQUEST, Need, Perform, Result,
-        admitted, read_request, run,
+        admitted, hold, read_request, run,
     };
     use crate::error::Code;
     use serde_json::{Value, json};
     use std::sync::{Arc, Weak};
     use tokio::{io::AsyncWriteExt, net::UnixStream, sync::Mutex};
+
+    #[test]
+    fn hold_requires_a_boolean_before_changing_the_stop() {
+        let dir = tempfile::tempdir().unwrap();
+        let marker = dir.path().join("stopped");
+        let gate = Gate::default();
+
+        let reply = hold(&gate, &marker, &json!({"on": true})).unwrap();
+        assert_eq!(reply["held"], true);
+        assert!(gate.held().unwrap());
+        assert!(marker.exists());
+        std::fs::write(&marker, b"stop").unwrap();
+
+        for request in [
+            json!({}),
+            json!({"on": null}),
+            json!({"on": "false"}),
+            json!({"on": 0}),
+            json!({"on": []}),
+            json!({"on": {}}),
+        ] {
+            let error = hold(&gate, &marker, &request).unwrap_err();
+            assert_eq!(error.code, Code::Input, "{request}");
+            assert!(gate.held().unwrap(), "{request}");
+            assert_eq!(std::fs::read(&marker).unwrap(), b"stop", "{request}");
+        }
+
+        let reply = hold(&gate, &marker, &json!({"on": false})).unwrap();
+        assert_eq!(reply["held"], false);
+        assert!(!gate.held().unwrap());
+        assert!(!marker.exists());
+    }
 
     /// What a stand-in engine does at one action.
     #[derive(Clone, Copy, PartialEq)]

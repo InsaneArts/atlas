@@ -244,6 +244,51 @@ async fn the_person_stops_and_resumes_agents_through_the_viewer() {
 }
 
 #[tokio::test]
+async fn hold_requires_a_boolean_before_changing_the_stop() {
+    let dir = tempfile::tempdir().unwrap();
+    let viewer = http::configured(client(dir.path()), "127.0.0.1:0".into(), None);
+    let client = viewer.client();
+    tokio::time::timeout(Duration::from_secs(5), async {
+        let (status, reply) = posted(&viewer, "control/hold", &json!({"on": true})).await;
+        assert_eq!(status, 200, "{reply}");
+        assert_eq!(reply["held"], true);
+        assert!(client.controller.stop_noted());
+        let marker = std::fs::read_dir(dir.path().join("state"))
+            .unwrap()
+            .map(|entry| entry.unwrap().path())
+            .find(|path| {
+                path.extension()
+                    .is_some_and(|extension| extension == "stopped")
+            })
+            .unwrap();
+        std::fs::write(&marker, b"stop").unwrap();
+
+        for body in [
+            json!({}),
+            json!({"on": null}),
+            json!({"on": "false"}),
+            json!({"on": 0}),
+            json!({"on": []}),
+            json!({"on": {}}),
+        ] {
+            let (status, reply) = posted(&viewer, "control/hold", &body).await;
+            assert_eq!(status, 400, "{body}: {reply}");
+            assert_eq!(reply["code"], "input");
+            assert!(client.controller.stop_noted(), "{body}");
+            assert_eq!(std::fs::read(&marker).unwrap(), b"stop", "{body}");
+        }
+
+        let (status, reply) = posted(&viewer, "control/hold", &json!({"on": false})).await;
+        assert_eq!(status, 200, "{reply}");
+        assert_eq!(reply["held"], false);
+        assert!(!client.controller.stop_noted());
+        assert!(!marker.exists());
+    })
+    .await
+    .expect("hold requests finish within five seconds");
+}
+
+#[tokio::test]
 async fn post_local_reads_the_viewers_answer_in_its_own_words() {
     let dir = tempfile::tempdir().unwrap();
     let (viewer, server) = served(dir.path(), CONNECTIONS).await;
