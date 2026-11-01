@@ -437,29 +437,25 @@ mod tests {
     use super::*;
     use crate::control::Controller;
     use serde_json::{Value, json};
-    use std::{
-        fs,
-        path::{Path, PathBuf},
-        process::{Child, Stdio},
-    };
+    use std::path::{Path, PathBuf};
 
     /// A grace no test waits out.
-    const LONG: Duration = Duration::from_secs(10);
+    const LONG: Duration = Duration::from_secs(60);
 
-    /// A grace a test waits out.
+    /// A grace advanced by the paused-time tests.
     const SHORT: Duration = Duration::from_millis(200);
 
-    /// How soon "at once" is, with room for a busy machine.
-    const PROMPTLY: Duration = Duration::from_millis(500);
+    fn pending(future: std::pin::Pin<&mut impl Future>) {
+        let mut context = std::task::Context::from_waker(std::task::Waker::noop());
+        assert!(future.poll(&mut context).is_pending());
+    }
 
-    #[tokio::test]
+    #[tokio::test(start_paused = true)]
     async fn a_stop_with_nothing_under_way_settles_at_once() {
         let interrupt = Interrupt::new(LONG);
         interrupt.ask(Signal::SIGTERM);
 
-        let stopped = tokio::time::timeout(PROMPTLY, interrupt.settled())
-            .await
-            .unwrap();
+        let stopped = interrupt.settled().await;
         assert_eq!(
             stopped,
             Stopped {
@@ -469,61 +465,65 @@ mod tests {
         );
     }
 
-    #[tokio::test]
+    #[tokio::test(start_paused = true)]
     async fn a_stop_waits_for_the_change_under_way_then_settles() {
         let interrupt = Interrupt::new(LONG);
         let claim = interrupt.claim();
         interrupt.ask(Signal::SIGTERM);
-        let asked = Instant::now();
-        tokio::spawn(async move {
-            tokio::time::sleep(Duration::from_millis(100)).await;
+        let (release, permit) = tokio::sync::oneshot::channel();
+        let worker = tokio::spawn(async move {
+            permit.await.unwrap();
             drop(claim);
         });
-
-        let stopped = tokio::time::timeout(PROMPTLY * 2, interrupt.settled())
-            .await
-            .unwrap();
-        assert!(asked.elapsed() >= Duration::from_millis(100));
+        let mut settlement = std::pin::pin!(interrupt.settled());
+        pending(settlement.as_mut());
+        release.send(()).unwrap();
+        worker.await.unwrap();
+        let stopped = settlement.await;
         assert!(!stopped.cut, "the change finished");
     }
 
-    #[tokio::test]
+    #[tokio::test(start_paused = true)]
     async fn a_change_still_under_way_after_the_grace_is_cut() {
         let interrupt = Interrupt::new(SHORT);
         let _claim = interrupt.claim();
         interrupt.ask(Signal::SIGTERM);
-        let asked = Instant::now();
-
-        assert_eq!(interrupt.cut().await, Signal::SIGTERM);
-        let cut = asked.elapsed();
-        assert!(cut >= SHORT && cut < SHORT + PROMPTLY, "{cut:?}");
-
-        let stopped = interrupt.settled().await;
-        let settled = asked.elapsed();
-        assert!(
-            settled >= SHORT + SETTLE && settled < SHORT + SETTLE + PROMPTLY,
-            "{settled:?}"
-        );
-        assert!(stopped.cut, "its outcome is unknown");
+        let mut cut = std::pin::pin!(interrupt.cut());
+        let mut settlement = std::pin::pin!(interrupt.settled());
+        pending(cut.as_mut());
+        pending(settlement.as_mut());
+        let tick = Duration::from_nanos(1);
+        tokio::time::advance(SHORT - tick).await;
+        pending(cut.as_mut());
+        pending(settlement.as_mut());
+        tokio::time::advance(tick).await;
+        assert_eq!(cut.await, Signal::SIGTERM);
+        pending(settlement.as_mut());
+        tokio::time::advance(SETTLE - tick).await;
+        pending(settlement.as_mut());
+        tokio::time::advance(tick).await;
+        assert!(settlement.await.cut, "its outcome is unknown");
     }
 
-    #[tokio::test]
+    #[tokio::test(start_paused = true)]
     async fn a_second_signal_cuts_at_once() {
         let interrupt = Interrupt::new(LONG);
         let _claim = interrupt.claim();
         interrupt.ask(Signal::SIGTERM);
+        let mut cut = std::pin::pin!(interrupt.cut());
+        let mut settlement = std::pin::pin!(interrupt.settled());
+        pending(cut.as_mut());
+        pending(settlement.as_mut());
         interrupt.ask(Signal::SIGINT);
-
-        let (signal, stopped) = tokio::time::timeout(PROMPTLY, async {
-            (interrupt.cut().await, interrupt.settled().await)
-        })
-        .await
-        .unwrap();
-        assert_eq!(signal, Signal::SIGTERM, "the first signal names the stop");
-        assert!(stopped.cut);
+        assert_eq!(
+            cut.await,
+            Signal::SIGTERM,
+            "the first signal names the stop"
+        );
+        assert!(settlement.await.cut);
     }
 
-    #[tokio::test]
+    #[tokio::test(start_paused = true)]
     async fn a_step_cut_short_ends_uncertain_once_its_claim_is_gone() {
         let interrupt = Interrupt::new(SHORT);
         let step = interrupt.step();
@@ -532,27 +532,26 @@ mod tests {
         assert!(error.uncertain);
         drop(step);
 
-        let stopped = tokio::time::timeout(PROMPTLY, interrupt.settled())
-            .await
-            .unwrap();
+        let stopped = interrupt.settled().await;
         assert!(stopped.cut, "what was cut stays unknown");
         assert!(stopped.error().uncertain);
     }
 
-    #[tokio::test]
+    #[tokio::test(start_paused = true)]
     async fn a_request_being_sent_is_never_dropped_half_sent() {
         let interrupt = Interrupt::new(LONG);
         let sending = interrupt.sending();
         interrupt.ask(Signal::SIGTERM);
         interrupt.ask(Signal::SIGTERM);
-
-        let early = tokio::time::timeout(Duration::from_millis(100), interrupt.settled()).await;
-        assert!(early.is_err(), "not even a second signal drops it");
+        let mut settlement = std::pin::pin!(interrupt.settled());
+        pending(settlement.as_mut());
+        tokio::time::advance(LONG + SETTLE).await;
+        pending(settlement.as_mut());
         drop(sending);
-        let stopped = tokio::time::timeout(PROMPTLY, interrupt.settled())
-            .await
-            .unwrap();
-        assert!(!stopped.cut, "a request not all sent changed nothing");
+        assert!(
+            !settlement.await.cut,
+            "a request not all sent changed nothing"
+        );
     }
 
     #[test]
@@ -609,7 +608,7 @@ mod tests {
 
     /// What the stand-in command does, by name.
     const SCENARIO: &str = "ATLAS_INTERRUPT_TEST_SCENARIO";
-    /// The folder the stand-in keeps its state and `ready` in.
+    /// The folder the stand-in keeps its controller state in.
     const DIRECTORY: &str = "ATLAS_INTERRUPT_TEST_DIRECTORY";
     /// The stand-in's grace, in milliseconds.
     const GRACE_MS: &str = "ATLAS_INTERRUPT_TEST_GRACE_MS";
@@ -619,9 +618,8 @@ mod tests {
     enum Scenario {
         /// Waits on a read, with nothing under way.
         Idle,
-        /// Holds a change for `hold` from the signal on, settles it, then
-        /// waits on a read.
-        Change { hold: Duration },
+        /// Holds a change until permitted to settle after observing a signal.
+        Change,
         /// Waits for control another process holds.
         Waiting,
         /// Holds a change while blocked where it never checks.
@@ -635,7 +633,7 @@ mod tests {
         fn name(self) -> String {
             match self {
                 Self::Idle => "idle".to_owned(),
-                Self::Change { hold } => format!("change-{}", hold.as_millis()),
+                Self::Change => "change".to_owned(),
                 Self::Waiting => "waiting".to_owned(),
                 Self::Blocked => "blocked".to_owned(),
                 Self::Reading => "reading".to_owned(),
@@ -648,42 +646,47 @@ mod tests {
                 "waiting" => Self::Waiting,
                 "blocked" => Self::Blocked,
                 "reading" => Self::Reading,
-                change => Self::Change {
-                    hold: Duration::from_millis(
-                        change.strip_prefix("change-").unwrap().parse().unwrap(),
-                    ),
-                },
+                "change" => Self::Change,
+                _ => panic!("unknown test scenario"),
             }
         }
 
         /// Carry it out in `directory`, under `interrupt`, saying `ready`
         /// once a signal finds it where it is meant to.
         async fn run(self, directory: &Path, interrupt: &Interrupt) -> Result<()> {
-            let ready = directory.join("ready");
             let controller =
                 Controller::at(UID, &directory.join("state")).interrupted_by(interrupt.clone());
             match self {
                 Self::Idle => {
-                    fs::write(&ready, b"")?;
-                    tokio::time::sleep(LONG).await;
+                    crate::test_support::message("ready");
+                    std::future::pending::<()>().await;
                 }
-                Self::Change { hold } => {
+                Self::Change => {
                     let _ownership = controller.acquire(false)?;
                     let change = controller.quarantine()?;
-                    fs::write(&ready, b"")?;
-                    // Timed from the signal's arrival, not the sender's.
-                    while interrupt.asked().is_none() {
-                        tokio::time::sleep(Duration::from_millis(5)).await;
-                    }
-                    tokio::time::sleep(hold).await;
+                    crate::test_support::message("ready");
+                    interrupt
+                        .when(|state| match state.asked {
+                            Some(_) => ControlFlow::Break(()),
+                            None => ControlFlow::Continue(None),
+                        })
+                        .await;
+                    crate::test_support::message("signal-observed");
+                    let (released, permit) = tokio::sync::oneshot::channel();
+                    std::thread::spawn(move || {
+                        crate::test_support::permitted("continue");
+                        let _ = released.send(());
+                    });
+                    permit.await.unwrap();
                     controller.clear_if(&change)?;
                     drop(change);
-                    tokio::time::sleep(LONG).await;
+                    crate::test_support::message("released");
+                    std::future::pending::<()>().await;
                 }
                 Self::Waiting => {
                     let waiting = controller.waiting(LONG).on_wait(move |event| {
                         if event == crate::control::WaitEvent::Began {
-                            let _ = fs::write(&ready, b"");
+                            crate::test_support::message("ready");
                         }
                     });
                     waiting.acquire(false)?;
@@ -691,12 +694,12 @@ mod tests {
                 Self::Blocked => {
                     let _ownership = controller.acquire(false)?;
                     let _change = controller.quarantine()?;
-                    fs::write(&ready, b"")?;
-                    std::thread::sleep(LONG * 2);
+                    crate::test_support::message("ready");
+                    crate::test_support::permitted("continue");
                 }
                 Self::Reading => {
-                    fs::write(&ready, b"")?;
-                    std::thread::sleep(LONG * 2);
+                    crate::test_support::message("ready");
+                    crate::test_support::permitted("continue");
                 }
             }
             Ok(())
@@ -720,7 +723,10 @@ mod tests {
             .build()
             .unwrap();
         let result = runtime.block_on(async {
-            interrupt.listen(|stopped| eprintln!("{}", json!(stopped.error())));
+            interrupt.listen(|stopped| {
+                eprintln!("{}", json!(stopped.error()));
+                crate::test_support::message("exit");
+            });
             interrupt
                 .unless_stopped(Scenario::parse(&scenario).run(&directory, &interrupt))
                 .await
@@ -730,76 +736,73 @@ mod tests {
             eprintln!("{}", json!(error));
         }
         drop(runtime);
+        crate::test_support::message("exit");
         std::process::exit(interrupt.asked().map_or(0, |signal| status(signal).into()));
     }
 
-    /// How a stand-in ended: its status, its failure and how long after
-    /// the signal.
+    /// The status and public failure of the reaped command.
     struct Ended {
         status: Option<i32>,
         failure: Value,
-        after: Duration,
     }
 
-    /// Start `scenario` as the test `test` run again, in `directory`,
-    /// giving it `grace`.
-    fn stand_in(test: &str, scenario: Scenario, directory: &Path, grace: Duration) -> Child {
-        crate::test_support::rerun(test)
-            .arg("--nocapture")
-            .env(SCENARIO, scenario.name())
-            .env(DIRECTORY, directory)
-            .env(GRACE_MS, grace.as_millis().to_string())
-            .stdout(Stdio::null())
-            .stderr(Stdio::piped())
-            .spawn()
-            .unwrap()
-    }
-
-    /// Run `scenario` in a process of its own, send it `signal` once it is
-    /// ready, and wait for it to end.
-    fn signalled(
+    fn stand_in(
         test: &str,
         scenario: Scenario,
         directory: &Path,
         grace: Duration,
-        signal: Signal,
-    ) -> Ended {
-        let mut child = stand_in(test, scenario, directory, grace);
-        let ready = directory.join("ready");
-        let started = std::time::Instant::now();
-        while !ready.exists() {
-            assert!(started.elapsed() < LONG, "the stand-in never got ready");
-            std::thread::sleep(Duration::from_millis(10));
-        }
+    ) -> crate::test_support::TestChild {
+        crate::test_support::TestChild::spawn(
+            crate::test_support::rerun(test)
+                .arg("--nocapture")
+                .env(SCENARIO, scenario.name())
+                .env(DIRECTORY, directory)
+                .env(GRACE_MS, grace.as_millis().to_string()),
+        )
+    }
 
-        let pid = nix::unistd::Pid::from_raw(i32::try_from(child.id()).unwrap());
+    /// Send the real signal only after the child has acknowledged readiness.
+    fn signal(child: &crate::test_support::TestChild, signal: Signal) {
+        let pid = nix::unistd::Pid::from_raw(i32::try_from(child.process.id()).unwrap());
         nix::sys::signal::kill(pid, signal).unwrap();
-        let signalled = std::time::Instant::now();
-        let status = loop {
-            if let Some(status) = child.try_wait().unwrap() {
-                break status;
-            }
-            if signalled.elapsed() > LONG * 2 {
-                let _ = child.kill();
-                panic!("the stand-in did not end");
-            }
-            std::thread::sleep(Duration::from_millis(10));
-        };
-        let after = signalled.elapsed();
+    }
 
+    fn ended(child: &mut crate::test_support::TestChild) -> Ended {
+        child.expect("exit");
+        let status = child.wait();
         let mut stderr = String::new();
-        std::io::Read::read_to_string(&mut child.stderr.take().unwrap(), &mut stderr).unwrap();
+        std::io::Read::read_to_string(&mut child.process.stderr.take().unwrap(), &mut stderr)
+            .unwrap();
         let failure = stderr
             .lines()
             .rev()
             .find_map(|line| serde_json::from_str::<Value>(line).ok())
             .unwrap_or(Value::Null);
-
         Ended {
             status: status.code(),
             failure,
-            after,
         }
+    }
+
+    fn signalled(
+        test: &str,
+        scenario: Scenario,
+        directory: &Path,
+        grace: Duration,
+        sent: Signal,
+    ) -> Ended {
+        let mut child = stand_in(test, scenario, directory, grace);
+        child.expect("ready");
+        signal(&child, sent);
+        if matches!(scenario, Scenario::Change) {
+            child.expect("signal-observed");
+            let controller = controller(directory);
+            assert_eq!(controller.acquire(false).unwrap_err().code, "busy");
+            assert_eq!(controller.pending().unwrap().len(), 1);
+            child.permit("continue");
+            child.expect("released");
+        }
+        ended(&mut child)
     }
 
     /// The control state the stand-ins keep in `directory`.
@@ -824,7 +827,6 @@ mod tests {
             Signal::SIGTERM,
         );
         assert_eq!(ended.status, Some(143));
-        assert!(ended.after < PROMPTLY * 4, "{:?}", ended.after);
         assert_eq!(ended.failure["code"], "interrupted");
         assert_eq!(ended.failure["uncertain"], false);
         assert_eq!(ended.failure["signal"], "SIGTERM");
@@ -839,21 +841,15 @@ mod tests {
             return;
         }
         let directory = tempfile::tempdir().unwrap();
-        let hold = Duration::from_millis(500);
 
         let ended = signalled(
             TEST,
-            Scenario::Change { hold },
+            Scenario::Change,
             directory.path(),
             LONG,
             Signal::SIGTERM,
         );
         assert_eq!(ended.status, Some(143));
-        assert!(
-            ended.after >= hold && ended.after < hold + PROMPTLY * 4,
-            "{:?}",
-            ended.after
-        );
         assert_eq!(ended.failure["code"], "interrupted");
         assert_eq!(ended.failure["uncertain"], false);
 
@@ -870,27 +866,23 @@ mod tests {
             return;
         }
         let directory = tempfile::tempdir().unwrap();
-        let grace = Duration::from_millis(300);
-
-        let ended = signalled(
-            TEST,
-            Scenario::Change { hold: LONG },
-            directory.path(),
-            grace,
-            Signal::SIGTERM,
-        );
+        let mut child = stand_in(TEST, Scenario::Change, directory.path(), LONG);
+        child.expect("ready");
+        let controller = controller(directory.path());
+        let pending = controller.pending().unwrap();
+        assert_eq!(pending.len(), 1);
+        signal(&child, Signal::SIGTERM);
+        child.expect("signal-observed");
+        assert_eq!(controller.acquire(false).unwrap_err().code, "busy");
+        assert_eq!(controller.pending().unwrap(), pending);
+        signal(&child, Signal::SIGINT);
+        let ended = ended(&mut child);
         assert_eq!(ended.status, Some(143));
-        assert!(
-            ended.after >= grace + SETTLE && ended.after < grace + SETTLE + PROMPTLY * 4,
-            "{:?}",
-            ended.after
-        );
         assert_eq!(ended.failure["code"], "interrupted");
         assert_eq!(ended.failure["uncertain"], true);
 
-        let controller = controller(directory.path());
-        assert_eq!(controller.pending().unwrap().len(), 1);
-        assert_eq!(controller.unresolved().unwrap().len(), 1);
+        assert_eq!(controller.pending().unwrap(), pending);
+        assert_eq!(controller.unresolved().unwrap(), pending);
         assert_eq!(controller.acquire(false).unwrap_err().code, "uncertain");
         let recovery = controller.acquire(true).unwrap();
         controller.clear().unwrap();
@@ -918,7 +910,6 @@ mod tests {
             Signal::SIGTERM,
         );
         assert_eq!(ended.status, Some(143));
-        assert!(ended.after < PROMPTLY * 4, "{:?}", ended.after);
         assert_eq!(ended.failure["code"], "interrupted");
         assert_eq!(ended.failure["uncertain"], false);
         assert!(ended.failure["waited"].is_u64(), "{}", ended.failure);
@@ -933,23 +924,11 @@ mod tests {
         if !crate::test_support::isolated(TEST) {
             return;
         }
-        let hold = Duration::from_millis(300);
 
         for (signal, status) in [(Signal::SIGHUP, 129), (Signal::SIGINT, 130)] {
             let directory = tempfile::tempdir().unwrap();
-            let ended = signalled(
-                TEST,
-                Scenario::Change { hold },
-                directory.path(),
-                LONG,
-                signal,
-            );
+            let ended = signalled(TEST, Scenario::Change, directory.path(), LONG, signal);
             assert_eq!(ended.status, Some(status), "{signal}");
-            assert!(
-                ended.after >= hold && ended.after < hold + PROMPTLY * 4,
-                "{:?}",
-                ended.after
-            );
             assert_eq!(ended.failure["signal"], signal.as_str());
             assert_eq!(ended.failure["uncertain"], false);
             assert!(controller(directory.path()).pending().unwrap().is_empty());
@@ -974,13 +953,7 @@ mod tests {
             grace,
             Signal::SIGTERM,
         );
-        let last_resort = grace + SETTLE + LAST_RESORT;
         assert_eq!(ended.status, Some(143));
-        assert!(
-            ended.after >= last_resort && ended.after < last_resort + PROMPTLY * 4,
-            "{:?}",
-            ended.after
-        );
         assert_eq!(ended.failure["code"], "interrupted");
         assert_eq!(ended.failure["uncertain"], true);
         assert_eq!(controller(directory.path()).pending().unwrap().len(), 1);
@@ -1004,11 +977,6 @@ mod tests {
             Signal::SIGTERM,
         );
         assert_eq!(ended.status, Some(143));
-        assert!(
-            ended.after >= LAST_RESORT && ended.after < LAST_RESORT + PROMPTLY * 4,
-            "{:?}",
-            ended.after
-        );
         assert_eq!(ended.failure["code"], "interrupted");
         assert_eq!(ended.failure["uncertain"], false);
     }

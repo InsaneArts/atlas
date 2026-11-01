@@ -52,6 +52,16 @@ impl Turn {
         name.push_str(".json");
         let note = Note::now(label);
         let since = note.as_ref().map_or_else(now_ms, |note| note.since);
+        Self::write(folder, name, since, note)
+    }
+
+    #[cfg(test)]
+    pub(super) fn join_at(folder: &Path, label: Option<&Label>, since: u64, name: &str) -> Self {
+        let note = Note::now(label).map(|note| Note { since, ..note });
+        Self::write(folder, format!("{name}.json"), since, note)
+    }
+
+    fn write(folder: &Path, name: String, since: u64, note: Option<Note>) -> Self {
         let path = folder.join(&name);
         let written =
             note.is_some_and(|note| make_folder(folder).is_ok() && note.write(&path).is_ok());
@@ -277,6 +287,19 @@ mod tests {
     use super::*;
     use crate::host_session::Instance;
 
+    #[test]
+    fn waiters_with_equal_timestamps_use_their_names_to_order() {
+        let directory = tempfile::tempdir().unwrap();
+        let folder = directory.path().join("waiting");
+        let since = now_ms();
+        let later = Turn::join_at(&folder, None, since, "ffffffffffffffff");
+        let earlier = Turn::join_at(&folder, None, since, "0000000000000000");
+        assert!(!later.first());
+        assert!(earlier.first());
+        drop(earlier);
+        assert!(later.first());
+    }
+
     /// A waiting note in `folder` for `process`, begun `since`.
     fn noted(folder: &Path, process: Instance, since: u64) -> PathBuf {
         make_folder(folder).unwrap();
@@ -341,11 +364,12 @@ mod tests {
 
         let directory = tempfile::tempdir().unwrap();
         let folder = directory.path().join("waiting");
-        let mut child = std::process::Command::new("/bin/sleep")
-            .arg("30")
-            .spawn()
-            .unwrap();
-        let pid = i32::try_from(child.id()).unwrap();
+        let mut child = crate::test_support::TestChild::spawn(
+            std::process::Command::new("/bin/sh")
+                .args(["-c", "echo atlas-test:ready; read -r permit"]),
+        );
+        child.expect("ready");
+        let pid = i32::try_from(child.process.id()).unwrap();
         let start = crate::host_session::ancestry::process(pid).unwrap().start;
         let suspended = Instance::new(pid, start);
         let path = noted(&folder, suspended, now_ms() - 1000);
@@ -361,8 +385,8 @@ mod tests {
         assert!(path.exists(), "it is not gone, so its note stays");
 
         let _ = kill(nix::unistd::Pid::from_raw(pid), Signal::SIGCONT);
-        child.kill().unwrap();
-        child.wait().unwrap();
+        child.process.kill().unwrap();
+        assert!(!child.wait().success());
         assert!(!queued(&folder));
         assert!(!path.exists(), "an ended waiter's note is removed");
     }

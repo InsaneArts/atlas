@@ -272,9 +272,12 @@ impl Controller {
 
     /// What is left of [`Controller::wait`].
     pub fn remaining(&self) -> Duration {
-        self.until.map_or(Duration::ZERO, |until| {
-            until.saturating_duration_since(Instant::now())
-        })
+        self.remaining_at(Instant::now())
+    }
+
+    fn remaining_at(&self, now: Instant) -> Duration {
+        self.until
+            .map_or(Duration::ZERO, |until| until.saturating_duration_since(now))
     }
 
     /// This controller, for a command the person's Stop refuses: once

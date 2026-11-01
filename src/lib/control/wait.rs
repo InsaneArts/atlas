@@ -72,24 +72,31 @@ impl Controller {
     pub(super) fn take(&self, lock: &LockFile) -> Result<()> {
         let started = Instant::now();
         let first = self.wait.is_zero() || !turns::queued(&self.waiting);
-        if self.try_take(lock, started, first)? {
+        if self.try_take(lock, started, first, Instant::now)? {
             return Ok(());
         }
 
-        self.wait_for_lock(lock, started)
+        self.wait_for_lock(lock, started, || {
+            turns::Turn::join(&self.waiting, self.label.as_ref())
+        })
     }
 
     /// Try `lock` again about ten times a second, between telling the hook
     /// that the wait began and that it ended, whenever no command that began
     /// waiting earlier is still waiting. A signal's stop ends the wait
     /// within one poll.
-    fn wait_for_lock(&self, lock: &LockFile, started: Instant) -> Result<()> {
+    pub(super) fn wait_for_lock(
+        &self,
+        lock: &LockFile,
+        started: Instant,
+        join: impl FnOnce() -> turns::Turn,
+    ) -> Result<()> {
         let _notice = WaitNotice::begin(self.on_wait.as_ref());
-        let turn = turns::Turn::join(&self.waiting, self.label.as_ref());
+        let turn = join();
         loop {
             std::thread::sleep(poll(self.remaining()));
             self.interrupt.check_waiting(started.elapsed())?;
-            if self.try_take(lock, started, turn.first())? {
+            if self.try_take(lock, started, turn.first(), Instant::now)? {
                 return Ok(());
             }
         }
@@ -101,9 +108,15 @@ impl Controller {
     /// left, else why not. The person's note and a Stop are looked at on
     /// every try, so either ends a wait within one poll, and the person is
     /// never waited for. A refused lock is let go when the caller drops it.
-    fn try_take(&self, lock: &LockFile, started: Instant, turn: bool) -> Result<bool> {
+    pub(super) fn try_take(
+        &self,
+        lock: &LockFile,
+        started: Instant,
+        turn: bool,
+        now: impl Fn() -> Instant,
+    ) -> Result<bool> {
         let taken = turn && FileExt::try_lock_exclusive(&lock.0).is_ok();
-        let waited = (!self.wait.is_zero()).then(|| started.elapsed());
+        let waited = (!self.wait.is_zero()).then(|| now().saturating_duration_since(started));
         if !taken && self.person.exists() {
             return Err(busy_person(waited));
         }
@@ -113,7 +126,7 @@ impl Controller {
         if taken {
             return Ok(true);
         }
-        if self.remaining().is_zero() {
+        if self.remaining_at(now()).is_zero() {
             return Err(busy_agent(waited, self.wait));
         }
 

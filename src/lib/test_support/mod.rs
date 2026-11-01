@@ -1,9 +1,11 @@
 //! What tests across the crate share: temporary clients, a stand-in for
 //! the helper's daemon, unprivileged stand-ins for interrupted mutation
 //! transactions, and running one test again in a process of its own.
+mod child;
 mod executor;
 mod helper;
 
+pub(crate) use child::{TestChild, message, permitted};
 pub(crate) use executor::{executor_ready, interrupted_executor, pause_executor};
 pub(crate) use helper::{Helper, completed, exited};
 

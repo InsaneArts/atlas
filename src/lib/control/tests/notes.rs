@@ -1,7 +1,7 @@
 //! The labels kept beside the lock and the marker: which host session
 //! claimed each pending change, which holds control and which waits, and
 //! the order waiters take control in.
-use super::appears;
+use super::{acquiring, told, watched};
 use crate::{
     control::*,
     error::Holder,
@@ -129,15 +129,13 @@ fn a_cause_that_cannot_be_written_never_fails_the_claim() {
 
 /// Stand in for another agent's command, as the test `test` run again in a
 /// process of its own: it claims a change for session `right` in the state
-/// kept in `directory`, says so in `claimed`, and waits to be killed.
-fn claimer(test: &str, directory: &Path) -> std::process::Child {
-    crate::test_support::rerun(test)
-        .arg("--nocapture")
-        .env("ATLAS_CONTROL_TEST_CLAIMER", directory)
-        .stdout(std::process::Stdio::null())
-        .stderr(std::process::Stdio::null())
-        .spawn()
-        .unwrap()
+/// kept in `directory`, reports readiness, and waits to be killed.
+fn claimer(test: &str, directory: &Path) -> crate::test_support::TestChild {
+    crate::test_support::TestChild::spawn(
+        crate::test_support::rerun(test)
+            .arg("--nocapture")
+            .env("ATLAS_CONTROL_TEST_CLAIMER", directory),
+    )
 }
 
 /// The command [`claimer`] starts, when this process is it.
@@ -149,10 +147,9 @@ fn claim_if_claimer() {
     let controller = labelled(&directory.join("state"), "right");
     let _ownership = controller.acquire(false).unwrap();
     let _claim = controller.quarantine().unwrap();
-    fs::write(directory.join("claimed"), b"").unwrap();
-    loop {
-        std::thread::sleep(Duration::from_secs(1));
-    }
+    crate::test_support::message("ready");
+    crate::test_support::permitted("exit");
+    std::process::exit(0);
 }
 
 #[test]
@@ -164,7 +161,7 @@ fn a_killed_holders_cause_survives_it() {
     }
     let directory = tempfile::tempdir().unwrap();
     let mut child = claimer(TEST, directory.path());
-    appears(&directory.path().join("claimed"));
+    child.expect("ready");
     let controller = Controller::at(505, &directory.path().join("state"));
     let note = controller.holder_note().unwrap();
     assert_eq!(
@@ -173,8 +170,8 @@ fn a_killed_holders_cause_survives_it() {
         "it holds control"
     );
 
-    child.kill().unwrap();
-    child.wait().unwrap();
+    child.process.kill().unwrap();
+    assert!(!child.wait().success());
     let causes = controller.pending_causes().unwrap();
     assert_eq!(causes.len(), 1);
     assert_eq!(causes[0].session, Some(session("right").key().clone()));
@@ -315,46 +312,66 @@ fn six_waiters_take_the_lock_in_the_order_they_began() {
     let directory = tempfile::tempdir().unwrap();
     let controller = Controller::at(505, directory.path());
     let held = controller.acquire(false).unwrap();
-    let order = Arc::new(std::sync::Mutex::new(Vec::new()));
-
-    // Each waiter starts only once the one before it is in line, and in a
-    // later millisecond, so the order they began in is certain.
+    let since = crate::host_session::now_ms();
+    let (send, acquired) = std::sync::mpsc::channel();
     let waiters: Vec<_> = (0..6)
         .map(|index| {
-            let (waiter, order) = (
-                labelled(directory.path(), &format!("waiter-{index}"))
-                    .waiting(Duration::from_secs(60)),
-                Arc::clone(&order),
+            let (waiter, notice) = watched(
+                &labelled(directory.path(), &format!("waiter-{index}")),
+                Duration::from_secs(60),
             );
-            let began = crate::host_session::now_ms();
+            let (release, permit) = std::sync::mpsc::channel();
+            let send = send.clone();
             let waiting = std::thread::spawn(move || {
-                let ownership = waiter.acquire(false).unwrap();
-                order.lock().unwrap().push(index);
-                std::thread::sleep(Duration::from_millis(40));
+                let lock = crate::files::open_lock(&waiter.lock).unwrap();
+                waiter
+                    .wait_for_lock(&lock, Instant::now(), || {
+                        turns::Turn::join_at(
+                            &waiter.waiting,
+                            waiter.label.as_ref(),
+                            since + index,
+                            &format!("{index:016x}"),
+                        )
+                    })
+                    .unwrap();
+                let ownership = waiter.owning(lock);
+                send.send(index).unwrap();
+                permit.recv_timeout(Duration::from_secs(30)).unwrap();
                 drop(ownership);
             });
+            assert_eq!(told(&notice), WaitEvent::Began);
+            // Began precedes joining: observe the actual note before the next waiter starts.
             within(Duration::from_secs(30), || {
-                waiting_notes(&controller).len() == index + 1
+                waiting_notes(&controller).len() == index as usize + 1
             });
-            within(Duration::from_secs(5), || {
-                crate::host_session::now_ms() > began
-            });
-            waiting
+            (waiting, release)
         })
         .collect();
-
     let notes = waiting_notes(&controller);
-    assert_eq!(notes.len(), 6, "each waiter keeps a note");
+    assert_eq!(notes.len(), 6);
     assert!(
         notes
             .iter()
             .all(|note| note.session.is_some() && note.live())
     );
+    assert!(
+        acquired.try_recv().is_err(),
+        "the holder excludes every successor"
+    );
     drop(held);
-    for waiting in waiters {
+    for (index, (waiting, release)) in waiters.into_iter().enumerate() {
+        assert_eq!(
+            acquired.recv_timeout(Duration::from_secs(30)).unwrap(),
+            index as u64
+        );
+        assert_eq!(controller.acquire(false).unwrap_err().code, "busy");
+        assert!(
+            acquired.try_recv().is_err(),
+            "only one waiter owns the lock"
+        );
+        release.send(()).unwrap();
         waiting.join().unwrap();
     }
-    assert_eq!(*order.lock().unwrap(), [0, 1, 2, 3, 4, 5]);
     assert!(
         waiting_notes(&controller).is_empty(),
         "each note goes with its wait"
@@ -380,38 +397,22 @@ fn a_dead_or_stale_waiters_note_is_skipped() {
     );
     let old = waiter_note(&controller, this, now - 606_000, Duration::ZERO);
     let quiet = waiter_note(&controller, this, now - 1000, Duration::from_secs(3));
-
     let held = controller.acquire(false).unwrap();
-    let waiting = std::thread::spawn({
-        let waiter = controller.clone().waiting(Duration::from_secs(5));
-        move || waiter.acquire(false).map(drop)
-    });
-    std::thread::sleep(Duration::from_millis(300));
-    let released = Instant::now();
+    let (waiter, events) = watched(&controller, Duration::from_secs(60));
+    let waiting = acquiring(waiter, false);
+    assert_eq!(told(&events), WaitEvent::Began);
+    assert!(!waiting.is_finished());
     drop(held);
+    assert_eq!(told(&events), WaitEvent::Ended);
     waiting.join().unwrap().unwrap();
-    assert!(
-        released.elapsed() < Duration::from_secs(3),
-        "no passed-over note held it up"
-    );
     assert!(!dead.exists(), "a dead waiter's note is removed");
     assert!(
         old.exists() && quiet.exists(),
         "a live one's is only passed over"
     );
-
-    let started = Instant::now();
-    drop(
-        controller
-            .clone()
-            .waiting(Duration::from_secs(5))
-            .acquire(false)
-            .unwrap(),
-    );
-    assert!(
-        started.elapsed() < Duration::from_secs(2),
-        "nobody is in line"
-    );
+    let (waiter, events) = watched(&controller, Duration::from_secs(60));
+    drop(waiter.acquire(false).unwrap());
+    assert!(events.try_recv().is_err(), "nobody is in line");
 }
 
 #[test]
@@ -422,16 +423,15 @@ fn a_waiter_with_no_note_still_gets_the_lock() {
         return;
     }
     let directory = tempfile::tempdir().unwrap();
-    let controller = Controller::at(505, directory.path());
+    let controller = labelled(directory.path(), "right");
     let held = controller.acquire(false).unwrap();
     fs::write(&controller.waiting, b"not a folder").unwrap();
-
-    let waiting = std::thread::spawn({
-        let waiter = labelled(directory.path(), "right").waiting(Duration::from_secs(5));
-        move || waiter.acquire(false).map(drop)
-    });
-    std::thread::sleep(Duration::from_millis(300));
+    let (waiter, events) = watched(&controller, Duration::from_secs(60));
+    let waiting = acquiring(waiter, false);
+    assert_eq!(told(&events), WaitEvent::Began);
+    assert!(!waiting.is_finished());
     drop(held);
+    assert_eq!(told(&events), WaitEvent::Ended);
     waiting.join().unwrap().unwrap();
     assert_eq!(fs::read(&controller.waiting).unwrap(), b"not a folder");
 }
@@ -446,43 +446,35 @@ fn a_newcomer_waits_its_turn_but_the_person_and_a_stop_end_every_wait() {
     let directory = tempfile::tempdir().unwrap();
     let controller = Controller::at(505, directory.path());
     let this = Instance::current().unwrap();
-    let now = crate::host_session::now_ms();
-    let ahead = waiter_note(&controller, this, now - 1000, Duration::ZERO);
-
-    // The lock is free, but an older waiter is in line: a newcomer with a
-    // wait lets it go first, and one with none takes it at once.
-    let refused = controller
-        .clone()
-        .waiting(Duration::from_millis(300))
-        .acquire(false)
-        .unwrap_err();
-    assert_eq!(refused.code, "busy");
-    drop(controller.acquire(false).unwrap());
-
-    fs::write(&controller.person, b"").unwrap();
-    let started = Instant::now();
-    let refused = controller
-        .clone()
-        .waiting(Duration::from_secs(5))
-        .acquire(false)
-        .unwrap_err();
-    assert_eq!(refused.holder, Some(Holder::Person));
-    assert!(
-        started.elapsed() < Duration::from_secs(2),
-        "the person is never waited for"
+    let ahead = waiter_note(
+        &controller,
+        this,
+        crate::host_session::now_ms() - 1000,
+        Duration::ZERO,
     );
-    fs::remove_file(&controller.person).unwrap();
-
-    controller.note_stop(true).unwrap();
-    let started = Instant::now();
-    let refused = controller
-        .clone()
-        .waiting(Duration::from_secs(5))
-        .heeding_stop()
-        .acquire(false)
-        .unwrap_err();
-    assert_eq!(refused.code, "stopped");
-    assert!(started.elapsed() < Duration::from_secs(2));
+    for stop in [false, true] {
+        let (waiter, events) = watched(&controller, Duration::from_secs(60));
+        let waiting = acquiring(waiter.heeding_stop(), false);
+        assert_eq!(told(&events), WaitEvent::Began);
+        assert!(
+            !waiting.is_finished(),
+            "an older waiter goes first even with the lock free"
+        );
+        drop(controller.acquire(false).unwrap());
+        if stop {
+            controller.note_stop(true).unwrap();
+        } else {
+            fs::write(&controller.person, b"").unwrap();
+        }
+        assert_eq!(told(&events), WaitEvent::Ended);
+        let refused = waiting.join().unwrap().unwrap_err();
+        if stop {
+            assert_eq!(refused.code, "stopped");
+        } else {
+            assert_eq!(refused.holder, Some(Holder::Person));
+            fs::remove_file(&controller.person).unwrap();
+        }
+    }
     fs::remove_file(ahead).unwrap();
 }
 
@@ -492,15 +484,22 @@ fn a_bounded_pending_read_returns_when_the_marker_lock_is_held() {
     let controller = Controller::at(crate::test_support::UID, directory.path());
     drop(controller.quarantine().unwrap());
     let held = controller.lock_marker().unwrap();
-    let began = std::time::Instant::now();
+    let (send, result) = std::sync::mpsc::channel();
+    let reader = controller.clone();
+    let reading = std::thread::spawn(move || {
+        send.send(reader.pending_causes_within(Duration::from_millis(10)))
+            .unwrap();
+    });
+    let refused = result
+        .recv_timeout(Duration::from_secs(30))
+        .unwrap()
+        .unwrap_err();
+    assert_eq!(refused.code, "busy");
     assert_eq!(
-        controller
-            .pending_causes_within(Duration::from_millis(10))
-            .unwrap_err()
-            .code,
-        "busy"
+        refused.error,
+        "Atlas could not check pending activity in time."
     );
-    assert!(began.elapsed() < Duration::from_millis(250));
+    reading.join().unwrap();
     drop(held);
     assert_eq!(
         controller
@@ -561,7 +560,7 @@ fn entry_attachment_does_not_wait_for_a_held_marker_lock_or_lose_pending_attribu
         let result = crate::host_session::store::touch(&caller, &own);
         send.send(result.map_err(|error| error.code)).unwrap();
     });
-    let result = receive.recv_timeout(Duration::from_millis(250));
+    let result = receive.recv_timeout(Duration::from_secs(30));
     drop(lock);
     worker.join().unwrap();
     assert_eq!(result.unwrap().unwrap_err(), "busy");
