@@ -266,6 +266,8 @@ pub(crate) struct Candidate {
 
 impl Candidate {
     fn new(kind: Kind, name: &str, host: Option<PathBuf>, paths: Vec<PathBuf>) -> Self {
+        // Preserve host serialization failures before any helper probes.
+        let _ = json!(host);
         Self {
             kind,
             name: name.to_owned(),
@@ -543,7 +545,10 @@ pub async fn discover(
 mod tests {
     use super::*;
     use crate::test_support::{Helper, UID, completed};
-    use std::os::unix::fs::PermissionsExt;
+    use std::{
+        ffi::OsStr,
+        os::unix::{ffi::OsStrExt, fs::PermissionsExt},
+    };
 
     /// The arguments a probe was given, after its fixed script.
     fn arguments(request: &Value) -> &[Value] {
@@ -572,6 +577,26 @@ mod tests {
             &[PathBuf::from("/Users/Shared")],
         )
         .await
+    }
+
+    #[test]
+    fn a_non_utf8_host_path_panics_during_candidate_assembly() {
+        let host = PathBuf::from(OsStr::from_bytes(b"/host/\xff/tool"));
+        for kind in [Kind::Tool, Kind::Application] {
+            let panic = std::panic::catch_unwind(|| {
+                Candidate::new(
+                    kind,
+                    "selected",
+                    Some(host.clone()),
+                    vec!["/helper/selected".into()],
+                );
+            })
+            .expect_err("a host path with invalid UTF-8 must fail before any discovery probe");
+            assert_eq!(
+                panic.downcast_ref::<String>().unwrap(),
+                "called `Result::unwrap()` on an `Err` value: Error(\"path contains invalid UTF-8 characters\", line: 0, column: 0)"
+            );
+        }
     }
 
     #[tokio::test]
