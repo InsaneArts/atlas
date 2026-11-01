@@ -43,6 +43,8 @@ if ($mode eq 'escape') {
         my $escaped = fork();
         die $! unless defined $escaped;
         if (!$escaped) {
+            report('descendant');
+            permit($descendant, 'escape');
             POSIX::setsid() >= 0 or die $!;
             report('escaped');
             permit($descendant, 'work');

@@ -189,7 +189,11 @@ async fn stopping_ends_the_whole_group_and_reports_what_left_it() {
     child.permit("fork");
     let parent = child.message("parent").await;
     child.permit_parent("fork");
+    let descendant = child.message("descendant").await;
+    assert_eq!(process::info(descendant.pid).unwrap().unwrap().pgid, pgid);
+    child.permit_descendant("escape");
     let escaped = child.message("escaped").await;
+    assert_eq!(escaped, descendant);
     child.permit_descendant("work");
     assert!(eventually(|| {
         let info = process::info(escaped.pid).unwrap().unwrap();
