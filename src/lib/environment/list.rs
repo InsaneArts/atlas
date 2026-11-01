@@ -143,7 +143,7 @@ pub(super) fn frozen(shared: &Path, uid: u32) -> Vec<Frozen> {
 /// takes the lock in that instant waits it out.
 fn held(stage: &Path) -> bool {
     match open_regular(&stage.join("controller.lock"), false) {
-        Ok(Some(lock)) => FileExt::try_lock_shared(&lock).is_err(),
+        Ok(Some(lock)) => FileExt::try_lock_shared(&LockFile(lock).0).is_err(),
         Ok(None) | Err(_) => false,
     }
 }

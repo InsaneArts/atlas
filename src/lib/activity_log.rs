@@ -400,7 +400,8 @@ fn append_using(
             "The activity lock is not a plain file",
         ));
     }
-    FileExt::lock_exclusive(&lock)?;
+    let lock = crate::files::LockFile(lock);
+    FileExt::lock_exclusive(&lock.0)?;
 
     let path = directory.join(FILE);
     let mut file = open_log(&path)?;

@@ -13,7 +13,7 @@ use super::{
 };
 use crate::{
     error::{Code, Error, Result},
-    files::{Held, Lock, lock_within, open_lock, token},
+    files::{Held, Lock, LockFile, lock_within, open_lock, token},
     host_session::Key,
 };
 use fs2::FileExt;
@@ -70,16 +70,16 @@ impl Controller {
         })
     }
 
-    pub(super) fn lock_marker(&self) -> Result<File> {
+    pub(super) fn lock_marker(&self) -> Result<LockFile> {
         self.make_directory()?;
         let file = open_lock(&self.marker_lock)?;
-        FileExt::lock_exclusive(&file)?;
+        FileExt::lock_exclusive(&file.0)?;
 
         Ok(file)
     }
 
     /// Take the marker lock with bounded patience, including when no marker exists.
-    pub(super) fn lock_marker_within(&self, wait: Duration) -> Result<File> {
+    pub(super) fn lock_marker_within(&self, wait: Duration) -> Result<LockFile> {
         self.make_directory()?;
         let file = open_lock(&self.marker_lock)?;
         lock_within(&file, Lock::Exclusive, wait).map_err(|Held| {
@@ -192,7 +192,7 @@ impl Controller {
     /// an executor that outlived its caller is not held.
     fn held(&self, generation: &str) -> bool {
         self.open_claim(generation).is_some_and(|(_, file)| {
-            FileExt::try_lock_shared(&file)
+            FileExt::try_lock_shared(&file.0)
                 .is_err_and(|error| error.kind() == std::io::ErrorKind::WouldBlock)
         })
     }
@@ -205,14 +205,14 @@ impl Controller {
 
     /// The claim file for `generation`, and where it is, when there is one
     /// that opens without following a link.
-    fn open_claim(&self, generation: &str) -> Option<(PathBuf, File)> {
+    fn open_claim(&self, generation: &str) -> Option<(PathBuf, LockFile)> {
         let live = self.live(generation)?;
         let file = OpenOptions::new()
             .read(true)
             .custom_flags(libc::O_NOFOLLOW)
             .open(&live)
             .ok()?;
-        Some((live, file))
+        Some((live, LockFile(file)))
     }
 
     /// The generations marked as commands agents started with `run`, as
@@ -225,7 +225,7 @@ impl Controller {
     /// Whether some live mutation, in any process, still holds the claim.
     pub(super) fn in_progress(&self, generation: &str) -> bool {
         self.open_claim(generation).is_some_and(|(live, file)| {
-            FileExt::try_lock_shared(&file).is_err() || claim_executor_running(&file, &live)
+            FileExt::try_lock_shared(&file.0).is_err() || claim_executor_running(&file.0, &live)
         })
     }
 
@@ -259,7 +259,7 @@ impl Controller {
 
         self.make_directory()?;
         let file = open_lock(&live)?;
-        FileExt::try_lock_exclusive(&file)
+        FileExt::try_lock_exclusive(&file.0)
             .map_err(|_| Error::new(Code::Busy, "That generation is already being carried out"))?;
 
         let claim = Pending {

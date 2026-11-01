@@ -1,6 +1,6 @@
 //! Private write-ahead state. Preview opens existing state without creating it.
 use super::{model::*, *};
-use crate::files::{Lock, lock_retrying};
+use crate::files::{Lock, LockFile, lock_retrying};
 
 /// How long a lock that looks held is retried, as [`lock_retrying`] says.
 const LOCK_PATIENCE: std::time::Duration = std::time::Duration::from_millis(250);
@@ -9,14 +9,14 @@ const LOCK_PATIENCE: std::time::Duration = std::time::Duration::from_millis(250)
 const RUNNING: &str = "Another environment operation is running";
 
 /// Take the store lock without blocking on a real holder.
-fn take(lock: &fs::File, write: bool, retry: impl FnMut(std::time::Instant) -> bool) -> Result<()> {
+fn take(lock: &LockFile, write: bool, retry: impl FnMut(std::time::Instant) -> bool) -> Result<()> {
     let held = if write { Lock::Exclusive } else { Lock::Shared };
     lock_retrying(lock, held, LOCK_PATIENCE, retry).map_err(|_| problem(RUNNING))
 }
 
 pub(super) struct Store {
     pub path: PathBuf,
-    lock: Option<fs::File>,
+    lock: Option<LockFile>,
     /// Whether the store's folder was there when it was opened.
     existed: bool,
 }
@@ -51,9 +51,9 @@ impl Store {
         };
 
         validate_private(&directory, true)?;
-        let lock = open_regular(&path.join("lock"), write)?;
+        let lock = open_regular(&path.join("lock"), write)?.map(LockFile);
         if let Some(lock) = &lock {
-            validate_private(lock, false)?;
+            validate_private(&lock.0, false)?;
             take(lock, write, retry)?;
         }
 
