@@ -16,7 +16,7 @@ use std::{
     },
     path::Path,
     process::{Child, Command, Stdio},
-    time::Duration,
+    time::{Duration, Instant},
 };
 
 const LIMIT: Duration = Duration::from_secs(15);
@@ -137,6 +137,25 @@ impl Executor {
         Ok(())
     }
 
+    fn finish(&mut self, limit: Duration) -> io::Result<()> {
+        self.wait()?;
+        // Recovery still excludes an exited executor until its identity is gone.
+        let started = Instant::now();
+        while crate::process::info(self.identity.pid)
+            .map_err(io::Error::other)?
+            .is_some_and(|info| info.instance == self.identity)
+        {
+            if started.elapsed() >= limit {
+                return Err(io::Error::new(
+                    io::ErrorKind::TimedOut,
+                    "executor reaping watchdog expired",
+                ));
+            }
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        Ok(())
+    }
+
     fn stop(&mut self) -> io::Result<()> {
         if self.wait().is_ok() {
             return Ok(());
@@ -204,7 +223,7 @@ impl Fixture {
         let channel = self.channel.as_mut().unwrap();
         writeln!(channel, "continue")?;
         expect(channel, "exited")?;
-        self.executor.as_mut().unwrap().wait()
+        self.executor.as_mut().unwrap().finish(LIMIT)
     }
 }
 
@@ -355,7 +374,7 @@ mod tests {
     }
 
     #[test]
-    fn an_exit_watch_requires_the_owned_process_to_end() {
+    fn an_exit_watch_requires_the_owned_process_to_end_and_be_reaped() {
         let caller = Command::new("/bin/cat")
             .stdin(Stdio::piped())
             .stdout(Stdio::null())
@@ -390,7 +409,22 @@ mod tests {
         );
         drop(fixture.caller.stdin.take());
         fixture.executor.as_mut().unwrap().wait().unwrap();
+        let exited = crate::process::info(pid).unwrap().unwrap();
+        assert_eq!(exited.instance, identity);
+        assert!(exited.zombie);
+        assert_eq!(
+            fixture
+                .executor
+                .as_mut()
+                .unwrap()
+                .finish(Duration::from_millis(50))
+                .unwrap_err()
+                .kind(),
+            io::ErrorKind::TimedOut,
+            "an observed exit cannot finish while its identity remains unreaped"
+        );
         assert!(fixture.caller.wait().unwrap().success());
+        fixture.executor.as_mut().unwrap().finish(LIMIT).unwrap();
         assert_eq!(crate::process::info(identity.pid).unwrap(), None);
     }
 }
