@@ -16,6 +16,8 @@ use serde::Deserialize;
 use serde_json::{Value, json};
 use std::{
     collections::BTreeSet,
+    error::Error as StdError,
+    fmt,
     path::{Path, PathBuf},
     sync::{
         Arc, Mutex as StdMutex, RwLock,
@@ -167,6 +169,56 @@ fn worker_failed() -> Error {
     .uncertain()
 }
 
+struct CleanupFailures {
+    primary: Error,
+    cleanup: Error,
+}
+
+impl fmt::Debug for CleanupFailures {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("CleanupFailures")
+            .field("primary", &self.primary.code)
+            .field("cleanup", &self.cleanup.code)
+            .field(
+                "uncertain",
+                &(self.primary.uncertain || self.cleanup.uncertain),
+            )
+            .finish()
+    }
+}
+
+impl fmt::Display for CleanupFailures {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "Native work and cleanup failed ({})", self.cleanup.code)
+    }
+}
+
+impl StdError for CleanupFailures {
+    fn source(&self) -> Option<&(dyn StdError + 'static)> {
+        Some(&self.primary)
+    }
+}
+
+fn combine_cleanup(primary: Result<()>, cleanup: Result<()>) -> Result<()> {
+    match (primary, cleanup) {
+        (Ok(()), outcome) | (outcome, Ok(())) => outcome,
+        (Err(primary), Err(cleanup)) => {
+            let uncertain = primary.uncertain || cleanup.uncertain;
+            let mut error = Error::new(
+                primary.code,
+                format!(
+                    "{}; cleanup: {} (recovery pending: {uncertain})",
+                    primary.error, cleanup.code,
+                ),
+            );
+            error.uncertain = uncertain;
+            error.holder = primary.holder;
+            error.details = primary.details.clone();
+            Err(error.with_source(CleanupFailures { primary, cleanup }))
+        }
+    }
+}
+
 /// Cancelling a request changes ownership without waiting for the engine.
 struct Cancellation {
     gate: Arc<Gate>,
@@ -177,6 +229,9 @@ struct Cancellation {
 impl Drop for Cancellation {
     fn drop(&mut self) {
         if self.armed {
+            // Drop can only try to cancel ownership. It cannot acknowledge
+            // release, clear sticky worker failure or settle the controller's
+            // pending record, even if cancellation succeeds.
             let _ = self.gate.cancel(Some(&self.owner));
         }
     }
@@ -189,12 +244,12 @@ async fn drain_and_release(
 ) -> Result<()> {
     let drained = operations.drain().await;
     let mut engine = engine.lock().await;
-    let released = if !gate.active()? {
-        engine.release()
-    } else {
-        Ok(())
+    let released = match gate.active() {
+        Ok(false) => engine.release(),
+        Ok(true) => Ok(()),
+        Err(error) => Err(error),
     };
-    drained.and(released)
+    combine_cleanup(drained, released)
 }
 
 /// Only explicit recovery can settle an unknown worker outcome. If recovery
@@ -230,7 +285,7 @@ async fn finish(
     requests.abort_all();
     while requests.join_next().await.is_some() {}
     let cleanup = drain_and_release(operations, engine, gate).await;
-    closed.and(cleanup)
+    combine_cleanup(closed, cleanup)
 }
 
 /// The operations the input service answers, by their `op` string.
@@ -961,7 +1016,7 @@ pub async fn serve(uid: u32, controller_uid: u32, socket: PathBuf) -> Result<()>
         &service.engine,
     )
     .await;
-    outcome.and(cleanup)
+    combine_cleanup(outcome, cleanup)
 }
 
 /// Whether the peer on `stream` is the controller, the only account the
@@ -1796,7 +1851,8 @@ mod tests {
             );
             assert!(!gate.active().unwrap());
             let competing = async {
-                let _engine = engine.lock().await;
+                let engine = engine.lock().await;
+                assert!(engine.releases >= 1, "cleanup acknowledged release first");
                 let who = if matches!(ending, Ending::Stop) {
                     super::Who::Person
                 } else {
@@ -1842,6 +1898,56 @@ mod tests {
     #[tokio::test]
     async fn aborting_a_request_waits_for_its_preparation_before_cleanup() {
         blocked_operation(Ending::Abort).await;
+    }
+
+    #[tokio::test]
+    async fn aborting_a_request_after_registration_keeps_its_work_until_cleanup() {
+        use std::{future::Future, task::Context, task::Poll, task::Waker};
+
+        let operations = super::Operations::default();
+        let gate = Arc::new(Gate::default());
+        let owner = "a".repeat(48);
+        let grant = gate.acquire(&owner, super::Who::Agent).unwrap();
+        let stand = Stand::locked(&[]);
+        let (resume, barrier) = tokio::sync::oneshot::channel::<()>();
+        {
+            let request = async {
+                let _cancel = super::Cancellation {
+                    gate: gate.clone(),
+                    owner,
+                    armed: true,
+                };
+                let engine = stand.clone().lock_owned().await;
+                operations
+                    .start(async move {
+                        let _engine = engine;
+                        barrier.await.unwrap();
+                        grant.authorize().map(drop)
+                    })
+                    .await
+                    .unwrap()
+                    .await
+            };
+            tokio::pin!(request);
+            let mut context = Context::from_waker(Waker::noop());
+            assert!(matches!(request.as_mut().poll(&mut context), Poll::Pending));
+            assert_eq!(operations.tasks.lock().unwrap().len(), 1);
+        }
+        assert!(!gate.active().unwrap());
+        assert!(stand.try_lock().is_err());
+        {
+            let cleanup = super::drain_and_release(&operations, &stand, &gate);
+            tokio::pin!(cleanup);
+            let mut context = Context::from_waker(Waker::noop());
+            assert!(matches!(cleanup.as_mut().poll(&mut context), Poll::Pending));
+            assert_eq!(operations.tasks.lock().unwrap().len(), 1);
+            resume.send(()).unwrap();
+            cleanup.await.unwrap();
+        }
+        assert!(operations.tasks.lock().unwrap().is_empty());
+        let engine = stand.lock().await;
+        assert_eq!(engine.releases, 1);
+        assert_eq!(engine.posted, 0);
     }
 
     #[tokio::test]
@@ -1918,6 +2024,240 @@ mod tests {
         let error = operations.drain().await.unwrap_err();
         assert_eq!(error.code, Code::Uncertain);
         assert!(error.uncertain);
+        let stand = Stand::locked(&[]);
+        let error = super::drain_and_release(&operations, &stand, &Gate::default())
+            .await
+            .unwrap_err();
+        assert_eq!(error.error, "The input worker did not report its outcome");
+        assert!(error.uncertain);
+        assert_eq!(stand.lock().await.releases, 1);
+        assert!(operations.check().is_err());
+    }
+
+    #[test]
+    fn successful_cleanup_and_single_failures_keep_their_original_shapes() {
+        use std::error::Error as _;
+
+        super::combine_cleanup(Ok(()), Ok(())).unwrap();
+        for primary in [false, true] {
+            let error = Error::new(Code::Busy, "Original failure")
+                .held_by(crate::error::Holder::Agent)
+                .with("detail", json!({"count": 3}))
+                .uncertain()
+                .with_source(std::io::Error::from_raw_os_error(13));
+            let expected = serde_json::to_vec(&error).unwrap();
+            let error = if primary {
+                super::combine_cleanup(Err(error), Ok(()))
+            } else {
+                super::combine_cleanup(Ok(()), Err(error))
+            }
+            .unwrap_err();
+            assert_eq!(serde_json::to_vec(&error).unwrap(), expected);
+            assert_eq!(error.to_string(), "Original failure");
+            assert_eq!(
+                error
+                    .source()
+                    .unwrap()
+                    .downcast_ref::<std::io::Error>()
+                    .unwrap()
+                    .raw_os_error(),
+                Some(13)
+            );
+        }
+    }
+
+    #[test]
+    fn primary_and_cleanup_failures_are_both_retained() {
+        use std::error::Error as _;
+
+        for primary_unknown in [false, true] {
+            for cleanup_unknown in [false, true] {
+                let mut primary = Error::new(Code::Busy, "Original failure")
+                    .held_by(crate::error::Holder::Agent)
+                    .with("count", json!(3))
+                    .with_source(std::io::Error::from_raw_os_error(13));
+                primary.uncertain = primary_unknown;
+                let mut cleanup = Error::new(Code::Cleanup, "Original cleanup failure")
+                    .with("private", json!("cleanup detail"))
+                    .with_source(std::io::Error::from_raw_os_error(5));
+                cleanup.uncertain = cleanup_unknown;
+                let primary_bytes = serde_json::to_vec(&primary).unwrap();
+                let cleanup_bytes = serde_json::to_vec(&cleanup).unwrap();
+                let error = super::combine_cleanup(Err(primary), Err(cleanup)).unwrap_err();
+                let pending = primary_unknown || cleanup_unknown;
+                assert_eq!(
+                    json!(error),
+                    json!({
+                        "ok": false,
+                        "code": "busy",
+                        "error": format!("Original failure; cleanup: cleanup (recovery pending: {pending})"),
+                        "uncertain": pending,
+                        "holder": "agent",
+                        "count": 3,
+                    })
+                );
+                let pair = error
+                    .source()
+                    .unwrap()
+                    .downcast_ref::<super::CleanupFailures>()
+                    .unwrap();
+                assert_eq!(serde_json::to_vec(&pair.primary).unwrap(), primary_bytes);
+                assert_eq!(serde_json::to_vec(&pair.cleanup).unwrap(), cleanup_bytes);
+                assert!(std::ptr::eq(
+                    pair.source().unwrap().downcast_ref::<Error>().unwrap(),
+                    &pair.primary
+                ));
+                for (original, errno) in [(&pair.primary, 13), (&pair.cleanup, 5)] {
+                    assert_eq!(
+                        original
+                            .source()
+                            .unwrap()
+                            .downcast_ref::<std::io::Error>()
+                            .unwrap()
+                            .raw_os_error(),
+                        Some(errno)
+                    );
+                }
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn a_cleanup_failure_cannot_turn_unknown_work_into_success() {
+        use std::error::Error as _;
+
+        let operations = super::Operations::default();
+        let outcome = operations
+            .start(async { panic!("worker failed") })
+            .await
+            .unwrap();
+        assert!(outcome.await.is_err());
+        let stand = Stand::locked(&[]);
+        {
+            let mut engine = stand.lock().await;
+            engine.held = true;
+            engine.release_fails = true;
+        }
+        let gate = Gate::default();
+        let error = super::drain_and_release(&operations, &stand, &gate)
+            .await
+            .unwrap_err();
+        assert_eq!(error.code, Code::Uncertain);
+        assert!(error.uncertain);
+        let pair = error
+            .source()
+            .unwrap()
+            .downcast_ref::<super::CleanupFailures>()
+            .unwrap();
+        assert_eq!(
+            pair.primary.error,
+            "The input worker did not report its outcome"
+        );
+        assert_eq!(pair.cleanup.error, "Held input could not be released");
+        assert!(stand.lock().await.held);
+        assert!(operations.start(async {}).await.unwrap_err().uncertain);
+        stand.lock().await.release_fails = false;
+        assert!(
+            super::drain_and_release(&operations, &stand, &gate)
+                .await
+                .unwrap_err()
+                .uncertain
+        );
+        assert!(!stand.lock().await.held);
+        assert!(operations.start(async {}).await.unwrap_err().uncertain);
+        super::reset(&operations, &stand, &gate, Perform::release)
+            .await
+            .unwrap();
+        operations.start(async {}).await.unwrap().await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn a_gate_failure_does_not_hide_a_drain_failure() {
+        use std::error::Error as _;
+
+        let operations = super::Operations::default();
+        let outcome = operations
+            .start(async { panic!("worker failed") })
+            .await
+            .unwrap();
+        assert!(outcome.await.is_err());
+        let gate = Arc::new(Gate::default());
+        let grant = gate.acquire(&"a".repeat(48), super::Who::Agent).unwrap();
+        assert!(
+            std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                let _guard = grant.authorize().unwrap();
+                panic!("poison ownership");
+            }))
+            .is_err()
+        );
+        let stand = Stand::locked(&[]);
+        stand.lock().await.held = true;
+        let error = super::drain_and_release(&operations, &stand, &gate)
+            .await
+            .unwrap_err();
+        assert_eq!(error.code, Code::Uncertain);
+        assert!(error.uncertain);
+        let pair = error
+            .source()
+            .unwrap()
+            .downcast_ref::<super::CleanupFailures>()
+            .unwrap();
+        assert_eq!(pair.primary.code, Code::Uncertain);
+        assert_eq!(pair.cleanup.code, Code::Native);
+        assert_eq!(pair.cleanup.error, "Input ownership failed");
+        let engine = stand.lock().await;
+        assert_eq!(engine.releases, 0, "unknown ownership cannot allow release");
+        assert!(engine.held);
+        assert!(operations.check().unwrap_err().uncertain);
+        drop(engine);
+        let mut requests = tokio::task::JoinSet::new();
+        let error = super::finish(&gate, &mut requests, &operations, &stand)
+            .await
+            .unwrap_err();
+        assert_eq!(error.code, Code::Native, "closing failed first");
+        assert!(error.uncertain);
+        let pair = error
+            .source()
+            .unwrap()
+            .downcast_ref::<super::CleanupFailures>()
+            .unwrap();
+        assert_eq!(pair.primary.error, "Input ownership failed");
+        assert_eq!(pair.cleanup.code, Code::Uncertain);
+        assert!(pair.cleanup.source().is_some());
+        assert_eq!(stand.lock().await.releases, 0);
+    }
+
+    #[test]
+    fn cleanup_diagnostics_do_not_reveal_private_causes() {
+        use std::error::Error as _;
+
+        let secret = "private-owner-input-cause".repeat(1024);
+        let primary = Error::new(Code::Native, "Input failed")
+            .with_source(std::io::Error::other(secret.clone()));
+        let cleanup = Error::new(Code::Cleanup, secret.clone())
+            .with("private", json!(secret))
+            .with_source(std::io::Error::other(secret.clone()))
+            .uncertain();
+        let error = super::combine_cleanup(Err(primary), Err(cleanup)).unwrap_err();
+        let pair = error
+            .source()
+            .unwrap()
+            .downcast_ref::<super::CleanupFailures>()
+            .unwrap();
+        for diagnostic in [
+            serde_json::to_string(&error).unwrap(),
+            error.to_string(),
+            format!("{error:?}"),
+            pair.to_string(),
+            format!("{pair:?}"),
+        ] {
+            assert!(!diagnostic.contains("private-owner-input-cause"));
+            assert!(diagnostic.len() < 256);
+        }
+        assert_eq!(pair.cleanup.error, secret);
+        assert_eq!(pair.cleanup.details["private"], secret);
+        assert_eq!(pair.primary.source().unwrap().to_string(), secret);
+        assert_eq!(pair.cleanup.source().unwrap().to_string(), secret);
     }
 
     #[tokio::test]
@@ -2009,6 +2349,56 @@ mod tests {
         assert_eq!(stand.lock().await.releases, 1);
         operations.drain().await.unwrap();
         assert!(operations.tasks.lock().unwrap().is_empty());
+    }
+
+    #[tokio::test]
+    async fn cancelling_reset_before_drain_or_rebind_keeps_recovery_pending() {
+        use std::{future::Future, task::Context, task::Poll, task::Waker};
+
+        for before_rebind in [false, true] {
+            let operations = super::Operations::default();
+            let gate = Arc::new(Gate::default());
+            let _grant = gate.acquire(&"a".repeat(48), super::Who::Agent).unwrap();
+            let stand = Stand::locked(&[]);
+            let (resume, barrier) = tokio::sync::oneshot::channel::<()>();
+            let mut resume = Some(resume);
+            let running = operations.start(barrier).await.unwrap();
+            let engine_guard = if before_rebind {
+                resume.take().unwrap().send(()).unwrap();
+                running.await.unwrap().unwrap();
+                operations.drain().await.unwrap();
+                Some(stand.lock().await)
+            } else {
+                // Leave the registered operation waiting at its drain barrier.
+                None
+            };
+            {
+                let recovery = super::reset(&operations, &stand, &gate, Perform::release);
+                tokio::pin!(recovery);
+                let mut context = Context::from_waker(Waker::noop());
+                assert!(matches!(
+                    recovery.as_mut().poll(&mut context),
+                    Poll::Pending
+                ));
+                assert!(
+                    !gate.active().unwrap(),
+                    "cancellation did not need the engine"
+                );
+                assert!(operations.check().unwrap_err().uncertain);
+            }
+            assert!(operations.start(async {}).await.unwrap_err().uncertain);
+            if !before_rebind {
+                assert_eq!(operations.tasks.lock().unwrap().len(), 1);
+            }
+            drop(resume);
+            drop(engine_guard);
+            super::reset(&operations, &stand, &gate, Perform::release)
+                .await
+                .unwrap();
+            assert_eq!(stand.lock().await.releases, 1);
+            operations.check().unwrap();
+            assert!(operations.tasks.lock().unwrap().is_empty());
+        }
     }
 
     #[tokio::test]
