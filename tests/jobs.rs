@@ -4,6 +4,9 @@
 //! every process it made.
 #![cfg(target_os = "macos")]
 
+#[path = "jobs/child.rs"]
+mod child;
+
 use atlas::{
     daemon::{
         job::Jobs,
@@ -11,10 +14,8 @@ use atlas::{
     },
     process,
 };
-use nix::{
-    sys::signal::{Signal, kill, killpg},
-    unistd::Pid,
-};
+use child::{Child, Processes};
+use nix::unistd::Pid;
 use serde_json::Value;
 use std::{
     os::unix::fs::PermissionsExt,
@@ -40,10 +41,42 @@ fn start(argv: &[&str]) -> JobStart {
     }
 }
 
-async fn started(jobs: &Arc<Jobs>, argv: &[&str]) -> Value {
+struct Started {
+    job: Value,
+    _processes: Processes,
+}
+
+impl std::ops::Deref for Started {
+    type Target = Value;
+
+    fn deref(&self) -> &Value {
+        &self.job
+    }
+}
+
+impl Started {
+    fn new(job: Value) -> Self {
+        let expected = expected_of(&job);
+        Self {
+            job,
+            _processes: Processes::new(process::Instance::new(expected.pid, expected.start)),
+        }
+    }
+}
+
+async fn started(jobs: &Arc<Jobs>, argv: &[&str]) -> Started {
     let reply = jobs.start(start(argv)).await;
     assert_eq!(reply["ok"], true, "{reply}");
-    reply["job"].clone()
+    Started::new(reply["job"].clone())
+}
+
+async fn ready(jobs: &Arc<Jobs>, child: &mut Child, mode: &str) -> Started {
+    let argv = child.argv(mode);
+    let argv: Vec<&str> = argv.iter().map(String::as_str).collect();
+    let job = started(jobs, &argv).await;
+    assert_eq!(child.message("ready").await.pid, pid_of(&job));
+    child.permit("start");
+    job
 }
 
 fn id_of(job: &Value) -> JobId {
@@ -61,12 +94,13 @@ fn pid_of(job: &Value) -> i32 {
     job["pid"].as_i64().unwrap() as i32
 }
 
-/// Watch `jobs` until job `id` has ended, or `within` passes.
+/// Poll the kernel-backed supervisor until its child has exited and been
+/// reaped. The deadline is an outer watchdog, not an ordering permit.
 fn ended(jobs: &Jobs, id: &JobId, within: Duration) -> Value {
     let until = Instant::now() + within;
     loop {
         jobs.watch_once(None).unwrap();
-        let shown = jobs.show(Some(id))["job"].clone();
+        let shown = show_job(jobs, id);
         if shown["state"] == "ended" || Instant::now() >= until {
             return shown;
         }
@@ -74,7 +108,8 @@ fn ended(jobs: &Jobs, id: &JobId, within: Duration) -> Value {
     }
 }
 
-/// Wait until `ready` holds, for at most five seconds.
+/// Poll kernel/record readiness under a watchdog; failed observations must
+/// be unwrapped by the caller rather than treated as an absent process.
 fn eventually(mut ready: impl FnMut() -> bool) -> bool {
     let until = Instant::now() + Duration::from_secs(5);
     while Instant::now() < until {
@@ -90,22 +125,23 @@ fn alive(pid: i32) -> bool {
     process::info(pid).unwrap().is_some_and(|info| !info.zombie)
 }
 
-fn end_group(pgid: i32) {
-    let _ = killpg(Pid::from_raw(pgid), Signal::SIGKILL);
+fn show_job(jobs: &Jobs, id: &JobId) -> Value {
+    let reply = jobs.show(Some(id));
+    assert_eq!(reply["ok"], true, "{reply}");
+    reply["job"].clone()
 }
 
 #[tokio::test]
 async fn a_started_job_keeps_running_after_its_request_ends() {
     let folder = tempfile::tempdir().unwrap();
     let jobs = jobs_in(folder.path());
-    let job = started(&jobs, &["/bin/sleep", "30"]).await;
+    let mut child = Child::new();
+    let job = ready(&jobs, &mut child, "quiet").await;
     assert_eq!(job["state"], "running");
-    assert_eq!(job["name"], "sleep");
-    std::thread::sleep(Duration::from_millis(300));
+    assert_eq!(job["name"], "perl");
     jobs.watch_once(None).unwrap();
     assert!(alive(pid_of(&job)));
     assert_eq!(jobs.running().unwrap(), 1);
-    end_group(pid_of(&job));
 }
 
 #[tokio::test]
@@ -117,7 +153,6 @@ async fn a_job_runs_in_a_session_and_group_of_its_own() {
     assert_eq!(process::session(pid), Some(pid));
     assert_eq!(process::info(pid).unwrap().unwrap().pgid, pid);
     assert_ne!(pid, nix::unistd::getpgrp().as_raw());
-    end_group(pid);
 }
 
 #[tokio::test]
@@ -137,6 +172,7 @@ async fn a_launch_that_cannot_exec_is_refused_and_leaves_nothing_running() {
     assert_eq!(broken["uncertain"], false);
 
     let shown = jobs.show(None);
+    assert_eq!(shown["ok"], true, "{shown}");
     assert_eq!(shown["jobs"], serde_json::json!([]), "no record is left");
     assert_eq!(jobs.running().unwrap(), 0);
 }
@@ -145,38 +181,44 @@ async fn a_launch_that_cannot_exec_is_refused_and_leaves_nothing_running() {
 async fn stopping_ends_the_whole_group_and_reports_what_left_it() {
     let folder = tempfile::tempdir().unwrap();
     let jobs = jobs_in(folder.path());
-    // The escaping process's parent lingers, so it is seen while its link
-    // to the job is still there to see. The escaped process says its own
-    // PID, which exec keeps, so the test knows it exactly.
-    let said = folder.path().join("escaped.pid");
-    let script = format!(
-        "sleep 60 & /usr/bin/perl -MPOSIX -e 'if (fork) {{ sleep 1; exit }} POSIX::setsid(); open(my $f, \">\", q({})) or die; print $f $$; close($f); exec q(/bin/sleep), 61' & wait",
-        said.display()
-    );
-    let job = started(&jobs, &["/bin/sh", "-c", &script]).await;
+    let mut child = Child::new();
+    let job = ready(&jobs, &mut child, "escape").await;
     let id = id_of(&job);
     let pgid = pid_of(&job);
-    let escaped = || {
-        let pid: i32 = std::fs::read_to_string(&said).ok()?.trim().parse().ok()?;
-        process::info(pid)
-            .unwrap()
-            .filter(|info| !info.zombie && info.name == "sleep" && info.pgid != pgid)
-    };
+    let member = child.message("member").await;
+    child.permit("fork");
+    let parent = child.message("parent").await;
+    child.permit_parent("fork");
+    let escaped = child.message("escaped").await;
+    child.permit_descendant("work");
+    assert!(eventually(|| {
+        let info = process::info(escaped.pid).unwrap().unwrap();
+        assert_eq!(info.instance, escaped);
+        assert_ne!(info.pgid, pgid);
+        info.name == "sleep"
+    }));
+    // Do not release its parent until the durable observation contains this
+    // exact instance. A failed watch/read is never an empty observation.
     assert!(eventually(|| {
         jobs.watch_once(None).unwrap();
-        escaped().is_some()
+        let record: Value = serde_json::from_slice(
+            &std::fs::read(jobs.folder().unwrap().join(format!("{id}.json"))).unwrap(),
+        )
+        .unwrap();
+        record["seen"].as_array().unwrap().iter().any(|seen| {
+            seen["pid"] == escaped.pid && seen["start"] == serde_json::json!(escaped.start)
+        })
     }));
-    // Seen while its parent still runs in the job's group.
-    for _ in 0..5 {
-        jobs.watch_once(None).unwrap();
-        std::thread::sleep(Duration::from_millis(50));
-    }
+    child.permit_parent("exit");
+    child.message("parent-reaped").await;
+    assert!(process::info(parent.pid).unwrap().is_none());
 
     let reply = jobs.stop(&id, &expected_of(&job), Duration::from_secs(2));
     assert_eq!(reply["signalled"], "SIGTERM", "{reply}");
     let shown = ended(&jobs, &id, Duration::from_secs(8));
     assert_eq!(shown["state"], "ended", "{shown}");
     assert_eq!(shown["how"], "stopped");
+    assert!(!alive(member.pid), "the same-group descendant was stopped");
     assert!(
         process::group(pgid)
             .unwrap()
@@ -187,23 +229,26 @@ async fn stopping_ends_the_whole_group_and_reports_what_left_it() {
     let left = shown["left"].as_array().unwrap();
     assert_eq!(left.len(), 1, "{shown}");
     assert_eq!(left[0]["name"], "sleep");
-    let escaped = escaped().expect("it still runs");
-    assert_eq!(left[0]["pid"], escaped.instance.pid);
-    let _ = kill(Pid::from_raw(escaped.instance.pid), Signal::SIGKILL);
+    let info = process::info(escaped.pid).unwrap().expect("it still runs");
+    assert_eq!(info.instance, escaped);
+    assert!(!info.zombie);
+    assert_eq!(left[0]["pid"], escaped.pid);
 }
 
 #[tokio::test]
 async fn a_job_that_ignores_term_is_killed_after_its_grace() {
     let folder = tempfile::tempdir().unwrap();
     let jobs = jobs_in(folder.path());
-    let job = started(&jobs, &["/bin/sh", "-c", "trap '' TERM; sleep 60"]).await;
+    let mut child = Child::new();
+    let job = ready(&jobs, &mut child, "ignore").await;
     let id = id_of(&job);
-    std::thread::sleep(Duration::from_millis(300));
     let reply = jobs.stop(&id, &expected_of(&job), Duration::from_secs(1));
     assert_eq!(reply["signalled"], "SIGTERM", "{reply}");
-    std::thread::sleep(Duration::from_millis(500));
-    jobs.watch_once(None).unwrap();
-    assert_eq!(jobs.show(Some(&id))["job"]["state"], "stopping");
+    assert_eq!(child.message("term").await.pid, pid_of(&job));
+    assert_eq!(show_job(&jobs, &id)["state"], "stopping");
+    let leader = process::info(pid_of(&job)).unwrap().unwrap();
+    assert_eq!(leader.instance.start, expected_of(&job).start);
+    assert!(!leader.zombie);
 
     let shown = ended(&jobs, &id, Duration::from_secs(8));
     assert_eq!(shown["state"], "ended", "{shown}");
@@ -218,7 +263,9 @@ async fn the_lifetime_ends_a_job() {
     let mut asked = start(&["/bin/sleep", "60"]);
     asked.lifetime = Duration::from_secs(1);
     let reply = jobs.start(asked).await;
-    let id = id_of(&reply["job"]);
+    assert_eq!(reply["ok"], true, "{reply}");
+    let job = Started::new(reply["job"].clone());
+    let id = id_of(&job);
     let shown = ended(&jobs, &id, Duration::from_secs(8));
     assert_eq!(shown["how"], "timeout", "{shown}");
 }
@@ -260,7 +307,7 @@ async fn a_job_outlives_its_supervisor_and_is_adopted_again() {
     // process stands in for launchd, which reaps it in the helper.
     let id = id_of(&job);
     let jobs = jobs_in(folder.path());
-    let shown = jobs.show(Some(&id))["job"].clone();
+    let shown = show_job(&jobs, &id);
     assert_eq!(shown["state"], "running", "{shown}");
     assert_eq!(shown["adopted"], true);
     assert!(alive(pid_of(&job)));
@@ -280,11 +327,18 @@ async fn a_job_outlives_its_supervisor_and_is_adopted_again() {
 async fn the_leaders_status_is_kept_until_its_group_ends() {
     let folder = tempfile::tempdir().unwrap();
     let jobs = jobs_in(folder.path());
-    let job = started(&jobs, &["/bin/sh", "-c", "sleep 2 & exit 3"]).await;
+    let mut child = Child::new();
+    let job = ready(&jobs, &mut child, "group").await;
     let id = id_of(&job);
-    std::thread::sleep(Duration::from_millis(500));
+    let descendant = child.message("descendant").await;
+    child.permit("exit");
+    assert!(eventually(|| {
+        process::info(pid_of(&job))
+            .unwrap()
+            .is_some_and(|info| info.zombie)
+    }));
     jobs.watch_once(None).unwrap();
-    let shown = jobs.show(Some(&id))["job"].clone();
+    let shown = show_job(&jobs, &id);
     assert_eq!(shown["state"], "running", "its child still runs: {shown}");
     assert!(
         process::info(pid_of(&job))
@@ -292,6 +346,11 @@ async fn the_leaders_status_is_kept_until_its_group_ends() {
             .is_some_and(|leader| leader.zombie),
         "the leader is held unreaped"
     );
+    assert!(
+        alive(descendant.pid),
+        "the descendant is held by its exit permit"
+    );
+    child.permit_descendant("exit");
 
     let shown = ended(&jobs, &id, Duration::from_secs(8));
     assert_eq!(shown["how"], "exited", "{shown}");
@@ -305,7 +364,9 @@ async fn a_job_that_ends_at_once_is_reported_ended_with_its_exit() {
     let reply = jobs
         .start(start(&["/bin/sh", "-c", "echo hello; exit 3"]))
         .await;
-    let id = id_of(&reply["job"]);
+    assert_eq!(reply["ok"], true, "{reply}");
+    let job = Started::new(reply["job"].clone());
+    let id = id_of(&job);
     let shown = ended(&jobs, &id, Duration::from_secs(5));
     assert_eq!(shown["exitCode"], 3, "{shown}");
     let log = jobs.log(&id, 100);
@@ -329,18 +390,15 @@ async fn a_job_log_past_its_limit_starts_again() {
         )
         .unwrap(),
     );
-    let job = started(
-        &jobs,
-        &["/bin/sh", "-c", "head -c 5000 /dev/zero; sleep 30"],
-    )
-    .await;
+    let mut child = Child::new();
+    let job = ready(&jobs, &mut child, "log").await;
+    child.message("output").await;
     let id = id_of(&job);
     assert!(eventually(|| {
         jobs.watch_once(None).unwrap();
-        jobs.show(Some(&id))["job"]["logResets"] == 1
+        show_job(&jobs, &id)["logResets"] == 1
     }));
     assert_eq!(jobs.log(&id, 100)["size"], 0);
-    end_group(pid_of(&job));
 }
 
 #[tokio::test]
@@ -351,6 +409,12 @@ async fn nothing_but_its_own_group_is_ever_signalled() {
         .arg("30")
         .spawn()
         .unwrap();
+    let _sibling = Processes::new(
+        process::info(sibling.id() as i32)
+            .unwrap()
+            .unwrap()
+            .instance,
+    );
     let job = started(&jobs, &["/bin/sleep", "30"]).await;
     let id = id_of(&job);
     let mut stale = expected_of(&job);
@@ -381,7 +445,7 @@ async fn a_record_that_cannot_be_read_is_shown_and_never_acted_on() {
         b"{\"version\":2}",
     )
     .unwrap();
-    let shown = jobs.show(Some(&id))["job"].clone();
+    let shown = show_job(&jobs, &id);
     assert_eq!(shown["state"], "unknown", "{shown}");
     let refused = jobs.stop(
         &id,
@@ -395,29 +459,24 @@ async fn a_record_that_cannot_be_read_is_shown_and_never_acted_on() {
     );
     assert_eq!(refused["reason"], "unknown");
     let reopened = jobs_in(folder.path());
-    assert_eq!(reopened.show(Some(&id))["job"]["state"], "unknown");
+    assert_eq!(show_job(&reopened, &id)["state"], "unknown");
 }
 
 #[tokio::test]
 async fn a_stop_the_client_leaves_is_finished_by_the_daemon() {
     let folder = tempfile::tempdir().unwrap();
     let jobs = jobs_in(folder.path());
-    let job = started(&jobs, &["/bin/sh", "-c", "trap '' TERM; sleep 60"]).await;
+    let mut child = Child::new();
+    let job = ready(&jobs, &mut child, "ignore").await;
     let id = id_of(&job);
-    std::thread::sleep(Duration::from_millis(300));
     // The client asks, hears TERM was sent, and goes away.
     assert_eq!(
         jobs.stop(&id, &expected_of(&job), Duration::from_secs(1))["signalled"],
         "SIGTERM"
     );
+    child.message("term").await;
     // Only supervision runs from here.
-    let until = Instant::now() + Duration::from_secs(8);
-    while Instant::now() < until && alive(pid_of(&job)) {
-        jobs.watch_once(None).unwrap();
-        std::thread::sleep(Duration::from_millis(100));
-    }
-    jobs.watch_once(None).unwrap();
-    let shown = jobs.show(Some(&id))["job"].clone();
+    let shown = ended(&jobs, &id, Duration::from_secs(8));
     assert_eq!(shown["state"], "ended", "{shown}");
     assert_eq!(shown["signal"], "SIGKILL");
 }

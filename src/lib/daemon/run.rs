@@ -534,7 +534,8 @@ async fn run_at(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use nix::sys::signal::kill;
+    mod child;
+    use child::{Child, Processes};
     use tokio::sync::mpsc;
 
     #[test]
@@ -552,7 +553,7 @@ mod tests {
 
     #[tokio::test]
     async fn a_command_runs_at_home_in_a_utf8_locale() {
-        let (events, _) = execute(
+        let (events, _, _processes) = execute(
             &["/bin/sh", "-c", "pwd -P; echo \"$LANG\"; echo \"$PATH\""],
             5000,
         )
@@ -577,30 +578,34 @@ mod tests {
 
     /// Every event `receiver` gets until the run drops its sender, taken as
     /// they come so a long output never fills the channel.
-    fn gather(mut receiver: mpsc::Receiver<Value>) -> tokio::task::JoinHandle<Vec<Value>> {
-        tokio::spawn(async move {
-            let mut events = Vec::new();
-            while let Some(event) = receiver.recv().await {
-                events.push(event);
-            }
-            events
-        })
+    async fn gather(mut receiver: mpsc::Receiver<Value>) -> (Vec<Value>, Processes) {
+        let mut processes = Processes::default();
+        let mut events = Vec::new();
+        while let Some(event) = receiver.recv().await {
+            processes.started(&event);
+            events.push(event);
+        }
+        (events, processes)
     }
 
-    async fn execute(argv: &[&str], timeout_ms: u64) -> (Vec<Value>, Value) {
+    async fn execute(argv: &[&str], timeout_ms: u64) -> (Vec<Value>, Value, Processes) {
         let argv: Vec<String> = argv.iter().map(|a| (*a).to_owned()).collect();
         let (sender, receiver) = mpsc::channel(EVENTS);
         let collected = gather(receiver);
 
-        let reply = run(
+        let command = run(
             &argv,
             Duration::from_millis(timeout_ms),
             sender,
             std::future::pending::<Cancel>(),
-        )
-        .await;
+        );
 
-        (collected.await.unwrap(), reply)
+        let (reply, (events, processes)) = tokio::time::timeout(Duration::from_secs(30), async {
+            tokio::join!(command, collected)
+        })
+        .await
+        .unwrap();
+        (events, reply, processes)
     }
 
     fn output(events: &[Value]) -> String {
@@ -617,9 +622,47 @@ mod tests {
         signal_group(Pid::from_raw(group as i32), None)
     }
 
+    async fn time_out(child: &mut Child, mode: &str, capacity: usize) -> (Vec<Value>, Value) {
+        let argv = child.argv(mode);
+        let (sender, mut receiver) = mpsc::channel(capacity);
+        let command = run(
+            &argv,
+            Duration::from_secs(60),
+            sender,
+            std::future::pending::<Cancel>(),
+        );
+        tokio::pin!(command);
+        let ready = async {
+            child.message("ready").await;
+            child.permit("start");
+            if matches!(mode, "group" | "term") {
+                child.message("descendant").await;
+            } else if mode == "flood" {
+                child.message("output").await;
+            }
+        };
+        tokio::select! {
+            reply = &mut command => panic!("command ended before readiness: {reply}"),
+            () = ready => {}
+        }
+        // The real child is ready. Advance only the command's deadline, then
+        // resume real time before polling supervision and its kernel waits.
+        tokio::time::pause();
+        tokio::time::advance(Duration::from_secs(60)).await;
+        tokio::time::resume();
+        let reply = tokio::time::timeout(Duration::from_secs(20), command)
+            .await
+            .unwrap();
+        let mut events = Vec::new();
+        while let Some(event) = receiver.recv().await {
+            events.push(event);
+        }
+        (events, reply)
+    }
+
     #[tokio::test]
     async fn a_command_streams_merged_output_then_its_exit() {
-        let (events, reply) =
+        let (events, reply, _processes) =
             execute(&["/bin/sh", "-c", "echo out; echo err >&2; exit 3"], 5000).await;
         assert_eq!(events[0]["event"], "started");
         assert!(events[0]["pid"].as_u64().unwrap() > 1);
@@ -629,7 +672,7 @@ mod tests {
         assert_eq!(reply["signal"], Value::Null);
         assert_eq!(reply["timedOut"], false);
 
-        let (events, reply) = execute(&["echo", "on", "path"], 5000).await;
+        let (events, reply, _processes) = execute(&["echo", "on", "path"], 5000).await;
         assert_eq!(
             (output(&events).as_str(), &reply["exitCode"]),
             ("on path\n", &json!(0))
@@ -638,10 +681,9 @@ mod tests {
 
     #[tokio::test]
     async fn a_timeout_ends_the_whole_group_with_sigterm() {
-        let started = Instant::now();
-        let (events, reply) = execute(&["/bin/sh", "-c", "sleep 30 & sleep 30"], 300).await;
+        let mut child = Child::new();
+        let (events, reply) = time_out(&mut child, "term", EVENTS).await;
 
-        assert!(started.elapsed() < Duration::from_secs(5));
         assert_eq!(reply["timedOut"], true);
         // A shell that handles the signal first exits 143 instead of dying by it.
         assert!(reply["signal"] == "SIGTERM" || reply["exitCode"] == 143);
@@ -649,7 +691,7 @@ mod tests {
         let group = events[0]["pid"].as_i64().unwrap();
         assert!(!group_alive(group), "no member of the group survives");
 
-        let (_, reply) = execute(&["/bin/sh", "-c", "kill -TERM $$"], 5000).await;
+        let (_, reply, _processes) = execute(&["/bin/sh", "-c", "kill -TERM $$"], 5000).await;
         assert_eq!(
             (&reply["signal"], &reply["timedOut"]),
             (&json!("SIGTERM"), &json!(false))
@@ -659,8 +701,8 @@ mod tests {
     /// The leader dies on SIGTERM; a descendant that ignores it is killed too.
     #[tokio::test]
     async fn a_timeout_kills_descendants_that_ignore_sigterm() {
-        let (events, reply) =
-            execute(&["/bin/sh", "-c", "(trap '' TERM; sleep 30) & wait"], 300).await;
+        let mut child = Child::new();
+        let (events, reply) = time_out(&mut child, "group", EVENTS).await;
         assert_eq!(reply["timedOut"], true);
         let group = events[0]["pid"].as_i64().unwrap();
         assert!(
@@ -671,97 +713,148 @@ mod tests {
 
     #[tokio::test]
     async fn something_left_running_does_not_hold_the_reply() {
-        let started = Instant::now();
-        let (events, reply) = execute(&["/bin/sh", "-c", "sleep 5 & echo $!"], 5000).await;
-
-        assert!(
-            started.elapsed() < Duration::from_secs(2),
-            "returned after the shell exited"
+        let mut child = Child::new();
+        let argv = child.argv("pipe");
+        let (sender, mut receiver) = mpsc::channel(EVENTS);
+        let command = run(
+            &argv,
+            Duration::from_secs(60),
+            sender,
+            std::future::pending::<Cancel>(),
         );
+        let control = async {
+            child.message("ready").await;
+            child.permit("start");
+            let descendant = child.message("descendant").await;
+            child.permit("exit");
+            child.message("exiting").await;
+            descendant
+        };
+        let (reply, descendant) = tokio::time::timeout(Duration::from_secs(20), async {
+            tokio::join!(command, control)
+        })
+        .await
+        .unwrap();
         assert_eq!(reply["exitCode"], 0);
-
-        let child = Pid::from_raw(output(&events).trim().parse().unwrap());
-        assert!(
-            kill(child, None).is_ok(),
-            "a background process outlives the run"
+        assert_eq!(
+            reply["outputUnfinished"], true,
+            "the descendant still holds the output pipe"
         );
-
-        kill(child, Signal::SIGKILL).unwrap();
+        let info = crate::process::info(descendant.pid).unwrap().unwrap();
+        assert_eq!(info.instance, descendant);
+        assert!(!info.zombie, "a background process outlives the run");
+        let mut events = Vec::new();
+        while let Some(event) = receiver.recv().await {
+            events.push(event);
+        }
+        assert!(output(&events).is_empty());
+        child.permit_descendant("close");
+        child.message("closed").await;
+        assert!(
+            crate::process::info(descendant.pid)
+                .unwrap()
+                .is_some_and(|info| !info.zombie),
+            "closing the output pipe and exiting have separate permits"
+        );
+        child.permit_descendant("exit");
     }
 
     /// A client that stops reading cannot stall supervision or the timeout.
     #[tokio::test]
     async fn a_client_that_never_reads_cannot_stall_the_timeout() {
-        let (sender, _receiver) = mpsc::channel(1);
-        let argv = ["/bin/sh".to_owned(), "-c".to_owned(), "yes".to_owned()];
-        let started = Instant::now();
-        let reply = run(
-            &argv,
-            Duration::from_millis(300),
-            sender,
-            std::future::pending::<Cancel>(),
-        )
-        .await;
+        let mut child = Child::new();
+        let (_, reply) = time_out(&mut child, "flood", 1).await;
 
-        assert!(started.elapsed() < Duration::from_secs(5));
         assert_eq!(
             (&reply["timedOut"], &reply["outputTruncated"]),
             (&json!(true), &json!(true))
         );
+    }
 
+    #[tokio::test]
+    async fn a_departed_receiver_leaves_no_owned_group_running() {
+        let mut child = Child::new();
+        let argv = child.argv("flood");
         let (sender, receiver) = mpsc::channel(1);
-        drop(receiver);
-
-        let gone = run(
+        let command = run(
             &argv,
             Duration::from_secs(30),
             sender,
             std::future::pending::<Cancel>(),
-        )
-        .await;
+        );
+        let control = async {
+            let leader = child.message("ready").await;
+            drop(receiver);
+            child.permit("start");
+            leader
+        };
+        let (gone, leader) = tokio::time::timeout(Duration::from_secs(20), async {
+            tokio::join!(command, control)
+        })
+        .await
+        .unwrap();
 
         assert_eq!(
             gone["code"], "transport",
             "a departed client ends the command"
+        );
+        assert!(
+            !group_alive(i64::from(leader.pid)),
+            "the owned group ended before the reply"
         );
     }
 
     /// Cancelling ends a command that prints nothing, and its descendants.
     #[tokio::test]
     async fn cancelling_ends_a_quiet_command_and_its_group() {
+        let mut child = Child::new();
         let (sender, mut receiver) = mpsc::channel(EVENTS);
-        let argv = [
-            "/bin/sh".to_owned(),
-            "-c".to_owned(),
-            "(trap '' TERM; sleep 30) & sleep 30".to_owned(),
-        ];
-        let started = Instant::now();
+        let argv = child.argv("group");
         let cancel = async {
-            tokio::time::sleep(Duration::from_millis(300)).await;
+            child.message("ready").await;
+            child.permit("start");
+            child.message("descendant").await;
             Cancel::Left
         };
-        let reply = run(&argv, Duration::from_secs(60), sender, cancel).await;
+        let reply = tokio::time::timeout(
+            Duration::from_secs(20),
+            run(&argv, Duration::from_secs(60), sender, cancel),
+        )
+        .await
+        .unwrap();
 
-        assert!(started.elapsed() < Duration::from_secs(8));
         assert_eq!(reply["code"], "transport");
         assert_eq!(reply["uncertain"], true, "the command had started");
 
         let group = receiver.recv().await.unwrap()["pid"].as_i64().unwrap();
         assert!(!group_alive(group), "nothing the command started survives");
+        assert!(
+            receiver.try_recv().is_err(),
+            "fixture messages never enter output"
+        );
+        child.message("term").await;
+        child.message("term").await;
     }
 
     /// A daemon that stops mid-command says so, and that the outcome is
     /// unknown.
     #[tokio::test]
     async fn a_stopping_daemon_leaves_the_outcome_unknown() {
+        let mut child = Child::new();
         let (sender, _receiver) = mpsc::channel(EVENTS);
-        let argv = ["/bin/sleep".to_owned(), "30".to_owned()];
+        let argv = child.argv("quiet");
         let cancel = async {
-            tokio::time::sleep(Duration::from_millis(200)).await;
+            child.message("ready").await;
+            child.permit("start");
             Cancel::Stopping
         };
 
-        let reply = run(&argv, Duration::from_secs(60), sender, cancel).await;
+        let reply = tokio::time::timeout(
+            Duration::from_secs(20),
+            run(&argv, Duration::from_secs(60), sender, cancel),
+        )
+        .await
+        .unwrap();
         assert_eq!(
             reply,
             interrupted(Code::Restart, "The helper stopped while the command ran")
@@ -773,42 +866,66 @@ mod tests {
     /// output that cannot be delivered is reported as truncated.
     #[tokio::test]
     async fn the_last_output_reaches_a_slow_client_or_is_reported() {
-        let argv = [
-            "/bin/sh".to_owned(),
-            "-c".to_owned(),
-            "printf one; sleep 0.3; printf two".to_owned(),
-        ];
-        // One slot: `started` fills it until the client reads, 1 s later.
+        let mut child = Child::new();
+        let argv = child.argv("output");
+        // One slot: `started` fills it until the controller permits reads.
         let (sender, mut receiver) = mpsc::channel(1);
-        let slow = tokio::spawn(async move {
-            tokio::time::sleep(Duration::from_secs(1)).await;
+        let (permit, reads) = tokio::sync::oneshot::channel();
+        let slow = async move {
+            reads.await.unwrap();
             let mut events = Vec::new();
             while let Some(event) = receiver.recv().await {
                 events.push(event);
             }
             events
-        });
+        };
+        let control = async {
+            child.message("ready").await;
+            child.permit("start");
+            child.permit("output");
+            child.message("output").await;
+            child.permit("exit");
+            child.message("exiting").await;
+            permit.send(()).unwrap();
+        };
 
-        let reply = run(
+        let command = run(
             &argv,
-            Duration::from_secs(10),
+            Duration::from_secs(60),
             sender,
             std::future::pending::<Cancel>(),
-        )
-        .await;
+        );
+        let (reply, events, ()) = tokio::time::timeout(Duration::from_secs(20), async {
+            tokio::join!(command, slow, control)
+        })
+        .await
+        .unwrap();
 
-        let events = slow.await.unwrap();
         assert_eq!(output(&events), "onetwo");
         assert_eq!(reply.get("outputTruncated"), None);
 
+        let mut child = Child::new();
+        let argv = child.argv("output");
         let (sender, _never) = mpsc::channel(1);
-        let reply = run(
+        let command = run(
             &argv,
-            Duration::from_secs(20),
+            Duration::from_secs(60),
             sender,
             std::future::pending::<Cancel>(),
-        )
-        .await;
+        );
+        let control = async {
+            child.message("ready").await;
+            child.permit("start");
+            child.permit("output");
+            child.message("output").await;
+            child.permit("exit");
+            child.message("exiting").await;
+        };
+        let (reply, ()) = tokio::time::timeout(Duration::from_secs(20), async {
+            tokio::join!(command, control)
+        })
+        .await
+        .unwrap();
         assert_eq!(reply["outputTruncated"], true);
     }
 
@@ -816,7 +933,7 @@ mod tests {
     /// limit and arrives whole.
     #[tokio::test]
     async fn trickled_output_is_coalesced_into_few_events() {
-        let (events, reply) = execute(
+        let (events, reply, _processes) = execute(
             &[
                 "/bin/sh",
                 "-c",
@@ -833,14 +950,14 @@ mod tests {
 
     #[tokio::test]
     async fn missing_commands_and_huge_output_are_reported() {
-        let (events, reply) = execute(&["/nonexistent/binary"], 3000).await;
+        let (events, reply, _processes) = execute(&["/nonexistent/binary"], 3000).await;
         assert!(events.is_empty());
         assert_eq!(
             reply,
             failure(Code::SpawnFailed, "/nonexistent/binary: no such program")
         );
 
-        let (_, folder) = execute(&["/tmp"], 3000).await;
+        let (_, folder, _processes) = execute(&["/tmp"], 3000).await;
         assert_eq!(
             folder,
             failure(Code::SpawnFailed, "/tmp: is a folder, not a program")
@@ -848,7 +965,7 @@ mod tests {
 
         let plain = tempfile::NamedTempFile::new().unwrap();
         let plain_path = plain.path().to_string_lossy().into_owned();
-        let (_, not_executable) = execute(&[&plain_path], 3000).await;
+        let (_, not_executable, _processes) = execute(&[&plain_path], 3000).await;
         assert_eq!(
             not_executable,
             failure(
@@ -857,14 +974,14 @@ mod tests {
             )
         );
 
-        let (_, reply) = execute(&["no-such-command-atlas"], 3000).await;
+        let (_, reply, _processes) = execute(&["no-such-command-atlas"], 3000).await;
         assert_eq!(reply["code"], "spawn-failed");
 
-        let (events, reply) = execute(&[], 3000).await;
+        let (events, reply, _processes) = execute(&[], 3000).await;
         assert!(events.is_empty());
         assert_eq!(reply, failure(Code::SpawnFailed, "No command to run"));
 
-        let (events, reply) =
+        let (events, reply, _processes) =
             execute(&["/bin/sh", "-c", "head -c 17000000 /dev/zero"], 20000).await;
         assert_eq!(reply["outputTruncated"], true);
 
@@ -901,34 +1018,39 @@ mod tests {
                 let (sender, receiver) = mpsc::channel(EVENTS);
                 let collected = gather(receiver);
 
-                let reply = run_at(
+                let command = run_at(
                     &argv,
                     Some(home),
                     Duration::from_secs(5),
                     sender,
                     std::future::pending::<Cancel>(),
-                )
-                .await;
+                );
 
-                (collected.await.unwrap(), reply)
+                let (reply, (events, processes)) =
+                    tokio::time::timeout(Duration::from_secs(20), async {
+                        tokio::join!(command, collected)
+                    })
+                    .await
+                    .unwrap();
+                (events, reply, processes)
             }
         };
 
-        let (events, reply) = execute(&["./bin/build.sh", "now"]).await;
+        let (events, reply, _processes) = execute(&["./bin/build.sh", "now"]).await;
         assert_eq!(reply["exitCode"], 0, "{reply}");
         assert_eq!(output(&events), "built now\n");
 
-        let (events, reply) = execute(&["bin/build.sh"]).await;
+        let (events, reply, _processes) = execute(&["bin/build.sh"]).await;
         assert_eq!(reply["exitCode"], 0, "{reply}");
         assert_eq!(output(&events), "built \n");
 
-        let (_, folder) = execute(&["./bin"]).await;
+        let (_, folder, _processes) = execute(&["./bin"]).await;
         assert_eq!(
             folder,
             failure(Code::SpawnFailed, "./bin: is a folder, not a program")
         );
 
-        let (_, plain) = execute(&["./notes"]).await;
+        let (_, plain, _processes) = execute(&["./notes"]).await;
         assert_eq!(
             plain,
             failure(
@@ -937,7 +1059,7 @@ mod tests {
             )
         );
 
-        let (_, missing) = execute(&["./missing"]).await;
+        let (_, missing, _processes) = execute(&["./missing"]).await;
         assert_eq!(
             missing,
             failure(Code::SpawnFailed, "./missing: no such program")
@@ -948,14 +1070,21 @@ mod tests {
     /// unknown.
     #[tokio::test]
     async fn coming_on_screen_stops_the_command() {
+        let mut child = Child::new();
         let (sender, mut receiver) = mpsc::channel(EVENTS);
-        let argv = ["/bin/sleep".to_owned(), "30".to_owned()];
+        let argv = child.argv("quiet");
         let cancel = async {
-            tokio::time::sleep(Duration::from_millis(200)).await;
+            child.message("ready").await;
+            child.permit("start");
             Cancel::OnConsole
         };
 
-        let reply = run(&argv, Duration::from_secs(60), sender, cancel).await;
+        let reply = tokio::time::timeout(
+            Duration::from_secs(20),
+            run(&argv, Duration::from_secs(60), sender, cancel),
+        )
+        .await
+        .unwrap();
         assert_eq!(
             (&reply["code"], &reply["uncertain"]),
             (&json!("on-console"), &json!(true))
