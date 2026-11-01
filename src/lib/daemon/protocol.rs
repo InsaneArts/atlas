@@ -159,6 +159,10 @@ pub enum Request {
     Apps {
         pin: Option<SessionPin>,
     },
+    Windows {
+        dock: bool,
+        pin: Option<SessionPin>,
+    },
     Run {
         argv: Vec<String>,
         timeout: Duration,
@@ -206,6 +210,15 @@ pub fn parse(line: &[u8]) -> Result<Request, Value> {
             .map(Request::HostSession)
             .ok_or_else(|| bad("invalid host session claims")),
         "apps" => Ok(Request::Apps {
+            pin: pin(&request)?,
+        }),
+        "windows" => Ok(Request::Windows {
+            dock: match &request["dock"] {
+                Value::Null => false,
+                value => value
+                    .as_bool()
+                    .ok_or_else(|| bad("\"dock\" must be true or false"))?,
+            },
             pin: pin(&request)?,
         }),
         "restart" => Ok(Request::Restart),
@@ -579,7 +592,7 @@ mod tests {
         assert_eq!(timeout, Duration::from_secs(30));
     }
 
-    /// A run or an app listing may name the helper session it was verified
+    /// A run or a listing may name the helper session it was verified
     /// in; anything but its two numbers is refused.
     #[test]
     fn a_read_may_name_the_session_it_is_for() {
@@ -590,6 +603,12 @@ mod tests {
         assert_eq!(
             parse(br#"{"op":"apps","session":{"securitySessionId":42,"displayId":7}}"#),
             Ok(Request::Apps { pin })
+        );
+        assert_eq!(
+            parse(
+                br#"{"op":"windows","dock":true,"session":{"securitySessionId":42,"displayId":7}}"#
+            ),
+            Ok(Request::Windows { dock: true, pin })
         );
         let Ok(Request::Run { pin: run, .. }) = parse(
             br#"{"op":"run","argv":["true"],"session":{"securitySessionId":42,"displayId":7}}"#,
@@ -604,8 +623,28 @@ mod tests {
             r#"{"securitySessionId":42,"displayId":7,"uid":501}"#,
             r#"42"#,
         ] {
-            let line = format!(r#"{{"op":"apps","session":{session}}}"#);
-            assert_eq!(refused(&line)["code"], "bad-request", "{session}");
+            for op in ["apps", "windows"] {
+                let line = format!(r#"{{"op":"{op}","session":{session}}}"#);
+                assert_eq!(refused(&line)["code"], "bad-request", "{session}");
+            }
+        }
+    }
+
+    #[test]
+    fn a_window_read_asks_for_the_dock_only_when_needed() {
+        for dock in ["", ",\"dock\":null", ",\"dock\":false"] {
+            let line = format!(r#"{{"op":"windows"{dock}}}"#);
+            assert_eq!(
+                parse(line.as_bytes()),
+                Ok(Request::Windows {
+                    dock: false,
+                    pin: None
+                })
+            );
+        }
+        for dock in ["1", "\"yes\""] {
+            let line = format!(r#"{{"op":"windows","dock":{dock}}}"#);
+            assert_eq!(refused(&line)["error"], "\"dock\" must be true or false");
         }
     }
 

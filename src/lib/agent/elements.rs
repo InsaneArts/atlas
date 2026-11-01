@@ -158,7 +158,9 @@ pub async fn elements(
 ) -> Result<Value> {
     let verified = client.verify().await?;
     let pid = target_pid(client, &verified, target).await?;
-    let scanned = app_elements(client, &verified, pid).await?;
+    let scanned = client
+        .look(&verified, app_elements(client, &verified, pid))
+        .await?;
 
     Ok(listing(pid, &scanned, filter, max, full))
 }

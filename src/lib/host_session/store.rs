@@ -337,7 +337,7 @@ impl Store {
             let stale =
                 *empty && now.saturating_sub(record.last_seen) > idle && record.key != *keep;
             if stale {
-                self.folder.remove(&record.key);
+                self.remove(&record.key);
             }
             !stale
         });
@@ -352,7 +352,14 @@ impl Store {
                 break;
             };
             let (record, _) = records.remove(oldest);
-            self.folder.remove(&record.key);
+            self.remove(&record.key);
+        }
+    }
+
+    fn remove(&self, key: &Key) {
+        self.folder.remove(key);
+        if let Some(output) = self.folder.directory().parent() {
+            crate::last_capture::forget_windows(output, key);
         }
     }
 

@@ -492,18 +492,9 @@ impl Canary<'_> {
     /// The helper's on-screen windows, front to back, and where its Dock
     /// takes clicks.
     async fn windows(&self) -> Result<Shown> {
-        // Only reads: a failed listing leaves nothing pending.
-        let probe = self.client.config.identity_probe.to_string_lossy();
-        let reply = self
-            .client
-            .inspect_owned(
-                self.ownership,
-                vec![probe.into_owned(), "windows-info".into(), "--dock".into()],
-            )
-            .await?;
-
-        crate::native::windows::from_probe(&reply)
-            .ok_or_else(|| problem("The helper window list is unavailable"))
+        self.client
+            .windows_in(None, true, Duration::from_secs(5))
+            .await
     }
 
     /// The helper's display, with its Dock as `shown` says.

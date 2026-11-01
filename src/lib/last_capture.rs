@@ -1,8 +1,9 @@
 //! The latest screenshot of each target (the whole screen, an app's windows
 //! or a region, at one size), so a capture with the same pixels can point at
-//! that file instead of saving the same picture again.
+//! that file instead of saving the same picture again, and the latest
+//! pointer hit regions observed by each host session.
 //!
-//! The record (`last-captures.json`, beside the screenshots) only says where
+//! The record (`last-captures.json`, beside the screenshots) says where
 //! to look: an earlier file counts as the same picture only once its own
 //! bytes on disk hash to the new capture's. A lost, damaged or stale record
 //! can therefore only cost a new file, never claim a match that is not one.
@@ -11,9 +12,12 @@ use crate::{
     config::write_atomic,
     daemon::protocol::{Crop, Region},
     digest,
-    error::Result,
-    files::write_private,
+    error::{Code, Error, Result},
+    files::{Durability, write_private},
     helper_info::capture_time,
+    host_session::Key,
+    native::windows::HitWindow,
+    record_folder::{RecordFolder, Records},
     session::Epoch,
 };
 use fs2::FileExt;
@@ -26,12 +30,19 @@ use std::{
     io::Read,
     os::unix::fs::OpenOptionsExt,
     path::{Path, PathBuf},
-    time::Duration,
+    time::{Duration, Instant},
 };
 
 const RECORD: &str = "last-captures.json";
 const LOCK: &str = "last-captures.lock";
 const VERSION: u64 = 1;
+static WINDOWS: Records = Records {
+    folder: "last-windows",
+    noun: "window observation",
+    lock_wait: Duration::from_millis(250),
+    durability: Durability::Kernel,
+    bytes: RECORD_LIMIT,
+};
 /// How many targets the record remembers, newest first.
 const TARGETS: usize = 32;
 /// A record larger than this is not read.
@@ -50,8 +61,14 @@ pub(crate) struct Kept {
     pub written: bool,
 }
 
+#[derive(Deserialize, Serialize)]
+struct Captures<T> {
+    version: u64,
+    targets: T,
+}
+
 /// The last capture of one target.
-#[derive(Clone, Debug, Deserialize, Serialize)]
+#[derive(Debug, Deserialize, Serialize)]
 struct Entry {
     sha256: String,
     file: String,
@@ -62,6 +79,72 @@ struct Entry {
     region: Option<Region>,
     epoch: Value,
     at: String,
+}
+
+#[derive(Debug, Deserialize, Serialize)]
+pub(crate) struct Observation {
+    #[serde(deserialize_with = "Option::deserialize")]
+    pub windows: Option<Vec<HitWindow>>,
+    pub epoch: Value,
+}
+
+pub(crate) fn remember_windows(
+    output: &Path,
+    key: &Key,
+    windows: Option<&[HitWindow]>,
+    epoch: &Epoch,
+) -> Result<()> {
+    let folder = RecordFolder::at(output, &WINDOWS);
+    let mut observation = Observation {
+        windows: windows.map(<[_]>::to_vec),
+        epoch: recorded_epoch(epoch),
+    };
+    let mut bytes = serde_json::to_vec(&observation)?;
+    let oversized = bytes.len() as u64 > RECORD_LIMIT;
+    if oversized {
+        observation.windows = None;
+        bytes = serde_json::to_vec(&observation)?;
+    }
+    folder.make()?;
+    let _lock = folder.lock()?;
+    folder.write(key, &bytes)?;
+    if oversized {
+        return Err(Error::new(
+            Code::Io,
+            "Too many window regions to remember; look again",
+        ));
+    }
+    Ok(())
+}
+
+pub(crate) fn remembered_windows(output: &Path, key: &Key) -> Result<Option<Observation>> {
+    let folder = RecordFolder::at(output, &WINDOWS);
+    match fs::symlink_metadata(folder.directory()) {
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(error) => return Err(error.into()),
+        Ok(_) => {}
+    }
+    if !folder.exists() {
+        return Err(Error::new(
+            Code::Windows,
+            "Cannot read the window observations folder; look again",
+        ));
+    }
+    match fs::symlink_metadata(folder.path(key)) {
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(error) => return Err(error.into()),
+        Ok(_) => {}
+    }
+    folder.read_json(key).map(Some).ok_or_else(|| {
+        Error::new(
+            Code::Windows,
+            "Cannot read the last window observation; look again",
+        )
+    })
+}
+
+pub(crate) fn forget_windows(output: &Path, key: &Key) {
+    RecordFolder::at(output, &WINDOWS).remove(key);
 }
 
 /// What a capture shows and at what size: captures compare only with the
@@ -174,13 +257,19 @@ fn locked(output: &Path) -> Option<crate::files::LockFile> {
     if !lock.metadata().ok()?.is_file() {
         return None;
     }
-    FileExt::lock_exclusive(&lock).ok()?;
+    let deadline = Instant::now() + Duration::from_millis(50);
+    while let Err(error) = FileExt::try_lock_exclusive(&lock) {
+        if error.kind() != std::io::ErrorKind::WouldBlock || Instant::now() >= deadline {
+            return None;
+        }
+        std::thread::sleep(Duration::from_millis(5));
+    }
 
     Some(crate::files::LockFile(lock))
 }
 
 /// The display epoch a capture was taken in, as the record keeps it.
-fn recorded_epoch(epoch: &Epoch) -> Value {
+pub(crate) fn recorded_epoch(epoch: &Epoch) -> Value {
     json!({
         "uid": epoch.uid,
         "securitySessionId": epoch.security_session_id,
@@ -205,47 +294,39 @@ fn verified(output: &Path, file: &str, hash: &str) -> Option<PathBuf> {
     (metadata.is_file() && age < FRESH && digest::file_sha256(&path)? == hash).then_some(path)
 }
 
-/// The record's targets; a missing, oversized, unreadable or unknown record
-/// counts as empty, and an entry that cannot be read or does not name a
-/// screenshot file is left out.
+/// A missing, oversized, unreadable or unknown record counts as empty.
 fn read(output: &Path) -> BTreeMap<String, Entry> {
-    let Some(file) = crate::files::open_plain(&output.join(RECORD)) else {
-        return BTreeMap::new();
+    let read = || {
+        let mut bytes = Vec::new();
+        crate::files::open_plain(&output.join(RECORD))?
+            .take(RECORD_LIMIT + 1)
+            .read_to_end(&mut bytes)
+            .ok()?;
+        if bytes.len() as u64 > RECORD_LIMIT {
+            return None;
+        }
+        let record: Captures<BTreeMap<String, Entry>> = serde_json::from_slice(&bytes).ok()?;
+        (record.version == VERSION).then_some(record.targets)
     };
-    let mut bytes = Vec::new();
-    if file.take(RECORD_LIMIT + 1).read_to_end(&mut bytes).is_err()
-        || bytes.len() as u64 > RECORD_LIMIT
-    {
-        return BTreeMap::new();
-    }
-
-    let Ok(Value::Object(mut record)) = serde_json::from_slice::<Value>(&bytes) else {
-        return BTreeMap::new();
-    };
-    if record.get("version").and_then(Value::as_u64) != Some(VERSION) {
-        return BTreeMap::new();
-    }
-    let Some(Value::Object(targets)) = record.remove("targets") else {
-        return BTreeMap::new();
-    };
-
-    targets
-        .into_iter()
-        .filter_map(|(key, entry)| Some((key, serde_json::from_value::<Entry>(entry).ok()?)))
-        .filter(|(_, entry)| capture_time(&entry.file).is_some())
-        .collect()
+    read().unwrap_or_default()
 }
 
-/// Write the newest [`TARGETS`] targets as the record, in one rename.
+/// Write the newest targets within the record's count and byte limits.
 fn write(output: &Path, targets: BTreeMap<String, Entry>) -> Result<()> {
-    let mut entries: Vec<(String, Entry)> = targets.into_iter().collect();
-    entries.sort_by_key(|(_, entry)| std::cmp::Reverse(entry.at.parse::<u128>().unwrap_or(0)));
+    let mut entries: Vec<_> = targets.into_iter().collect();
+    entries.sort_by_key(|(_, entry)| std::cmp::Reverse(entry.at.parse::<u128>().ok().unwrap_or(0)));
     entries.truncate(TARGETS);
-
-    let targets: BTreeMap<String, Entry> = entries.into_iter().collect();
-    let record = json!({"version": VERSION, "targets": targets});
-
-    write_atomic(&output.join(RECORD), &serde_json::to_vec(&record)?, 0o600)
+    loop {
+        let targets: BTreeMap<_, _> = entries.iter().map(|(key, entry)| (key, entry)).collect();
+        let bytes = serde_json::to_vec(&Captures {
+            version: VERSION,
+            targets,
+        })?;
+        if bytes.len() as u64 <= RECORD_LIMIT {
+            return write_atomic(&output.join(RECORD), &bytes, 0o600);
+        }
+        entries.pop();
+    }
 }
 
 #[cfg(test)]
@@ -257,6 +338,27 @@ mod tests {
         session::Display,
     };
     use std::{sync::Arc, time::Instant};
+
+    fn window_key(name: &str) -> Key {
+        Key::of(crate::host_session::Host::Named, name)
+    }
+
+    fn window_record(output: &Path, name: &str) -> PathBuf {
+        RecordFolder::at(output, &WINDOWS).path(&window_key(name))
+    }
+
+    fn remember_windows(
+        output: &Path,
+        name: &str,
+        windows: &[HitWindow],
+        epoch: &Epoch,
+    ) -> Result<()> {
+        super::remember_windows(output, &window_key(name), Some(windows), epoch)
+    }
+
+    fn remembered_windows(output: &Path, name: &str) -> Option<Observation> {
+        super::remembered_windows(output, &window_key(name)).unwrap()
+    }
 
     fn epoch() -> Epoch {
         Epoch {
@@ -568,6 +670,135 @@ mod tests {
         let targets = kept["targets"].as_object().unwrap();
         assert_eq!(targets.len(), TARGETS);
         assert!((8..TARGETS + 8).all(|index| targets.contains_key(&format!("app:{index} full"))));
+    }
+
+    #[test]
+    fn capture_targets_are_read_as_entries_and_written_at_the_file_boundary() {
+        let dir = tempfile::tempdir().unwrap();
+        let kept = keep(dir.path(), "screen full", &screen(), None, false).unwrap();
+        let targets: BTreeMap<String, Entry> = read(dir.path());
+        assert_eq!(
+            targets["screen full"].file,
+            kept.path.file_name().unwrap().to_str().unwrap()
+        );
+        write(dir.path(), targets).unwrap();
+        assert_eq!(
+            read(dir.path())["screen full"].file,
+            record(dir.path())["targets"]["screen full"]["file"]
+        );
+    }
+
+    #[test]
+    fn window_memory_uses_kernel_durability_outside_the_screenshot_directory() {
+        assert!(WINDOWS.durability == Durability::Kernel);
+        let dir = tempfile::tempdir().unwrap();
+        remember_windows(dir.path(), "one", &[], &epoch()).unwrap();
+        let entries: Vec<_> = fs::read_dir(dir.path())
+            .unwrap()
+            .map(|entry| entry.unwrap().path())
+            .collect();
+        assert_eq!(entries.len(), 1);
+        assert!(entries[0].is_dir());
+        assert!(remembered_windows(dir.path(), "one").is_some());
+    }
+
+    #[test]
+    fn window_memory_replaces_an_existing_observation_while_the_capture_lock_is_busy() {
+        let dir = tempfile::tempdir().unwrap();
+        let window = HitWindow {
+            start: Some([123, 456]),
+            number: 42,
+            pid: 812,
+            layer: 0,
+            bounds: crate::native::windows::Bounds::display(1000.0, 800.0),
+        };
+        remember_windows(dir.path(), "one", &[window], &epoch()).unwrap();
+        let _lock = locked(dir.path()).unwrap();
+        remember_windows(dir.path(), "one", &[], &epoch()).unwrap();
+        assert!(
+            remembered_windows(dir.path(), "one")
+                .unwrap()
+                .windows
+                .unwrap()
+                .is_empty()
+        );
+    }
+
+    #[test]
+    fn window_memory_reports_denied_replacements_and_invalidation() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let dir = tempfile::tempdir().unwrap();
+        remember_windows(dir.path(), "one", &[], &epoch()).unwrap();
+        let path = window_record(dir.path(), "one");
+        fs::set_permissions(path.parent().unwrap(), fs::Permissions::from_mode(0o500)).unwrap();
+        let denied = remember_windows(dir.path(), "one", &[], &epoch());
+        fs::set_permissions(path.parent().unwrap(), fs::Permissions::from_mode(0o700)).unwrap();
+        assert!(denied.is_err());
+        assert!(path.is_file());
+
+        fs::remove_file(&path).unwrap();
+        fs::create_dir(&path).unwrap();
+        assert!(remember_windows(dir.path(), "one", &[], &epoch()).is_err());
+    }
+
+    #[test]
+    fn malformed_window_memory_is_refused() {
+        let dir = tempfile::tempdir().unwrap();
+        RecordFolder::<Key>::at(dir.path(), &WINDOWS)
+            .make()
+            .unwrap();
+        for entry in [
+            json!(false),
+            json!(1),
+            json!("bad"),
+            json!([]),
+            json!({}),
+            json!({"epoch": {}}),
+            json!({"windows": false, "epoch": {}}),
+        ] {
+            fs::write(window_record(dir.path(), "one"), entry.to_string()).unwrap();
+            assert!(super::remembered_windows(dir.path(), &window_key("one")).is_err());
+        }
+    }
+
+    #[test]
+    fn window_memory_is_separate_from_capture_retention() {
+        let dir = tempfile::tempdir().unwrap();
+        let kept = keep(dir.path(), "screen full", &screen(), None, false).unwrap();
+        for index in 0..TARGETS + 1 {
+            remember_windows(dir.path(), &index.to_string(), &[], &epoch()).unwrap();
+        }
+        assert!(remembered_windows(dir.path(), "0").is_some());
+        assert_eq!(
+            remembered_windows(dir.path(), &TARGETS.to_string())
+                .map(|observation| observation.windows),
+            Some(Some(vec![]))
+        );
+        keep(dir.path(), "screen full", &screen(), None, false).unwrap();
+        assert_eq!(
+            remembered_windows(dir.path(), &TARGETS.to_string())
+                .map(|observation| observation.windows),
+            Some(Some(vec![]))
+        );
+        assert_eq!(record(dir.path())["targets"].as_object().unwrap().len(), 1);
+        assert!(kept.path.exists());
+        let large = HitWindow {
+            start: Some([123, 456]),
+            number: 42,
+            pid: 812,
+            layer: 0,
+            bounds: crate::native::windows::Bounds::display(1000.0, 800.0),
+        };
+        remember_windows(dir.path(), "large", &[], &epoch()).unwrap();
+        assert!(remember_windows(dir.path(), "large", &vec![large; 1024], &epoch()).is_err());
+        assert!(
+            remembered_windows(dir.path(), "large")
+                .unwrap()
+                .windows
+                .is_none()
+        );
+        assert!(fs::metadata(dir.path().join(RECORD)).unwrap().len() <= RECORD_LIMIT);
     }
 
     #[test]

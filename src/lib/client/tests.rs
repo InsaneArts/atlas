@@ -18,6 +18,7 @@ use crate::{
     digest::file_sha256,
     error::Holder,
     interrupt::Interrupt,
+    native::windows::HitWindow,
     session::{Display, Epoch, FOCUS_APP, FOCUS_DOCK, FOCUS_FIELD, FOCUS_WINDOW, HOLD, SHUTDOWN},
     test_support::client_in,
 };
@@ -185,7 +186,7 @@ async fn the_expectation_is_sent_only_when_asked() {
 async fn named_typing_pins_the_resolved_instance_across_every_native_batch() {
     use crate::{
         agent::{Expected, Target, type_text},
-        test_support::{Helper, UID, completed},
+        test_support::{Helper, UID},
     };
 
     let pid = i64::from(i32::MAX);
@@ -209,13 +210,13 @@ async fn named_typing_pins_the_resolved_instance_across_every_native_batch() {
                 if request["op"] == "apps" {
                     Some(json!({"ok":true,"starts":{pid.to_string():start},"apps":[{"pid":pid,"name":"Editor","active":true}]}))
                 } else {
-                    assert_eq!(request["argv"][1], "windows-info");
+                    assert_eq!(request["op"], "windows");
                     let mut snapshot = json!({"ok":true,"starts":{pid.to_string():start},"windows":[{
                     "number":42,"pid":pid,"owner":"Editor","title":null,"layer":0,"alpha":1.0,
                     "bounds":{"x":0,"y":0,"width":100,"height":100}
                 }]});
                     if windowless { snapshot["windows"] = json!([]); }
-                    Some(completed(&snapshot.to_string()))
+                    Some(snapshot)
                 }
             },
         ));
@@ -280,10 +281,12 @@ async fn named_clicks_carry_the_helper_identity_even_when_the_controller_cannot_
                 if request["op"] == "apps" {
                     return Some(json!({"ok":true,"apps":[{"pid":pid,"name":"Editor"}],"starts":{pid.to_string():start}}));
                 }
-                let output = match request["argv"][1].as_str() {
-                    Some("windows-info") => json!({"ok":true,"starts":{pid.to_string():if request["argv"][2] == "--dock" { [124,456] } else { start }},"windows":[{
+                if request["op"] == "windows" {
+                    return Some(json!({"ok":true,"starts":{pid.to_string():if request["dock"] == true { [124,456] } else { start }},"windows":[{
                         "number":42,"pid":pid,"owner":"Editor","title":null,"layer":0,"alpha":1.0,
-                        "bounds":{"x":10,"y":20,"width":80,"height":60}}]}),
+                        "bounds":{"x":10,"y":20,"width":80,"height":60}}]}));
+                }
+                let output = match request["argv"][1].as_str() {
                     Some("elements-info") => json!({"ok":true,"truncated":false,"elements":[{
                         "index":0,"depth":0,"role":"AXButton","title":"Save","enabled":true,
                         "frame":{"x":20,"y":30,"width":20,"height":20},
@@ -3637,4 +3640,81 @@ async fn a_named_click_sends_its_window_and_keeps_a_native_dock_refusal() {
         assert_eq!(reply[field], refused[field]);
     }
     assert!(client.controller.pending().unwrap().is_empty());
+}
+
+#[tokio::test]
+async fn a_missing_window_endpoint_preserves_memory_without_starting_the_look() {
+    use crate::{
+        host_session::{Host, HostSession},
+        native::windows::Bounds,
+    };
+    use std::cell::Cell;
+
+    let directory = tempfile::tempdir().unwrap();
+    let mut client = crate::test_support::client(directory.path());
+    client.host_session = Some(HostSession::new(Host::Named, "one").unwrap());
+    let verified = Verified {
+        session: Session {
+            epoch: Epoch {
+                uid: client.config.helper_uid,
+                capture_pid: 123,
+                input_pid: 456,
+                security_session_id: 42,
+                display_id: 7,
+                display: Display {
+                    width: 100.0,
+                    height: 100.0,
+                    scale: 1.0,
+                },
+            },
+            capture: true,
+            input: true,
+        },
+        pinned: true,
+    };
+    client.remember_windows(
+        &[HitWindow {
+            number: 42,
+            pid: 812,
+            start: Some([123, 456]),
+            layer: 0,
+            bounds: Bounds::display(100.0, 100.0),
+        }],
+        &verified.session().epoch,
+    );
+    let looked = Cell::new(false);
+    let result = tokio::time::timeout(
+        Duration::from_secs(1),
+        client.look(&verified, async {
+            looked.set(true);
+            Ok(())
+        }),
+    )
+    .await
+    .expect("the missing endpoint is refused promptly");
+    assert!(result.is_err());
+    assert!(!looked.get());
+    assert_eq!(
+        client.remembered_windows().unwrap().windows.unwrap()[0].number,
+        42
+    );
+}
+
+impl Client {
+    pub(crate) fn remember_windows(&self, windows: &[HitWindow], epoch: &Epoch) {
+        if let Some(session) = &self.host_session
+            && let Ok(output) = self.output_dir()
+        {
+            crate::last_capture::remember_windows(output, session.key(), Some(windows), epoch)
+                .unwrap();
+        }
+    }
+
+    pub(crate) fn remembered_windows(&self) -> Option<crate::last_capture::Observation> {
+        crate::last_capture::remembered_windows(
+            &self.config.output_dir,
+            self.host_session.as_ref()?.key(),
+        )
+        .unwrap()
+    }
 }

@@ -251,7 +251,8 @@ impl Client {
             return Err(Error::new(Code::Input, "Maximum dimension must be 1–8192"));
         }
 
-        let before = self.identity().await?;
+        let verified = self.verify().await?;
+        let before = verified.session();
         if expected.is_some_and(|epoch| *epoch != before.epoch) {
             return Err(Error::new(
                 Code::SessionChanged,
@@ -278,55 +279,58 @@ impl Client {
             }
         }
 
-        let reply = self.transport.call(&request).await?;
-        if reply["ok"] != true {
-            if reply["code"].is_string() {
-                return Err(crate::transport::refusal(&reply));
+        self.look(&verified, async {
+            let reply = self.transport.call(&request).await?;
+            if reply["ok"] != true {
+                if reply["code"].is_string() {
+                    return Err(crate::transport::refusal(&reply));
+                }
+
+                return Err(Error::new(
+                    Code::Capture,
+                    reply["error"].as_str().unwrap_or("Capture failed"),
+                ));
+            }
+            let shows = cropped(&reply, crop, &before.epoch.display)?;
+
+            let at = Instant::now();
+            let encoded = reply["png"]
+                .as_str()
+                .ok_or_else(|| Error::new(Code::Capture, "Missing PNG"))?;
+            let png = STANDARD
+                .decode(encoded)
+                .map_err(|_| Error::new(Code::Capture, "Invalid PNG encoding"))?;
+            let (width, height) = png_dimensions(&png)?;
+            if reply["width"].as_u64() != Some(width.into())
+                || reply["height"].as_u64() != Some(height.into())
+            {
+                return Err(Error::new(
+                    Code::Capture,
+                    "PNG dimensions disagree with metadata",
+                ));
             }
 
-            return Err(Error::new(
-                Code::Capture,
-                reply["error"].as_str().unwrap_or("Capture failed"),
-            ));
-        }
-        let shows = cropped(&reply, crop, &before.epoch.display)?;
+            let after = self.identity().await?;
+            if before.epoch != after.epoch {
+                return Err(Error::new(
+                    Code::SessionChanged,
+                    "Session changed during capture; observe again",
+                ));
+            }
 
-        let at = Instant::now();
-        let encoded = reply["png"]
-            .as_str()
-            .ok_or_else(|| Error::new(Code::Capture, "Missing PNG"))?;
-        let png = STANDARD
-            .decode(encoded)
-            .map_err(|_| Error::new(Code::Capture, "Invalid PNG encoding"))?;
-        let (width, height) = png_dimensions(&png)?;
-        if reply["width"].as_u64() != Some(width.into())
-            || reply["height"].as_u64() != Some(height.into())
-        {
-            return Err(Error::new(
-                Code::Capture,
-                "PNG dimensions disagree with metadata",
-            ));
-        }
-
-        let after = self.identity().await?;
-        if before.epoch != after.epoch {
-            return Err(Error::new(
-                Code::SessionChanged,
-                "Session changed during capture; observe again",
-            ));
-        }
-
-        Ok((
-            Frame {
-                png: png.into(),
-                width,
-                height,
-                display: after.epoch.display.clone(),
-                epoch: after.epoch,
-                at,
-            },
-            shows,
-        ))
+            Ok((
+                Frame {
+                    png: png.into(),
+                    width,
+                    height,
+                    display: after.epoch.display.clone(),
+                    epoch: after.epoch,
+                    at,
+                },
+                shows,
+            ))
+        })
+        .await
     }
 
     /// Save a screenshot of the whole display, or of `crop`, and say where

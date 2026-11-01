@@ -60,8 +60,9 @@ then `atlas wait --app NAME`. Prefer
 element, or refuses and lists `candidates`. Otherwise use
 `atlas click --app A X Y`, `atlas type --app A "text"`,
 `atlas key --app A cmd+a` or `atlas scroll --app A X Y --dy -3` (and
-`drag`): nothing is sent while another app would get it. In an app another
-agent uses, add `--window N` from `atlas windows`; to click there, use
+`drag`): nothing is sent while another app would get it.
+Untargeted points use the top window from your last look.
+`--app` bypasses this memory; in a shared app, add `--window N`:
 `atlas click --app A --window N X Y`.
 
 `atlas run -- PROGRAM ARGS` runs a command as the helper; its result is

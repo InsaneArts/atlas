@@ -1,10 +1,11 @@
 //! The helper's on-screen windows: which ones a command is about, read
-//! through a read-only probe, listed, and waited for until one appears or
+//! through its daemon, listed, and waited for until one appears or
 //! none is left.
 use crate::{
-    client::{Client, Run, Verified},
+    client::{Client, Verified},
     error::{Code, Error, Result},
-    native::windows::{Shown, Window},
+    last_capture,
+    native::windows::{Bounds, Shown, Window, hit_windows, same_routing},
     ui::text::same_text,
 };
 use serde_json::{Value, json};
@@ -44,40 +45,28 @@ impl WindowFilter {
     }
 }
 
-/// The helper's on-screen windows, front to back, through a read-only probe.
-async fn windows(client: &Client) -> Result<Vec<Window>> {
-    window_list(client, PROBE_LIMIT).await
-}
-
-/// The window list alone, with the helper probe bounded by `limit`.
+/// The window list alone, with the daemon read bounded by `limit`.
 async fn window_list(client: &Client, limit: Duration) -> Result<Vec<Window>> {
-    let probe = windows_probe(client, DockRead::Skip);
-    let reply = client.run(probe, Run::inspect().within(limit)).await?;
-    Ok(shown(&reply)?.windows)
+    Ok(client.windows_in(None, false, limit).await?.windows)
 }
 
 /// The window list and where the Dock takes clicks, to judge a point by.
 pub(super) async fn pointer_view(client: &Client) -> Result<Shown> {
-    let probe = windows_probe(client, DockRead::Read);
-    let reply = client
-        .run(probe, Run::inspect().within(PROBE_LIMIT))
-        .await?;
-    shown(&reply)
+    client.windows_in(None, true, PROBE_LIMIT).await
 }
 
 /// The windows and process identities read together inside the helper.
-pub(super) async fn verified_window_snapshot(
+pub(super) async fn window_snapshot(
     client: &Client,
     verified: &Verified,
+    dock: DockRead,
 ) -> Result<Shown> {
-    let probe = windows_probe(client, DockRead::Skip);
-    let reply = client
-        .run(probe, Run::inspect().within(PROBE_LIMIT).pinned(verified))
-        .await?;
-    shown(&reply)
+    client
+        .windows_in(Some(verified), matches!(dock, DockRead::Read), PROBE_LIMIT)
+        .await
 }
 
-/// Whether a window probe also reads where the Dock takes clicks, which
+/// Whether a window read also reads where the Dock takes clicks, which
 /// only a check of a point needs.
 #[derive(Clone, Copy)]
 pub(super) enum DockRead {
@@ -85,24 +74,15 @@ pub(super) enum DockRead {
     Read,
 }
 
-/// The probe that lists the helper's windows.
-pub(super) fn windows_probe(client: &Client, dock: DockRead) -> Vec<String> {
-    let probe = client.config.identity_probe.to_string_lossy().into_owned();
-    let mut argv = vec![probe, "windows-info".into()];
-    if matches!(dock, DockRead::Read) {
-        argv.push("--dock".into());
-    }
-    argv
-}
-
-/// What the window probe's `reply` shows.
-fn shown(reply: &Value) -> Result<Shown> {
-    crate::native::windows::from_probe(reply)
-        .ok_or_else(|| Error::new(Code::Windows, "The helper window list is unavailable"))
-}
-
 pub async fn list(client: &Client, filter: &WindowFilter) -> Result<Value> {
-    let windows = windows(client).await?;
+    let windows = if client.host_session.is_some() {
+        let verified = client.verify().await?;
+        let snapshot = window_snapshot(client, &verified, DockRead::Read).await?;
+        client.remember_look(&verified, Some(&snapshot))?;
+        snapshot.windows
+    } else {
+        window_list(client, PROBE_LIMIT).await?
+    };
     let matching: Vec<_> = windows
         .into_iter()
         .filter(|window| filter.matches(window))
@@ -209,5 +189,40 @@ async fn no_window(client: &Client, filter: &WindowFilter) -> String {
              menu bar item"
         ),
         Some(_) => format!("{app} is running but shows no window"),
+    }
+}
+
+impl Client {
+    pub(crate) async fn look<T>(
+        &self,
+        verified: &Verified,
+        look: impl std::future::Future<Output = Result<T>>,
+    ) -> Result<T> {
+        if self.host_session.is_none() {
+            return look.await;
+        }
+        let before = window_snapshot(self, verified, DockRead::Read).await?;
+        let result = look.await?;
+        let after = window_snapshot(self, verified, DockRead::Skip).await?;
+        let unchanged = same_routing(&before.windows, &after.windows).then_some(&before);
+        self.remember_look(verified, unchanged)?;
+        Ok(result)
+    }
+
+    fn remember_look(&self, verified: &Verified, snapshot: Option<&Shown>) -> Result<()> {
+        let Some(session) = &self.host_session else {
+            return Ok(());
+        };
+        let epoch = &verified.session().epoch;
+        let display = &epoch.display;
+        let windows = snapshot.map(|snapshot| {
+            hit_windows(
+                &snapshot.windows,
+                &Bounds::display(display.width, display.height),
+                &snapshot.dock,
+                snapshot.starts.as_ref(),
+            )
+        });
+        last_capture::remember_windows(self.output_dir()?, session.key(), windows.as_deref(), epoch)
     }
 }
