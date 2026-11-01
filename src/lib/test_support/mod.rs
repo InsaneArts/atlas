@@ -4,7 +4,7 @@
 mod executor;
 mod helper;
 
-pub(crate) use executor::{interrupted_executor, pause_executor};
+pub(crate) use executor::{executor_ready, interrupted_executor, pause_executor};
 pub(crate) use helper::{Helper, completed, exited};
 
 use crate::{client::Client, config::Config, control::Controller};

@@ -37,6 +37,7 @@ unicode-segmentation = "1.12"
 unicode-width = "0.2"
 
 [dev-dependencies]
+nix = { version = "0.31", features = ["event", "socket"] }
 tempfile = "3"
 tokio = { version = "1", features = ["test-util"] }
 

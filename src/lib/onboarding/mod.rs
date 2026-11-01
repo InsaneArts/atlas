@@ -1716,16 +1716,10 @@ mod tests {
         let Some(directory) = crate::test_support::directory() else {
             return;
         };
-        fs::write(directory.join("executor"), std::process::id().to_string()).unwrap();
-        fs::write(directory.join("changed"), b"").unwrap();
-        fs::write(directory.join("paused"), b"").unwrap();
-
-        let continued = directory.join("continue");
-        let deadline = Instant::now() + Duration::from_secs(15);
-        while !continued.exists() && directory.is_dir() {
-            assert!(Instant::now() < deadline, "the worker was not released");
-            std::thread::sleep(Duration::from_millis(10));
-        }
+        crate::test_support::executor_ready(&directory, || {
+            fs::write(directory.join("changed"), b"").unwrap();
+        })
+        .unwrap();
     }
 
     #[test]
