@@ -32,8 +32,8 @@ pub(super) struct State {
 }
 
 impl State {
-    fn expire(&mut self) {
-        if self.expires.is_some_and(|at| at <= Instant::now()) {
+    fn expire_at(&mut self, now: Instant) {
+        if self.expires.is_some_and(|at| at <= now) {
             self.owner = None;
         }
     }
@@ -41,8 +41,8 @@ impl State {
     /// Refuse unless `owner` holds control. An action under way (`acting`)
     /// whose owner was cancelled is told so, once; anything else that finds
     /// control gone is told it was lost.
-    fn require(&mut self, owner: &str, acting: bool) -> Result<()> {
-        self.expire();
+    fn require_at(&mut self, owner: &str, acting: bool, now: Instant) -> Result<()> {
+        self.expire_at(now);
 
         if self.closed || self.owner.as_deref() != Some(owner) {
             let ended = self
@@ -81,16 +81,24 @@ impl Gate {
     }
 
     pub(super) fn active(&self) -> Result<bool> {
-        let mut state = self.lock()?;
-        state.expire();
+        let state = self.lock()?;
+        self.active_at(state, Instant::now())
+    }
+
+    fn active_at(&self, mut state: MutexGuard<'_, State>, now: Instant) -> Result<bool> {
+        state.expire_at(now);
         Ok(state.owner.is_some())
     }
 
     /// Who holds control now, if anyone: the person through a viewer, or
     /// an agent. Read under one lock, so the two never disagree.
     pub(super) fn holder(&self) -> Result<Option<Holder>> {
-        let mut state = self.lock()?;
-        state.expire();
+        let state = self.lock()?;
+        self.holder_at(state, Instant::now())
+    }
+
+    fn holder_at(&self, mut state: MutexGuard<'_, State>, now: Instant) -> Result<Option<Holder>> {
+        state.expire_at(now);
         Ok(match (state.owner.is_some(), state.person) {
             (false, _) => None,
             (true, true) => Some(Holder::Person),
@@ -99,8 +107,18 @@ impl Gate {
     }
 
     pub(super) fn acquire(self: &Arc<Self>, owner: &str, who: Who) -> Result<Grant> {
-        let mut state = self.lock()?;
-        state.expire();
+        let state = self.lock()?;
+        self.acquire_at(state, owner, who, Instant::now())
+    }
+
+    fn acquire_at(
+        self: &Arc<Self>,
+        mut state: MutexGuard<'_, State>,
+        owner: &str,
+        who: Who,
+        now: Instant,
+    ) -> Result<Grant> {
+        state.expire_at(now);
 
         if state.held && who == Who::Agent && !state.closed {
             return Err(Error::stopped());
@@ -132,7 +150,7 @@ impl Gate {
 
         state.owner = Some(owner.to_owned());
         state.previous = state.owner.clone();
-        state.expires = Some(Instant::now() + super::GRANT_TTL);
+        state.expires = Some(now + super::GRANT_TTL);
         state.person = who == Who::Person;
         state.cancelled = None;
 
@@ -145,7 +163,18 @@ impl Gate {
     /// The grant for an input request: the action under way, so it hears
     /// of a cancel or a stop that came since control was taken.
     pub(super) fn grant(self: &Arc<Self>, owner: &str) -> Result<Grant> {
-        self.lock()?.require(owner, true)?;
+        let state = self.lock()?;
+        self.grant_at(state, owner, Instant::now())
+    }
+
+    fn grant_at(
+        self: &Arc<Self>,
+        mut state: MutexGuard<'_, State>,
+        owner: &str,
+        now: Instant,
+    ) -> Result<Grant> {
+        state.require_at(owner, true, now)?;
+        drop(state);
         Ok(Grant {
             gate: self.clone(),
             owner: owner.to_owned(),
@@ -153,9 +182,13 @@ impl Gate {
     }
 
     pub(super) fn renew(&self, owner: &str) -> Result<()> {
-        let mut state = self.lock()?;
-        state.require(owner, false)?;
-        state.expires = Some(Instant::now() + super::GRANT_TTL);
+        let state = self.lock()?;
+        self.renew_at(state, owner, Instant::now())
+    }
+
+    fn renew_at(&self, mut state: MutexGuard<'_, State>, owner: &str, now: Instant) -> Result<()> {
+        state.require_at(owner, false, now)?;
+        state.expires = Some(now + super::GRANT_TTL);
         Ok(())
     }
 
@@ -226,8 +259,16 @@ pub(super) struct Grant {
 
 impl Grant {
     pub(super) fn authorize(&self) -> Result<MutexGuard<'_, State>> {
-        let mut state = self.gate.lock()?;
-        state.require(&self.owner, true)?;
+        let state = self.gate.lock()?;
+        self.authorize_at(state, Instant::now())
+    }
+
+    fn authorize_at<'a>(
+        &self,
+        mut state: MutexGuard<'a, State>,
+        now: Instant,
+    ) -> Result<MutexGuard<'a, State>> {
+        state.require_at(&self.owner, true, now)?;
         Ok(state)
     }
 }
@@ -250,15 +291,24 @@ mod tests {
 
     #[test]
     fn a_second_controller_is_busy() {
+        let now = Instant::now();
         let gate = gate();
-        assert_eq!(gate.holder().unwrap(), None);
-        let _grant = gate.acquire(&owner('a'), Who::Agent).unwrap();
+        assert_eq!(gate.holder_at(gate.lock().unwrap(), now).unwrap(), None);
+        let _grant = gate
+            .acquire_at(gate.lock().unwrap(), &owner('a'), Who::Agent, now)
+            .unwrap();
 
-        assert!(gate.active().unwrap());
-        assert_eq!(gate.holder().unwrap(), Some(Holder::Agent));
-        assert_eq!(code(gate.acquire(&owner('b'), Who::Agent)), "busy");
+        assert!(gate.active_at(gate.lock().unwrap(), now).unwrap());
         assert_eq!(
-            code(gate.acquire(&owner('a'), Who::Agent)),
+            gate.holder_at(gate.lock().unwrap(), now).unwrap(),
+            Some(Holder::Agent)
+        );
+        assert_eq!(
+            code(gate.acquire_at(gate.lock().unwrap(), &owner('b'), Who::Agent, now)),
+            "busy"
+        );
+        assert_eq!(
+            code(gate.acquire_at(gate.lock().unwrap(), &owner('a'), Who::Agent, now)),
             "busy",
             "even the owner"
         );
@@ -266,12 +316,18 @@ mod tests {
 
     #[test]
     fn an_agent_finding_the_person_in_control_is_told_to_wait_for_them() {
+        let now = Instant::now();
         let gate = gate();
-        let _person = gate.acquire(&owner('a'), Who::Person).unwrap();
+        let _person = gate
+            .acquire_at(gate.lock().unwrap(), &owner('a'), Who::Person, now)
+            .unwrap();
 
-        assert_eq!(gate.holder().unwrap(), Some(Holder::Person));
+        assert_eq!(
+            gate.holder_at(gate.lock().unwrap(), now).unwrap(),
+            Some(Holder::Person)
+        );
         let said = |who| {
-            gate.acquire(&owner('b'), who)
+            gate.acquire_at(gate.lock().unwrap(), &owner('b'), who, now)
                 .err()
                 .map(|error| (error.code, error.error))
         };
@@ -279,12 +335,18 @@ mod tests {
             said(Who::Agent),
             Some((Code::Busy, crate::error::PERSON_HAS_CONTROL.to_owned()))
         );
-        let holder = |gate: &Arc<Gate>, who| gate.acquire(&owner('b'), who).err()?.holder;
+        let holder = |gate: &Arc<Gate>, who| {
+            gate.acquire_at(gate.lock().unwrap(), &owner('b'), who, now)
+                .err()?
+                .holder
+        };
         assert_eq!(holder(&gate, Who::Agent), Some(Holder::Person));
         assert_eq!(holder(&gate, Who::Person), Some(Holder::Person));
 
         let other = self::gate();
-        let _agent = other.acquire(&owner('c'), Who::Agent).unwrap();
+        let _agent = other
+            .acquire_at(other.lock().unwrap(), &owner('c'), Who::Agent, now)
+            .unwrap();
         assert_eq!(
             holder(&other, Who::Agent),
             Some(Holder::Agent),
@@ -305,6 +367,7 @@ mod tests {
 
     #[test]
     fn owners_are_control_tokens() {
+        let now = Instant::now();
         let gate = gate();
         assert_eq!(owner('a').len(), crate::files::token().len());
 
@@ -314,78 +377,439 @@ mod tests {
             "a".repeat(49),
             "g".repeat(48),
         ] {
-            assert_eq!(code(gate.acquire(&bad, Who::Agent)), "input", "{bad:?}");
+            assert_eq!(
+                code(gate.acquire_at(gate.lock().unwrap(), &bad, Who::Agent, now)),
+                "input",
+                "{bad:?}"
+            );
         }
 
-        assert!(!gate.active().unwrap());
-        assert_eq!(code(gate.acquire(&crate::files::token(), Who::Agent)), "ok");
+        assert!(!gate.active_at(gate.lock().unwrap(), now).unwrap());
+        assert_eq!(
+            code(gate.acquire_at(
+                gate.lock().unwrap(),
+                &crate::files::token(),
+                Who::Agent,
+                now
+            )),
+            "ok"
+        );
     }
 
     #[test]
-    fn ownership_expires_unless_renewed() {
+    fn ownership_is_valid_before_expiry_and_lost_at_and_after_expiry() {
+        use std::time::Duration;
+
+        let start = Instant::now();
+        let expires = start + Duration::from_secs(6);
+        let acquired = || {
+            let gate = gate();
+            let grant = gate
+                .acquire_at(gate.lock().unwrap(), &owner('a'), Who::Agent, start)
+                .unwrap();
+            assert_eq!(gate.lock().unwrap().expires, Some(expires));
+            (gate, grant)
+        };
+
+        for (now, valid) in [
+            (expires - Duration::from_nanos(1), true),
+            (expires, false),
+            (expires + Duration::from_nanos(1), false),
+        ] {
+            let (gate, _) = acquired();
+            assert_eq!(gate.active_at(gate.lock().unwrap(), now).unwrap(), valid);
+
+            let (gate, _) = acquired();
+            assert_eq!(
+                gate.holder_at(gate.lock().unwrap(), now).unwrap(),
+                valid.then_some(Holder::Agent)
+            );
+
+            let expected = if valid { "ok" } else { "lease-lost" };
+            let (gate, _) = acquired();
+            assert_eq!(
+                code(gate.grant_at(gate.lock().unwrap(), &owner('a'), now)),
+                expected
+            );
+
+            let (_, grant) = acquired();
+            assert_eq!(
+                code(grant.authorize_at(grant.gate.lock().unwrap(), now)),
+                expected
+            );
+
+            let (gate, _) = acquired();
+            assert_eq!(
+                code(gate.renew_at(gate.lock().unwrap(), &owner('a'), now)),
+                expected
+            );
+            assert_eq!(
+                gate.lock().unwrap().expires,
+                Some(if valid {
+                    now + Duration::from_secs(6)
+                } else {
+                    expires
+                })
+            );
+
+            let (gate, _) = acquired();
+            assert_eq!(
+                code(gate.acquire_at(gate.lock().unwrap(), &owner('b'), Who::Agent, now)),
+                if valid { "busy" } else { "ok" }
+            );
+        }
+    }
+
+    #[test]
+    fn renewal_moves_only_the_current_owners_deadline() {
+        use std::time::Duration;
+
+        let start = Instant::now();
         let gate = gate();
-        let grant = gate.acquire(&owner('a'), Who::Agent).unwrap();
-
-        gate.renew(&owner('a')).unwrap();
-        assert_eq!(code(gate.renew(&owner('b'))), "lease-lost");
-
-        gate.lock().unwrap().expires = Some(Instant::now());
-        assert!(!gate.active().unwrap());
-        assert_eq!(code(gate.renew(&owner('a'))), "lease-lost");
-        assert_eq!(code(gate.grant(&owner('a'))), "lease-lost");
-        assert_eq!(code(grant.authorize()), "lease-lost");
+        let first = gate
+            .acquire_at(gate.lock().unwrap(), &owner('a'), Who::Agent, start)
+            .unwrap();
+        let renewed = start + Duration::from_secs(2);
+        gate.renew_at(gate.lock().unwrap(), &owner('a'), renewed)
+            .unwrap();
+        let deadline = renewed + Duration::from_secs(6);
+        assert_eq!(gate.lock().unwrap().expires, Some(deadline));
         assert_eq!(
-            code(gate.acquire(&owner('b'), Who::Agent)),
-            "ok",
-            "free again"
+            code(gate.renew_at(gate.lock().unwrap(), &owner('b'), renewed)),
+            "lease-lost"
         );
+        assert_eq!(gate.lock().unwrap().expires, Some(deadline));
+        drop(
+            first
+                .authorize_at(first.gate.lock().unwrap(), start + Duration::from_secs(6))
+                .unwrap(),
+        );
+        assert_eq!(
+            gate.lock().unwrap().expires,
+            Some(deadline),
+            "authorization does not renew"
+        );
+
+        gate.cancel(Some(&owner('a'))).unwrap();
+        let acquired = renewed + Duration::from_secs(5);
+        let _second = gate
+            .acquire_at(gate.lock().unwrap(), &owner('b'), Who::Agent, acquired)
+            .unwrap();
+        let deadline = acquired + Duration::from_secs(6);
+        assert_eq!(gate.lock().unwrap().expires, Some(deadline));
+        assert_eq!(
+            code(gate.renew_at(gate.lock().unwrap(), &owner('a'), acquired)),
+            "lease-lost"
+        );
+        assert_eq!(gate.lock().unwrap().expires, Some(deadline));
+        assert_eq!(
+            code(gate.renew_at(gate.lock().unwrap(), &owner('b'), deadline)),
+            "lease-lost"
+        );
+        assert_eq!(
+            gate.lock().unwrap().expires,
+            Some(deadline),
+            "a lost lease cannot renew"
+        );
+    }
+
+    #[test]
+    fn cancellation_is_reported_once_to_an_action_but_not_a_keepalive() {
+        let start = Instant::now();
+        let expires = start + super::super::GRANT_TTL;
+        for stopped in [false, true] {
+            let gate = gate();
+            let grant = gate
+                .acquire_at(gate.lock().unwrap(), &owner('a'), Who::Agent, start)
+                .unwrap();
+            if stopped {
+                gate.hold(true).unwrap();
+            } else {
+                gate.cancel(Some(&owner('a'))).unwrap();
+            }
+
+            assert_eq!(
+                code(gate.renew_at(gate.lock().unwrap(), &owner('a'), expires)),
+                "lease-lost"
+            );
+            assert_eq!(gate.lock().unwrap().expires, Some(expires));
+            assert_eq!(
+                code(gate.grant_at(gate.lock().unwrap(), &owner('b'), expires)),
+                "lease-lost"
+            );
+            assert_eq!(gate.lock().unwrap().cancelled, Some((owner('a'), stopped)));
+            assert_eq!(
+                code(grant.authorize_at(grant.gate.lock().unwrap(), expires)),
+                if stopped { "stopped" } else { "cancelled" }
+            );
+            assert_eq!(gate.lock().unwrap().cancelled, None);
+            assert_eq!(
+                code(grant.authorize_at(grant.gate.lock().unwrap(), expires)),
+                "lease-lost"
+            );
+            assert_eq!(
+                code(gate.grant_at(gate.lock().unwrap(), &owner('a'), expires)),
+                "lease-lost"
+            );
+            assert_eq!(gate.lock().unwrap().expires, Some(expires));
+        }
+    }
+
+    #[test]
+    fn observing_expiry_before_cancel_or_stop_leaves_no_cancellation_reason() {
+        let start = Instant::now();
+        let expires = start + super::super::GRANT_TTL;
+        for expired in [false, true] {
+            for stopped in [false, true] {
+                let gate = gate();
+                let grant = gate
+                    .acquire_at(gate.lock().unwrap(), &owner('a'), Who::Agent, start)
+                    .unwrap();
+                if expired {
+                    assert!(!gate.active_at(gate.lock().unwrap(), expires).unwrap());
+                }
+                if stopped {
+                    gate.hold(true).unwrap();
+                } else {
+                    gate.cancel(Some(&owner('a'))).unwrap();
+                }
+                assert_eq!(gate.lock().unwrap().expires, Some(expires));
+                assert_eq!(
+                    gate.lock().unwrap().previous.as_deref(),
+                    Some(owner('a').as_str())
+                );
+                assert_eq!(
+                    code(grant.authorize_at(grant.gate.lock().unwrap(), expires)),
+                    if expired {
+                        "lease-lost"
+                    } else if stopped {
+                        "stopped"
+                    } else {
+                        "cancelled"
+                    }
+                );
+                assert_eq!(
+                    code(grant.authorize_at(grant.gate.lock().unwrap(), expires)),
+                    "lease-lost"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn revocation_closure_and_a_new_owner_suppress_an_old_cancellation() {
+        let now = Instant::now();
+        for ending in ["revoke", "close", "acquire"] {
+            let gate = gate();
+            let grant = gate
+                .acquire_at(gate.lock().unwrap(), &owner('a'), Who::Agent, now)
+                .unwrap();
+            gate.cancel(None).unwrap();
+            match ending {
+                "revoke" => gate.revoke().unwrap(),
+                "close" => gate.close().unwrap(),
+                "acquire" => {
+                    gate.acquire_at(gate.lock().unwrap(), &owner('b'), Who::Agent, now)
+                        .unwrap();
+                    assert_eq!(code(gate.cancel(Some(&owner('a')))), "lease-lost");
+                }
+                _ => unreachable!(),
+            }
+            assert_eq!(
+                code(grant.authorize_at(grant.gate.lock().unwrap(), now)),
+                "lease-lost"
+            );
+            assert_eq!(
+                code(gate.grant_at(gate.lock().unwrap(), &owner('a'), now)),
+                "lease-lost"
+            );
+            assert_eq!(
+                gate.active_at(gate.lock().unwrap(), now).unwrap(),
+                ending == "acquire"
+            );
+            assert_eq!(
+                gate.lock().unwrap().cancelled,
+                (ending == "close").then(|| (owner('a'), false))
+            );
+        }
+    }
+
+    #[test]
+    fn an_expired_owner_cannot_release_its_successor() {
+        let start = Instant::now();
+        let expires = start + super::super::GRANT_TTL;
+        let gate = gate();
+        let first = gate
+            .acquire_at(gate.lock().unwrap(), &owner('a'), Who::Agent, start)
+            .unwrap();
+        let second = gate
+            .acquire_at(gate.lock().unwrap(), &owner('b'), Who::Agent, expires)
+            .unwrap();
+        assert_eq!(code(gate.cancel(Some(&owner('a')))), "lease-lost");
+        assert_eq!(
+            code(first.authorize_at(first.gate.lock().unwrap(), expires)),
+            "lease-lost"
+        );
+        drop(
+            second
+                .authorize_at(second.gate.lock().unwrap(), expires)
+                .unwrap(),
+        );
+        assert_eq!(
+            gate.lock().unwrap().expires,
+            Some(expires + super::super::GRANT_TTL)
+        );
+        gate.cancel(Some(&owner('b'))).unwrap();
+        gate.cancel(Some(&owner('b'))).unwrap();
+        assert_eq!(
+            code(second.authorize_at(second.gate.lock().unwrap(), expires)),
+            "cancelled"
+        );
+        assert_eq!(
+            code(second.authorize_at(second.gate.lock().unwrap(), expires)),
+            "lease-lost"
+        );
+    }
+
+    #[test]
+    fn a_persons_lease_can_expire_while_agents_remain_stopped() {
+        use std::time::Duration;
+
+        let start = Instant::now();
+        let expires = start + super::super::GRANT_TTL;
+        let gate = gate();
+        gate.hold(true).unwrap();
+        let person = gate
+            .acquire_at(gate.lock().unwrap(), &owner('a'), Who::Person, start)
+            .unwrap();
+        gate.hold(true).unwrap();
+        drop(
+            person
+                .authorize_at(
+                    person.gate.lock().unwrap(),
+                    expires - Duration::from_nanos(1),
+                )
+                .unwrap(),
+        );
+        assert_eq!(
+            code(person.authorize_at(person.gate.lock().unwrap(), expires)),
+            "lease-lost"
+        );
+        assert_eq!(gate.holder_at(gate.lock().unwrap(), expires).unwrap(), None);
+        gate.revoke().unwrap();
+        assert!(gate.held().unwrap());
+        assert_eq!(
+            code(gate.acquire_at(gate.lock().unwrap(), &owner('b'), Who::Agent, expires)),
+            "stopped"
+        );
+        gate.close().unwrap();
+        let error = gate
+            .acquire_at(gate.lock().unwrap(), "invalid", Who::Agent, expires)
+            .err()
+            .unwrap();
+        assert_eq!(error.code, Code::Busy);
+        assert_eq!(error.holder, None);
+        assert_eq!(
+            code(gate.acquire_at(gate.lock().unwrap(), &owner('b'), Who::Person, expires)),
+            "busy"
+        );
+    }
+
+    #[test]
+    fn a_poisoned_gate_refuses_every_operation() {
+        let now = Instant::now();
+        let gate = gate();
+        let grant = gate
+            .acquire_at(gate.lock().unwrap(), &owner('a'), Who::Agent, now)
+            .unwrap();
+        assert!(
+            std::panic::catch_unwind(|| {
+                let _state = gate.lock().unwrap();
+                panic!("poison ownership");
+            })
+            .is_err()
+        );
+
+        for error in [
+            gate.active().err().unwrap(),
+            gate.holder().err().unwrap(),
+            gate.acquire(&owner('b'), Who::Agent).err().unwrap(),
+            gate.grant(&owner('a')).err().unwrap(),
+            gate.renew(&owner('a')).err().unwrap(),
+            grant.authorize().err().unwrap(),
+            gate.cancel(None).err().unwrap(),
+            gate.hold(true).err().unwrap(),
+            gate.held().err().unwrap(),
+            gate.revoke().err().unwrap(),
+            gate.close().err().unwrap(),
+        ] {
+            assert_eq!(error.code, Code::Native);
+            assert_eq!(error.error, "Input ownership failed");
+        }
     }
 
     #[test]
     fn a_stale_token_cannot_end_a_newer_controller() {
+        let now = Instant::now();
         let gate = gate();
-        let _first = gate.acquire(&owner('a'), Who::Agent).unwrap();
+        let _first = gate
+            .acquire_at(gate.lock().unwrap(), &owner('a'), Who::Agent, now)
+            .unwrap();
 
         gate.cancel(Some(&owner('a'))).unwrap();
-        let _second = gate.acquire(&owner('b'), Who::Agent).unwrap();
+        let _second = gate
+            .acquire_at(gate.lock().unwrap(), &owner('b'), Who::Agent, now)
+            .unwrap();
         assert_eq!(code(gate.cancel(Some(&owner('a')))), "lease-lost");
-        assert!(gate.active().unwrap());
+        assert!(gate.active_at(gate.lock().unwrap(), now).unwrap());
 
-        gate.grant(&owner('b')).unwrap();
+        gate.grant_at(gate.lock().unwrap(), &owner('b'), now)
+            .unwrap();
         gate.cancel(Some(&owner('b'))).unwrap();
-        assert!(!gate.active().unwrap());
+        assert!(!gate.active_at(gate.lock().unwrap(), now).unwrap());
     }
 
     #[test]
     fn nothing_is_granted_after_a_cancel() {
+        let now = Instant::now();
         let gate = gate();
-        let _acquired = gate.acquire(&owner('a'), Who::Agent).unwrap();
-        let grant = gate.grant(&owner('a')).unwrap();
-        drop(grant.authorize().unwrap());
+        let _acquired = gate
+            .acquire_at(gate.lock().unwrap(), &owner('a'), Who::Agent, now)
+            .unwrap();
+        let grant = gate
+            .grant_at(gate.lock().unwrap(), &owner('a'), now)
+            .unwrap();
+        drop(grant.authorize_at(grant.gate.lock().unwrap(), now).unwrap());
         gate.cancel(None).unwrap();
 
         assert_eq!(
-            code(gate.renew(&owner('a'))),
+            code(gate.renew_at(gate.lock().unwrap(), &owner('a'), now)),
             "lease-lost",
             "a keep-alive is not told"
         );
         assert_eq!(
-            code(gate.grant(&owner('b'))),
+            code(gate.grant_at(gate.lock().unwrap(), &owner('b'), now)),
             "lease-lost",
             "nor a stranger"
         );
         assert_eq!(
-            code(grant.authorize()),
+            code(grant.authorize_at(grant.gate.lock().unwrap(), now)),
             "cancelled",
             "the action under way is"
         );
-        assert_eq!(code(grant.authorize()), "lease-lost", "once");
+        assert_eq!(
+            code(grant.authorize_at(grant.gate.lock().unwrap(), now)),
+            "lease-lost",
+            "once"
+        );
 
-        let _again = gate.acquire(&owner('a'), Who::Agent).unwrap();
+        let _again = gate
+            .acquire_at(gate.lock().unwrap(), &owner('a'), Who::Agent, now)
+            .unwrap();
         gate.revoke().unwrap();
 
         assert_eq!(
-            code(gate.grant(&owner('a'))),
+            code(gate.grant_at(gate.lock().unwrap(), &owner('a'), now)),
             "lease-lost",
             "nobody stopped it"
         );
@@ -393,44 +817,74 @@ mod tests {
 
     #[test]
     fn a_stop_cancels_an_agents_action_and_refuses_agents_until_resumed() {
+        let now = Instant::now();
         let gate = gate();
-        let _acquired = gate.acquire(&owner('a'), Who::Agent).unwrap();
-        let grant = gate.grant(&owner('a')).unwrap();
+        let _acquired = gate
+            .acquire_at(gate.lock().unwrap(), &owner('a'), Who::Agent, now)
+            .unwrap();
+        let grant = gate
+            .grant_at(gate.lock().unwrap(), &owner('a'), now)
+            .unwrap();
 
         gate.hold(true).unwrap();
         assert!(gate.held().unwrap());
-        assert!(!gate.active().unwrap());
+        assert!(!gate.active_at(gate.lock().unwrap(), now).unwrap());
         assert_eq!(
-            code(grant.authorize()),
+            code(grant.authorize_at(grant.gate.lock().unwrap(), now)),
             "stopped",
             "what it was doing stops"
         );
-        assert_eq!(code(gate.acquire(&owner('b'), Who::Agent)), "stopped");
+        assert_eq!(
+            code(gate.acquire_at(gate.lock().unwrap(), &owner('b'), Who::Agent, now)),
+            "stopped"
+        );
 
-        let person = gate.acquire(&owner('c'), Who::Person).unwrap();
+        let person = gate
+            .acquire_at(gate.lock().unwrap(), &owner('c'), Who::Person, now)
+            .unwrap();
         gate.hold(true).unwrap();
-        assert_eq!(code(person.authorize()), "ok", "the person keeps control");
+        assert_eq!(
+            code(person.authorize_at(person.gate.lock().unwrap(), now)),
+            "ok",
+            "the person keeps control"
+        );
         gate.cancel(Some(&owner('c'))).unwrap();
 
         gate.hold(false).unwrap();
         assert!(!gate.held().unwrap());
-        assert_eq!(code(gate.acquire(&owner('b'), Who::Agent)), "ok");
+        assert_eq!(
+            code(gate.acquire_at(gate.lock().unwrap(), &owner('b'), Who::Agent, now)),
+            "ok"
+        );
     }
 
     #[test]
     fn an_input_asked_for_after_a_stop_hears_why_control_ended() {
+        let now = Instant::now();
         let gate = gate();
-        let _acquired = gate.acquire(&owner('a'), Who::Agent).unwrap();
+        let _acquired = gate
+            .acquire_at(gate.lock().unwrap(), &owner('a'), Who::Agent, now)
+            .unwrap();
         gate.hold(true).unwrap();
-        assert_eq!(code(gate.grant(&owner('a'))), "stopped", "not merely lost");
-        assert_eq!(code(gate.grant(&owner('a'))), "lease-lost", "told once");
+        assert_eq!(
+            code(gate.grant_at(gate.lock().unwrap(), &owner('a'), now)),
+            "stopped",
+            "not merely lost"
+        );
+        assert_eq!(
+            code(gate.grant_at(gate.lock().unwrap(), &owner('a'), now)),
+            "lease-lost",
+            "told once"
+        );
 
         gate.hold(false).unwrap();
-        let _again = gate.acquire(&owner('b'), Who::Agent).unwrap();
+        let _again = gate
+            .acquire_at(gate.lock().unwrap(), &owner('b'), Who::Agent, now)
+            .unwrap();
         gate.cancel(None).unwrap();
         gate.hold(true).unwrap();
         assert_eq!(
-            code(gate.grant(&owner('b'))),
+            code(gate.grant_at(gate.lock().unwrap(), &owner('b'), now)),
             "cancelled",
             "the cause is what ended it, not what holds now"
         );
@@ -438,17 +892,26 @@ mod tests {
 
     #[test]
     fn a_closed_gate_stays_closed() {
+        let now = Instant::now();
         let gate = gate();
-        let grant = gate.acquire(&owner('a'), Who::Agent).unwrap();
+        let grant = gate
+            .acquire_at(gate.lock().unwrap(), &owner('a'), Who::Agent, now)
+            .unwrap();
 
         gate.close().unwrap();
-        assert!(!gate.active().unwrap());
-        assert_eq!(code(grant.authorize()), "lease-lost");
-        assert_eq!(code(gate.acquire(&owner('b'), Who::Agent)), "busy");
+        assert!(!gate.active_at(gate.lock().unwrap(), now).unwrap());
+        assert_eq!(
+            code(grant.authorize_at(grant.gate.lock().unwrap(), now)),
+            "lease-lost"
+        );
+        assert_eq!(
+            code(gate.acquire_at(gate.lock().unwrap(), &owner('b'), Who::Agent, now)),
+            "busy"
+        );
 
         gate.cancel(None).unwrap();
         assert_eq!(
-            code(gate.acquire(&owner('b'), Who::Agent)),
+            code(gate.acquire_at(gate.lock().unwrap(), &owner('b'), Who::Agent, now)),
             "busy",
             "for good"
         );
