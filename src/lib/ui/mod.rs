@@ -62,7 +62,7 @@ pub fn interactive() -> bool {
 }
 
 /// What to try next once Atlas is set up, one command per line.
-pub(crate) fn suggestions() -> Vec<String> {
+pub fn suggestions() -> Vec<String> {
     let commands = [
         ("atlas screenshot", "see the helper's screen"),
         ("atlas menubar", "watch it, or take control"),

@@ -7,24 +7,24 @@ use indicatif::{ProgressBar, ProgressStyle};
 use std::{io::IsTerminal, time::Duration};
 
 /// A line for the person, on standard error; nothing for programs.
-pub(crate) fn say(text: &str) {
+pub fn say(text: &str) {
     if human() {
         eprintln!("{text}");
     }
 }
 
 /// A heading that starts a part of a longer flow.
-pub(crate) fn heading(text: &str) {
+pub fn heading(text: &str) {
     say(&format!("\n{}", style::bold(text)));
 }
 
 /// A finished step: `✓ label  detail`.
-pub(crate) fn done(label: &str, detail: &str) {
+pub fn done(label: &str, detail: &str) {
     say(&step(&style::ok(), label, detail));
 }
 
 /// A step left out, and why.
-pub(crate) fn skipped(label: &str, detail: &str) {
+pub fn skipped(label: &str, detail: &str) {
     say(&step(&style::unknown(), label, detail));
 }
 

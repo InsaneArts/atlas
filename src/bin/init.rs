@@ -149,11 +149,11 @@ fn finish(done_steps: &mut Vec<Value>, settings: &Path) -> Result<()> {
             ),
         );
     } else if first {
-        let status = atlas::menubar::set_login(atlas::menubar::Login::Status).unwrap_or_default();
+        let status = atlas::menubar::login("status").unwrap_or_default();
         if status["enabled"] == true {
             atlas::menubar::decide_login();
         } else if status["available"] == true {
-            match atlas::menubar::set_login(atlas::menubar::Login::On) {
+            match atlas::menubar::login("on") {
                 Ok(login) if login["enabled"] == true => {
                     atlas::menubar::decide_login();
                     done(

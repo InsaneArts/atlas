@@ -631,12 +631,12 @@ fn login_record() -> Option<PathBuf> {
 }
 
 /// Whether opening the menu bar at login was decided (by init or the person).
-pub(crate) fn login_decided() -> bool {
+pub fn login_decided() -> bool {
     login_record().is_some_and(|path| path.exists())
 }
 
 /// Remember that opening at login was decided.
-pub(crate) fn decide_login() {
+pub fn decide_login() {
     if let Some(path) = login_record() {
         if let Some(parent) = path.parent() {
             let _ = fs::create_dir_all(parent);

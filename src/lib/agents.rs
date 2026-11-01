@@ -77,12 +77,12 @@ impl Agent {
     }
 
     /// The name a person knows it by.
-    pub(crate) fn display_name(self) -> &'static str {
+    pub fn display_name(self) -> &'static str {
         self.metadata().display
     }
 
     /// The agent `name` (as in `status`), if it is one.
-    pub(crate) fn named(name: &str) -> Option<Self> {
+    pub fn named(name: &str) -> Option<Self> {
         Self::ALL.into_iter().find(|agent| agent.name() == name)
     }
 

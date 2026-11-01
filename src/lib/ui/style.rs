@@ -33,7 +33,7 @@ pub(crate) fn warn() -> String {
 }
 
 /// The mark for a yes/no/unknown fact.
-pub(crate) fn mark(fact: Option<bool>) -> String {
+pub fn mark(fact: Option<bool>) -> String {
     match fact {
         Some(true) => ok(),
         Some(false) => fail(),
@@ -50,6 +50,6 @@ pub fn dim(text: impl Display) -> String {
     style(text).dim().to_string()
 }
 
-pub(crate) fn bold(text: impl Display) -> String {
+pub fn bold(text: impl Display) -> String {
     style(text).bold().to_string()
 }

@@ -18,7 +18,7 @@ pub(crate) const SETTINGS: &str = ".config/atlas.toml";
 
 /// Where `atlas init` keeps the configuration: `~/.config/atlas.toml`.
 /// Screenshots, logs and records stay in `~/Library/Application Support/Atlas`.
-pub(crate) fn installed_path() -> Result<PathBuf> {
+pub fn installed_path() -> Result<PathBuf> {
     Ok(home()?.join(SETTINGS))
 }
 

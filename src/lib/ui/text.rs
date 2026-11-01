@@ -61,7 +61,7 @@ pub(crate) fn clip(text: &str, width: usize) -> String {
 }
 
 /// A path with the home directory written as `~`.
-pub(crate) fn tilde(path: impl AsRef<Path>) -> String {
+pub fn tilde(path: impl AsRef<Path>) -> String {
     let path = path.as_ref();
     match std::env::var_os("HOME").map(std::path::PathBuf::from) {
         Some(home) if !home.as_os_str().is_empty() => match path.strip_prefix(&home) {
