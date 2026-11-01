@@ -242,13 +242,26 @@ async fn a_job_that_ignores_term_is_killed_after_its_grace() {
     let mut child = Child::new();
     let job = ready(&jobs, &mut child, "ignore").await;
     let id = id_of(&job);
-    let reply = jobs.stop(&id, &expected_of(&job), Duration::from_secs(1));
+    // Supervise before expiry, then explicitly expire this owned record's
+    // grace. Wall-clock scheduling must not decide which phase is checked.
+    let reply = jobs.stop(&id, &expected_of(&job), Duration::MAX);
     assert_eq!(reply["signalled"], "SIGTERM", "{reply}");
-    assert_eq!(child.message("term").await.pid, pid_of(&job));
-    assert_eq!(show_job(&jobs, &id)["state"], "stopping");
-    let leader = process::info(pid_of(&job)).unwrap().unwrap();
-    assert_eq!(leader.instance.start, expected_of(&job).start);
-    assert!(!leader.zombie);
+    let leader = child.message("term").await;
+    let expected = expected_of(&job);
+    assert_eq!(leader, process::Instance::new(expected.pid, expected.start));
+    jobs.watch_once(None).unwrap();
+    let shown = show_job(&jobs, &id);
+    assert_eq!(shown["state"], "stopping");
+    assert_eq!(shown["signal"], "SIGTERM");
+    let info = process::info(leader.pid).unwrap().unwrap();
+    assert_eq!(info.instance, leader);
+    assert!(!info.zombie);
+
+    let path = jobs.folder().unwrap().join(format!("{id}.json"));
+    let mut record: Value = serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+    assert_eq!(record["stopping"]["graceMs"], u64::MAX);
+    record["stopping"]["graceMs"] = serde_json::json!(0);
+    std::fs::write(path, serde_json::to_vec(&record).unwrap()).unwrap();
 
     let shown = ended(&jobs, &id, Duration::from_secs(8));
     assert_eq!(shown["state"], "ended", "{shown}");

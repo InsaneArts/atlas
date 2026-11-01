@@ -625,6 +625,7 @@ mod tests {
     async fn time_out(child: &mut Child, mode: &str, capacity: usize) -> (Vec<Value>, Value) {
         let argv = child.argv(mode);
         let (sender, mut receiver) = mpsc::channel(capacity);
+        let observer = sender.clone();
         let command = run(
             &argv,
             Duration::from_secs(60),
@@ -633,6 +634,7 @@ mod tests {
         );
         tokio::pin!(command);
         let ready = async {
+            child.started(&mut receiver, observer).await;
             child.message("ready").await;
             child.permit("start");
             if matches!(mode, "group" | "term") {
@@ -716,6 +718,7 @@ mod tests {
         let mut child = Child::new();
         let argv = child.argv("pipe");
         let (sender, mut receiver) = mpsc::channel(EVENTS);
+        let observer = sender.clone();
         let command = run(
             &argv,
             Duration::from_secs(60),
@@ -723,6 +726,7 @@ mod tests {
             std::future::pending::<Cancel>(),
         );
         let control = async {
+            child.started(&mut receiver, observer).await;
             child.message("ready").await;
             child.permit("start");
             let descendant = child.message("descendant").await;
@@ -775,7 +779,8 @@ mod tests {
     async fn a_departed_receiver_leaves_no_owned_group_running() {
         let mut child = Child::new();
         let argv = child.argv("flood");
-        let (sender, receiver) = mpsc::channel(1);
+        let (sender, mut receiver) = mpsc::channel(1);
+        let observer = sender.clone();
         let command = run(
             &argv,
             Duration::from_secs(30),
@@ -783,6 +788,7 @@ mod tests {
             std::future::pending::<Cancel>(),
         );
         let control = async {
+            child.started(&mut receiver, observer).await;
             let leader = child.message("ready").await;
             drop(receiver);
             child.permit("start");
@@ -804,13 +810,51 @@ mod tests {
         );
     }
 
+    #[tokio::test]
+    async fn a_readiness_timeout_leaves_no_foreground_child_running() {
+        let mut child = Child::new();
+        let argv = child.argv("unready");
+        let (sender, mut receiver) = mpsc::channel(1);
+        let observer = sender.clone();
+        let leader = {
+            let command = run(
+                &argv,
+                Duration::from_secs(60),
+                sender,
+                std::future::pending::<Cancel>(),
+            );
+            tokio::pin!(command);
+            let control = async {
+                let leader = child.started(&mut receiver, observer).await;
+                assert!(
+                    tokio::time::timeout(Duration::ZERO, child.message("ready"))
+                        .await
+                        .is_err()
+                );
+                leader
+            };
+            tokio::time::timeout(Duration::from_secs(20), async {
+                tokio::select! {
+                    reply = &mut command => panic!("command ended before readiness: {reply}"),
+                    leader = control => leader,
+                }
+            })
+            .await
+            .unwrap()
+        };
+        drop(child);
+        assert!(crate::process::info(leader.pid).unwrap().is_none());
+    }
+
     /// Cancelling ends a command that prints nothing, and its descendants.
     #[tokio::test]
     async fn cancelling_ends_a_quiet_command_and_its_group() {
         let mut child = Child::new();
         let (sender, mut receiver) = mpsc::channel(EVENTS);
+        let observer = sender.clone();
         let argv = child.argv("group");
         let cancel = async {
+            child.started(&mut receiver, observer).await;
             child.message("ready").await;
             child.permit("start");
             child.message("descendant").await;
@@ -841,9 +885,11 @@ mod tests {
     #[tokio::test]
     async fn a_stopping_daemon_leaves_the_outcome_unknown() {
         let mut child = Child::new();
-        let (sender, _receiver) = mpsc::channel(EVENTS);
+        let (sender, mut receiver) = mpsc::channel(EVENTS);
+        let observer = sender.clone();
         let argv = child.argv("quiet");
         let cancel = async {
+            child.started(&mut receiver, observer).await;
             child.message("ready").await;
             child.permit("start");
             Cancel::Stopping
@@ -862,6 +908,30 @@ mod tests {
         assert_eq!(reply["uncertain"], true);
     }
 
+    #[tokio::test]
+    async fn final_output_waits_for_capacity_before_delivery() {
+        let (sender, mut receiver) = mpsc::channel(1);
+        sender.try_send(json!({"event": "started"})).unwrap();
+        let mut buffered = Output::new();
+        buffered.push(b"onetwo");
+        {
+            let finish = buffered.finish(&sender);
+            tokio::pin!(finish);
+            std::future::poll_fn(|context| {
+                assert!(finish.as_mut().poll(context).is_pending());
+                std::task::Poll::Ready(())
+            })
+            .await;
+            assert_eq!(receiver.recv().await.unwrap()["event"], "started");
+            assert!(finish.await.is_ok());
+        }
+        assert_eq!(output(&[receiver.recv().await.unwrap()]), "onetwo");
+        assert!(!buffered.truncated);
+        assert!(buffered.pending.is_empty());
+        assert_eq!(buffered.forwarded, 6);
+        assert_eq!(buffered.sent, 1);
+    }
+
     /// The last output waits for a slow client instead of being dropped, and
     /// output that cannot be delivered is reported as truncated.
     #[tokio::test]
@@ -870,9 +940,10 @@ mod tests {
         let argv = child.argv("output");
         // One slot: `started` fills it until the controller permits reads.
         let (sender, mut receiver) = mpsc::channel(1);
+        let observer = sender.clone();
         let (permit, reads) = tokio::sync::oneshot::channel();
         let slow = async move {
-            reads.await.unwrap();
+            let mut receiver: mpsc::Receiver<Value> = reads.await.unwrap();
             let mut events = Vec::new();
             while let Some(event) = receiver.recv().await {
                 events.push(event);
@@ -880,13 +951,14 @@ mod tests {
             events
         };
         let control = async {
+            child.started(&mut receiver, observer).await;
             child.message("ready").await;
             child.permit("start");
             child.permit("output");
             child.message("output").await;
             child.permit("exit");
             child.message("exiting").await;
-            permit.send(()).unwrap();
+            permit.send(receiver).unwrap();
         };
 
         let command = run(
@@ -906,7 +978,8 @@ mod tests {
 
         let mut child = Child::new();
         let argv = child.argv("output");
-        let (sender, _never) = mpsc::channel(1);
+        let (sender, mut never) = mpsc::channel(1);
+        let observer = sender.clone();
         let command = run(
             &argv,
             Duration::from_secs(60),
@@ -914,6 +987,7 @@ mod tests {
             std::future::pending::<Cancel>(),
         );
         let control = async {
+            child.started(&mut never, observer).await;
             child.message("ready").await;
             child.permit("start");
             child.permit("output");
@@ -1072,8 +1146,10 @@ mod tests {
     async fn coming_on_screen_stops_the_command() {
         let mut child = Child::new();
         let (sender, mut receiver) = mpsc::channel(EVENTS);
+        let observer = sender.clone();
         let argv = child.argv("quiet");
         let cancel = async {
+            child.started(&mut receiver, observer).await;
             child.message("ready").await;
             child.permit("start");
             Cancel::OnConsole

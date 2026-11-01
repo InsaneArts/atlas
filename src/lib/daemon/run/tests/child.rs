@@ -13,7 +13,7 @@ use std::{
     os::unix::fs::OpenOptionsExt,
     time::{Duration, Instant},
 };
-use tokio::{io::AsyncReadExt, net::unix::pipe};
+use tokio::{io::AsyncReadExt, net::unix::pipe, sync::mpsc};
 
 pub(super) struct Child {
     // Reap before closing control pipes or removing their directory.
@@ -57,6 +57,20 @@ impl Child {
         }
         argv.push(mode.to_owned());
         argv
+    }
+
+    pub(super) async fn started(
+        &mut self,
+        events: &mut mpsc::Receiver<serde_json::Value>,
+        sender: mpsc::Sender<serde_json::Value>,
+    ) -> Instance {
+        let event = events.recv().await.unwrap();
+        assert_eq!(event["event"], "started");
+        self.owned.started(&event);
+        let leader = *self.owned.0.first().unwrap();
+        // Keep the event in the channel so its backpressure is unchanged.
+        sender.try_send(event).unwrap();
+        leader
     }
 
     pub(super) async fn message(&mut self, expected: &str) -> Instance {

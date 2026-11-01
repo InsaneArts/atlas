@@ -24,7 +24,7 @@ sub permit {
 
 $SIG{TERM} = sub { report('term'); exit 0; };
 $SIG{TERM} = 'DEFAULT' if $mode eq 'term';
-report('ready');
+report('ready') unless $mode eq 'unready';
 permit($leader, 'start');
 if ($mode eq 'flood') {
     print "y\n" x (1024 * 1024);

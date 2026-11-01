@@ -228,10 +228,11 @@ async fn a_fixture_failure_reaps_its_group_and_escaped_descendant() {
         panic!("fixture assertion failed");
     }));
     assert!(failure.is_err());
-    assert_eq!(
-        child.wait().unwrap_err().raw_os_error(),
-        Some(nix::libc::ECHILD)
-    );
+    let reaped = child.try_wait();
+    if matches!(reaped, Ok(None)) {
+        Processes::new(leader).cleanup().unwrap();
+    }
+    assert_eq!(reaped.unwrap_err().raw_os_error(), Some(nix::libc::ECHILD));
     for owned in [leader, member, parent, escaped] {
         assert!(process::info(owned.pid).unwrap().is_none(), "{owned:?}");
     }
