@@ -260,7 +260,7 @@ mod tests {
             assert_eq!(report["checks"][0]["ok"], true);
             assert_eq!(
                 atlas::capability::summary(report),
-                json!({"ok": true, "ready": true})
+                atlas::capability::summary(ready())
             );
         }
     }

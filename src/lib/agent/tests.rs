@@ -1534,6 +1534,121 @@ fn a_click_chooses_one_visible_element() {
     assert!(error.details.is_empty(), "a doubtful match lists none");
 }
 
+#[test]
+fn disabled_controls_refuse_without_guessing_native_panel_identity() {
+    for name in ["Save", "Open", "Export"] {
+        let mut element = shown(0, "AXButton", Some(name), None);
+        element.enabled = Some(false);
+        let error = choose(&[element], &named(name)).unwrap_err();
+        assert_eq!(
+            json!(error),
+            json!({
+                "ok":false,"code":"input","uncertain":false,
+                "error":"The selected control is disabled; no click was sent",
+                "next":"Choose an enabled control. If this is Save/Open, cancel with Escape and use atlas run to create files or atlas open to open them; do not retry an inert confirmation."
+            })
+        );
+    }
+}
+
+#[test]
+fn enabled_and_unknown_controls_including_save_and_sheets_remain_selectable() {
+    for role in ["AXButton", "AXSheet", "AXMenuItem"] {
+        for enabled in [Some(true), None] {
+            let mut element = shown(0, role, Some("Save"), None);
+            element.enabled = enabled;
+            assert_eq!(
+                choose(std::slice::from_ref(&element), &named("Save")).unwrap(),
+                &element
+            );
+        }
+    }
+}
+
+#[test]
+fn a_disabled_match_does_not_hide_ambiguity_or_unreadable_names() {
+    let mut disabled = shown(0, "AXButton", Some("Save"), None);
+    disabled.enabled = Some(false);
+    let other = shown(1, "AXButton", Some("Save"), None);
+    let error = choose(&[disabled.clone(), other], &named("Save")).unwrap_err();
+    assert_eq!(error.code, Code::Elements);
+    let mut unread = shown(1, "AXButton", None, None);
+    unread.unreadable.push("AXTitle".into());
+    let error = choose(&[disabled, unread], &named("Save")).unwrap_err();
+    assert_eq!(error.code, Code::Elements);
+}
+
+#[tokio::test]
+async fn a_disabled_named_control_refuses_before_any_input_or_native_preparation() {
+    use crate::test_support::{Helper, UID, completed};
+
+    let directory = tempfile::tempdir().unwrap();
+    let (client, helper) = Helper::client(directory.path(), UID);
+    let mut reads = 0;
+    let error = helper
+        .serve(
+            click_element(
+                &client,
+                &Target::Pid(i64::from(std::process::id())),
+                &named("Save"),
+                Button::Left,
+                1,
+                &[],
+            ),
+            |request| {
+                if request["op"] == "apps" {
+                    assert_eq!(reads, 0, "no app lookup after scanning");
+                    return Some(json!({"ok": true, "apps": [{"pid": std::process::id(), "name": "TextEdit"}]}));
+                }
+                assert_eq!(
+                    request["op"], "run",
+                    "no input or other mutation: {request}"
+                );
+                assert_eq!(request["argv"][1], "elements-info", "no native preparation");
+                reads += 1;
+                let mut element = shown(0, "AXButton", Some("Save"), None);
+                element.enabled = Some(false);
+                Some(completed(
+                    &json!({"ok":true,"elements":[element],"truncated":false}).to_string(),
+                ))
+            },
+        )
+        .await
+        .unwrap_err();
+    assert_eq!(
+        json!(error),
+        json!({
+            "ok":false,"code":"input","uncertain":false,
+            "error":"The selected control is disabled; no click was sent",
+            "next":"Choose an enabled control. If this is Save/Open, cancel with Escape and use atlas run to create files or atlas open to open them; do not retry an inert confirmation."
+        })
+    );
+    assert_eq!(reads, 1);
+    assert!(client.controller.pending().unwrap().is_empty());
+    assert!(client.controller.acquire_beside_commands().is_ok());
+}
+
+#[tokio::test]
+async fn a_named_click_keeps_an_unknown_mutation_pending_instead_of_scanning_or_posting() {
+    let directory = tempfile::tempdir().unwrap();
+    let client = crate::test_support::client(directory.path());
+    let abandoned = client.controller.quarantine().unwrap();
+    let generation = abandoned.to_string();
+    drop(abandoned);
+    let error = click_element(
+        &client,
+        &Target::Pid(812),
+        &named("Save"),
+        Button::Left,
+        1,
+        &[],
+    )
+    .await
+    .unwrap_err();
+    assert_eq!(error.code, Code::Uncertain);
+    assert_eq!(client.controller.pending().unwrap(), vec![generation]);
+}
+
 /// A scan as the probe reports it, complete.
 fn scanned(elements: Vec<Element>) -> Scanned {
     Scanned {

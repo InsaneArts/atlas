@@ -13,27 +13,40 @@
   drop you could not do as not checked.
 - `/Users/Shared/Atlas/Open` holds the copies `open` makes and is read-only
   for the helper: save or create files in the helper's home instead.
-- Native Save/Open panels work only while an authenticated Screen Sharing
-  session is connected to the helper
-  (`doctor --verbose` → `capabilities.nativeDialogs`). Without it, clicks in a
-  panel report `ok` but do nothing; `atlas key --app A escape` closes it.
-  The sheet asking whether to keep a new document (Save As, Where, Delete)
-  is one: once a crop shows it over a document you made,
-  `atlas key --app A cmd+backspace` deletes that document; otherwise
-  `atlas key --app A escape` cancels (again if it stays). `--window` refuses
-  while a sheet is open, so do not add it here. Save existing files with
-  Cmd+S, or create files with tools via `run`; report a panel flow you could
-  not drive as not checked.
+- Native Save/Open panels can be inert without authenticated Screen Sharing.
+  Compact `doctor` warns; `doctor --verbose` → `capabilities.nativeDialogs`
+  gives dated `verify-native` evidence, not connection detection. `ready`
+  does not qualify panels. A definitely disabled named control refuses with
+  `code: input`, `uncertain: false` and sends no input. A button called Save
+  or an ordinary sheet alone does not identify a native panel. Coordinate
+  clicks and Return can still report `ok` without completing anything; do
+  not retry an inert confirmation or wait indefinitely. Cancel Save/Open
+  with `atlas key --app A escape` and use `run` to create files or `open`
+  to open them. `--window` refuses while a sheet is open, so omit it here.
+  For a new file, choose a fresh filename; this example refuses overwrites:
+
+  ```sh
+  atlas run -- /bin/sh -c 'umask 077; mkdir -p "$HOME/atlas-work" && set -C && printf "%s\n" "Atlas" > "$HOME/atlas-work/panels-new.txt" && printf "%s\n" "$HOME/atlas-work/panels-new.txt"'
+  atlas run -- /bin/sh -c 'cat "$HOME/atlas-work/panels-new.txt"'
+  atlas open --app TextEdit /Users/HELPER/atlas-work/panels-new.txt
+  ```
+
+  Substitute the helper's actual home path returned by `run` for
+  `/Users/HELPER`; your shell's `$HOME` names your own home. An existing file
+  opened at a helper-writable path can save in place with Cmd+S: verify its
+  bytes with `run`. Do not rely on read-only copies in
+  `/Users/Shared/Atlas/Open`. Never press panel OK through app scripting.
+  File workarounds do not qualify the panel flow; report it as not checked.
 - The helper's Desktop, Documents and Downloads are protected by macOS: `run`
   gets "Operation not permitted" there. Keep files elsewhere in its home, such
   as `$HOME/atlas-work`.
 - Google Chrome and Firefox draw web pages in the helper and take clicks and
   typing; test web pages there. Safari and other WebKit views (Dictionary,
-  help windows, apps built on WebKit web views) show a blank page unless a
-  Screen Sharing session is connected to the helper, because macOS reports
-  the hidden login's windows as not visible and WebKit then stops drawing
-  (`doctor --verbose` → `capabilities.webContent`). `atlas open URL` without
-  `--app` opens Safari, so name the browser:
+  help windows, apps built on WebKit web views) can stay blank without
+  authenticated Screen Sharing. `capabilities.webContent` in
+  `doctor --verbose` is static guidance, not a rendering test. Treat a blank
+  page as untested; do not retry it. `atlas open URL` uses the default
+  browser, so choose before launching a web task:
   `atlas open --app "Google Chrome" URL`. The helper shares this Mac's
   network, so a local dev server is reachable. Read pages with
   `elements --app "Google Chrome" --name LABEL` first; use named clicks and

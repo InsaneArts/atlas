@@ -5,11 +5,9 @@ description: "See and use macOS GUIs in a hidden second login (the helper) witho
 
 # Atlas
 
-Atlas gives you a Mac screen of your own: a hidden macOS login (the
-helper) where you open apps, look, click and type while the person keeps
-using their own desktop. If `atlas` is missing or `doctor` stays not ready,
-say so and ask the person to open Atlas to finish setup; never test on their
-desktop instead.
+Atlas gives you a hidden macOS login (the helper) to open apps, look, click
+and type while the person uses their desktop. If `atlas` is missing or
+`doctor` stays not ready, ask them to open Atlas to finish setup.
 
 ## Rules
 
@@ -73,9 +71,12 @@ Untargeted points use the top window from your last look.
 `atlas run -- PROGRAM ARGS` runs a command as the helper; its result is
 `exitCode`. Use `--timeout` up to 600, not `&`, and never send keys or clicks
 from it (`osascript`, `cliclick`). For a server that must keep running,
-use `atlas job start -- PROGRAM ARGS`. Save and Open panels, Safari,
-drag-and-drop and the Desktop and Documents folders often fail in the
-helper: read Limits first.
+use `atlas job start -- PROGRAM ARGS`.
+
+Without a qualified native panel flow, cancel Save/Open and use `run` to
+create files or `open` to open them; use Chrome/Firefox for web pages. Do not
+retry a blank page or inert confirmation. First read Limits for file workarounds,
+drag-and-drop and protected folders.
 
 A command that changes the helper waits its turn, up to 30 s (`--wait`).
 Keep each shell call, every chained command and wait included, under your
@@ -92,10 +93,8 @@ After each action:
 3. To check what's visible (drawing, layout), take a crop:
    `atlas screenshot --app A` or `--region X,Y,W,H`. Take a full
    `atlas screenshot` only when a crop's `overlapping` names a window in front.
-4. After a visible change you will report, take a screenshot as evidence.
 
-Never open a screenshot you have already read, or one with
-`unchanged: true`: nothing has changed yet.
+Never reopen a screenshot you read or one marked `unchanged: true`.
 
 ## When something goes wrong
 
