@@ -4,7 +4,7 @@ use atlas::{
     config::Config,
     control::{Controller, Lease},
     error::Code,
-    session::{Display, diagnose, input_current, input_settled, require_hidden},
+    session::{Display, InputEpoch, diagnose, input_current, input_settled, require_hidden},
     transport::Transport,
 };
 use serde_json::{Value, json};
@@ -70,6 +70,208 @@ fn identities_change_when_security_session_or_display_changes() {
         state["sessionProof"][field] = json!(99);
         assert_ne!(original, require_hidden(&state, 502).unwrap().epoch);
     }
+}
+
+#[test]
+fn a_changed_display_or_process_invalidates_the_original_epoch() {
+    let original = require_hidden(&ready_status(), 502).unwrap().epoch;
+    for (path, value) in [
+        ("/daemon/pid", json!(124)),
+        ("/inputService/pid", json!(78)),
+        ("/sessionProof/securitySessionID", json!(99)),
+        ("/sessionProof/displayID", json!(99)),
+        ("/display/width", json!(1440)),
+        ("/display/scale", json!(2)),
+    ] {
+        let mut state = ready_status();
+        *state.pointer_mut(path).unwrap() = value;
+        state["sessionProof"]["parentPID"] = state["daemon"]["pid"].clone();
+        state["sessionProof"]["width"] = state["display"]["width"].clone();
+        let changed = require_hidden(&state, 502).unwrap().epoch;
+        assert_ne!(original, changed, "{path}");
+    }
+}
+
+#[test]
+fn hidden_session_proofs_keep_their_field_and_range_requirements() {
+    for (path, invalid) in [
+        ("/user/uid", json!(503)),
+        ("/daemon/pid", json!(u64::from(u32::MAX) + 1)),
+        ("/session/managerName", json!("Background")),
+        ("/session/onConsole", json!(true)),
+        ("/display/width", json!(0)),
+        ("/display/height", json!(32769)),
+        ("/display/scale", json!(9)),
+        ("/sessionProof/ok", json!(false)),
+        ("/sessionProof/uid", json!(501)),
+        ("/sessionProof/parentPID", json!(124)),
+        ("/sessionProof/onConsole", json!(true)),
+        ("/sessionProof/hasGraphicAccess", json!(false)),
+        ("/sessionProof/securitySessionID", json!(u32::MAX)),
+        ("/sessionProof/displayID", json!(u64::from(u32::MAX) + 1)),
+        ("/sessionProof/width", json!(1e99)),
+        ("/sessionProof/height", json!(-1)),
+    ] {
+        for value in [
+            None,
+            Some(Value::Null),
+            Some(json!("unknown")),
+            Some(invalid),
+        ] {
+            let mut state = ready_status();
+            match value {
+                Some(value) => *state.pointer_mut(path).unwrap() = value,
+                None => {
+                    let (parent, key) = path.rsplit_once('/').unwrap();
+                    state
+                        .pointer_mut(parent)
+                        .unwrap()
+                        .as_object_mut()
+                        .unwrap()
+                        .remove(key);
+                }
+            }
+            let error = require_hidden(&state, 502).unwrap_err();
+            let console =
+                state["session"]["onConsole"] == true || state["sessionProof"]["onConsole"] == true;
+            assert_eq!(
+                error.code,
+                if console {
+                    Code::OnConsole
+                } else {
+                    Code::Identity
+                },
+                "{path}: {state}"
+            );
+        }
+    }
+}
+
+#[test]
+fn input_proof_refusals_preserve_the_capture_session() {
+    let valid = ready_status()["inputService"]["session"].clone();
+    assert!(InputEpoch::from_proof(&valid, 77).is_ok());
+    for (field, invalid) in [
+        ("ok", json!(false)),
+        ("uid", json!(500)),
+        ("securitySessionID", json!(u32::MAX)),
+        ("displayID", json!(u64::from(u32::MAX) + 1)),
+        ("width", json!(0)),
+        ("height", json!(32769)),
+        ("onConsole", json!(true)),
+        ("hasGraphicAccess", json!(false)),
+    ] {
+        for value in [
+            None,
+            Some(Value::Null),
+            Some(json!("unknown")),
+            Some(invalid),
+        ] {
+            let mut proof = valid.clone();
+            match value {
+                Some(value) => proof[field] = value,
+                None => {
+                    proof.as_object_mut().unwrap().remove(field);
+                }
+            }
+            let error = InputEpoch::from_proof(&proof, 77).unwrap_err();
+            assert_eq!(error.code, Code::Identity);
+            assert_eq!(
+                error.error,
+                "A hidden graphical session with valid geometry is required"
+            );
+            let mut state = ready_status();
+            state["inputService"]["session"] = proof;
+            let session = require_hidden(&state, 502).unwrap();
+            assert!(session.capture);
+            assert!(!session.input, "{field}: {state}");
+        }
+    }
+    assert!(InputEpoch::from_proof(&valid, 0).is_err());
+}
+
+#[test]
+fn only_idle_empty_input_settles_recovery() {
+    let mut ready = ready_status();
+    ready["inputService"]["controlActive"] = json!(false);
+    ready["inputService"]["heldInput"] = json!(false);
+    assert!(input_settled(&ready, 502, 77));
+    for field in ["controlActive", "heldInput"] {
+        for value in [
+            None,
+            Some(Value::Null),
+            Some(json!(true)),
+            Some(json!(0)),
+            Some(json!("false")),
+        ] {
+            let mut state = ready.clone();
+            match value {
+                Some(value) => state["inputService"][field] = value,
+                None => {
+                    state["inputService"].as_object_mut().unwrap().remove(field);
+                }
+            }
+            assert!(!input_settled(&state, 502, 77), "{field}: {state}");
+        }
+    }
+}
+
+#[test]
+fn proof_refusals_keep_their_precedence_and_words() {
+    for (code, fallback) in [
+        ("blocked", "This shell may not connect to the helper"),
+        ("busy", "The helper is serving too many requests; try again"),
+        ("identity", "The helper socket belongs to another account"),
+    ] {
+        let mut state = ready_status();
+        state["ok"] = json!(false);
+        state["code"] = json!(code);
+        state["user"]["uid"] = json!(503);
+        state["session"]["onConsole"] = json!(true);
+        for (cause, expected) in [
+            (Value::Null, fallback),
+            (json!("Original cause"), "Original cause"),
+        ] {
+            state["error"] = cause;
+            let error = require_hidden(&state, 502).unwrap_err();
+            assert_eq!(error.code.as_str(), code);
+            assert_eq!(error.error, expected);
+            assert!(!error.uncertain);
+        }
+        assert_eq!(
+            require_hidden(&state, 500).unwrap_err().error,
+            "Target must be a distinct helper account with UID >= 501"
+        );
+    }
+    let mut state = ready_status();
+    state["user"]["uid"] = json!(503);
+    state["sessionProof"]["onConsole"] = json!(true);
+    assert_eq!(
+        require_hidden(&state, 502).unwrap_err().error,
+        "A different account answered than the configured helper. Run atlas doctor."
+    );
+    state["user"]["uid"] = Value::Null;
+    assert_eq!(
+        require_hidden(&state, 502).unwrap_err().code,
+        Code::OnConsole
+    );
+}
+
+#[test]
+fn compatibility_decoders_keep_legacy_absence_and_unknown_extensions() {
+    let mut state = status();
+    state["display"] = json!([2560, 1440, 1]);
+    state["future"] = json!({"nested": [true, "extension"]});
+    let session = require_hidden(&state, 502).unwrap();
+    assert!(session.capture);
+    assert!(!session.input);
+    assert_eq!(session.epoch.input_pid, 0);
+
+    let mut state = ready_status();
+    state["inputService"]["session"]["future"] = json!(true);
+    assert!(require_hidden(&state, 502).unwrap().input);
+    state["inputService"]["protocolVersion"] = json!(1.0);
+    assert!(!require_hidden(&state, 502).unwrap().input);
 }
 
 #[test]

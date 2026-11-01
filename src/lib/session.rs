@@ -67,60 +67,398 @@ fn within(value: f64, max: f64) -> bool {
     value.is_finite() && value > 0.0 && value <= max
 }
 
-/// A session proof's security session and main display IDs. Both are 32-bit
-/// on macOS. Zero is no session and no display; a security session of
-/// `u32::MAX` is `callerSecuritySession`, the sentinel that asks about the
-/// caller's own session and never a real ID, so a session lies strictly
-/// between the two.
-fn session_ids(proof: &Value) -> Option<(u64, u64)> {
-    let security = proof["securitySessionID"]
-        .as_u64()
-        .filter(|n| *n > 0 && *n < u32::MAX.into())?;
-    let display = proof["displayID"]
-        .as_u64()
-        .filter(|n| *n > 0 && *n <= u32::MAX.into())?;
-
-    Some((security, display))
+/// The facts a proof supplied, before any caller's identity is trusted.
+#[derive(Clone, Debug)]
+struct ProofObservation {
+    ok: Option<bool>,
+    uid: Option<u64>,
+    parent_pid: Option<u64>,
+    on_console: Option<bool>,
+    graphic_access: Option<bool>,
+    security_session_id: Option<u64>,
+    display_id: Option<u64>,
+    width: Option<f64>,
+    height: Option<f64>,
 }
 
-impl InputEpoch {
-    pub fn from_proof(proof: &Value, process_id: u32) -> Result<Self> {
+impl ProofObservation {
+    fn decode(proof: &Value) -> Self {
+        Self {
+            ok: proof["ok"].as_bool(),
+            uid: proof["uid"].as_u64(),
+            parent_pid: proof["parentPID"].as_u64(),
+            on_console: proof["onConsole"].as_bool(),
+            graphic_access: proof["hasGraphicAccess"].as_bool(),
+            security_session_id: proof["securitySessionID"].as_u64(),
+            display_id: proof["displayID"].as_u64(),
+            width: proof["width"].as_f64(),
+            height: proof["height"].as_f64(),
+        }
+    }
+
+    /// macOS IDs are 32-bit; zero and callerSecuritySession are not sessions.
+    fn session_ids(&self) -> Option<(u64, u64)> {
+        let security = self
+            .security_session_id
+            .filter(|n| *n > 0 && *n < u32::MAX.into())?;
+        let display = self
+            .display_id
+            .filter(|n| *n > 0 && *n <= u32::MAX.into())?;
+        Some((security, display))
+    }
+
+    fn input_epoch(&self, process_id: u32) -> Result<InputEpoch> {
         let invalid = || {
             Error::new(
                 Code::Identity,
                 "A hidden graphical session with valid geometry is required",
             )
         };
-        let (security_session_id, display_id) = session_ids(proof).ok_or_else(invalid)?;
-        let side = |key: &str| {
-            proof[key]
-                .as_f64()
-                .filter(|v| within(*v, MAX_SIDE))
-                .ok_or_else(invalid)
-        };
-
-        let epoch = Self {
-            uid: proof["uid"]
-                .as_u64()
+        let (security_session_id, display_id) = self.session_ids().ok_or_else(invalid)?;
+        let epoch = InputEpoch {
+            uid: self
+                .uid
                 .and_then(|v| u32::try_from(v).ok())
                 .filter(|v| *v >= FIRST_USER_UID)
                 .ok_or_else(invalid)?,
             security_session_id,
             display_id,
-            width: side("width")?,
-            height: side("height")?,
+            width: self
+                .width
+                .filter(|v| within(*v, MAX_SIDE))
+                .ok_or_else(invalid)?,
+            height: self
+                .height
+                .filter(|v| within(*v, MAX_SIDE))
+                .ok_or_else(invalid)?,
             process_id,
         };
-
-        if proof["ok"] != true
-            || proof["onConsole"] != false
-            || proof["hasGraphicAccess"] != true
+        if self.ok != Some(true)
+            || self.on_console != Some(false)
+            || self.graphic_access != Some(true)
             || process_id == 0
         {
             return Err(invalid());
         }
-
         Ok(epoch)
+    }
+}
+
+impl InputEpoch {
+    pub fn from_proof(proof: &Value, process_id: u32) -> Result<Self> {
+        ProofObservation::decode(proof).input_epoch(process_id)
+    }
+}
+
+/// Permission not asked about, not answered, refused, or granted.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum PermissionObservation {
+    Unqueried,
+    Unavailable,
+    Denied,
+    Allowed,
+}
+
+impl PermissionObservation {
+    fn decode(value: &Value, queried: bool) -> Self {
+        if !queried {
+            Self::Unqueried
+        } else {
+            match value.as_bool() {
+                Some(true) => Self::Allowed,
+                Some(false) => Self::Denied,
+                None => Self::Unavailable,
+            }
+        }
+    }
+}
+
+/// A pin may be incomplete; readiness never fills in its missing fields.
+#[derive(Clone, Debug)]
+struct PinObservation {
+    uid: Option<u64>,
+    security_session_id: Option<u64>,
+    process_id: Option<u64>,
+    width: Option<f64>,
+    height: Option<f64>,
+}
+
+impl PinObservation {
+    fn decode(value: &Value) -> Self {
+        Self {
+            uid: value["uid"].as_u64(),
+            security_session_id: value["securitySessionId"].as_u64(),
+            process_id: value["processId"].as_u64(),
+            width: value["width"].as_f64(),
+            height: value["height"].as_f64(),
+        }
+    }
+}
+
+fn capability_names(value: &Value) -> Vec<String> {
+    value["capabilities"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter_map(Value::as_str)
+        .map(str::to_owned)
+        .collect()
+}
+
+#[derive(Clone, Debug)]
+pub(crate) struct NativeObservation {
+    pub(crate) ok: bool,
+    protocol_version: Option<u64>,
+    pub(crate) pid: Option<u64>,
+    pub(crate) ready: Option<bool>,
+    accessibility: PermissionObservation,
+    epoch: Option<InputEpoch>,
+    pinned: PinObservation,
+    control_active: Option<bool>,
+    held_input: Option<bool>,
+    build: Option<String>,
+    replaced: bool,
+    capabilities: Vec<String>,
+}
+
+impl NativeObservation {
+    fn decode(value: &Value) -> Self {
+        let reported_pid = value["pid"].as_u64();
+        let pid = reported_pid
+            .and_then(|v| u32::try_from(v).ok())
+            .filter(|v| *v > 0)
+            .unwrap_or(0);
+        Self {
+            ok: value["ok"] == true,
+            protocol_version: value["protocolVersion"].as_u64(),
+            pid: reported_pid,
+            ready: value["ready"].as_bool(),
+            accessibility: PermissionObservation::decode(&value["accessibility"], !value.is_null()),
+            epoch: ProofObservation::decode(&value["session"])
+                .input_epoch(pid)
+                .ok(),
+            pinned: PinObservation::decode(&value["enforcedEpoch"]),
+            control_active: value["controlActive"].as_bool(),
+            held_input: value["heldInput"].as_bool(),
+            build: value["build"].as_str().map(str::to_owned),
+            replaced: value["replaced"] == true,
+            capabilities: capability_names(value),
+        }
+    }
+
+    fn process_id(&self) -> u32 {
+        self.pid
+            .and_then(|pid| u32::try_from(pid).ok())
+            .filter(|pid| *pid > 0)
+            .unwrap_or(0)
+    }
+
+    fn healthy(&self) -> bool {
+        self.ok
+            && self.protocol_version == Some(1)
+            && self.accessibility == PermissionObservation::Allowed
+    }
+
+    pub(crate) fn has_capability(&self, name: &str) -> bool {
+        self.capabilities
+            .iter()
+            .any(|capability| capability == name)
+    }
+
+    fn pinned_to_session(&self, session: &Session) -> bool {
+        let epoch = &session.epoch;
+        self.healthy()
+            && self.pinned.uid == Some(epoch.uid.into())
+            && self.pinned.security_session_id == Some(epoch.security_session_id)
+            && self.pinned.process_id == Some(epoch.input_pid.into())
+    }
+
+    fn repinnable(&self, session: &Session) -> bool {
+        self.pinned_to_session(session)
+            && self.pinned.width == Some(session.epoch.display.width)
+            && self.pinned.height == Some(session.epoch.display.height)
+    }
+}
+
+/// One status read, including facts that cannot yet prove a complete session.
+/// Keeping it never authorizes an effect against a later session.
+#[derive(Clone, Debug)]
+pub(crate) struct Observation {
+    ok: bool,
+    code: Option<String>,
+    error: Option<String>,
+    uid: Option<u64>,
+    on_console: Option<bool>,
+    aqua: bool,
+    capture_pid: Option<u32>,
+    display: Option<Display>,
+    proof: ProofObservation,
+    capture: PermissionObservation,
+    daemon_capabilities: Vec<String>,
+    pub(crate) native: NativeObservation,
+    installed_build: Option<String>,
+}
+
+impl Observation {
+    pub(crate) fn decode(value: &Value) -> Self {
+        let ok = value["ok"] == true;
+        Self {
+            ok,
+            code: value["code"].as_str().map(str::to_owned),
+            error: value["error"].as_str().map(str::to_owned),
+            uid: value["user"]["uid"].as_u64(),
+            on_console: value["session"]["onConsole"].as_bool(),
+            aqua: value["session"]["managerName"] == "Aqua",
+            capture_pid: value["daemon"]["pid"]
+                .as_u64()
+                .and_then(|pid| u32::try_from(pid).ok())
+                .filter(|pid| *pid > 0),
+            display: Display::deserialize(&value["display"]).ok(),
+            proof: ProofObservation::decode(&value["sessionProof"]),
+            capture: PermissionObservation::decode(&value["permissions"]["screenCapture"], ok),
+            daemon_capabilities: capability_names(&value["daemon"]),
+            native: NativeObservation::decode(&value["inputService"]),
+            installed_build: value["installedBuild"].as_str().map(str::to_owned),
+        }
+    }
+
+    pub(crate) fn has_capability(&self, name: &str) -> bool {
+        self.daemon_capabilities
+            .iter()
+            .any(|capability| capability == name)
+    }
+
+    pub(crate) fn input_settled(&self, uid: u32, pid: u32) -> bool {
+        self.require_hidden(uid)
+            .is_ok_and(|session| self.settled_in(&session, pid))
+    }
+
+    pub(crate) fn settled_in(&self, session: &Session, pid: u32) -> bool {
+        session.input
+            && session.epoch.input_pid == pid
+            && self.native.control_active == Some(false)
+            && self.native.held_input == Some(false)
+    }
+
+    pub(crate) fn input_build_current(&self) -> bool {
+        self.native.build.is_some()
+            && self.native.build == self.installed_build
+            && !self.native.replaced
+    }
+
+    pub(crate) fn input_current(&self, uid: u32, pid: u32) -> bool {
+        self.input_settled(uid, pid) && self.input_build_current()
+    }
+    pub(crate) fn require_hidden(&self, uid: u32) -> Result<Session> {
+        validate_uid(uid)?;
+
+        // The common cases in plain words; anything else is one unverified state.
+        if !self.ok {
+            // A shell that may not reach the helper says so: it is not down.
+            if self.code.as_deref() == Some("blocked") {
+                return Err(Error::new(
+                    Code::Blocked,
+                    self.error
+                        .as_deref()
+                        .unwrap_or("This shell may not connect to the helper"),
+                ));
+            }
+
+            // A helper turning callers away while it serves others is up, not
+            // silent: the caller may try again.
+            if self.code.as_deref() == Some("busy") {
+                return Err(Error::new(
+                    Code::Busy,
+                    self.error
+                        .as_deref()
+                        .unwrap_or("The helper is serving too many requests; try again"),
+                ));
+            }
+
+            // A socket served by the wrong account stays an identity violation.
+            if self.code.as_deref() == Some("identity") {
+                return Err(Error::new(
+                    Code::Identity,
+                    self.error
+                        .as_deref()
+                        .unwrap_or("The helper socket belongs to another account"),
+                ));
+            }
+
+            let cause = self
+                .error
+                .as_deref()
+                .map_or_else(String::new, |cause| format!(": {cause}"));
+            return Err(Error::new(
+                Code::Transport,
+                format!("The helper is not answering{cause}. Run atlas doctor."),
+            ));
+        }
+
+        if self.uid.is_some_and(|other| other != u64::from(uid)) {
+            return Err(Error::new(
+                Code::Identity,
+                "A different account answered than the configured helper. Run atlas doctor.",
+            ));
+        }
+
+        if self.on_console == Some(true) || self.proof.on_console == Some(true) {
+            return Err(Error::new(
+                Code::OnConsole,
+                "The helper is on screen right now. Atlas works only while it is in the \
+             background: switch back to your own account.",
+            ));
+        }
+
+        let invalid = || {
+            Error::new(
+                Code::Identity,
+                "The helper's session could not be verified. Run atlas doctor.",
+            )
+        };
+
+        let pid = self.capture_pid.ok_or_else(invalid)?;
+        let display = self.display.clone().ok_or_else(invalid)?;
+
+        // `ok` is already known true here.
+        if self.uid != Some(uid.into())
+            || self.on_console != Some(false)
+            || !self.aqua
+            || !display.valid()
+        {
+            return Err(invalid());
+        }
+
+        let proof = &self.proof;
+        let (security, display_id) = proof.session_ids().ok_or_else(invalid)?;
+
+        if proof.parent_pid != Some(pid.into())
+            || proof.ok != Some(true)
+            || proof.uid != Some(uid.into())
+            || proof.graphic_access != Some(true)
+            || proof.on_console != Some(false)
+            || proof.width != Some(display.width)
+            || proof.height != Some(display.height)
+        {
+            return Err(invalid());
+        }
+
+        let input_pid = self.native.process_id();
+        let epoch = Epoch {
+            uid,
+            capture_pid: pid,
+            display,
+            security_session_id: security,
+            display_id,
+            input_pid,
+        };
+        let native_matches = self.native.epoch.as_ref() == Some(&epoch.input_epoch());
+
+        Ok(Session {
+            epoch,
+            capture: self.capture == PermissionObservation::Allowed,
+            input: self.native.healthy() && self.native.ready == Some(true) && native_matches,
+        })
     }
 }
 
@@ -147,145 +485,13 @@ pub(crate) fn validate_target_uid(uid: u32, controller_uid: u32) -> Result<()> {
 }
 
 pub fn require_hidden(value: &Value, uid: u32) -> Result<Session> {
-    validate_uid(uid)?;
-
-    // The common cases in plain words; anything else is one unverified state.
-    if value["ok"] != true {
-        // A shell that may not reach the helper says so: it is not down.
-        if value["code"] == "blocked" {
-            return Err(Error::new(
-                Code::Blocked,
-                value["error"]
-                    .as_str()
-                    .unwrap_or("This shell may not connect to the helper"),
-            ));
-        }
-
-        // A helper turning callers away while it serves others is up, not
-        // silent: the caller may try again.
-        if value["code"] == "busy" {
-            return Err(Error::new(
-                Code::Busy,
-                value["error"]
-                    .as_str()
-                    .unwrap_or("The helper is serving too many requests; try again"),
-            ));
-        }
-
-        // A socket served by the wrong account stays an identity violation.
-        if value["code"] == "identity" {
-            return Err(Error::new(
-                Code::Identity,
-                value["error"]
-                    .as_str()
-                    .unwrap_or("The helper socket belongs to another account"),
-            ));
-        }
-
-        let cause = value["error"]
-            .as_str()
-            .map_or_else(String::new, |cause| format!(": {cause}"));
-        return Err(Error::new(
-            Code::Transport,
-            format!("The helper is not answering{cause}. Run atlas doctor."),
-        ));
-    }
-
-    if value["user"]["uid"]
-        .as_u64()
-        .is_some_and(|other| other != u64::from(uid))
-    {
-        return Err(Error::new(
-            Code::Identity,
-            "A different account answered than the configured helper. Run atlas doctor.",
-        ));
-    }
-
-    if value["session"]["onConsole"] == true || value["sessionProof"]["onConsole"] == true {
-        return Err(Error::new(
-            Code::OnConsole,
-            "The helper is on screen right now. Atlas works only while it is in the \
-             background: switch back to your own account.",
-        ));
-    }
-
-    let invalid = || {
-        Error::new(
-            Code::Identity,
-            "The helper's session could not be verified. Run atlas doctor.",
-        )
-    };
-
-    let pid = value["daemon"]["pid"]
-        .as_u64()
-        .and_then(|pid| u32::try_from(pid).ok())
-        .filter(|pid| *pid > 0)
-        .ok_or_else(invalid)?;
-    let display = Display::deserialize(&value["display"]).map_err(|_| invalid())?;
-
-    // `ok` is already known true here.
-    if value["user"]["uid"].as_u64() != Some(uid.into())
-        || value["session"]["onConsole"] != false
-        || value["session"]["managerName"] != "Aqua"
-        || !display.valid()
-    {
-        return Err(invalid());
-    }
-
-    let proof = &value["sessionProof"];
-    let (security, display_id) = session_ids(proof).ok_or_else(invalid)?;
-
-    if proof["parentPID"].as_u64() != Some(pid.into())
-        || proof["ok"] != true
-        || proof["uid"].as_u64() != Some(uid.into())
-        || proof["hasGraphicAccess"] != true
-        || proof["onConsole"] != false
-        || proof["width"].as_f64() != Some(display.width)
-        || proof["height"].as_f64() != Some(display.height)
-    {
-        return Err(invalid());
-    }
-
-    let input_pid = value["inputService"]["pid"]
-        .as_u64()
-        .and_then(|v| u32::try_from(v).ok())
-        .filter(|v| *v > 0)
-        .unwrap_or(0);
-    let native_epoch = InputEpoch::from_proof(&value["inputService"]["session"], input_pid).ok();
-    let epoch = Epoch {
-        uid,
-        capture_pid: pid,
-        display,
-        security_session_id: security,
-        display_id,
-        input_pid,
-    };
-    let native_matches = native_epoch.as_ref() == Some(&epoch.input_epoch());
-
-    Ok(Session {
-        epoch,
-        capture: value["permissions"]["screenCapture"] == true,
-        input: value["inputService"]["ok"] == true
-            && value["inputService"]["protocolVersion"] == 1
-            && value["inputService"]["ready"] == true
-            && value["inputService"]["accessibility"] == true
-            && native_matches,
-    })
+    Observation::decode(value).require_hidden(uid)
 }
 
 /// Whether the input service in `value` is healthy and the one `session`
 /// names, in the same login, whatever display it is pinned to.
 pub fn pinned_to_session(value: &Value, session: &Session) -> bool {
-    let native = &value["inputService"];
-    let pinned = &native["enforcedEpoch"];
-    let epoch = &session.epoch;
-
-    native["ok"] == true
-        && native["protocolVersion"] == 1
-        && native["accessibility"] == true
-        && pinned["uid"] == epoch.uid
-        && pinned["securitySessionId"] == epoch.security_session_id
-        && pinned["processId"] == epoch.input_pid
+    NativeObservation::decode(&value["inputService"]).pinned_to_session(session)
 }
 
 /// Whether the input service in `value` is healthy and in the same helper
@@ -293,12 +499,7 @@ pub fn pinned_to_session(value: &Value, session: &Session) -> bool {
 /// display (switching accounts can renumber it). The next action re-pins it
 /// to the current display, so it counts as ready.
 pub fn repinnable(value: &Value, session: &Session) -> bool {
-    let pinned = &value["inputService"]["enforcedEpoch"];
-    let epoch = &session.epoch;
-
-    pinned_to_session(value, session)
-        && pinned["width"].as_f64() == Some(epoch.display.width)
-        && pinned["height"].as_f64() == Some(epoch.display.height)
+    NativeObservation::decode(&value["inputService"]).repinnable(session)
 }
 
 struct Check {
@@ -311,19 +512,13 @@ struct Check {
 /// Whether `status` shows input service `pid` ready in the hidden helper with
 /// no controller and nothing held.
 pub fn input_settled(status: &Value, uid: u32, pid: u32) -> bool {
-    let native = &status["inputService"];
-    require_hidden(status, uid).is_ok_and(|session| session.input && session.epoch.input_pid == pid)
-        && native["controlActive"] == false
-        && native["heldInput"] == false
+    Observation::decode(status).input_settled(uid, pid)
 }
 
 /// Whether the input service runs the installed build from the file still
 /// in place (a replaced file leaves even the same build stale).
 pub fn input_build_current(status: &Value) -> bool {
-    let native = &status["inputService"];
-    native["build"].is_string()
-        && native["build"] == status["installedBuild"]
-        && native["replaced"] != true
+    Observation::decode(status).input_build_current()
 }
 
 /// The input-service capability to shut down when its controller asks.
@@ -349,14 +544,12 @@ pub const FOCUS_FIELD: &str = "focus-field";
 
 /// Whether an input service's hello lists `name` among its capabilities.
 pub fn has_capability(native: &Value, name: &str) -> bool {
-    native["capabilities"]
-        .as_array()
-        .is_some_and(|capabilities| capabilities.iter().any(|capability| capability == name))
+    NativeObservation::decode(native).has_capability(name)
 }
 
 /// [`input_settled`], and running the installed build.
 pub fn input_current(status: &Value, uid: u32, pid: u32) -> bool {
-    input_settled(status, uid, pid) && input_build_current(status)
+    Observation::decode(status).input_current(uid, pid)
 }
 
 /// The doctor report for a status snapshot: each check, what to do about a
@@ -1124,14 +1317,102 @@ fn running_for(elapsed: &str) -> Option<std::time::Duration> {
 #[cfg(test)]
 mod tests {
     use super::{
-        Absence, Blocker, FOCUS_APP, Kind, LOGGED_OUT, Process, Record, Window, blockers, classify,
-        desktop_up_in, diagnose, gone_twice, has_capability, input_build_current, logged_out_in,
-        parse_processes, record_with, require_hidden, running_for, silent, stale_in,
-        validate_target_uid,
+        Absence, Blocker, FOCUS_APP, Kind, LOGGED_OUT, Observation, PermissionObservation, Process,
+        Record, Window, blockers, classify, desktop_up_in, diagnose, gone_twice, has_capability,
+        input_build_current, logged_out_in, parse_processes, record_with, require_hidden,
+        running_for, silent, stale_in, validate_target_uid,
     };
     use crate::error::Code;
     use serde_json::json;
     use std::time::Duration;
+
+    #[test]
+    fn an_unqueried_permission_remains_distinct_from_denial() {
+        let unknown = json!({"ok": true});
+        let unavailable = json!({"ok": true, "inputService": {"ok": false}});
+        let denied = json!({"ok": true, "inputService": {"ok": true, "accessibility": false}});
+        let allowed = json!({"ok": true, "inputService": {"ok": true, "accessibility": true}});
+        for (value, expected, projection) in [
+            (unknown, PermissionObservation::Unqueried, json!(null)),
+            (unavailable, PermissionObservation::Unavailable, json!(null)),
+            (denied, PermissionObservation::Denied, json!(false)),
+            (allowed, PermissionObservation::Allowed, json!(true)),
+        ] {
+            let observation = Observation::decode(&value);
+            assert_eq!(observation.native.accessibility, expected);
+            let report = diagnose(value, 502);
+            let check = report["checks"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .find(|check| check["name"] == "Accessibility allowed")
+                .unwrap();
+            assert_eq!(check["ok"], projection);
+        }
+
+        for (value, expected) in [
+            (json!({}), PermissionObservation::Unqueried),
+            (json!({"ok": true}), PermissionObservation::Unavailable),
+            (
+                json!({"ok": true, "permissions": {"screenCapture": false}}),
+                PermissionObservation::Denied,
+            ),
+            (
+                json!({"ok": true, "permissions": {"screenCapture": true}}),
+                PermissionObservation::Allowed,
+            ),
+        ] {
+            assert_eq!(Observation::decode(&value).capture, expected);
+        }
+    }
+
+    #[test]
+    fn a_partial_observation_never_proves_a_hidden_session() {
+        for value in [
+            json!(null),
+            json!(true),
+            json!([]),
+            json!({}),
+            json!({"ok": true}),
+            json!({"ok": true, "user": {"uid": 502},
+                "session": {"managerName": "Aqua", "onConsole": false}}),
+        ] {
+            let observation = Observation::decode(&value);
+            assert!(observation.require_hidden(502).is_err(), "{value}");
+            assert!(!observation.input_current(502, 77), "{value}");
+            assert_eq!(diagnose(value, 502)["ready"], false);
+        }
+    }
+
+    #[test]
+    fn nonfinite_or_nonpositive_geometry_never_proves_an_input_epoch() {
+        let value = json!({"ok": true, "uid": 502, "onConsole": false,
+            "hasGraphicAccess": true, "securitySessionID": 42, "displayID": 7,
+            "width": 100, "height": 100});
+        for invalid in [
+            f64::NAN,
+            f64::INFINITY,
+            f64::NEG_INFINITY,
+            0.0,
+            -1.0,
+            32769.0,
+        ] {
+            let mut proof = super::ProofObservation::decode(&value);
+            proof.width = Some(invalid);
+            assert!(proof.input_epoch(77).is_err());
+            proof.width = Some(100.0);
+            proof.height = Some(invalid);
+            assert!(proof.input_epoch(77).is_err());
+            assert!(
+                !super::Display {
+                    width: invalid,
+                    height: 100.0,
+                    scale: 1.0
+                }
+                .valid()
+            );
+        }
+    }
 
     #[test]
     fn a_service_lists_only_the_capabilities_it_names() {

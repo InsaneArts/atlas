@@ -4,7 +4,7 @@ use super::{Client, service::require_accessibility};
 use crate::{
     control::Ownership,
     error::{Code, Error, Result},
-    session::{Session, has_capability, input_settled, require_hidden},
+    session::{Observation, Session},
 };
 use serde_json::{Value, json};
 use std::time::Duration;
@@ -56,7 +56,7 @@ impl Client {
         // Recovery goes through the input service; with none running and no
         // Accessibility to start one, it cannot finish, so nothing is marked.
         let current = self.status().await;
-        if current["inputService"]["ok"] != true {
+        if !Observation::decode(&current).native.ok {
             require_accessibility(&current)?;
         }
 
@@ -91,7 +91,7 @@ impl Client {
         let initial = self.status().await;
         // A service whose file was replaced (an app update) cannot become
         // ready under the restarted helper; it is replaced there instead.
-        let stale = !crate::session::input_build_current(&initial);
+        let stale = !Observation::decode(&initial).input_build_current();
         let (input_pid, _) = self.ensure_input(&initial).await?;
         let session = self.identity().await?;
         if session.epoch.input_pid != input_pid {
@@ -127,7 +127,8 @@ impl Client {
 
                 // Settle only with a new capture process and the same input
                 // service whose cleanup was acknowledged, idle and empty.
-                let Ok(session) = require_hidden(&status, self.config.helper_uid) else {
+                let observation = Observation::decode(&status);
+                let Ok(session) = observation.require_hidden(self.config.helper_uid) else {
                     continue;
                 };
 
@@ -135,7 +136,7 @@ impl Client {
                     continue;
                 }
 
-                if input_settled(&status, self.config.helper_uid, input_pid) {
+                if observation.settled_in(&session, input_pid) {
                     self.controller.clear().map_err(Error::uncertain)?;
                     return Ok(json!({"ok": true, "restarted": true, "session": status}));
                 }
@@ -143,8 +144,8 @@ impl Client {
                 // Its cleanup was confirmed above, so nothing is held: a stale
                 // service that is not ready under the new helper is replaced.
                 if stale
-                    && status["inputService"]["pid"] == input_pid
-                    && status["inputService"]["ready"] == false
+                    && observation.native.pid == Some(input_pid.into())
+                    && observation.native.ready == Some(false)
                 {
                     self.upgrade_input_for(&status, true)
                         .await
@@ -189,12 +190,13 @@ impl Client {
     /// caller that keeps it across more than the log-out, such as uninstall.
     pub(crate) async fn logout_held(&self, _ownership: &Ownership, force: bool) -> Result<Value> {
         let status = self.status().await;
-        require_hidden(&status, self.config.helper_uid)?;
+        let observation = Observation::decode(&status);
+        observation.require_hidden(self.config.helper_uid)?;
         let claim = self.controller.quarantine()?;
 
         // Background jobs are stopped first, so none outlives the login it
         // ran in unsupervised.
-        let jobs = if has_capability(&status["daemon"], crate::daemon::protocol::JOBS) {
+        let jobs = if observation.has_capability(crate::daemon::protocol::JOBS) {
             Some(crate::jobs::stop_every(self, crate::daemon::protocol::StopReason::Stopped).await)
         } else {
             None

@@ -35,7 +35,7 @@ use crate::{
     doing::Doing,
     error::{Code, Error, Result},
     host_session::HostSession,
-    session::{Session, has_capability, require_hidden},
+    session::{Observation, Session},
     task::Task,
     transport::{Transport, run_output},
 };
@@ -57,7 +57,7 @@ type BuildCache = Arc<std::sync::Mutex<Option<((u64, u64, u64, i64, i64), String
 #[derive(Debug, Clone)]
 pub struct Verified {
     session: Session,
-    pinned: bool,
+    observation: Observation,
 }
 
 impl Verified {
@@ -69,10 +69,12 @@ impl Verified {
     /// What a read carries to be served only in this session; none when the
     /// daemon cannot be told, and the session is verified again instead.
     pub(crate) fn pin(&self) -> Option<SessionPin> {
-        self.pinned.then_some(SessionPin {
-            security_session_id: self.session.epoch.security_session_id,
-            display_id: self.session.epoch.display_id,
-        })
+        self.observation
+            .has_capability(SESSION_PIN)
+            .then_some(SessionPin {
+                security_session_id: self.session.epoch.security_session_id,
+                display_id: self.session.epoch.display_id,
+            })
     }
 }
 
@@ -250,7 +252,7 @@ impl Client {
     }
 
     pub async fn identity(&self) -> Result<Session> {
-        require_hidden(&self.status().await, self.config.helper_uid)
+        Observation::decode(&self.status().await).require_hidden(self.config.helper_uid)
     }
 
     /// The helper session as the daemon reports it now, and whether that
@@ -259,9 +261,12 @@ impl Client {
     /// [`Client::identity`] does.
     pub async fn verify(&self) -> Result<Verified> {
         let status = self.status().await;
-        let session = require_hidden(&status, self.config.helper_uid)?;
-        let pinned = has_capability(&status["daemon"], SESSION_PIN);
-        Ok(Verified { session, pinned })
+        let observation = Observation::decode(&status);
+        let session = observation.require_hidden(self.config.helper_uid)?;
+        Ok(Verified {
+            session,
+            observation,
+        })
     }
 
     /// [`Client::verify`], refusing a helper daemon that does not offer
@@ -273,12 +278,15 @@ impl Client {
         older: &'static str,
     ) -> Result<Verified> {
         let status = self.status().await;
-        let session = require_hidden(&status, self.config.helper_uid)?;
-        if !has_capability(&status["daemon"], capability) {
+        let observation = Observation::decode(&status);
+        let session = observation.require_hidden(self.config.helper_uid)?;
+        if !observation.has_capability(capability) {
             return Err(Error::new(Code::Daemon, older));
         }
-        let pinned = has_capability(&status["daemon"], SESSION_PIN);
-        Ok(Verified { session, pinned })
+        Ok(Verified {
+            session,
+            observation,
+        })
     }
 
     /// Whether this shell may keep Atlas's own files: the controller lock

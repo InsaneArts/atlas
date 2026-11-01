@@ -385,6 +385,73 @@ fn verified_status(capabilities: &[&str]) -> Value {
     })
 }
 
+#[tokio::test]
+async fn verification_reuses_decoded_capability_facts_without_another_helper_request() {
+    use base64::{Engine, engine::general_purpose::STANDARD};
+
+    for (offering, valid_proof) in [
+        (None, true),
+        (Some(SESSION_PIN), true),
+        (Some("missing"), true),
+        (None, false),
+        (Some("missing"), false),
+    ] {
+        let (_dir, mut client, listener, _) = native_client();
+        client.config.helper_uid = 7001;
+        client.input_peer_uid = Some(nix::unistd::getuid().as_raw());
+        let mut status = verified_status(&[SHUTDOWN, "future-input"]);
+        status["daemon"]["capabilities"] = json!([SESSION_PIN, "future-daemon", null, 1]);
+        if !valid_proof {
+            status["sessionProof"]["onConsole"] = json!(true);
+        }
+        let mut caller = Box::pin(async {
+            match offering {
+                Some(capability) => client.verify_offering(capability, "Older daemon").await,
+                None => client.verify().await,
+            }
+        });
+        let mut hello = dispatched(&mut caller, &listener, "hello").await;
+        answer(&mut hello, status.clone()).await;
+        let mut native = dispatched(&mut caller, &listener, "hello").await;
+        answer(&mut native, status["inputService"].clone()).await;
+        let (mut proof, request) = received(&mut caller, &listener, "run").await;
+        assert_eq!(
+            request["argv"],
+            json!([client.config.identity_probe, "session-info"])
+        );
+        assert_eq!(request["timeoutMs"], 3000);
+        answer(&mut proof, json!({"ok": true, "exitCode": 0, "timedOut": false,
+            "events": [{"event": "output", "data": STANDARD.encode(status["sessionProof"].to_string())}]})).await;
+        let outcome = tokio::time::timeout(Duration::from_secs(2), caller)
+            .await
+            .unwrap();
+        if !valid_proof {
+            assert_eq!(outcome.unwrap_err().code, Code::OnConsole);
+        } else if offering == Some("missing") {
+            let error = outcome.unwrap_err();
+            assert_eq!(error.code, Code::Daemon);
+            assert_eq!(error.error, "Older daemon");
+        } else {
+            let verified = outcome.unwrap();
+            assert!(verified.session().input);
+            assert!(verified.session().capture);
+            assert_eq!(
+                verified.pin(),
+                Some(SessionPin {
+                    security_session_id: 42,
+                    display_id: 7
+                })
+            );
+            assert!(verified.observation.has_capability("future-daemon"));
+            assert!(verified.observation.native.has_capability("future-input"));
+            assert!(!verified.observation.native.has_capability("missing"));
+        }
+        assert!(
+            matches!(listener.into_std().unwrap().accept(), Err(error) if error.kind() == std::io::ErrorKind::WouldBlock)
+        );
+    }
+}
+
 /// Send one key under `check` given `status`, and whether the input
 /// service's socket was connected to at all.
 ///
@@ -3682,7 +3749,7 @@ async fn a_missing_window_endpoint_preserves_memory_without_starting_the_look() 
             capture: true,
             input: true,
         },
-        pinned: true,
+        observation: Observation::decode(&json!({"daemon": {"capabilities": [SESSION_PIN]}})),
     };
     client.remember_windows(
         &[HitWindow {
