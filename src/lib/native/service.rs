@@ -373,7 +373,25 @@ enum Request {
         #[serde(default, deserialize_with = "Request::owner")]
         owner: String,
     },
-    // Only acquire, reset, input and unknown operations retain raw fields.
+    Acquire {
+        #[serde(default)]
+        owner: String,
+        epoch: InputEpoch,
+        #[serde(
+            rename = "person",
+            default = "Request::agent",
+            deserialize_with = "Request::who"
+        )]
+        who: Who,
+    },
+    Reset {
+        epoch: InputEpoch,
+    },
+    // Acquire has always checked service availability before its fields.
+    // Keep that precedence without retaining untyped or authorized input.
+    #[serde(skip)]
+    RefusedAcquire(Arc<Error>),
+    // Only input and unknown operations retain raw fields.
     #[serde(skip)]
     TemporaryRaw {
         operation: RawOperation,
@@ -384,14 +402,22 @@ enum Request {
 #[derive(Clone, Copy, Debug, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "lowercase")]
 enum RawOperation {
-    Acquire,
-    Reset,
     Input,
     #[serde(other)]
     Unknown,
 }
 
 impl Request {
+    fn agent() -> Who {
+        Who::Agent
+    }
+
+    fn who<'de, D: serde::Deserializer<'de>>(
+        deserializer: D,
+    ) -> std::result::Result<Who, D::Error> {
+        bool::deserialize(deserializer).map(|person| if person { Who::Person } else { Who::Agent })
+    }
+
     fn owner<'de, D: serde::Deserializer<'de>>(
         deserializer: D,
     ) -> std::result::Result<String, D::Error> {
@@ -437,6 +463,18 @@ impl Request {
         })?;
         match raw.op.as_str() {
             "hello" => Err(refusal.into()),
+            "acquire" | "reset" => {
+                let mut error = Error::from(refusal);
+                // The old missing member was read as null before decoding.
+                if error.error == "missing field `epoch`" {
+                    error.error = "invalid type: null, expected struct InputEpoch".into();
+                }
+                if raw.op == "acquire" {
+                    Ok(Self::RefusedAcquire(Arc::new(error)))
+                } else {
+                    Err(error)
+                }
+            }
             "shutdown" => Err(Error::new(
                 Code::Identity,
                 "Shutdown names a different input service process",
@@ -612,38 +650,77 @@ impl Service {
                 phase.send_replace(ConnectionPhase::Mutation("renew"));
                 return Ok(json!({ "ok": true }));
             }
+            Request::RefusedAcquire(error) => {
+                self.check()?;
+                return Err(Error::new(error.code, &error.error).with_source(error.clone()));
+            }
+            Request::Reset { epoch: expected } => {
+                let current = InputEpoch::from_proof(&session_info()?, std::process::id())?;
+                if *expected != current || !Engine::trusted() {
+                    return Err(Error::new(
+                        Code::Identity,
+                        "Recovery requires the current hidden session and permission",
+                    ));
+                }
+
+                phase.send_replace(ConnectionPhase::Mutation("reset"));
+                reset(&self.operations, &self.engine, &self.gate, |engine| {
+                    let rebound = engine.rebind(current);
+
+                    // Enforce whatever epoch the engine now holds, even when its
+                    // release failed: the two never disagree, and the timer keeps
+                    // retrying that release against the display it was bound to.
+                    *self
+                        .epoch
+                        .write()
+                        .map_err(|_| Error::new(Code::Native, "Input identity failed"))? =
+                        engine.epoch.clone();
+
+                    rebound
+                })
+                .await?;
+                return Ok(json!({ "ok": true, "released": true }));
+            }
+            Request::Acquire {
+                owner,
+                epoch: expected,
+                who,
+            } => {
+                self.check()?;
+
+                let epoch = self.epoch()?;
+                if *expected != epoch {
+                    return Err(Error::new(
+                        Code::SessionChanged,
+                        "Input coordinates belong to a different session or display",
+                    ));
+                }
+                let mut engine = self.engine.lock().await;
+                self.operations.check()?;
+
+                if let Some(holder) = self.gate.holder()? {
+                    // An agent finding the person in control is told to wait.
+                    let error = Error::new(
+                        Code::Busy,
+                        if *who == Who::Agent && holder == Holder::Person {
+                            crate::error::PERSON_HAS_CONTROL
+                        } else {
+                            "The native input service already has a controller"
+                        },
+                    );
+                    return Err(error.held_by(holder));
+                }
+
+                engine.check()?;
+                phase.send_replace(ConnectionPhase::Mutation("acquire"));
+                engine.release()?;
+                engine.grant = Some(self.gate.acquire(owner, *who)?);
+
+                return Ok(json!({ "ok": true }));
+            }
             Request::TemporaryRaw { operation, request } => (*operation, request),
         };
         let owner = request["owner"].as_str().unwrap_or_default();
-
-        if operation == RawOperation::Reset {
-            let expected = InputEpoch::deserialize(&request["epoch"])?;
-            let current = InputEpoch::from_proof(&session_info()?, std::process::id())?;
-            if expected != current || !Engine::trusted() {
-                return Err(Error::new(
-                    Code::Identity,
-                    "Recovery requires the current hidden session and permission",
-                ));
-            }
-
-            phase.send_replace(ConnectionPhase::Mutation("reset"));
-            reset(&self.operations, &self.engine, &self.gate, |engine| {
-                let rebound = engine.rebind(current);
-
-                // Enforce whatever epoch the engine now holds, even when its
-                // release failed: the two never disagree, and the timer keeps
-                // retrying that release against the display it was bound to.
-                *self
-                    .epoch
-                    .write()
-                    .map_err(|_| Error::new(Code::Native, "Input identity failed"))? =
-                    engine.epoch.clone();
-
-                rebound
-            })
-            .await?;
-            return Ok(json!({ "ok": true, "released": true }));
-        }
 
         self.check()?;
 
@@ -654,37 +731,6 @@ impl Service {
                 Code::SessionChanged,
                 "Input coordinates belong to a different session or display",
             ));
-        }
-
-        if operation == RawOperation::Acquire {
-            let mut engine = self.engine.lock().await;
-            self.operations.check()?;
-
-            if let Some(holder) = self.gate.holder()? {
-                // An agent finding the person in control is told to wait.
-                let agent = request["person"] != true;
-                let error = Error::new(
-                    Code::Busy,
-                    if agent && holder == Holder::Person {
-                        crate::error::PERSON_HAS_CONTROL
-                    } else {
-                        "The native input service already has a controller"
-                    },
-                );
-                return Err(error.held_by(holder));
-            }
-
-            engine.check()?;
-            phase.send_replace(ConnectionPhase::Mutation("acquire"));
-            engine.release()?;
-            let who = if request["person"] == true {
-                Who::Person
-            } else {
-                Who::Agent
-            };
-            engine.grant = Some(self.gate.acquire(owner, who)?);
-
-            return Ok(json!({ "ok": true }));
         }
 
         if operation != RawOperation::Input {
@@ -1289,6 +1335,391 @@ mod tests {
         }
     }
 
+    #[test]
+    fn a_present_malformed_person_flag_never_grants_control() {
+        let directory = tempfile::tempdir().unwrap();
+        let service = service(&directory.path().join("stopped"));
+        let epoch = serde_json::to_string(&service.epoch().unwrap()).unwrap();
+        for person in ["null", r#""true""#, "0", "1", "[]", "{}"] {
+            let body = format!(
+                r#"{{"op":"acquire","owner":"{}","epoch":{epoch},"person":{person}}}"#,
+                "a".repeat(48)
+            );
+            assert!(
+                matches!(
+                    Request::decode(body.as_bytes()).unwrap(),
+                    Request::RefusedAcquire(_)
+                ),
+                "{body}"
+            );
+            assert!(!service.gate.active().unwrap());
+        }
+    }
+
+    #[test]
+    fn an_absent_person_flag_remains_an_agent() {
+        let directory = tempfile::tempdir().unwrap();
+        let service = service(&directory.path().join("stopped"));
+        let epoch = serde_json::to_string(&service.epoch().unwrap()).unwrap();
+        let owner = "a".repeat(48);
+        for (person, expected) in [
+            ("", super::Who::Agent),
+            (r#", "person":false"#, super::Who::Agent),
+            (r#", "person":true"#, super::Who::Person),
+        ] {
+            let body = format!(r#"{{"epoch":{epoch},"owner":"{owner}"{person},"op":"acquire"}}"#);
+            let Request::Acquire {
+                owner,
+                epoch: actual,
+                who,
+            } = Request::decode(body.as_bytes()).unwrap()
+            else {
+                panic!("expected typed acquire");
+            };
+            assert_eq!(actual, service.epoch().unwrap());
+            assert_eq!(who, expected);
+            let gate = Arc::new(Gate::default());
+            gate.hold(true).unwrap();
+            let grant = gate.acquire(&owner, who);
+            if who == super::Who::Agent {
+                assert_eq!(grant.err().unwrap().code, Code::Stopped);
+                assert!(!gate.active().unwrap());
+            } else {
+                assert!(grant.unwrap().authorize().is_ok());
+                assert_eq!(gate.holder().unwrap(), Some(crate::error::Holder::Person));
+            }
+        }
+    }
+
+    #[test]
+    fn acquire_and_reset_ignore_only_unrelated_extensions() {
+        let epoch = r#"{"uid":501,"securitySessionId":1,"displayId":2,"width":800,"height":600,"processId":1}"#;
+        let body = format!(
+            r#"{{"op":"acquire","epoch":{epoch},"other":1,"other":2,"on":null,"on":false}}"#
+        );
+        let Request::Acquire { owner, who, .. } = Request::decode(body.as_bytes()).unwrap() else {
+            panic!("expected typed acquire");
+        };
+        assert_eq!(owner, "");
+        assert_eq!(who, super::Who::Agent);
+        for owner in ["", "not-an-owner", &"a".repeat(48)] {
+            let body = format!(r#"{{"op":"acquire","owner":"{owner}","epoch":{epoch}}}"#);
+            let Request::Acquire { owner: actual, .. } = Request::decode(body.as_bytes()).unwrap()
+            else {
+                panic!("the gate checks token identity");
+            };
+            assert_eq!(actual, owner);
+        }
+        let body = format!(
+            r#"{{"op":"reset","epoch":{epoch},"owner":null,"owner":false,"person":[],"person":{{}},"other":1,"other":2}}"#
+        );
+        assert!(matches!(
+            Request::decode(body.as_bytes()).unwrap(),
+            Request::Reset { .. }
+        ));
+        // InputEpoch's existing sequence representation remains compatible.
+        for op in ["acquire", "reset"] {
+            let body = format!(r#"{{"op":"{op}","epoch":[501,1,2,800,600,1]}}"#);
+            let (Request::Acquire { epoch: actual, .. } | Request::Reset { epoch: actual }) =
+                Request::decode(body.as_bytes()).unwrap()
+            else {
+                panic!("expected a typed epoch");
+            };
+            assert_eq!(
+                actual,
+                crate::session::InputEpoch::deserialize(
+                    serde_json::from_str::<Value>(epoch).unwrap()
+                )
+                .unwrap()
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn typed_acquire_and_reset_still_require_fresh_authority() {
+        let directory = tempfile::tempdir().unwrap();
+        let service = service(&directory.path().join("stopped"));
+        let (phase, observed) = super::watch::channel(super::ConnectionPhase::Refusal);
+        let epoch = service.epoch().unwrap();
+        for who in [super::Who::Agent, super::Who::Person] {
+            let grant = service.gate.acquire(&"a".repeat(48), who).unwrap();
+            for member in [
+                "uid",
+                "securitySessionId",
+                "displayId",
+                "width",
+                "height",
+                "processId",
+            ] {
+                let mut stale = json!(epoch);
+                stale[member] = json!(2);
+                let stale = crate::session::InputEpoch::deserialize(stale).unwrap();
+                assert_ne!(stale, epoch);
+                for request in [
+                    Request::Acquire {
+                        owner: "wrong-owner".into(),
+                        epoch: stale.clone(),
+                        who,
+                    },
+                    Request::Reset { epoch: stale },
+                ] {
+                    let error = service.dispatch(&request, &phase).await.unwrap_err();
+                    assert_eq!(error.code, Code::Identity);
+                    assert!(!error.uncertain);
+                    assert!(grant.authorize().is_ok());
+                    assert_eq!(service.epoch().unwrap(), epoch);
+                    assert_eq!(service.engine.lock().await.posted, 0);
+                    assert!(matches!(
+                        *observed.borrow(),
+                        super::ConnectionPhase::Refusal
+                    ));
+                }
+            }
+            service.gate.cancel(None).unwrap();
+        }
+        service
+            .operations
+            .failed
+            .store(true, super::Ordering::Relaxed);
+        let request = Request::decode(br#"{"op":"acquire","epoch":null}"#).unwrap();
+        let error = service.dispatch(&request, &phase).await.unwrap_err();
+        assert_eq!(json!(error), json!(super::worker_failed()));
+    }
+
+    #[tokio::test]
+    async fn an_acquire_cannot_pass_cleanup_still_in_progress() {
+        for who in [super::Who::Agent, super::Who::Person] {
+            let operations = super::Operations::default();
+            let gate = Arc::new(Gate::default());
+            let old = gate.acquire(&"a".repeat(48), who).unwrap();
+            let stand = Stand::locked(&[]);
+            let engine = stand.clone().lock_owned().await;
+            let (resume, barrier) = tokio::sync::oneshot::channel::<()>();
+            let running = operations
+                .start(async move {
+                    barrier.await.unwrap();
+                    drop(engine);
+                })
+                .await
+                .unwrap();
+            gate.cancel(None).unwrap();
+            assert!(old.authorize().is_err());
+            let cleanup = super::drain_and_release(&operations, &stand, &gate);
+            let acquire = async {
+                let mut engine = stand.lock().await;
+                operations.check()?;
+                engine.release()?;
+                gate.acquire(&"b".repeat(48), who)
+            };
+            tokio::pin!(cleanup, acquire);
+            std::future::poll_fn(|cx| {
+                assert!(std::future::Future::poll(cleanup.as_mut(), cx).is_pending());
+                assert!(std::future::Future::poll(acquire.as_mut(), cx).is_pending());
+                std::task::Poll::Ready(())
+            })
+            .await;
+            assert!(!gate.active().unwrap());
+            assert_eq!(operations.tasks.lock().unwrap().len(), 1);
+            resume.send(()).unwrap();
+            let (cleaned, grant) = tokio::join!(cleanup, acquire);
+            cleaned.unwrap();
+            assert!(grant.unwrap().authorize().is_ok());
+            running.await.unwrap();
+        }
+    }
+
+    fn malformed_acquire_and_reset_requests() -> Vec<String> {
+        let epoch = r#"{"uid":501,"securitySessionId":1,"displayId":2,"width":800.0,"height":600.0,"processId":1}"#;
+        let owner = "a".repeat(48);
+        let mut cases = Vec::new();
+        for op in ["acquire", "reset"] {
+            let prefix = format!(r#""op":"{op}","owner":"{owner}""#);
+            cases.push(format!("{{{prefix}}}"));
+            for value in ["null", "false", "0", r#""epoch""#, "[]", "{}"] {
+                cases.push(format!(r#"{{{prefix},"epoch":{value}}}"#));
+            }
+            for member in ["op", "epoch"] {
+                let value = if member == "op" {
+                    format!(r#""{op}""#)
+                } else {
+                    epoch.to_owned()
+                };
+                for (first, second) in [
+                    (value.as_str(), value.as_str()),
+                    ("null", value.as_str()),
+                    (value.as_str(), "null"),
+                ] {
+                    let fields = if member == "op" {
+                        format!(r#""owner":"{owner}","epoch":{epoch}"#)
+                    } else {
+                        prefix.clone()
+                    };
+                    cases.push(format!(
+                        r#"{{{fields},"{member}":{first},"{member}":{second}}}"#
+                    ));
+                }
+            }
+            let fields = serde_json::from_str::<serde_json::Map<String, Value>>(epoch).unwrap();
+            for (member, valid) in &fields {
+                let mut missing = fields.clone();
+                missing.remove(member);
+                cases.push(format!(r#"{{{prefix},"epoch":{}}}"#, json!(missing)));
+                let mut invalid = vec!["null", "false", r#""1""#, "[]", "{}"];
+                if member != "width" && member != "height" {
+                    invalid.extend(["-1", "1.0", "18446744073709551616"]);
+                }
+                if member == "uid" || member == "processId" {
+                    invalid.push("4294967296");
+                }
+                for value in invalid {
+                    let mut malformed = fields.clone();
+                    malformed.insert(member.clone(), serde_json::from_str(value).unwrap());
+                    cases.push(format!(r#"{{{prefix},"epoch":{}}}"#, json!(malformed)));
+                }
+                for (first, second) in [
+                    (valid.to_string(), valid.to_string()),
+                    ("null".into(), valid.to_string()),
+                    (valid.to_string(), "null".into()),
+                ] {
+                    cases.push(format!(
+                        r#"{{{prefix},"epoch":{{"{member}":{first},"{member}":{second},{}}}}}"#,
+                        serde_json::to_string(&missing)
+                            .unwrap()
+                            .trim_start_matches('{')
+                            .trim_end_matches('}')
+                    ));
+                }
+                let escaped = format!(r#"\u{:04x}{}"#, member.as_bytes()[0], &member[1..]);
+                cases.push(format!(
+                    r#"{{{prefix},"epoch":{{"{escaped}":{valid},{}}}}}"#,
+                    epoch.trim_start_matches('{').trim_end_matches('}')
+                ));
+            }
+            cases.push(format!(
+                r#"{{{prefix},"epoch":{{"extension":1,{}}}}}"#,
+                epoch.trim_start_matches('{').trim_end_matches('}')
+            ));
+        }
+        for member in ["owner", "person"] {
+            for value in ["null", "0", "1", "[]", "{}"] {
+                let other = if member == "person" {
+                    format!(r#""owner":"{owner}""#)
+                } else {
+                    r#""person":false"#.to_owned()
+                };
+                cases.push(format!(
+                    r#"{{"op":"acquire","epoch":{epoch},{other},"{member}":{value}}}"#
+                ));
+            }
+            let values = if member == "owner" {
+                vec![format!(r#""{owner}""#), "false".into(), "null".into()]
+            } else {
+                vec![
+                    "false".into(),
+                    "true".into(),
+                    r#""true""#.into(),
+                    "null".into(),
+                ]
+            };
+            for first in &values {
+                for second in &values {
+                    let other = if member == "person" {
+                        format!(r#""owner":"{owner}","epoch":{epoch}"#)
+                    } else {
+                        format!(r#""epoch":{epoch}"#)
+                    };
+                    cases.push(format!(
+                        r#"{{"op":"acquire",{other},"{member}":{first},"{member}":{second}}}"#
+                    ));
+                }
+            }
+            let value = if member == "owner" {
+                "false"
+            } else {
+                r#""false""#
+            };
+            cases.push(format!(
+                r#"{{"op":"acquire","epoch":{epoch},"{member}":{value}}}"#
+            ));
+            let escaped = if member == "owner" {
+                r#"\u006fwner"#
+            } else {
+                r#"\u0070erson"#
+            };
+            let value = if member == "owner" {
+                format!(r#""{owner}""#)
+            } else {
+                "true".into()
+            };
+            cases.push(format!(
+                r#"{{"op":"acquire","epoch":{epoch},"{member}":{value},"{escaped}":{value}}}"#
+            ));
+        }
+        cases
+    }
+
+    #[tokio::test]
+    async fn malformed_acquire_and_reset_fields_leave_ownership_and_recovery_unchanged() {
+        let directory = tempfile::tempdir().unwrap();
+        for who in [super::Who::Agent, super::Who::Person] {
+            for failed in [false, true] {
+                let marker = directory.path().join("stopped");
+                let service = service(&marker);
+                let grant = service.gate.acquire(&"a".repeat(48), who).unwrap();
+                let (resume, barrier) = tokio::sync::oneshot::channel::<()>();
+                let running = service.operations.start(barrier).await.unwrap();
+                service
+                    .operations
+                    .failed
+                    .store(failed, super::Ordering::Relaxed);
+                let _recovery = service.operations.recovery.lock().await;
+                let (phase, observed) = super::watch::channel(super::ConnectionPhase::Refusal);
+                for body in malformed_acquire_and_reset_requests() {
+                    match Request::decode(body.as_bytes()) {
+                        Ok(request @ Request::RefusedAcquire(_)) => {
+                            let error = service.dispatch(&request, &phase).await.unwrap_err();
+                            assert_eq!(json!(error), json!(service.check().unwrap_err()), "{body}");
+                        }
+                        Err(error) => {
+                            assert!(
+                                matches!(error.code, Code::InvalidJson | Code::Input),
+                                "{body}"
+                            );
+                            assert!(!error.uncertain, "{body}");
+                        }
+                        Ok(_) => panic!("malformed fields reached dispatch: {body}"),
+                    }
+                    assert!(grant.authorize().is_ok(), "{body}");
+                    assert!(!service.gate.held().unwrap(), "{body}");
+                    assert!(!marker.exists(), "{body}");
+                    let engine = service.engine.lock().await;
+                    assert_eq!(engine.posted, 0, "{body}");
+                    assert!(!engine.held_input(), "{body}");
+                    assert!(engine.grant.is_none(), "{body}");
+                    assert_eq!(engine.epoch, service.epoch().unwrap(), "{body}");
+                    assert_eq!(
+                        service.operations.failed.load(super::Ordering::Relaxed),
+                        failed,
+                        "{body}"
+                    );
+                    assert_eq!(service.operations.tasks.lock().unwrap().len(), 1, "{body}");
+                    assert!(service.operations.recovery.try_lock().is_err(), "{body}");
+                    assert!(
+                        matches!(*observed.borrow(), super::ConnectionPhase::Refusal),
+                        "{body}"
+                    );
+                }
+                resume.send(()).unwrap();
+                running.await.unwrap().unwrap();
+                service
+                    .operations
+                    .failed
+                    .store(false, super::Ordering::Relaxed);
+                service.operations.drain().await.unwrap();
+            }
+        }
+    }
+
     // Field         | Presence/type             | Duplicates | Admission
     // op            | required string           | refuse     | boundary
     // shutdown pid  | required u64, bound PID    | refuse     | before controller checks
@@ -1296,7 +1727,9 @@ mod tests {
     // release owner | non-string becomes empty  | refuse     | existing gate refusal
     // renew owner   | non-string becomes empty  | refuse     | ordinary checks, then gate
     // extensions    | ignored                   | ignore     | no effects
-    // InputEpoch retains its existing strict member policy in the raw adapter.
+    // acquire owner | absent becomes empty      | refuse     | gate checks token identity
+    // acquire person| absent/false Agent, true Person; present non-bool refused
+    // epoch         | required InputEpoch       | refuse     | fresh authority checks in dispatch
     #[tokio::test]
     async fn a_duplicate_lifecycle_member_is_refused_before_state_changes() {
         let directory = tempfile::tempdir().unwrap();
@@ -1539,8 +1972,6 @@ mod tests {
             assert_eq!(owner, "unvalidated-token", "the gate owns token identity");
         }
         for (op, operation) in [
-            ("acquire", RawOperation::Acquire),
-            ("reset", RawOperation::Reset),
             ("input", RawOperation::Input),
             ("unknown", RawOperation::Unknown),
         ] {
