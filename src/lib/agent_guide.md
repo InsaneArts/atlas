@@ -61,9 +61,8 @@ element, or refuses and lists `candidates`. Otherwise use
 `atlas click --app A X Y`, `atlas type --app A "text"`,
 `atlas key --app A cmd+a` or `atlas scroll --app A X Y --dy -3` (and
 `drag`): nothing is sent while another app would get it.
-In a shared app, use `--window N` for your document.
 Untargeted points use the top window from your last look. An explicit `--app`
-bypasses this memory; name a window with `atlas click --app A --window N X Y`.
+bypasses this memory; in a shared app, add `--window N` for your document.
 
 `atlas run -- PROGRAM ARGS` runs a command as the helper; its result is
 `exitCode`. Use `--timeout` up to 600, not `&`, and never send keys or clicks
