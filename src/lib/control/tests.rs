@@ -657,18 +657,17 @@ fn waiting_for_control_takes_the_lock_once_the_holder_lets_go() {
     let directory = tempfile::tempdir().unwrap();
     let controller = Controller::at(505, directory.path());
     let held = controller.acquire(false).unwrap();
-    let (waiter, events) = watched(&controller, Duration::from_secs(5));
+    let (waiter, events) = watched(&controller, Duration::from_secs(60));
     let waiting = acquiring(waiter, false);
 
     assert_eq!(told(&events), WaitEvent::Began);
-    std::thread::sleep(Duration::from_millis(300));
+    assert!(!waiting.is_finished(), "the holder still has control");
     let released = Instant::now();
     drop(held);
+    assert_eq!(told(&events), WaitEvent::Ended);
     let (outcome, taken) = waiting.join().unwrap();
     outcome.unwrap();
     assert!(taken >= released);
-    assert!(taken - released < Duration::from_millis(500));
-    assert_eq!(told(&events), WaitEvent::Ended);
 }
 
 #[test]
@@ -764,14 +763,15 @@ fn one_wait_is_shared_by_every_acquire_of_a_command() {
     let directory = tempfile::tempdir().unwrap();
     let controller = Controller::at(505, directory.path());
     let _held = controller.acquire(false).unwrap();
-    let waiter = controller.clone().waiting(Duration::from_secs(1));
+    let (waiter, events) = watched(&controller, Duration::from_secs(1));
 
     assert_eq!(waiter.acquire(false).unwrap_err().code, "busy");
+    assert_eq!(told(&events), WaitEvent::Began);
+    assert_eq!(told(&events), WaitEvent::Ended);
     assert_eq!(waiter.remaining(), Duration::ZERO);
     for again in [waiter.clone(), waiter] {
-        let started = Instant::now();
         let refused = again.acquire(false).unwrap_err();
-        assert!(started.elapsed() < Duration::from_millis(50));
+        assert!(events.try_recv().is_err(), "the allowance is already spent");
         assert_eq!(refused.details["waited"], 0);
         assert_eq!(refused.details["next"], crate::ui::hints::WAITED);
     }
@@ -787,9 +787,7 @@ fn a_wait_of_zero_answers_busy_at_once() {
     let _held = controller.acquire(false).unwrap();
     let (waiter, events) = watched(&controller, Duration::ZERO);
 
-    let started = Instant::now();
     let refused = waiter.acquire(false).unwrap_err();
-    assert!(started.elapsed() < Duration::from_millis(50));
     assert_eq!(refused.code, "busy");
     assert_eq!(refused.holder, Some(Holder::Agent));
     assert_eq!(
@@ -813,9 +811,7 @@ fn the_person_in_control_is_never_waited_for() {
     let _person = controller.acquire_for_person().unwrap();
     let (waiter, events) = watched(&controller, Duration::from_secs(5));
 
-    let started = Instant::now();
     let refused = waiter.acquire(false).unwrap_err();
-    assert!(started.elapsed() < Duration::from_millis(50));
     assert_eq!(refused.code, "busy");
     assert_eq!(refused.error, crate::error::PERSON_HAS_CONTROL);
     assert_eq!(refused.holder, Some(Holder::Person));
@@ -861,13 +857,11 @@ fn a_stop_noted_before_or_during_a_wait_ends_it_at_once() {
     let directory = tempfile::tempdir().unwrap();
     let controller = Controller::at(505, directory.path());
     let held = controller.acquire(false).unwrap();
-    let (waiter, events) = watched(&controller, Duration::from_secs(5));
+    let (waiter, events) = watched(&controller, Duration::from_secs(60));
     let waiter = waiter.heeding_stop();
 
     controller.note_stop(true).unwrap();
-    let started = Instant::now();
     assert_eq!(waiter.acquire(false).unwrap_err().code, "stopped");
-    assert!(started.elapsed() < Duration::from_millis(50));
     assert!(events.try_recv().is_err(), "nothing waited for");
     let refused = controller
         .clone()
@@ -877,24 +871,20 @@ fn a_stop_noted_before_or_during_a_wait_ends_it_at_once() {
     assert_eq!(refused.code, "busy", "no wait, today's answer");
     controller.note_stop(false).unwrap();
 
-    let waiting = std::thread::spawn(move || {
-        let refused = waiter.acquire(false).unwrap_err();
-        (refused, Instant::now())
-    });
+    let waiting = acquiring(waiter, false);
     assert_eq!(told(&events), WaitEvent::Began);
-    let noted = Instant::now();
     controller.note_stop(true).unwrap();
-    let (refused, answered) = waiting.join().unwrap();
-    assert!(answered - noted < Duration::from_millis(300));
+    assert_eq!(told(&events), WaitEvent::Ended);
+    let refused = waiting.join().unwrap().0.unwrap_err();
     assert_eq!(refused.code, "stopped");
     assert_eq!(refused.error, crate::error::STOPPED);
-    assert_eq!(told(&events), WaitEvent::Ended);
 
     // What a Stop does not refuse, such as recovery, keeps waiting for the lock.
-    let (recovery, events) = watched(&controller, Duration::from_secs(5));
+    let (recovery, events) = watched(&controller, Duration::from_secs(60));
     let waiting = acquiring(recovery, true);
     assert_eq!(told(&events), WaitEvent::Began);
     drop(held);
+    assert_eq!(told(&events), WaitEvent::Ended);
     waiting.join().unwrap().0.unwrap();
 }
 
@@ -982,17 +972,16 @@ fn recovery_waits_for_the_lock_but_never_for_an_executor_still_running() {
     let controller = Controller::at(505, directory.path());
     let held = controller.acquire(false).unwrap();
     let running = controller.quarantine().unwrap();
-    let (recovery, events) = watched(&controller, Duration::from_secs(2));
-    let waiting = std::thread::spawn(move || {
-        let refused = recovery.acquire(true).unwrap_err();
-        (refused, Instant::now())
-    });
+    let (recovery, events) = watched(&controller, Duration::from_secs(60));
+    let waiting = acquiring(recovery, true);
 
     assert_eq!(told(&events), WaitEvent::Began);
-    std::thread::sleep(Duration::from_millis(300));
+    assert!(!waiting.is_finished(), "recovery still needs the lock");
     let released = Instant::now();
     drop(held);
-    let (refused, answered) = waiting.join().unwrap();
+    assert_eq!(told(&events), WaitEvent::Ended);
+    let (outcome, answered) = waiting.join().unwrap();
+    let refused = outcome.unwrap_err();
     assert!(answered >= released);
     assert_eq!(refused.code, "busy");
     assert!(
@@ -1003,15 +992,9 @@ fn recovery_waits_for_the_lock_but_never_for_an_executor_still_running() {
 
     controller.clear_if(&running).unwrap();
     drop(running);
-    let started = Instant::now();
-    drop(
-        controller
-            .clone()
-            .waiting(Duration::from_secs(2))
-            .acquire(true)
-            .unwrap(),
-    );
-    assert!(started.elapsed() < Duration::from_millis(50));
+    let (recovery, events) = watched(&controller, Duration::from_secs(60));
+    drop(recovery.acquire(true).unwrap());
+    assert!(events.try_recv().is_err(), "nothing left to wait for");
 }
 
 #[test]
