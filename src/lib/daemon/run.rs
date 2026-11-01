@@ -925,7 +925,7 @@ mod tests {
             assert_eq!(receiver.recv().await.unwrap()["event"], "started");
             assert!(finish.await.is_ok());
         }
-        assert_eq!(output(&[receiver.recv().await.unwrap()]), "onetwo");
+        assert_eq!(output(&[receiver.try_recv().unwrap()]), "onetwo");
         assert!(!buffered.truncated);
         assert!(buffered.pending.is_empty());
         assert_eq!(buffered.forwarded, 6);
