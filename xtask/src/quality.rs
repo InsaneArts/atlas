@@ -596,6 +596,7 @@ impl<'ast> Visit<'ast> for Scan<'_> {
 
     fn visit_item_trait(&mut self, item: &'ast syn::ItemTrait) {
         self.scope.push(item.ident.to_string());
+        self.emit("declaration", item.span(), item, json!({"type":"trait"}));
         visit::visit_item_trait(self, item);
         self.scope.pop();
     }
@@ -706,6 +707,36 @@ impl<'ast> Visit<'ast> for Scan<'_> {
         self.scope.push(item.ident.to_string());
         self.emit("declaration", item.span(), item, json!({"type":"alias"}));
         visit::visit_item_type(self, item);
+        self.scope.pop();
+    }
+
+    fn visit_trait_item_type(&mut self, item: &'ast syn::TraitItemType) {
+        self.scope.push(item.ident.to_string());
+        if !self.context.test {
+            self.declarations += 1;
+        }
+        self.emit(
+            "declaration",
+            item.span(),
+            item,
+            json!({"type":"associated type"}),
+        );
+        visit::visit_trait_item_type(self, item);
+        self.scope.pop();
+    }
+
+    fn visit_impl_item_type(&mut self, item: &'ast syn::ImplItemType) {
+        self.scope.push(item.ident.to_string());
+        if !self.context.test {
+            self.declarations += 1;
+        }
+        self.emit(
+            "declaration",
+            item.span(),
+            item,
+            json!({"type":"associated type"}),
+        );
+        visit::visit_impl_item_type(self, item);
         self.scope.pop();
     }
 
@@ -1298,7 +1329,7 @@ mod tests {
                 .iter()
                 .filter(|site| site["kind"] == "declaration")
                 .count(),
-            4
+            6
         );
         let changed = source.replace("fn signature(&self);", "fn signature(&self) {}");
         assert_eq!(
@@ -1309,6 +1340,85 @@ mod tests {
                 .count(),
             4
         );
+    }
+
+    #[test]
+    fn trait_contract_changes_require_fresh_dispositions() {
+        let source =
+            "#[doc = \"Contract\"] pub trait Service<T: Clone>: Send + Sync where T: Send {}";
+        let original = scan(source);
+        let dispositions = ledger(&original.sites);
+        assert!(check(&report(&original), &dispositions).is_ok());
+        for (from, to) in [
+            ("Contract", "Updated contract"),
+            ("pub trait", "trait"),
+            ("trait Service", "unsafe trait Service"),
+            ("T: Clone", "T: Copy"),
+            ("Send + Sync", "Send"),
+            ("where T: Send", "where T: Sync"),
+        ] {
+            let changed_source = source.replace(from, to);
+            let changed = self::scan(&changed_source);
+            assert_eq!(
+                check(&report(&changed), &dispositions).unwrap_err(),
+                "stale disposition: src/fixture.rs|Service|declaration|1",
+                "{from} -> {to}"
+            );
+        }
+    }
+
+    #[test]
+    fn associated_type_changes_require_fresh_dispositions() {
+        for (source, symbol, from, to) in [
+            (
+                "trait Service { type Output<'a>: Clone where Self: 'a; }",
+                "Service::Output",
+                "Clone",
+                "Copy",
+            ),
+            (
+                "trait Service { type Output<'a>: Clone where Self: 'a; }",
+                "Service::Output",
+                "Self: 'a",
+                "Self: 'static",
+            ),
+            (
+                "trait Service { type Output = u8; }",
+                "Service::Output",
+                "u8",
+                "u16",
+            ),
+            (
+                "struct Local; impl Service for Local { type Output = u8; }",
+                "Local::Output",
+                "u8",
+                "u16",
+            ),
+        ] {
+            let original = scan(source);
+            let site = original
+                .sites
+                .iter()
+                .find(|site| site["symbol"] == symbol && site["kind"] == "declaration")
+                .unwrap();
+            let dispositions = ledger(std::slice::from_ref(site));
+            let changed_source = source.replace(from, to);
+            let changed = self::scan(&changed_source);
+            let updated = changed
+                .sites
+                .iter()
+                .find(|site| site["symbol"] == symbol && site["kind"] == "declaration")
+                .unwrap();
+            assert_eq!(
+                check(&json!({"sites":[updated]}), &dispositions).unwrap_err(),
+                format!("stale disposition: src/fixture.rs|{symbol}|declaration|1")
+            );
+        }
+        let tests = scan(
+            "#[cfg(test)] trait Service { type Output; } impl Local { #[cfg(test)] type Output = u8; }",
+        );
+        assert_eq!(tests.declarations, 0);
+        assert!(tests.sites.is_empty());
     }
 
     #[test]
