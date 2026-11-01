@@ -53,9 +53,8 @@ fn noted(client: &Client, session: &HostSession, kind: Kind, verb: &'static str,
     note_at(
         client,
         session,
-        kind,
         Some(&Doing::new(verb)),
-        &Ok(reply),
+        &ReplyFacts::new(kind, &Ok(reply)),
         || now,
     )
     .unwrap();
@@ -66,8 +65,9 @@ fn noted(client: &Client, session: &HostSession, kind: Kind, verb: &'static str,
 fn environment(client: &Client, session: &HostSession, changes: bool, reply: Value) {
     let kind = Kind::Environment { changes };
     let result = Ok(reply);
-    note_at(client, session, kind, None, &result, || TEST_NOW).unwrap();
-    forget_rolled_back(client, kind, &result).unwrap();
+    let facts = ReplyFacts::new(kind, &result);
+    note_at(client, session, None, &facts, || TEST_NOW).unwrap();
+    forget_rolled_back_facts(client, &facts).unwrap();
 }
 
 #[test]
@@ -151,6 +151,193 @@ fn a_refused_command_is_seen_but_not_counted() {
     note(&client, &session, Kind::Other, Some(&click), &Ok(failed)).unwrap();
     let record = store(&client).read(session.key()).unwrap();
     assert_eq!(record.counts["click"], 2, "what may have acted counts");
+}
+
+#[test]
+fn an_uncertain_refusal_does_not_invent_confirmed_cleanup() {
+    let directory = tempfile::tempdir().unwrap();
+    let client = client(directory.path());
+    let (owner, other) = (session("owner"), session("other"));
+    let plan = Token::new();
+    environment(
+        &client,
+        &owner,
+        true,
+        json!({"planId": plan, "phase": "applied"}),
+    );
+    let before = store(&client).read(owner.key()).unwrap();
+
+    for reply in [
+        json!({"ok": false, "code": "uncertain", "uncertain": true, "planId": plan}),
+        json!({"ok": false, "code": "busy", "uncertain": true, "planId": plan,
+            "phase": "rollingBack"}),
+    ] {
+        environment(&client, &other, true, reply);
+        assert_eq!(store(&client).read(owner.key()).unwrap(), before);
+    }
+    let record = store(&client).read(other.key()).unwrap();
+    assert_eq!(record.counts["environment"], 2);
+    assert_eq!(record.plans[0].phase, Phase::RollingBack);
+}
+
+#[test]
+fn an_absent_reply_leaves_existing_copy_labels_intact() {
+    let directory = tempfile::tempdir().unwrap();
+    let client = client(directory.path());
+    let owner = session("copies");
+    let store = store(&client);
+    store.folder.make().unwrap();
+    let mut record = Record::new(&owner, TEST_NOW, None);
+    record.copies = (0..65).map(|_| Token::new()).collect();
+    store.write(&record).unwrap();
+    let doing = Doing::new("open");
+    let facts = ReplyFacts::new(
+        Kind::Open,
+        &Err(Error::new(Code::Transport, "No reply").uncertain()),
+    );
+    note_at(&client, &owner, Some(&doing), &facts, || TEST_NOW).unwrap();
+    assert_eq!(store.read(owner.key()).unwrap().copies, record.copies);
+
+    let facts = ReplyFacts::new(Kind::Open, &Ok(Value::Null));
+    note_at(&client, &owner, Some(&doing), &facts, || TEST_NOW).unwrap();
+    record.copies.truncate(64);
+    assert_eq!(store.read(owner.key()).unwrap().copies, record.copies);
+}
+
+#[test]
+fn an_unreadable_phase_leaves_existing_attribution_intact() {
+    let directory = tempfile::tempdir().unwrap();
+    let client = client(directory.path());
+    let owner = session("owner");
+    let plan = Token::new();
+    environment(
+        &client,
+        &owner,
+        true,
+        json!({"planId": plan, "phase": "applied"}),
+    );
+    let before = store(&client).read(owner.key()).unwrap().plans;
+    for phase in [
+        Value::Null,
+        json!(false),
+        json!(7),
+        json!({}),
+        json!("future"),
+    ] {
+        environment(
+            &client,
+            &owner,
+            true,
+            json!({"ok": true, "planId": plan, "phase": phase}),
+        );
+        assert_eq!(store(&client).read(owner.key()).unwrap().plans, before);
+    }
+}
+
+#[test]
+fn success_uncertainty_and_partial_phases_keep_their_independent_rules() {
+    let directory = tempfile::tempdir().unwrap();
+    let client = client(directory.path());
+    let (owner, other) = (session("owner"), session("other"));
+    let plan = Token::new();
+    for (ok, uncertain, phase, expected) in [
+        (false, false, "applying", Phase::Applying),
+        (false, true, "rollingBack", Phase::RollingBack),
+        (true, true, "applied", Phase::Applied),
+    ] {
+        environment(
+            &client,
+            &owner,
+            true,
+            json!({"ok": ok, "uncertain": uncertain, "planId": plan, "phase": phase}),
+        );
+        assert_eq!(
+            store(&client).read(owner.key()).unwrap().plans[0].phase,
+            expected
+        );
+    }
+    environment(
+        &client,
+        &other,
+        true,
+        json!({"ok": true, "uncertain": true, "planId": plan, "phase": "rolledBack"}),
+    );
+    assert!(store(&client).read(owner.key()).unwrap().plans.is_empty());
+    assert!(store(&client).read(other.key()).unwrap().plans.is_empty());
+}
+
+#[test]
+fn a_failed_reply_with_a_terminal_phase_changes_only_its_own_labels() {
+    let directory = tempfile::tempdir().unwrap();
+    let client = client(directory.path());
+    let (owner, other) = (session("owner"), session("other"));
+    let plan = Token::new();
+    for session in [&owner, &other] {
+        environment(
+            &client,
+            session,
+            true,
+            json!({"planId": plan, "phase": "applied"}),
+        );
+    }
+    let before = store(&client).read(other.key()).unwrap();
+    environment(
+        &client,
+        &owner,
+        true,
+        json!({"ok": false, "uncertain": true, "planId": plan, "phase": "rolledBack"}),
+    );
+    assert!(store(&client).read(owner.key()).unwrap().plans.is_empty());
+    assert_eq!(store(&client).read(other.key()).unwrap(), before);
+}
+
+#[test]
+fn settlement_uses_decoded_facts_even_when_its_projection_changes() {
+    use crate::task::{Claims, Owned, State, Task, store::Store as Tasks};
+
+    let directory = tempfile::tempdir().unwrap();
+    let client = client(directory.path());
+    let output = client.output_dir().unwrap();
+    let (owner, other) = (session("owner"), session("other"));
+    let plan = Token::new();
+    let owned = Owned::Plan { id: plan.clone() };
+    let mut tasks = Vec::new();
+    for session in [&owner, &other] {
+        environment(
+            &client,
+            session,
+            true,
+            json!({"planId": plan, "phase": "applied"}),
+        );
+        let task = Task::of(session.key(), None).unwrap();
+        Claims::in_store(Tasks::at(output), task.clone())
+            .claim(&owned, State::Made)
+            .unwrap();
+        tasks.push(task);
+    }
+    let kind = Kind::Environment { changes: true };
+    let mut projection = Ok(json!({"ok": true, "phase": "rolledBack", "planId": plan,
+        "keptTargets": ["private target"], "retainedDirectories": []}));
+    let facts = ReplyFacts::new(kind, &projection);
+    projection.as_mut().unwrap()["phase"] = json!("future");
+    projection.as_mut().unwrap()["planId"] = json!("private token");
+    projection.as_mut().unwrap()["keptTargets"] = json!([]);
+    note_at(&client, &other, None, &facts, || TEST_NOW).unwrap();
+    forget_rolled_back_facts(&client, &facts).unwrap();
+    crate::task::settle_rolled_back_facts(&client, &facts).unwrap();
+    for (session, task) in [&owner, &other].into_iter().zip(tasks) {
+        let mut expected = Record::new(session, TEST_NOW, None);
+        expected
+            .counts
+            .insert("environment".into(), if session == &other { 2 } else { 1 });
+        assert_eq!(store(&client).read(session.key()).unwrap(), expected);
+        let claims: Vec<_> = Tasks::at(output)
+            .load(task.key())
+            .unwrap()
+            .claims()
+            .collect();
+        assert_eq!(claims, [(owned.clone(), State::Kept)]);
+    }
 }
 
 #[test]
@@ -883,6 +1070,136 @@ fn a_record_through_a_link_or_too_large_or_with_foreign_names_is_not_read() {
     std::os::unix::fs::symlink(&real, &sessions).unwrap();
     assert!(store.folder.make().is_err(), "a linked folder is refused");
     assert!(store.all().is_empty());
+}
+
+#[test]
+fn preserved_records_survive_recording_forgetting_predecessors_and_pruning_after_reopen() {
+    let directory = tempfile::tempdir().unwrap();
+    let client = client(directory.path());
+    let process = Instance::current().unwrap();
+    let owner = session("preserved").run_by(Some(process));
+    let plan = Token::new();
+    let store = store(&client);
+    store.folder.make().unwrap();
+    let path = store.folder.path(owner.key());
+    let mut record = Record::new(&owner, 1, None);
+    record.planned(plan.clone(), Phase::Applied, 1);
+    let mut future = serde_json::to_value(&record).unwrap();
+    future["version"] = json!(VERSION + 1);
+    future["futureField"] = json!("private durable canary");
+    let mut mismatched = serde_json::to_value(&record).unwrap();
+    mismatched["key"] = json!(session("different").key());
+
+    for bytes in [
+        b"{malformed private durable canary".to_vec(),
+        serde_json::to_vec(&future).unwrap(),
+        serde_json::to_vec(&mismatched).unwrap(),
+    ] {
+        fs::write(&path, &bytes).unwrap();
+        for successor in ["first-successor", "reopened-successor"] {
+            let reopened = Store::at(client.output_dir().unwrap());
+            let cache = Mutex::new(None);
+            let recent = reopened.recent_in(&cache, Store::all);
+            assert!(recent.iter().all(|seen| seen.record.key != *owner.key()));
+            assert!(reopened.checked_recent().is_none());
+
+            let result = Ok(json!({"ok": true, "performed": 1}));
+            let error = note(
+                &client,
+                &owner,
+                Kind::Other,
+                Some(&Doing::new("click")),
+                &result,
+            )
+            .unwrap_err();
+            assert_eq!(error.code, Code::State);
+            assert_eq!(
+                error.error,
+                "This session's record cannot be read by this version of Atlas, so it was left as it is"
+            );
+            assert_eq!(result.ok(), Some(json!({"ok": true, "performed": 1})));
+            assert_eq!(fs::read(&path).unwrap(), bytes);
+            assert_eq!(
+                reopened
+                    .touch(&owner, Some(process), TEST_NOW, &client.controller)
+                    .unwrap_err()
+                    .code,
+                Code::State
+            );
+            assert_eq!(fs::read(&path).unwrap(), bytes);
+
+            reopened.forget_plan(&plan).unwrap();
+            assert_eq!(fs::read(&path).unwrap(), bytes);
+            let successor = session(successor).run_by(Some(process));
+            reopened
+                .update(&successor, TEST_NOW, &client.controller, |_| {})
+                .unwrap();
+            assert_ne!(
+                reopened.read(successor.key()).unwrap().previous.as_ref(),
+                Some(owner.key())
+            );
+            assert_eq!(fs::read(&path).unwrap(), bytes);
+
+            for n in 0..=MAX_RECORDS {
+                aged(&reopened, &format!("idle-{n}"), 8, 0);
+            }
+            reopened.prune_at(successor.key(), &[], TEST_NOW);
+            assert_eq!(fs::read(&path).unwrap(), bytes);
+            for n in 0..=MAX_RECORDS {
+                aged(&reopened, &format!("recent-{n}"), 1, 0);
+            }
+            reopened.prune_at(successor.key(), &[], TEST_NOW);
+            assert_eq!(fs::read(&path).unwrap(), bytes);
+        }
+    }
+}
+
+#[test]
+fn an_unreadable_record_is_preserved_until_it_can_be_read_again() {
+    let directory = tempfile::tempdir().unwrap();
+    let client = client(directory.path());
+    let owner = session("unreadable");
+    noted(&client, &owner, Kind::Other, "click", json!({"ok": true}));
+    let store = store(&client);
+    let path = store.folder.path(owner.key());
+    let bytes = fs::read(&path).unwrap();
+    fs::set_permissions(&path, fs::Permissions::from_mode(0o000)).unwrap();
+    assert!(store.read(owner.key()).is_none());
+    let result = Ok(json!({"ok": true}));
+    assert_eq!(
+        note(
+            &client,
+            &owner,
+            Kind::Other,
+            Some(&Doing::new("click")),
+            &result
+        )
+        .unwrap_err()
+        .code,
+        Code::State
+    );
+    assert_eq!(
+        store
+            .touch(&owner, None, TEST_NOW, &client.controller)
+            .unwrap_err()
+            .code,
+        Code::State
+    );
+    store.forget_plan(&Token::new()).unwrap();
+    store.prune_at(
+        session("other").key(),
+        &[],
+        TEST_NOW + crate::time::ms(IDLE_FOR) + 1,
+    );
+    fs::set_permissions(&path, fs::Permissions::from_mode(0o600)).unwrap();
+    assert_eq!(fs::read(&path).unwrap(), bytes);
+    assert_eq!(
+        Store::at(client.output_dir().unwrap())
+            .read(owner.key())
+            .unwrap()
+            .counts["click"],
+        1
+    );
 }
 
 #[test]

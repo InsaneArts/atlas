@@ -12,7 +12,7 @@ pub(crate) const ACTIVE_FOR: Duration = Duration::from_secs(10 * 60);
 /// nothing else before that command writes it again.
 const SEEN_WITHIN: Duration = Duration::from_secs(30);
 /// The record format this build writes.
-const VERSION: u32 = 1;
+pub(super) const VERSION: u32 = 1;
 /// The most screenshot names, copy tokens, plans and verbs a record keeps.
 const SCREENSHOTS: usize = 50;
 const COPIES: usize = 64;

@@ -7,14 +7,14 @@
 //! another command is writing the records, this one's goes unrecorded.
 use super::{
     Host, HostSession, Instance, Key, now_ms,
-    record::{Leftovers, Record, Seen},
+    record::{Leftovers, Record, Seen, VERSION},
 };
 use crate::{
     client::Client,
     control::{Cause, Controller},
     doing::Doing,
     environment::Phase,
-    error::Result,
+    error::{Code, Error, Result},
     files::{Durability, Token},
     handoff,
     helper_info::Capture,
@@ -65,6 +65,81 @@ impl Kind {
     }
 }
 
+/// Reply facts retained for `dispatch::note_outcome` to share across host and
+/// task settlement. These are labels, never mutation acknowledgements.
+pub struct ReplyFacts {
+    kind: Kind,
+    success: bool,
+    uncertain: bool,
+    refusal: bool,
+    preview: bool,
+    capture: Option<Capture>,
+    copied: Option<Vec<Token>>,
+    removed: Vec<Token>,
+    plan: Option<(Token, Phase)>,
+    kept: bool,
+}
+
+impl ReplyFacts {
+    /// Decode only Atlas names and settlement facts, never private reply text.
+    pub fn new(kind: Kind, result: &Result<Value>) -> Self {
+        let mut facts = Self {
+            kind,
+            success: false,
+            uncertain: false,
+            refusal: false,
+            preview: false,
+            capture: None,
+            copied: None,
+            removed: Vec::new(),
+            plan: None,
+            kept: false,
+        };
+        let refused_code = |code: &str| matches!(code, "busy" | "stopped" | "uncertain");
+        let reply = match result {
+            Err(error) => {
+                facts.uncertain = error.uncertain;
+                facts.refusal = refused_code(error.code.as_str());
+                return facts;
+            }
+            Ok(reply) => reply,
+        };
+        facts.success = reply["ok"] == true;
+        facts.uncertain = reply["uncertain"] == true;
+        facts.refusal = reply["ok"] == false && reply["code"].as_str().is_some_and(refused_code);
+        facts.preview = reply["preview"] == true;
+        match kind {
+            Kind::Screenshot => facts.capture = capture_named(&reply["path"]),
+            Kind::Open => facts.copied = Some(tokens(&reply["copied"], "to").collect()),
+            Kind::Close => facts.removed = tokens(&reply["removed"], "").collect(),
+            Kind::Environment { changes: true } => {
+                facts.plan = reply["planId"]
+                    .as_str()
+                    .and_then(Token::parse)
+                    .zip(Phase::deserialize(&reply["phase"]).ok());
+                let kept =
+                    |field: &str| reply[field].as_array().is_some_and(|kept| !kept.is_empty());
+                facts.kept = kept("keptTargets") || kept("retainedDirectories");
+            }
+            _ => {}
+        }
+        facts
+    }
+
+    fn refused(&self) -> bool {
+        self.refusal && !self.uncertain
+    }
+
+    pub(crate) fn rolled_back(&self) -> Option<&Token> {
+        let (plan, phase) = self.plan.as_ref()?;
+        (self.success && !self.preview && *phase == Phase::RolledBack).then_some(plan)
+    }
+
+    pub(crate) fn kept(&self) -> bool {
+        self.kept
+    }
+}
+
 /// The records status reads share, read again only once one was written,
 /// or once the copy folders they counted may have changed.
 static RECENT: Mutex<Option<Cached<Seen>>> = Mutex::new(None);
@@ -74,6 +149,20 @@ pub struct Store {
     folder: RecordFolder<Key>,
     /// Where `open`'s copy folders are.
     copies: PathBuf,
+}
+
+/// A record file, including bytes this build must preserve.
+enum Read {
+    Missing,
+    Kept,
+    Record(Box<Record>),
+}
+
+fn preserved_record() -> Error {
+    Error::new(
+        Code::State,
+        "This session's record cannot be read by this version of Atlas, so it was left as it is",
+    )
 }
 
 /// How session records are kept: written as far as the kernel, as every
@@ -109,9 +198,23 @@ impl Store {
 
     /// One record, when it is there and reads.
     pub(crate) fn read(&self, key: &Key) -> Option<Record> {
-        self.folder
-            .read_json::<Record>(key)
-            .filter(|record| record.key == *key)
+        match self.read_file(key) {
+            Read::Record(record) => Some(*record),
+            Read::Missing | Read::Kept => None,
+        }
+    }
+
+    fn read_file(&self, key: &Key) -> Read {
+        match self.folder.read_json::<Record>(key) {
+            Some(record) if record.key == *key && record.version <= VERSION => {
+                Read::Record(Box::new(record))
+            }
+            Some(_) => Read::Kept,
+            None => match fs::symlink_metadata(self.folder.path(key)) {
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => Read::Missing,
+                _ => Read::Kept,
+            },
+        }
     }
 
     /// The newest [`MAX_RECORDS`] records, newest `lastSeen` first.
@@ -189,11 +292,10 @@ impl Store {
         self.folder.make()?;
         let _lock = self.folder.lock()?;
 
-        let existing = self.read(session.key());
-        let made = existing.is_none();
-        let mut record = match existing {
-            Some(record) => record,
-            None => self.started_record(session, session.process(), now)?,
+        let (mut record, made) = match self.read_file(session.key()) {
+            Read::Record(record) => (*record, false),
+            Read::Missing => (self.started_record(session, session.process(), now)?, true),
+            Read::Kept => return Err(preserved_record()),
         };
 
         change(&mut record);
@@ -214,7 +316,7 @@ impl Store {
         now: u64,
         controller: &Controller,
     ) -> Result<()> {
-        if let Some(mut record) = self.read(session.key())
+        if let Read::Record(mut record) = self.read_file(session.key())
             && !record.touched(session, ancestor, now)
         {
             return Ok(());
@@ -222,14 +324,18 @@ impl Store {
         let causes = controller.pending_causes_within(Duration::ZERO)?;
         self.folder.make()?;
         let _lock = self.folder.lock_within(Duration::ZERO)?;
-        if let Some(mut record) = self.read(session.key()) {
-            if record.touched(session, ancestor, now) {
-                self.write(&record)?;
+        match self.read_file(session.key()) {
+            Read::Record(mut record) => {
+                if record.touched(session, ancestor, now) {
+                    self.write(&record)?;
+                }
             }
-        } else {
-            let record = self.started_record(session, ancestor, now)?;
-            self.write(&record)?;
-            self.prune(&record.key, &causes);
+            Read::Missing => {
+                let record = self.started_record(session, ancestor, now)?;
+                self.write(&record)?;
+                self.prune(&record.key, &causes);
+            }
+            Read::Kept => return Err(preserved_record()),
         }
         Ok(())
     }
@@ -376,6 +482,8 @@ impl Store {
 /// unless it was refused, and the screenshot, copies and plans its reply
 /// names. Nothing of its arguments, text or output is kept. A command that
 /// acts nowhere in the helper records nothing.
+/// Retained for Value fixtures in `overview::tests`, `watch::tests`,
+/// `viewer::tests`, and `cleanup::tests::{adoption, sessions}`.
 pub fn note(
     client: &Client,
     session: &HostSession,
@@ -383,31 +491,37 @@ pub fn note(
     doing: Option<&Doing>,
     result: &Result<Value>,
 ) -> Result<()> {
-    note_at(client, session, kind, doing, result, now_ms)
+    note_facts(client, session, doing, &ReplyFacts::new(kind, result))
+}
+
+/// Record the facts decoded by `dispatch::note_outcome`.
+pub fn note_facts(
+    client: &Client,
+    session: &HostSession,
+    doing: Option<&Doing>,
+    facts: &ReplyFacts,
+) -> Result<()> {
+    note_at(client, session, doing, facts, now_ms)
 }
 
 fn note_at(
     client: &Client,
     session: &HostSession,
-    kind: Kind,
     doing: Option<&Doing>,
-    result: &Result<Value>,
+    facts: &ReplyFacts,
     now: impl FnOnce() -> u64,
 ) -> Result<()> {
-    if !kind.recorded(doing) {
+    if !facts.kind.recorded(doing) {
         return Ok(());
     }
     let verb = doing.map_or("environment", Doing::verb);
-    let verb = (!refused(result)).then_some(verb);
+    let verb = (!facts.refused()).then_some(verb);
     let store = Store::at(client.output_dir()?);
-    let reply = result.as_ref().ok();
     let now = now();
 
     store.update(session, now, &client.controller, |record| {
         record.seen(session, now, verb);
-        if let Some(reply) = reply {
-            keep_what_was_left(record, kind, reply, now);
-        }
+        keep_what_was_left(record, facts, now);
     })
 }
 
@@ -422,70 +536,44 @@ pub fn touch(client: &Client, session: &HostSession) -> Result<()> {
 /// Forget, in every session's record, the plan a successful rollback in
 /// `result` undid, whoever ran it: the person at a terminal, another
 /// session or this one. It decides nothing about the rollback itself.
+/// Retained for `store::tests::a_plan_rolled_back_by_anyone_leaves_every_record`.
 pub fn forget_rolled_back(client: &Client, kind: Kind, result: &Result<Value>) -> Result<()> {
-    match rolled_back(kind, result).and_then(plan) {
-        Some(plan) => Store::at(client.output_dir()?).forget_plan(&plan),
+    forget_rolled_back_facts(client, &ReplyFacts::new(kind, result))
+}
+
+/// Forget the rollback decoded by `dispatch::note_outcome`.
+pub fn forget_rolled_back_facts(client: &Client, facts: &ReplyFacts) -> Result<()> {
+    match facts.rolled_back() {
+        Some(plan) => Store::at(client.output_dir()?).forget_plan(plan),
         None => Ok(()),
     }
 }
 
-/// The reply of a command of `kind` whose `result` says it rolled a plan
-/// back completely, when it did.
-pub(crate) fn rolled_back(kind: Kind, result: &Result<Value>) -> Option<&Value> {
-    let reply = result.as_ref().ok()?;
-    let rolled_back = kind == Kind::Environment { changes: true }
-        && reply["ok"] == true
-        && reply["preview"] != true
-        && phase(reply) == Some(Phase::RolledBack);
-    rolled_back.then_some(reply)
-}
-
-/// Note in `record` what `reply`, to a command of `kind`, says it left:
+/// Note in `record` what the decoded reply says it left:
 /// the screenshot it saved, the copies it made or removed, and the plan it
 /// applied. A preview only looks, so it names no plan as this session's.
-fn keep_what_was_left(record: &mut Record, kind: Kind, reply: &Value, now: u64) {
-    match kind {
-        Kind::Screenshot if reply["ok"] == true => {
-            if let Some(capture) = capture_named(&reply["path"]) {
-                record.took(capture);
+fn keep_what_was_left(record: &mut Record, facts: &ReplyFacts, now: u64) {
+    match facts.kind {
+        Kind::Screenshot if facts.success => {
+            if let Some(capture) = &facts.capture {
+                record.took(capture.clone());
             }
         }
-        Kind::Open => record.copied(tokens(&reply["copied"], "to")),
-        Kind::Close if reply["ok"] == true => {
-            let gone: Vec<Token> = tokens(&reply["removed"], "").collect();
-            record.removed(&gone);
+        Kind::Open => {
+            if let Some(copied) = &facts.copied {
+                record.copied(copied.iter().cloned());
+            }
         }
-        Kind::Environment { changes: true } if reply["preview"] != true => {
-            if let (Some(plan), Some(phase)) = (plan(reply), phase(reply)) {
-                record.planned(plan, phase, now);
+        Kind::Close if facts.success => {
+            record.removed(&facts.removed);
+        }
+        Kind::Environment { changes: true } if !facts.preview => {
+            if let Some((plan, phase)) = &facts.plan {
+                record.planned(plan.clone(), *phase, now);
             }
         }
         _ => {}
     }
-}
-
-/// Whether `result` refused the command before it did anything: the helper
-/// was another's, agents were stopped, or an earlier outcome is unknown.
-fn refused(result: &Result<Value>) -> bool {
-    let (code, uncertain) = match result {
-        Err(error) => (error.code.as_str(), error.uncertain),
-        Ok(value) if value["ok"] == false => (
-            value["code"].as_str().unwrap_or_default(),
-            value["uncertain"] == true,
-        ),
-        Ok(_) => return false,
-    };
-    !uncertain && matches!(code, "busy" | "stopped" | "uncertain")
-}
-
-/// The plan a reply names, when it is one of Atlas's own.
-pub(crate) fn plan(reply: &Value) -> Option<Token> {
-    reply["planId"].as_str().and_then(Token::parse)
-}
-
-/// How far a reply says its plan got.
-fn phase(reply: &Value) -> Option<Phase> {
-    Phase::deserialize(&reply["phase"]).ok()
 }
 
 /// The capture at `path`, when it is one of Atlas's own.

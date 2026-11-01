@@ -15,7 +15,7 @@ use crate::{
     host_session::{
         HostSession, Key, now_ms,
         record::Record as SessionRecord,
-        store::{Kind, Store as Sessions, rolled_back},
+        store::{Kind, ReplyFacts, Store as Sessions},
     },
     name::name_type,
 };
@@ -211,21 +211,25 @@ impl Claims {
 /// `kept` otherwise. Whoever rolled it back (the person at a terminal,
 /// another session or this one), the plan's own state is what changed. It
 /// decides nothing about the rollback itself.
+/// Retained for `task::tests::a_rolled_back_plan_is_settled_in_every_task_that_claimed_it`.
 pub fn settle_rolled_back(client: &Client, kind: Kind, result: &Result<Value>) -> Result<()> {
-    let Some(reply) = rolled_back(kind, result) else {
+    settle_rolled_back_facts(client, &ReplyFacts::new(kind, result))
+}
+
+/// Settle the plan and kept outcome decoded by `dispatch::note_outcome`.
+pub fn settle_rolled_back_facts(client: &Client, facts: &ReplyFacts) -> Result<()> {
+    let Some(plan_id) = facts.rolled_back() else {
         return Ok(());
     };
-    let Some(plan_id) = crate::host_session::store::plan(reply) else {
-        return Ok(());
-    };
-    let kept = |field: &str| reply[field].as_array().is_some_and(|kept| !kept.is_empty());
-    let state = if kept("keptTargets") || kept("retainedDirectories") {
+    let state = if facts.kept() {
         State::Kept
     } else {
         State::Gone
     };
     Store::at(client.output_dir()?).settle_everywhere(
-        &[Owned::Plan { id: plan_id }],
+        &[Owned::Plan {
+            id: plan_id.clone(),
+        }],
         state,
         now_ms(),
     )

@@ -345,7 +345,8 @@ fn a_rolled_back_plan_is_settled_in_every_task_that_claimed_it() {
         )
     };
     settle_rolled_back(&client, changes, &rolled_back(&undone, &[])).unwrap();
-    settle_rolled_back(&client, changes, &rolled_back(&kept, &[".config/probe"])).unwrap();
+    let facts = ReplyFacts::new(changes, &rolled_back(&kept, &[".config/probe"]));
+    settle_rolled_back_facts(&client, &facts).unwrap();
     let preview = Ok(json!({"ok": true, "planId": undone, "phase": "rolledBack", "preview": true}));
     settle_rolled_back(&client, changes, &preview).unwrap();
 
@@ -358,6 +359,36 @@ fn a_rolled_back_plan_is_settled_in_every_task_that_claimed_it() {
                 (Owned::Plan { id: kept.clone() }, State::Kept),
             ]
         );
+    }
+}
+
+#[test]
+fn an_unconfirmed_rollback_leaves_pending_task_claims_unchanged() {
+    let directory = tempfile::tempdir().unwrap();
+    let client = crate::test_support::client(directory.path());
+    let output = client.output_dir().unwrap();
+    let task = task("pending", None);
+    let owned = plan();
+    Claims::in_store(Store::at(output), task.clone())
+        .claim(&owned, State::Intent)
+        .unwrap();
+    let Owned::Plan { id } = owned else {
+        unreachable!()
+    };
+    let before = bytes(output, &task);
+    for result in [
+        Err(Error::new(Code::Transport, "No reply").uncertain()),
+        Ok(json!({"ok": false, "uncertain": true, "planId": id, "phase": "rollingBack"})),
+        Ok(json!({"ok": false, "code": "busy", "planId": id, "phase": "rolledBack"})),
+        Ok(json!({"planId": id, "phase": "rolledBack"})),
+        Ok(json!({"ok": true, "planId": id, "phase": "future"})),
+        Ok(json!({"ok": true, "planId": id, "phase": null})),
+        Ok(json!({"ok": true, "planId": "private canary", "phase": "rolledBack"})),
+        Ok(json!({"ok": true, "planId": id, "phase": "rolledBack", "preview": true})),
+    ] {
+        let facts = ReplyFacts::new(Kind::Environment { changes: true }, &result);
+        settle_rolled_back_facts(&client, &facts).unwrap();
+        assert_eq!(bytes(output, &task), before);
     }
 }
 

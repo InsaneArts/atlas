@@ -234,11 +234,12 @@ fn note_outcome(
     doing: Option<&Doing>,
     result: &Result<Value>,
 ) {
+    let facts = host_session::store::ReplyFacts::new(kind, result);
     if let Some(host) = host {
-        let _ = host_session::store::note(client, host, kind, doing, result);
+        let _ = host_session::store::note_facts(client, host, doing, &facts);
     }
-    let _ = host_session::store::forget_rolled_back(client, kind, result);
-    let _ = task::settle_rolled_back(client, kind, result);
+    let _ = host_session::store::forget_rolled_back_facts(client, &facts);
+    let _ = task::settle_rolled_back_facts(client, &facts);
 }
 
 /// [`execute`]'s work once the command is labelled: `client` gives its
@@ -1119,9 +1120,23 @@ mod tests {
         note_outcome(&client, None, Policy::of(&preview).kind, None, &rolled_back);
         assert_eq!(state(), "made", "a preview undoes nothing");
 
+        let host = HostSession::new(atlas::host_session::Host::Named, "unreadable").unwrap();
+        let sessions = client.output_dir().unwrap().join("sessions");
+        std::fs::create_dir(&sessions).unwrap();
+        let session_record = sessions.join(format!("{}.json", host.key()));
+        let unreadable = b"{private durable canary";
+        std::fs::write(&session_record, unreadable).unwrap();
         let undo = command(&["environment", "rollback", &plan, "--apply"]);
-        note_outcome(&client, None, Policy::of(&undo).kind, None, &rolled_back);
+        note_outcome(
+            &client,
+            Some(&host),
+            Policy::of(&undo).kind,
+            None,
+            &rolled_back,
+        );
         assert_eq!(state(), "gone");
+        assert_eq!(std::fs::read(session_record).unwrap(), unreadable);
+        assert_eq!(rolled_back.as_ref().unwrap()["ok"], true);
     }
 
     #[test]
