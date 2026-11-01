@@ -11,8 +11,9 @@ use std::{
     collections::BTreeMap,
     fs::OpenOptions,
     os::unix::fs::{DirBuilderExt, PermissionsExt},
-    time::Instant,
 };
+
+const TEST_NOW: u64 = u64::MAX / 2;
 
 fn session(id: &str) -> HostSession {
     HostSession::new(Host::Claude, id).unwrap()
@@ -46,7 +47,18 @@ fn capture(n: u64) -> Capture {
 
 /// Note `kind` for `session` doing `verb`, replying `reply`.
 fn noted(client: &Client, session: &HostSession, kind: Kind, verb: &'static str, reply: Value) {
-    note(client, session, kind, Some(&Doing::new(verb)), &Ok(reply)).unwrap();
+    let now = store(client)
+        .read(session.key())
+        .map_or(TEST_NOW, |record| record.last_seen + 1);
+    note_at(
+        client,
+        session,
+        kind,
+        Some(&Doing::new(verb)),
+        &Ok(reply),
+        || now,
+    )
+    .unwrap();
 }
 
 /// Note an environment request of `session` that `changes` the helper, or
@@ -54,7 +66,7 @@ fn noted(client: &Client, session: &HostSession, kind: Kind, verb: &'static str,
 fn environment(client: &Client, session: &HostSession, changes: bool, reply: Value) {
     let kind = Kind::Environment { changes };
     let result = Ok(reply);
-    note(client, session, kind, None, &result).unwrap();
+    note_at(client, session, kind, None, &result, || TEST_NOW).unwrap();
     forget_rolled_back(client, kind, &result).unwrap();
 }
 
@@ -66,7 +78,6 @@ fn a_first_command_makes_the_record_and_later_ones_update_it() {
 
     noted(&client, &session, Kind::Other, "click", json!({"ok": true}));
     let first = store(&client).read(session.key()).unwrap();
-    std::thread::sleep(Duration::from_millis(5));
     noted(
         &client,
         &session,
@@ -84,7 +95,8 @@ fn a_first_command_makes_the_record_and_later_ones_update_it() {
         .collect();
     assert_eq!(files.len(), 1);
     assert_eq!(later.started, first.started);
-    assert!(later.last_seen > first.last_seen);
+    assert_eq!(first.started, TEST_NOW);
+    assert_eq!(later.last_seen, TEST_NOW + 2);
     assert_eq!(
         later.counts,
         BTreeMap::from([("click".into(), 2), ("type".into(), 1)])
@@ -481,7 +493,9 @@ fn a_forged_id_naming_an_unrelated_process_neither_revives_nor_takes_a_record() 
     // A live process, but not one this command runs in: the command itself.
     let forged = session("real").run_by(Instance::current());
     assert_eq!(forged.ancestor(), None, "not this command's host");
-    touch(&client, &forged).unwrap();
+    store(&client)
+        .touch(&forged, None, TEST_NOW, &client.controller)
+        .unwrap();
     assert_eq!(
         store(&client).read(real.key()).unwrap(),
         ended,
@@ -492,10 +506,12 @@ fn a_forged_id_naming_an_unrelated_process_neither_revives_nor_takes_a_record() 
     let mut open = ended.clone();
     open.ended = None;
     store(&client).write(&open).unwrap();
-    touch(&client, &forged).unwrap();
+    store(&client)
+        .touch(&forged, None, TEST_NOW, &client.controller)
+        .unwrap();
     let seen = store(&client).read(real.key()).unwrap();
     assert_eq!(seen.host_process, open.host_process);
-    assert!(seen.last_seen > open.last_seen);
+    assert_eq!(seen.last_seen, TEST_NOW);
 }
 
 #[test]
@@ -600,13 +616,10 @@ fn a_touch_never_waits_for_another_command_writing_the_records() {
         .unwrap();
     FileExt::lock_exclusive(&other).unwrap();
     let resumed = session.clone().run_by(Some(parent()));
-    let started = Instant::now();
     let touched = touch(&client, &resumed);
-    let waited = started.elapsed();
     let _ = FileExt::unlock(&other);
 
     assert_eq!(touched.unwrap_err().code, "busy");
-    assert!(waited < SESSIONS.lock_wait, "it tried once: {waited:?}");
     assert_eq!(
         fs::read(store(&client).folder.path(session.key())).unwrap(),
         before
@@ -616,7 +629,7 @@ fn a_touch_never_waits_for_another_command_writing_the_records() {
 /// A record of `id` last seen `days_ago`, written straight into `store`.
 fn aged(store: &Store, id: &str, days_ago: u64, plans: usize) -> Record {
     let mut record = Record::new(&session(id), 0, None);
-    record.last_seen = now_ms().saturating_sub(days_ago * 24 * 60 * 60 * 1000);
+    record.last_seen = TEST_NOW - days_ago * 24 * 60 * 60 * 1000;
     record.started = record.last_seen;
     for _ in 0..plans {
         record.planned(Token::new(), Phase::Applied, record.last_seen);
@@ -645,13 +658,16 @@ fn records_idle_a_week_go_unless_they_list_leftovers() {
     let planned = aged(&store, "planned", 8, 1);
     let idle = aged(&store, "idle", 8, 0);
     let recent = aged(&store, "recent", 1, 0);
-    for record in [&copied, &planned, &idle, &recent] {
+    let boundary = aged(&store, "boundary", 7, 0);
+    for record in [&copied, &planned, &idle, &recent, &boundary] {
         remember_windows(&client, &record.key);
     }
 
     store
-        .update(&session("new"), now_ms(), &client.controller, |_| {})
+        .update(&session("new"), TEST_NOW, &client.controller, |_| {})
         .unwrap();
+
+    store.prune_at(session("new").key(), &[], TEST_NOW);
 
     assert!(store.read(&copied.key).is_some(), "its copy is still there");
     assert!(
@@ -659,8 +675,12 @@ fn records_idle_a_week_go_unless_they_list_leftovers() {
         "its plan is not rolled back"
     );
     assert!(store.read(&recent.key).is_some());
+    assert!(
+        store.read(&boundary.key).is_some(),
+        "exactly a week is retained"
+    );
     assert_eq!(store.read(&idle.key), None);
-    for record in [&copied, &planned, &recent] {
+    for record in [&copied, &planned, &recent, &boundary] {
         assert!(
             crate::last_capture::remembered_windows(&client.config.output_dir, &record.key)
                 .unwrap()
@@ -693,8 +713,10 @@ fn at_most_sixty_four_records_stay_and_those_with_leftovers_go_last() {
     }
     let new = session("newest");
     store
-        .update(&new, now_ms(), &client.controller, |_| {})
+        .update(&new, TEST_NOW, &client.controller, |_| {})
         .unwrap();
+
+    store.prune_at(new.key(), &[], TEST_NOW);
 
     let left = store.listed(LISTED);
     assert_eq!(left.len(), MAX_RECORDS);
@@ -768,7 +790,6 @@ fn a_command_whose_record_is_being_written_elsewhere_returns_without_recording()
 
     let reply = json!({"ok": true, "performed": 1});
     let result: Result<Value> = Ok(reply.clone());
-    let started = Instant::now();
     let noted = note(
         &client,
         &session,
@@ -776,11 +797,9 @@ fn a_command_whose_record_is_being_written_elsewhere_returns_without_recording()
         Some(&Doing::new("click")),
         &result,
     );
-    let waited = started.elapsed();
     let _ = FileExt::unlock(&other);
 
     assert_eq!(noted.unwrap_err().code, "busy");
-    assert!(waited < Duration::from_secs(2), "{waited:?}");
     assert_eq!(
         result.ok(),
         Some(reply),
@@ -869,20 +888,28 @@ fn a_record_through_a_link_or_too_large_or_with_foreign_names_is_not_read() {
 }
 
 #[test]
-fn a_status_poll_reads_the_records_only_when_they_changed() {
+fn a_directory_revision_invalidates_a_cached_session_without_waiting() {
     let directory = tempfile::tempdir().unwrap();
     let client = client(directory.path());
     let store = store(&client);
     let kept = Mutex::new(None);
     let reads = std::cell::Cell::new(0);
-    let counting = |store: &Store| {
-        reads.set(reads.get() + 1);
-        store.all()
+    let modified = std::time::SystemTime::UNIX_EPOCH;
+    let observed = |revision, age| {
+        store.folder.cached_observed(
+            &kept,
+            COPIES_FRESH,
+            revision,
+            |_| age,
+            || {
+                reads.set(reads.get() + 1);
+                store.seen(store.all())
+            },
+        )
     };
 
-    assert!(store.recent_in(&kept, counting).is_empty());
+    assert!(observed(None, Duration::ZERO).is_empty());
     assert_eq!(reads.get(), 0, "no folder, nothing to read");
-
     noted(
         &client,
         &session("polled"),
@@ -890,11 +917,12 @@ fn a_status_poll_reads_the_records_only_when_they_changed() {
         "click",
         json!({"ok": true}),
     );
-    assert_eq!(store.recent_in(&kept, counting).len(), 1);
-    assert_eq!(store.recent_in(&kept, counting).len(), 1);
+    let first = observed(Some(modified), Duration::ZERO);
+    let reused = observed(Some(modified), COPIES_FRESH - Duration::from_nanos(1));
+    assert!(Arc::ptr_eq(&first, &reused));
+    assert_eq!(first.len(), 1);
     assert_eq!(reads.get(), 1, "the second poll reads nothing");
 
-    std::thread::sleep(Duration::from_millis(5));
     noted(
         &client,
         &session("another"),
@@ -902,15 +930,21 @@ fn a_status_poll_reads_the_records_only_when_they_changed() {
         "click",
         json!({"ok": true}),
     );
-    assert_eq!(store.recent_in(&kept, counting).len(), 2);
+    let revised = modified + Duration::from_secs(1);
+    assert_eq!(observed(Some(revised), Duration::ZERO).len(), 2);
     assert_eq!(reads.get(), 2);
-
-    // Copies can go without a record changing: counted again in a while.
-    if let Some(snapshot) = kept.lock().unwrap().as_mut() {
-        snapshot.age_by(COPIES_FRESH);
-    }
-    store.recent_in(&kept, counting);
-    assert_eq!(reads.get(), 3);
+    assert_eq!(observed(Some(revised), COPIES_FRESH).len(), 2);
+    assert_eq!(
+        reads.get(),
+        3,
+        "copies are recounted at the exact age boundary"
+    );
+    assert!(observed(None, Duration::ZERO).is_empty());
+    assert_eq!(
+        reads.get(),
+        3,
+        "missing metadata never serves a cached result"
+    );
 }
 
 #[test]

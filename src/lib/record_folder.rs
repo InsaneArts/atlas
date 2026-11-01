@@ -73,14 +73,6 @@ pub(crate) struct Cached<T> {
     read: Arc<[T]>,
 }
 
-#[cfg(test)]
-impl<T> Cached<T> {
-    /// Take this as read `by` earlier than it was.
-    pub(crate) fn age_by(&mut self, by: Duration) {
-        self.taken -= by;
-    }
-}
-
 /// One output folder's records of one kind, each named by a `K`.
 pub(crate) struct RecordFolder<K> {
     directory: PathBuf,
@@ -217,14 +209,25 @@ impl<K: RecordName> RecordFolder<K> {
         fresh: Duration,
         read: impl FnOnce() -> Vec<T>,
     ) -> Arc<[T]> {
-        let Some(modified) = self.modified() else {
+        self.cached_observed(kept, fresh, self.modified(), |taken| taken.elapsed(), read)
+    }
+
+    pub(crate) fn cached_observed<T>(
+        &self,
+        kept: &Mutex<Option<Cached<T>>>,
+        fresh: Duration,
+        modified: Option<SystemTime>,
+        age: impl FnOnce(Instant) -> Duration,
+        read: impl FnOnce() -> Vec<T>,
+    ) -> Arc<[T]> {
+        let Some(modified) = modified else {
             return Arc::from([]);
         };
         let mut kept = kept.lock().unwrap_or_else(PoisonError::into_inner);
         if let Some(cached) = kept.as_ref()
             && cached.directory == self.directory
             && cached.modified == modified
-            && cached.taken.elapsed() < fresh
+            && age(cached.taken) < fresh
         {
             return Arc::clone(&cached.read);
         }
@@ -358,6 +361,40 @@ impl<K: RecordName> RecordFolder<K> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn cached_records_follow_the_observed_directory_revision_and_path() {
+        static RECORDS: Records = Records {
+            folder: "records",
+            noun: "test",
+            lock_wait: Duration::ZERO,
+            durability: Durability::Kernel,
+            bytes: 1024,
+        };
+        let first = tempfile::tempdir().unwrap();
+        let second = tempfile::tempdir().unwrap();
+        let folder = RecordFolder::<Key>::at(first.path(), &RECORDS);
+        let other = RecordFolder::<Key>::at(second.path(), &RECORDS);
+        folder.make().unwrap();
+        other.make().unwrap();
+        let revision = SystemTime::UNIX_EPOCH + Duration::from_secs(1);
+        let set_modified = |folder: &RecordFolder<Key>, modified| {
+            File::open(folder.directory())
+                .unwrap()
+                .set_times(fs::FileTimes::new().set_modified(modified))
+                .unwrap();
+        };
+        set_modified(&folder, revision);
+        let kept = Mutex::new(None);
+        let read = folder.cached(&kept, Duration::MAX, || vec![1]);
+        let reused = folder.cached(&kept, Duration::MAX, || panic!("unchanged folder"));
+        assert!(Arc::ptr_eq(&read, &reused));
+        let revision = revision + Duration::from_secs(1);
+        set_modified(&folder, revision);
+        assert_eq!(&*folder.cached(&kept, Duration::MAX, || vec![2]), &[2]);
+        set_modified(&other, revision);
+        assert_eq!(&*other.cached(&kept, Duration::MAX, || vec![3]), &[3]);
+    }
 
     #[test]
     fn record_listing_bounds_unrelated_files_and_unreadable_entries() {

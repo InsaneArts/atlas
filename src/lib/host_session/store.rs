@@ -313,7 +313,10 @@ impl Store {
     /// the helper, then the oldest while more than [`MAX_RECORDS`] remain,
     /// those with something left last. The record `keep` stays.
     fn prune(&self, keep: &Key, causes: &[Cause]) {
-        let now = now_ms();
+        self.prune_at(keep, causes, now_ms());
+    }
+
+    fn prune_at(&self, keep: &Key, causes: &[Cause], now: u64) {
         let idle = crate::time::ms(IDLE_FOR);
         // A session whose tasks still hold something, an unfinished cleanup
         // among them, has something left too.
@@ -380,6 +383,17 @@ pub fn note(
     doing: Option<&Doing>,
     result: &Result<Value>,
 ) -> Result<()> {
+    note_at(client, session, kind, doing, result, now_ms)
+}
+
+fn note_at(
+    client: &Client,
+    session: &HostSession,
+    kind: Kind,
+    doing: Option<&Doing>,
+    result: &Result<Value>,
+    now: impl FnOnce() -> u64,
+) -> Result<()> {
     if !kind.recorded(doing) {
         return Ok(());
     }
@@ -387,7 +401,7 @@ pub fn note(
     let verb = (!refused(result)).then_some(verb);
     let store = Store::at(client.output_dir()?);
     let reply = result.as_ref().ok();
-    let now = now_ms();
+    let now = now();
 
     store.update(session, now, &client.controller, |record| {
         record.seen(session, now, verb);

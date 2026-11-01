@@ -111,14 +111,34 @@ fn a_pid_reused_with_another_start_is_gone() {
     assert_eq!(snapshot.state(reused), State::Gone);
 }
 
+struct HostChild(std::process::Child);
+
+impl Drop for HostChild {
+    fn drop(&mut self) {
+        let _ = self.0.kill();
+        self.0.wait().unwrap();
+    }
+}
+
 #[test]
 fn a_host_exit_is_seen_without_a_record_write() {
-    let directory = tempfile::tempdir().unwrap();
-    let mut child = std::process::Command::new("/bin/sleep")
-        .arg("30")
-        .spawn()
+    use std::io::BufRead;
+    use std::process::{Command, Stdio};
+
+    let mut child = HostChild(
+        Command::new("/bin/sh")
+            .args(["-c", "printf 'ready\\n'; read -r continuation"])
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .spawn()
+            .unwrap(),
+    );
+    let mut ready = String::new();
+    std::io::BufReader::new(child.0.stdout.take().unwrap())
+        .read_line(&mut ready)
         .unwrap();
-    let pid = i32::try_from(child.id()).unwrap();
+    assert_eq!(ready, "ready\n");
+    let pid = i32::try_from(child.0.id()).unwrap();
     let instance = Instance::new(
         pid,
         crate::host_session::ancestry::process(pid).unwrap().start,
@@ -130,24 +150,24 @@ fn a_host_exit_is_seen_without_a_record_write() {
         100,
         None,
     );
-    let began = std::time::Instant::now();
-    let mut live = Snapshot::polled(directory.path(), [instance]).lifetime(&record, 100, false);
-    while !live.live && began.elapsed() < Duration::from_secs(2) {
-        std::thread::sleep(Duration::from_millis(5));
-        live = Snapshot::polled(directory.path(), [instance]).lifetime(&record, 100, false);
-    }
-    child.kill().unwrap();
-    child.wait().unwrap();
-    assert!(live.live);
-    let began = std::time::Instant::now();
-    loop {
-        let lifetime = Snapshot::polled(directory.path(), [instance]).lifetime(&record, 100, false);
-        if lifetime.ended == Some(100) {
-            break;
-        }
-        assert!(began.elapsed() < Duration::from_secs(2));
-        std::thread::sleep(Duration::from_millis(5));
-    }
+    let at = std::time::Instant::now();
+    let sampled = Snapshot::sample_at([instance], |instance| instance.state(), at);
+    assert!(
+        sampled
+            .clone()
+            .trusted_at(at)
+            .lifetime(&record, 100, false)
+            .live
+    );
+    child.0.kill().unwrap();
+    child.0.wait().unwrap();
+    let expired = at + FRESH * 2;
+    assert_eq!(sampled.trusted_at(expired).state(instance), State::Unknown);
+    let gone = Snapshot::sample_at([instance], |instance| instance.state(), expired);
+    assert_eq!(
+        gone.trusted_at(expired).lifetime(&record, 100, false).ended,
+        Some(100)
+    );
     assert_eq!(record.ended, None, "no record rewrite was needed");
 }
 
@@ -158,36 +178,47 @@ fn a_blocked_liveness_read_starts_only_one_worker() {
         atomic::{AtomicUsize, Ordering},
         mpsc,
     };
+
     let shared: &'static Shared<Snapshot, BatchKey> = Box::leak(Box::new(Shared::new(FRESH)));
     let (release, gate) = mpsc::channel::<()>();
-    let gate = Arc::new(std::sync::Mutex::new(gate));
+    let (started, began) = mpsc::channel();
+    let (completed, ended) = mpsc::channel();
     let calls = Arc::new(AtomicUsize::new(0));
     let key = BatchKey {
         uid: crate::test_support::UID,
         output: "/tmp/one".into(),
         instances: vec![Instance::new(10, [1, 0])],
     };
-    let began = std::time::Instant::now();
+    let counting = calls.clone();
+    assert!(
+        shared
+            .get_blocking(key.clone(), Duration::ZERO, move || {
+                counting.fetch_add(1, Ordering::SeqCst);
+                started.send(()).unwrap();
+                let _ = gate.recv();
+                completed.send(()).unwrap();
+                Snapshot::default()
+            })
+            .is_none()
+    );
+    began.recv_timeout(Duration::from_secs(5)).unwrap();
     let readers: Vec<_> = (0..50)
         .map(|_| {
-            let gate = Arc::clone(&gate);
-            let calls = Arc::clone(&calls);
             let key = key.clone();
             std::thread::spawn(move || {
-                shared.get_blocking(key, Duration::from_millis(20), move || {
-                    calls.fetch_add(1, Ordering::SeqCst);
-                    let _ = gate.lock().unwrap().recv_timeout(Duration::from_secs(2));
-                    Snapshot::default()
-                })
+                shared.get_blocking(key, Duration::ZERO, || panic!("second liveness worker"))
             })
         })
         .collect();
-    for reader in readers {
-        assert!(reader.join().unwrap().is_none());
-    }
-    assert!(began.elapsed() < Duration::from_secs(1));
-    assert_eq!(calls.load(Ordering::SeqCst), 1);
+    let refused: Vec<_> = readers
+        .into_iter()
+        .map(|reader| reader.join().unwrap())
+        .collect();
     drop(release);
+    ended.recv_timeout(Duration::from_secs(5)).unwrap();
+    shared.join_workers();
+    assert!(refused.iter().all(Option::is_none));
+    assert_eq!(calls.load(Ordering::SeqCst), 1);
 }
 
 #[test]
@@ -215,16 +246,34 @@ fn liveness_cache_keys_do_not_cross_accounts_outputs_or_instances() {
     ];
     for (index, key) in keys.into_iter().enumerate() {
         assert_eq!(shared.get_blocking(key, WAIT, move || index), Some(index));
+        shared.join_workers();
     }
     assert_eq!(shared.get_blocking(base, WAIT, || 99), Some(99));
+    shared.join_workers();
 }
 
 #[test]
-fn an_expired_batch_supplies_no_positive_liveness_or_inferred_end() {
+fn a_liveness_sample_never_infers_death_after_expiry() {
     let record = record();
-    let mut snapshot = Snapshot::sample(record.host_process, |_| State::Gone);
-    snapshot.sampled_at = Some(std::time::Instant::now() - FRESH * 3);
-    let frozen = snapshot.trusted();
+    let at = std::time::Instant::now();
+    for state in [State::Running, State::Stopped, State::Gone, State::Unknown] {
+        let sample = Snapshot::sample_at(record.host_process, |_| state, at);
+        assert_eq!(
+            sample
+                .clone()
+                .trusted_at(at + FRESH * 2 - Duration::from_nanos(1))
+                .state(record.host_process.unwrap()),
+            state
+        );
+        assert_eq!(
+            sample
+                .trusted_at(at + FRESH * 2)
+                .state(record.host_process.unwrap()),
+            State::Unknown
+        );
+    }
+    let snapshot = Snapshot::sample_at(record.host_process, |_| State::Gone, at);
+    let frozen = snapshot.trusted_at(at + FRESH * 2);
     assert_eq!(
         frozen.lifetime(&record, 100, false),
         Lifetime {

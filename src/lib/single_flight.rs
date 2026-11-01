@@ -13,6 +13,8 @@ use tokio::time::Instant;
 pub(crate) struct Shared<T, K = u32> {
     pub(crate) fresh_for: Duration,
     kept: Mutex<Kept<T, K>>,
+    #[cfg(test)]
+    workers: Mutex<Vec<std::thread::JoinHandle<()>>>,
 }
 
 struct Kept<T, K> {
@@ -30,6 +32,8 @@ impl<T: Clone + Send + 'static, K: Eq + Clone + Send + 'static> Shared<T, K> {
                 last: None,
                 running: false,
             }),
+            #[cfg(test)]
+            workers: Mutex::new(Vec::new()),
         }
     }
 
@@ -47,7 +51,7 @@ impl<T: Clone + Send + 'static, K: Eq + Clone + Send + 'static> Shared<T, K> {
         let known = {
             let mut kept = self.lock();
             let last = kept.last.as_ref().filter(|(key, ..)| *key == uid);
-            let fresh = last.is_some_and(|(.., taken)| taken.elapsed() < self.fresh_for);
+            let fresh = self.fresh_at(last.map(|(.., taken)| *taken), Instant::now());
             let known = last.map(|(_, found, taken)| (found.clone(), *taken));
             if fresh || kept.running {
                 return self.trusted(known);
@@ -80,7 +84,7 @@ impl<T: Clone + Send + 'static, K: Eq + Clone + Send + 'static> Shared<T, K> {
         let known = {
             let mut kept = self.lock();
             let last = kept.last.as_ref().filter(|(old, ..)| *old == key);
-            let fresh = last.is_some_and(|(.., taken)| taken.elapsed() < self.fresh_for);
+            let fresh = self.fresh_at(last.map(|(.., taken)| *taken), Instant::now());
             let known = last.map(|(_, found, taken)| (found.clone(), *taken));
             if fresh || kept.running {
                 return self.trusted(known);
@@ -101,6 +105,8 @@ impl<T: Clone + Send + 'static, K: Eq + Clone + Send + 'static> Shared<T, K> {
         if spawned.is_err() {
             return self.trusted(known);
         }
+        #[cfg(test)]
+        self.workers.lock().unwrap().push(spawned.unwrap());
         receive
             .recv_timeout(wait)
             .ok()
@@ -109,6 +115,10 @@ impl<T: Clone + Send + 'static, K: Eq + Clone + Send + 'static> Shared<T, K> {
 }
 
 impl<T, K> Shared<T, K> {
+    fn fresh_at(&self, taken: Option<Instant>, now: Instant) -> bool {
+        taken.is_some_and(|taken| now.duration_since(taken) < self.fresh_for)
+    }
+
     fn lock(&self) -> MutexGuard<'_, Kept<T, K>> {
         self.kept.lock().unwrap_or_else(PoisonError::into_inner)
     }
@@ -116,9 +126,20 @@ impl<T, K> Shared<T, K> {
     /// What a look found, unless it was taken more than twice as long ago
     /// as a result is reused for.
     fn trusted(&self, known: Option<(T, Instant)>) -> Option<T> {
+        self.trusted_at(known, Instant::now())
+    }
+
+    fn trusted_at(&self, known: Option<(T, Instant)>, now: Instant) -> Option<T> {
         known
-            .filter(|(_, taken)| taken.elapsed() < self.fresh_for * 2)
+            .filter(|(_, taken)| now.duration_since(*taken) < self.fresh_for * 2)
             .map(|(found, _)| found)
+    }
+
+    #[cfg(test)]
+    pub(crate) fn join_workers(&self) {
+        for worker in self.workers.lock().unwrap().drain(..) {
+            worker.join().unwrap();
+        }
     }
 }
 
@@ -132,172 +153,4 @@ impl<T, K> Drop for Ending<T, K> {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-
-    /// How long a look is reused in these tests.
-    const TEST_REUSE: Duration = Duration::from_secs(1);
-
-    fn shared<T: Clone + Send + 'static>() -> &'static Shared<T> {
-        Box::leak(Box::new(Shared::new(TEST_REUSE)))
-    }
-
-    /// Make the last look `by` older than it is; so soon after the Mac
-    /// started that no such time exists, wait that long instead.
-    fn age<T>(shared: &Shared<T>, by: Duration) {
-        let mut kept = shared.lock();
-        let Some((.., taken)) = &mut kept.last else {
-            return;
-        };
-        match taken.checked_sub(by) {
-            Some(older) => *taken = older,
-            None => {
-                drop(kept);
-                std::thread::sleep(by);
-            }
-        }
-    }
-
-    /// A look that counts how often it ran and gives that count.
-    fn counting(
-        runs: &std::sync::Arc<std::sync::atomic::AtomicUsize>,
-    ) -> impl FnOnce() -> usize + Send + 'static {
-        let runs = std::sync::Arc::clone(runs);
-        move || runs.fetch_add(1, std::sync::atomic::Ordering::SeqCst) + 1
-    }
-
-    fn later() -> Instant {
-        Instant::now() + Duration::from_secs(5)
-    }
-
-    #[tokio::test]
-    async fn a_look_that_hangs_runs_once_and_no_status_read_waits_past_its_deadline() {
-        use std::sync::{Arc, atomic::AtomicUsize, atomic::Ordering};
-
-        let shared = shared::<usize>();
-        let runs = Arc::new(AtomicUsize::new(0));
-        let (release, gate) = std::sync::mpsc::channel::<()>();
-        let gate = Arc::new(Mutex::new(gate));
-        let look = || {
-            let gate = Arc::clone(&gate);
-            let count = counting(&runs);
-            move || {
-                let run = count();
-                let _ = gate.lock().unwrap().recv();
-                run
-            }
-        };
-
-        for _ in 0..50 {
-            let until = Instant::now() + Duration::from_millis(20);
-            assert_eq!(shared.get(503, until, look()).await, None);
-            assert!(
-                Instant::now() < until + Duration::from_millis(500),
-                "the read ended at its deadline"
-            );
-        }
-        assert_eq!(runs.load(Ordering::SeqCst), 1, "only one look ran");
-
-        drop(release);
-        while shared.lock().running {
-            tokio::time::sleep(Duration::from_millis(5)).await;
-        }
-        assert_eq!(
-            shared.get(503, later(), look()).await,
-            Some(1),
-            "the look given up on kept what it found"
-        );
-        assert_eq!(runs.load(Ordering::SeqCst), 1);
-
-        age(shared, TEST_REUSE + Duration::from_millis(100));
-        assert_eq!(shared.get(503, later(), look()).await, Some(2));
-        assert_eq!(runs.load(Ordering::SeqCst), 2, "an old look is taken again");
-    }
-
-    #[tokio::test]
-    async fn a_fresh_look_is_reused_and_an_old_one_taken_again() {
-        let shared = shared::<usize>();
-        let runs = std::sync::Arc::default();
-
-        assert_eq!(shared.get(503, later(), counting(&runs)).await, Some(1));
-        age(shared, TEST_REUSE - Duration::from_millis(500));
-        assert_eq!(
-            shared.get(503, later(), counting(&runs)).await,
-            Some(1),
-            "a fresh look is reused"
-        );
-
-        age(shared, Duration::from_millis(600));
-        assert_eq!(
-            shared.get(503, later(), counting(&runs)).await,
-            Some(2),
-            "an old look is taken again"
-        );
-    }
-
-    #[tokio::test]
-    async fn a_look_is_never_reused_for_another_helper() {
-        let shared = shared::<usize>();
-        let runs = std::sync::Arc::default();
-
-        assert_eq!(shared.get(503, later(), counting(&runs)).await, Some(1));
-        assert_eq!(shared.get(504, later(), counting(&runs)).await, Some(2));
-        assert_eq!(shared.get(503, later(), counting(&runs)).await, Some(3));
-    }
-    /// A look that waits until `gate` is released or dropped, then gives
-    /// `found`.
-    fn held(
-        gate: &std::sync::Arc<Mutex<std::sync::mpsc::Receiver<()>>>,
-        found: usize,
-    ) -> impl FnOnce() -> usize + Send + 'static {
-        let gate = std::sync::Arc::clone(gate);
-        move || {
-            let _ = gate.lock().unwrap().recv();
-            found
-        }
-    }
-
-    #[tokio::test]
-    async fn a_look_somewhat_old_is_given_while_a_new_one_runs() {
-        let shared = shared::<usize>();
-        assert_eq!(shared.get(503, later(), || 1).await, Some(1));
-        age(shared, TEST_REUSE + Duration::from_millis(100));
-
-        let (release, gate) = std::sync::mpsc::channel::<()>();
-        let gate = std::sync::Arc::new(Mutex::new(gate));
-        let soon = Instant::now() + Duration::from_millis(20);
-        assert_eq!(
-            shared.get(503, soon, held(&gate, 2)).await,
-            Some(1),
-            "the caller whose look ran late gets the last result"
-        );
-        assert_eq!(
-            shared.get(503, later(), || 3).await,
-            Some(1),
-            "another caller gets it while the look runs"
-        );
-        drop(release);
-    }
-
-    #[tokio::test]
-    async fn a_look_too_old_to_trust_is_unknown_while_a_new_one_runs() {
-        let shared = shared::<usize>();
-        assert_eq!(shared.get(503, later(), || 1).await, Some(1));
-        age(shared, TEST_REUSE * 2 + Duration::from_millis(100));
-
-        let (release, gate) = std::sync::mpsc::channel::<()>();
-        let gate = std::sync::Arc::new(Mutex::new(gate));
-        let soon = Instant::now() + Duration::from_millis(20);
-        assert_eq!(
-            shared.get(503, soon, held(&gate, 2)).await,
-            None,
-            "the caller whose look ran late does not get the old result"
-        );
-        assert_eq!(
-            shared.get(503, later(), || 3).await,
-            None,
-            "nor does another caller while the look runs"
-        );
-        drop(release);
-    }
-}
+mod tests;

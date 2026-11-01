@@ -51,7 +51,14 @@ impl Snapshot {
         instances: impl IntoIterator<Item = Instance>,
         state: impl Fn(Instance) -> State,
     ) -> Self {
-        let began = std::time::Instant::now();
+        Self::sample_at(instances, state, std::time::Instant::now())
+    }
+
+    fn sample_at(
+        instances: impl IntoIterator<Item = Instance>,
+        state: impl Fn(Instance) -> State,
+        began: std::time::Instant,
+    ) -> Self {
         Self {
             sampled_at: Some(began),
             states: bounded(instances)
@@ -64,7 +71,14 @@ impl Snapshot {
     /// Expiry is checked once when acquiring a reply, before any fields
     /// are projected. A slow batch cannot refresh its earliest sample.
     fn trusted(self) -> Self {
-        if self.sampled_at.is_some_and(|at| at.elapsed() < FRESH * 2) {
+        self.trusted_at(std::time::Instant::now())
+    }
+
+    fn trusted_at(self, now: std::time::Instant) -> Self {
+        if self
+            .sampled_at
+            .is_some_and(|at| now.duration_since(at) < FRESH * 2)
+        {
             self
         } else {
             Self::default()
