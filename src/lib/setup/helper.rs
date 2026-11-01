@@ -8,6 +8,10 @@ use crate::{
     digest::file_sha256,
     error::{Code, Error, Result},
 };
+use crate::{
+    client::Client,
+    setup::{self, executor::setup_transaction_held},
+};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
@@ -860,6 +864,130 @@ fn restore(layout: &Layout, label: &str, sha256: &str) -> Result<Value> {
 
     let pid = loaded(layout, label, &path)?;
     Ok(json!({ "ok": true, "plist": path, "pid": pid }))
+}
+
+/// The helper's background job as this Atlas writes it, for `helper` and
+/// the app's `executable`, with the layout it lives in.
+pub(crate) fn helper_agent(helper: &setup::Account, executable: &Path) -> Result<(Agent, Layout)> {
+    let controller = setup::account_with_uid(nix::unistd::getuid().as_raw())?
+        .ok_or_else(|| setup::account::problem("This account cannot be resolved"))?;
+    let layout = Layout {
+        uid: helper.uid,
+        home: helper.home.clone(),
+        guard: None,
+    };
+
+    let agent = Agent {
+        label: LABEL.to_owned(),
+        program: executable.to_path_buf(),
+        uid: helper.uid,
+        controller_uid: controller.uid,
+        socket: layout.socket(),
+    };
+
+    Ok((agent, layout))
+}
+
+/// Run one setup-helper request as the helper, inside its own login, with
+/// the administrator rights init holds.
+pub(crate) fn as_helper(
+    executable: &Path,
+    helper: &setup::Account,
+    request: &Request,
+    expected: &setup::identity::Identity,
+) -> Result<Value> {
+    let (succeeded, reply) = setup::request_as_helper(executable, helper, request, true, expected)?;
+    if !succeeded || reply["ok"] != true {
+        return Err(setup::account::problem(format!(
+            "Setting up the helper failed: {}",
+            reply["error"].as_str().unwrap_or("no reply")
+        )));
+    }
+
+    Ok(reply)
+}
+
+/// Install the helper's background job `agent` through `run`, which runs one
+/// setup-helper request as the helper. An earlier Atlas's job (another app,
+/// another account, an older version) is set aside first, its definition
+/// kept as a backup, and comes back when the new one cannot go in.
+pub(crate) fn install_job(
+    run: impl Fn(&Request) -> Result<Value>,
+    uid: u32,
+    agent: Agent,
+    logs: &Path,
+) -> Result<Value> {
+    let inspected = run(&Request::Inspect {
+        uid,
+        labels: vec![LABEL.to_owned()],
+    })?;
+    let earlier = &inspected["jobs"][LABEL];
+    let expected = setup::helper::text_sha256(&setup::helper::plist(&agent, logs));
+    let retired = earlier["plistSha256"]
+        .as_str()
+        .filter(|sha| *sha != expected)
+        .map(str::to_owned);
+    if let Some(sha256) = &retired {
+        run(&Request::Retire {
+            uid,
+            label: LABEL.to_owned(),
+            sha256: sha256.clone(),
+            missing_ok: false,
+        })?;
+    }
+
+    let mut error = match run(&Request::Install { agent }) {
+        Ok(installed) => return Ok(installed),
+        Err(error) => error,
+    };
+
+    let Some(sha256) = retired else {
+        return Err(error);
+    };
+
+    // The earlier job comes back when the new one cannot go in. The new
+    // definition install may have written goes first, or it would block
+    // that return.
+    let restored = run(&Request::Retire {
+        uid,
+        label: LABEL.to_owned(),
+        sha256: expected,
+        missing_ok: true,
+    })
+    .and_then(|_| {
+        run(&Request::Restore {
+            uid,
+            label: LABEL.to_owned(),
+            sha256,
+        })
+    });
+
+    if let Err(lost) = restored {
+        error.error = format!(
+            "{}; the earlier helper job could not be put back: {}",
+            error.error, lost.error
+        );
+    }
+
+    Err(error)
+}
+
+/// Prepare and install under one claim, including rollback dispatches.
+pub(crate) async fn prepare_and_install(
+    client: &Client,
+    controller_name: &str,
+    agent: Agent,
+    logs: &Path,
+    run: impl Fn(&Request) -> Result<Value>,
+) -> Result<Value> {
+    let _ownership = client.service_change(true).await?;
+    setup_transaction_held(&client.controller, || {
+        run(&Request::Prepare {
+            uid: agent.uid,
+            controller: controller_name.to_owned(),
+        })?;
+        install_job(run, agent.uid, agent, logs)
+    })
 }
 
 #[cfg(test)]

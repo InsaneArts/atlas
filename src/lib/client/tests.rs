@@ -17,7 +17,7 @@ use crate::{
     digest::file_sha256,
     error::Holder,
     interrupt::Interrupt,
-    native::windows::HitWindow,
+    screen::windows::HitWindow,
     session::{Display, Epoch, FOCUS_APP, FOCUS_DOCK, FOCUS_FIELD, FOCUS_WINDOW, HOLD, SHUTDOWN},
     test_support::client_in,
 };
@@ -267,7 +267,7 @@ async fn named_clicks_carry_the_helper_identity_even_when_the_controller_cannot_
     use crate::{
         actions::Button,
         agent::{Target, click_element},
-        select::ElementFilter,
+        screen::select::ElementFilter,
         test_support::{Helper, UID, completed},
     };
     let pid = i64::from(i32::MAX);
@@ -3743,7 +3743,7 @@ async fn a_named_click_sends_its_window_and_keeps_a_native_dock_refusal() {
 async fn a_missing_window_endpoint_preserves_memory_without_starting_the_look() {
     use crate::{
         host_session::{Host, HostSession},
-        native::windows::Bounds,
+        screen::windows::Bounds,
     };
     use std::cell::Cell;
 

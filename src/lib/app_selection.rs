@@ -1,7 +1,7 @@
 //! Shared application-selection policy for close-all and held logout.
 use crate::{
     client::{AppList, AppRow},
-    ui::text::same_text,
+    name::same_text,
 };
 use serde_json::{Value, json};
 

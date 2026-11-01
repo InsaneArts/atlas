@@ -26,11 +26,11 @@ const WORKER: &str = "test_support::executor::tests::an_executor_test_worker";
 /// shell with a worker of the same process identity. All effects are temporary.
 pub(crate) fn pause_executor(directory: &Path) {
     let script = [
-        crate::onboarding::as_root::EXECUTOR,
+        crate::setup::executor::EXECUTOR,
         "exec \"$1\" --exact \"$2\" --nocapture\n",
     ]
     .concat();
-    let _ = crate::onboarding::as_root::tracked_output(
+    let _ = crate::setup::executor::tracked_output(
         Command::new("/bin/zsh")
             .args(["-f", "-c", &script, "zsh"])
             .arg(std::env::current_exe().unwrap())

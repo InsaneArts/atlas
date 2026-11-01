@@ -8,6 +8,7 @@ pub(crate) mod brief;
 pub mod explain;
 pub(crate) mod liveness;
 pub(crate) mod names;
+pub(crate) mod reading;
 pub(crate) mod record;
 mod recovery;
 pub mod store;
@@ -408,7 +409,7 @@ pub(crate) fn plain(value: &str) -> bool {
 
 /// Milliseconds since 1970, as records keep times.
 pub(crate) fn now_ms() -> u64 {
-    u64::try_from(crate::client::timestamp() / 1_000_000).unwrap_or(u64::MAX)
+    u64::try_from(crate::time::timestamp() / 1_000_000).unwrap_or(u64::MAX)
 }
 
 #[cfg(test)]

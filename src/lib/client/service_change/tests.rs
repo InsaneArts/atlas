@@ -1,7 +1,7 @@
 use super::*;
 use crate::{
+    client::service_change::service_blocker,
     host_session::{Host, HostSession, store::Store},
-    overview::service_blocker,
 };
 use serde_json::json;
 
@@ -23,7 +23,7 @@ fn service_blocker_with_state(
     recovery: bool,
     state: crate::process::State,
 ) -> Option<String> {
-    crate::overview::service_blocker_with(
+    crate::client::service_change::service_blocker_with(
         client,
         recovery,
         super::super::timestamp(),
@@ -73,7 +73,7 @@ fn service_changes_respect_host_exits_without_treating_unknown_hosts_as_idle() {
             .unwrap();
 
         assert_eq!(
-            crate::overview::service_blocker_with(
+            crate::client::service_change::service_blocker_with(
                 &client,
                 false,
                 u128::from(now) * 1_000_000,
@@ -335,9 +335,9 @@ async fn recovery_can_take_control_after_the_callers_screenshot_with_an_unknown_
             },
         )
         .unwrap();
-        let listed = crate::overview::SessionReading::collect(&client)
+        let listed = crate::host_session::reading::SessionReading::collect(&client)
             .unwrap()
-            .entries(crate::overview::SessionFacts::local(
+            .entries(crate::host_session::reading::SessionFacts::local(
                 &client.controller,
                 u128::from(now) * 1_000_000,
             ));
@@ -744,9 +744,9 @@ async fn a_named_updater_defers_for_terminal_work_before_its_own_screenshot() {
         )
         .unwrap();
     }
-    let listed = crate::overview::SessionReading::collect(&client)
+    let listed = crate::host_session::reading::SessionReading::collect(&client)
         .unwrap()
-        .entries(crate::overview::SessionFacts::local(
+        .entries(crate::host_session::reading::SessionFacts::local(
             &client.controller,
             u128::from(now) * 1_000_000,
         ));
@@ -849,7 +849,7 @@ fn an_unavailable_snapshot_refuses_service_changes_and_preserves_pending_claims(
 
     for recovery in [false, true] {
         assert_eq!(
-            crate::overview::service_blocker_with(
+            crate::client::service_change::service_blocker_with(
                 &client,
                 recovery,
                 super::super::timestamp(),

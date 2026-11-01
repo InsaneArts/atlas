@@ -1,3 +1,4 @@
+use super::resources::{APP_MIME, SCREEN, SCREEN_SCRIPT, VERSIONS};
 use super::*;
 
 pub(super) fn server(dir: &std::path::Path) -> Server {
@@ -1380,7 +1381,7 @@ async fn reply_cost_includes_the_private_frame_in_the_outgoing_envelope() {
 #[test]
 fn app_reply_cost_preserves_the_window_projection() {
     for fixture in cost_fixtures(include_str!("../../../tests/fixtures/reply-cost/apps.json")) {
-        let windows: Vec<crate::native::windows::Window> =
+        let windows: Vec<crate::screen::windows::Window> =
             serde_json::from_value(fixture["input"]["windows"].clone()).unwrap();
         let mut apps = open_apps(&fixture["input"]["apps"], &json!(windows)).unwrap();
         for app in &mut apps {

@@ -1,8 +1,9 @@
 //! Result presentation, output streams and process result classification.
+use atlas::error::advice as hints;
 use atlas::{
     error::{Code, Error, Holder},
     ui::{
-        Format, hints,
+        Format,
         render::{self, View},
     },
 };

@@ -2,192 +2,23 @@
 //! what the records, the controller's notes and the recent activity say,
 //! each named and shown in the state it is in.
 use super::pending;
+use crate::host_session::reading::{SessionFacts, SessionReading, unrecorded};
 use crate::{
-    activity_log,
     client::Client,
     control::Controller,
     host_session::{
         Key,
-        liveness::{Lifetime, Snapshot},
+        liveness::Lifetime,
         names::{name_of, names_with_left},
         record::Seen,
-        store::Store,
     },
-    session_view::{self, Scene, Who},
+    session_view::{self, Who},
 };
 use serde_json::{Value, json};
-use std::{collections::BTreeMap, sync::Arc};
+use std::collections::BTreeMap;
 
 /// The most host sessions a status lists.
 const SESSIONS: usize = 8;
-/// How many recent activity rows each session's state and latest action
-/// are read from.
-const SESSION_ROWS: usize = 64;
-/// How recently another session used Atlas to defer service replacement.
-const SERVICE_IDLE: std::time::Duration = std::time::Duration::from_secs(2 * 60);
-/// How long the local service-change read waits for a marker writer.
-const MARKER_CHECK: std::time::Duration = std::time::Duration::from_millis(250);
-
-/// Who would be interrupted by a service replacement, from checked session
-/// records and the full recent activity window. The caller's own session
-/// is left out for recent activity. Its waiting and running commands still defer
-/// replacement; the service change's own holder note does not. Recovering the
-/// caller's unknown outcome ignores recent activity and waiters, which cannot
-/// act until recovery finishes.
-pub(crate) fn service_blocker(client: &Client, recovery: bool, now: u128) -> Option<String> {
-    service_blocker_with(client, recovery, now, Snapshot::polled)
-}
-
-// size-exception: replacement is one ordered proof of idle. Keep pending,
-// command lifetime and recent activity refusals together so unknown stays busy.
-pub(crate) fn service_blocker_with(
-    client: &Client,
-    recovery: bool,
-    now: u128,
-    sample: impl FnOnce(&std::path::Path, Vec<crate::process::Instance>) -> Snapshot,
-) -> Option<String> {
-    let Ok(output) = client.output_dir() else {
-        return Some("Atlas could not check which sessions are active.".into());
-    };
-    let Some(seen) = Store::at(output).checked_recent() else {
-        return Some(
-            "Atlas could not read every session record; another session may still be active."
-                .into(),
-        );
-    };
-    // Unlike a display read, replacement checks the lock even with no marker:
-    // a writer may be paused just before recording its first pending change.
-    let causes = match client
-        .controller
-        .pending_causes_for_service_change(MARKER_CHECK)
-    {
-        Ok(causes) => causes,
-        Err(error) if error.code == crate::error::Code::Busy => return Some(error.error),
-        Err(error) => {
-            return Some(format!(
-                "Atlas could not check pending activity: {}",
-                error.error
-            ));
-        }
-    };
-    let own = client
-        .host_session
-        .as_ref()
-        .map(|session| session.key().as_str());
-    let pending = causes.iter().any(|cause| !cause.running);
-    let recovering_own = recovery
-        && pending
-        && causes
-            .iter()
-            .all(|cause| cause.running || cause.session.as_ref().map(|key| key.as_str()) == own);
-    let waiting = if recovering_own {
-        Vec::new()
-    } else if let Some(waiting) = client.controller.checked_waiting_notes() {
-        waiting
-    } else {
-        return Some(
-            "Atlas could not read every waiting command; a command may still be active.".into(),
-        );
-    };
-    let now_ms = u64::try_from(now / 1_000_000).unwrap_or(u64::MAX);
-    let holder = client.controller.holder_note().filter(|note| {
-        !(note.process.is_this_one() && note.session.as_ref().map(|key| key.as_str()) == own)
-    });
-    let facts = SessionFacts {
-        pending,
-        agent_holds: false,
-        now,
-    };
-    let Some(activity) =
-        activity_log::checked_since(output, now_ms.saturating_sub(crate::time::ms(SERVICE_IDLE)))
-    else {
-        return Some(
-            "Atlas could not read every activity row; another session may still be active.".into(),
-        );
-    };
-    let rows = activity_log::recent(output, SESSION_ROWS);
-    let reading = SessionReading {
-        seen: seen.into(),
-        rows,
-        causes,
-        holder,
-        waiting,
-        running: client.controller.running_candidates(),
-        processes: Snapshot::default(),
-    }
-    .sampled_for_service_change(output, sample);
-    if reading
-        .holder
-        .iter()
-        .chain(&reading.running)
-        .any(|note| reading.processes.state(note.process) == crate::process::State::Unknown)
-    {
-        return Some(
-            "Atlas could not check whether a command is still active in the helper.".into(),
-        );
-    }
-    if let Some(note) = reading.waiting.first() {
-        let first = unrecorded(None, &reading.waiting, &[], &reading.seen);
-        let names = names_with_left(
-            reading.seen.iter().map(|seen| &seen.record),
-            [],
-            first.iter().copied(),
-        );
-        let name = note.session.as_ref().map_or_else(
-            || session_view::TERMINAL.to_owned(),
-            |key| name_of(&names, key, note.host),
-        );
-        return Some(format!("{name} is active in the helper."));
-    }
-    reading
-        .live(facts)
-        .into_iter()
-        .find(|listed| {
-            let key = (!listed.key.is_empty()).then_some(listed.key.as_str());
-            listed.shown.holds_helper
-                || listed.running_command
-                || (!recovering_own
-                    && key != own
-                    && listed.ended.is_none()
-                    && now_ms.saturating_sub(listed.last_seen) <= crate::time::ms(SERVICE_IDLE))
-        })
-        .map(|listed| {
-            let name = &listed.name;
-            if listed.running_command {
-                return format!("{name} has a command still running in the helper.");
-            }
-            format!("{name} is active in the helper.")
-        })
-        .or_else(|| {
-            // An unknown or budget-limited host sample cannot establish idle.
-            // Display relevance may omit it, but recent work still defers replacement.
-            if recovering_own {
-                return None;
-            }
-            let seen = reading.seen.iter().find(|seen| {
-                let record = &seen.record;
-                Some(record.key.as_str()) != own
-                    && record.ended.is_none()
-                    && now_ms.saturating_sub(record.last_seen) <= crate::time::ms(SERVICE_IDLE)
-                    && record.host_process.is_some_and(|process| {
-                        reading.processes.state(process) == crate::process::State::Unknown
-                    })
-            })?;
-            let names = names_with_left(reading.seen.iter().map(|seen| &seen.record), [], []);
-            let name = name_of(&names, &seen.record.key, Some(seen.record.host));
-            Some(format!("{name} is active in the helper."))
-        })
-        .or_else(|| {
-            // The display omits unnamed rows older than the first named row.
-            // Service replacement must still respect their recent activity.
-            (!recovering_own
-                && own.is_some()
-                && activity
-                    .iter()
-                    .any(|row| row.session.is_none() && row.actor() != "viewer"))
-            .then(|| format!("{} is active in the helper.", session_view::TERMINAL))
-        })
-}
 
 /// The host sessions an app shows beside the helper's status, in its
 /// overview: those seen in the last hour, holding the helper, or with an
@@ -247,21 +78,9 @@ pub(crate) async fn add_sessions_for(
     }
 }
 
-/// What a status says that the sessions' states depend on.
-#[derive(Clone, Copy, Debug)]
-pub(crate) struct SessionFacts {
-    /// Whether an outcome is unknown.
-    pub(super) pending: bool,
-    /// Whether the input service says an agent, not the person, holds
-    /// control.
-    pub(super) agent_holds: bool,
-    /// Now, in nanoseconds since 1970.
-    pub(super) now: u128,
-}
-
 impl SessionFacts {
     /// The facts `status` gives, with its overview, at `now`.
-    pub(super) fn of(overview: &super::Overview, now: u128) -> Self {
+    pub(crate) fn of(overview: &super::Overview, now: u128) -> Self {
         Self {
             pending: overview.pending.unresolved > 0,
             agent_holds: overview.mode == super::Mode::Agent && overview.agent_holds,
@@ -294,27 +113,27 @@ impl SessionFacts {
 
 /// The sessions [`add_host_sessions`] lists.
 #[derive(Default)]
-pub(super) struct HostSessions {
-    pub(super) sessions: Vec<(String, Value)>,
+pub(crate) struct HostSessions {
+    pub(crate) sessions: Vec<(String, Value)>,
     /// How many more relevant sessions there are than are listed.
-    pub(super) more: usize,
+    pub(crate) more: usize,
     /// Whether two or more sessions remain relevant.
-    pub(super) shown: bool,
+    pub(crate) shown: bool,
     /// The key of the one with the helper; empty for the commands no host
     /// named.
-    pub(super) holder: Option<String>,
+    pub(crate) holder: Option<String>,
 }
 
 /// One session [`add_host_sessions`] may list: what it is, when it was
 /// last seen, and how it is shown.
-struct Listed {
-    key: String,
-    name: String,
-    ended: Option<u64>,
+pub(crate) struct Listed {
+    pub(crate) key: String,
+    pub(crate) name: String,
+    pub(crate) ended: Option<u64>,
     entry: Value,
-    last_seen: u64,
-    shown: session_view::Shown,
-    running_command: bool,
+    pub(crate) last_seen: u64,
+    pub(crate) shown: session_view::Shown,
+    pub(crate) running_command: bool,
 }
 
 impl Listed {
@@ -349,117 +168,8 @@ fn summarize(listed: Vec<Listed>) -> HostSessions {
     }
 }
 
-/// The records and bounded note candidates for one frozen reply.
-pub(crate) struct SessionReading {
-    pub(crate) seen: Arc<[Seen]>,
-    rows: Vec<crate::activity_log::Row>,
-    causes: Vec<crate::control::Cause>,
-    holder: Option<crate::control::Note>,
-    waiting: Vec<crate::control::Note>,
-    running: Vec<crate::control::Note>,
-    pub(crate) processes: Snapshot,
-}
-
 impl SessionReading {
-    pub(crate) fn collect(client: &Client) -> Option<Self> {
-        Self::collect_with(client, Snapshot::polled)
-    }
-
-    pub(super) fn collect_with(
-        client: &Client,
-        sample: impl FnOnce(&std::path::Path, Vec<crate::process::Instance>) -> Snapshot,
-    ) -> Option<Self> {
-        let output = client.output_dir().ok()?;
-        let seen = Store::at(output).recent();
-        let rows = activity_log::recent(output, SESSION_ROWS);
-        let causes = client
-            .controller
-            .pending_causes_within(std::time::Duration::from_millis(50))
-            .unwrap_or_default();
-        let holder = client.controller.holder_note();
-        let waiting = client.controller.waiting_candidates();
-        let running = client.controller.running_candidates();
-        Some(
-            Self {
-                seen,
-                rows,
-                causes,
-                holder,
-                waiting,
-                running,
-                processes: Snapshot::default(),
-            }
-            .sampled(output, sample),
-        )
-    }
-
-    fn sample(
-        mut self,
-        output: &std::path::Path,
-        sample: impl FnOnce(&std::path::Path, Vec<crate::process::Instance>) -> Snapshot,
-    ) -> Self {
-        let instances = self
-            .holder
-            .iter()
-            .chain(&self.waiting)
-            .chain(&self.running)
-            .map(|note| note.process)
-            .chain(self.seen.iter().filter_map(|seen| seen.record.host_process))
-            .collect();
-        self.processes = sample(output, instances);
-        self
-    }
-
-    fn sampled_for_service_change(
-        self,
-        output: &std::path::Path,
-        sample: impl FnOnce(&std::path::Path, Vec<crate::process::Instance>) -> Snapshot,
-    ) -> Self {
-        let mut reading = self.sample(output, sample);
-        let remains = |note: &crate::control::Note| {
-            reading.processes.state(note.process) != crate::process::State::Gone
-        };
-        reading.holder = reading.holder.filter(remains);
-        reading.waiting.retain(remains);
-        reading.running.retain(remains);
-        reading
-    }
-
-    fn sampled(
-        mut self,
-        output: &std::path::Path,
-        sample: impl FnOnce(&std::path::Path, Vec<crate::process::Instance>) -> Snapshot,
-    ) -> Self {
-        self = self.sample(output, sample);
-        self.holder = self
-            .holder
-            .filter(|note| self.processes.running(note.process));
-        self.waiting
-            .retain(|note| self.processes.state(note.process) == crate::process::State::Running);
-        self.running
-            .retain(|note| self.processes.running(note.process));
-        self
-    }
-
-    fn scene(&self, facts: SessionFacts) -> Scene<'_> {
-        Scene {
-            rows: &self.rows,
-            processes: &self.processes,
-            holder: self.holder.as_ref(),
-            waiting: &self.waiting,
-            running: &self.running,
-            causes: &self.causes,
-            pending: facts.pending,
-            agent_holds: facts.agent_holds,
-            now: facts.now,
-        }
-    }
-
-    pub(crate) fn work(&self, key: &Key, facts: SessionFacts) -> bool {
-        self.scene(facts).work(&Who::Host(key.clone()))
-    }
-
-    pub(super) fn summary(&self, facts: SessionFacts) -> HostSessions {
+    pub(crate) fn summary(&self, facts: SessionFacts) -> HostSessions {
         summarize(self.live(facts))
     }
 
@@ -472,7 +182,7 @@ impl SessionReading {
 }
 
 impl SessionReading {
-    fn live(&self, facts: SessionFacts) -> Vec<Listed> {
+    pub(crate) fn live(&self, facts: SessionFacts) -> Vec<Listed> {
         let seen = &self.seen;
         let causes = &self.causes;
         let holder = &self.holder;
@@ -544,42 +254,6 @@ impl SessionReading {
         listed.sort_by_key(|listed| (listed.shown.state, std::cmp::Reverse(listed.last_seen)));
         listed
     }
-}
-
-/// The live notes, the holder's first, then the waiting commands' and the
-/// running commands', naming a session that has no record among `seen`:
-/// each such session once.
-fn unrecorded<'a>(
-    holder: Option<&'a crate::control::Note>,
-    waiting: &'a [crate::control::Note],
-    running: &'a [crate::control::Note],
-    seen: &[Seen],
-) -> Vec<&'a crate::control::Note> {
-    let notes = holder.into_iter().chain(waiting).chain(running);
-    let mut found: Vec<&crate::control::Note> = Vec::new();
-    for note in notes {
-        let Some(key) = &note.session else { continue };
-        let known = seen.iter().any(|seen| seen.record.key == *key)
-            || found.iter().any(|kept| kept.session.as_ref() == Some(key));
-        if !known {
-            found.push(note);
-        }
-    }
-    found
-}
-
-/// Whether a live holder, waiting or running note names a session with no
-/// record yet among `seen`: a session on its first command.
-pub(crate) fn first_command_running(client: &Client, seen: &[Seen]) -> bool {
-    SessionReading::collect(client).is_some_and(|reading| {
-        !unrecorded(
-            reading.holder.as_ref(),
-            &reading.waiting,
-            &reading.running,
-            seen,
-        )
-        .is_empty()
-    })
 }
 
 /// A record's frozen lifetime and activity metadata, before its shown

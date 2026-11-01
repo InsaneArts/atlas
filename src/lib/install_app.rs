@@ -11,8 +11,8 @@ use crate::{
     error::{Code, Error, Result},
     files::Token,
     handoff::{self, Running, Target},
+    name::same_text,
     task::{Claims, Owned, State, store::Store as Tasks},
-    ui::text::same_text,
 };
 use serde_json::Value;
 use std::{

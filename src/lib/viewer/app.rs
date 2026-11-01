@@ -58,7 +58,7 @@ pub async fn serve(client: Client, port: u16, program: crate::menubar::Program) 
     let record = json!({
         "url": viewer.url,
         "pid": std::process::id(),
-        "startedAt": crate::client::timestamp().to_string(),
+        "startedAt": crate::time::timestamp().to_string(),
     });
     files::write_private(&path, &serde_json::to_vec_pretty(&record)?)?;
     *unpoisoned(&viewer.record) = Some((path, record.clone()));

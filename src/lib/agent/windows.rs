@@ -5,8 +5,8 @@ use crate::{
     client::{Client, Verified},
     error::{Code, Error, Result},
     last_capture,
-    native::windows::{Bounds, Shown, Window, hit_windows, same_routing},
-    ui::text::same_text,
+    name::same_text,
+    screen::windows::{Bounds, Shown, Window, hit_windows, same_routing},
 };
 use serde_json::{Value, json};
 use std::time::{Duration, Instant};

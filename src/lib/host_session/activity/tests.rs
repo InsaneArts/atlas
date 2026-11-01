@@ -303,7 +303,7 @@ fn only_the_session_itself_is_told_to_recover_and_only_when_every_unknown_is_its
 
     let own = list(&client, Some(&claude), Scope::Own, 10).unwrap();
     assert_eq!(own["uncertain"], 1);
-    assert_eq!(own["next"], crate::ui::hints::UNKNOWN_OWN);
+    assert_eq!(own["next"], crate::error::advice::UNKNOWN_OWN);
 
     let asked = list(&client, Some(&codex), Scope::Session(claude.key()), 10).unwrap();
     assert_eq!(asked["uncertain"], 1, "another's count is said");

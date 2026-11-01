@@ -1,6 +1,8 @@
 //! The one failure shape Atlas reports, as JSON and as text: a short code
 //! agents act on, a plain sentence, and whether the action may have
 //! happened anyway.
+pub mod advice;
+
 use serde::{Deserialize, Serialize};
 use std::{error::Error as StdError, fmt};
 

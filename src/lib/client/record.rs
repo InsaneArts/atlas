@@ -5,7 +5,7 @@ use super::{Actor, Client, timestamp};
 use crate::{
     activity_log::{self, Failure, Op, Row, Step},
     error::{Code, Error, Result},
-    ui::text::same_text,
+    name::same_text,
 };
 use serde_json::{Value, json};
 use std::{

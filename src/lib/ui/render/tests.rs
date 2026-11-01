@@ -1029,7 +1029,7 @@ fn a_focus_refusal_card_advises_by_what_was_in_the_way_and_what_was_sent() {
         json!({"ok": false, "code": "focus-changed", "reason": "field", "typed": 16,
             "partial": true, "error": "The field with keyboard focus is not the one named First"}),
     );
-    let advice = crate::ui::hints::focus_changed(true, crate::ui::hints::InTheWay::Field);
+    let advice = crate::error::advice::focus_changed(true, crate::error::advice::InTheWay::Field);
     assert!(left.err.contains(&advice), "{}", left.err);
     assert!(left.err.contains("send only the rest"), "{}", left.err);
 
@@ -1086,7 +1086,7 @@ fn activity_gives_the_restart_step_only_when_the_reply_does() {
         let mut value = json!({"ok": true, "session": {"name": "Claude Code · left", "this": this},
             "counts": {}, "recent": [], "copies": [], "plans": [], "uncertain": 1});
         if next {
-            value["next"] = json!(crate::ui::hints::UNKNOWN_OWN);
+            value["next"] = json!(crate::error::advice::UNKNOWN_OWN);
         }
         show(View::Activity, value).out
     };

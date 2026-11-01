@@ -2,6 +2,18 @@
 //! checks before it acts and is skipped when already done. It never types or
 //! stores a password and never touches privacy settings: the person signs in
 //! and clicks Allow themselves; Atlas waits and checks.
+use crate::setup::{FULL_NAME, missing};
+#[cfg(test)]
+use crate::setup::{
+    account::{available_uid, used_uids},
+    executor::quietly_attended,
+};
+use crate::setup::{
+    account::{free_uid, problem, valid_account_name},
+    executor::setup_transaction,
+    helper::{as_helper, helper_agent, install_job, prepare_and_install},
+};
+
 use crate::{
     client::Client,
     config::{self, Config},
@@ -21,7 +33,6 @@ use crate::{
 use serde_json::{Value, json};
 use std::{
     fs,
-    io::Write,
     path::{Path, PathBuf},
     process::Command,
     time::{Duration, Instant},
@@ -29,10 +40,6 @@ use std::{
 
 /// How long init waits for the person to log in or click Allow.
 const PATIENCE: Duration = Duration::from_secs(30 * 60);
-
-fn problem(message: impl Into<String>) -> Error {
-    Error::new(Code::Init, message)
-}
 
 /// A command that must succeed and talks to the person itself (sudo and
 /// sysadminctl ask for passwords in their own words).
@@ -44,134 +51,12 @@ fn attended(program: &str, args: &[&str], why: &str) -> Result<()> {
         .ok_or_else(|| problem(why.to_owned()))
 }
 
-/// Read `stream` on a thread of its own, passing each chunk on as it
-/// arrives; the channel closes when the stream ends.
-pub(crate) fn forward(
-    mut stream: impl std::io::Read + Send + 'static,
-) -> std::sync::mpsc::Receiver<Vec<u8>> {
-    let (sender, receiver) = std::sync::mpsc::channel();
-    std::thread::spawn(move || {
-        let mut chunk = [0u8; 4096];
-        while let Ok(read @ 1..) = stream.read(&mut chunk) {
-            if sender.send(chunk[..read].to_vec()).is_err() {
-                break;
-            }
-        }
-    });
-
-    receiver
-}
-
-/// Like `attended`, but timestamped log lines on standard error (as
-/// sysadminctl writes) are dropped; anything else, such as a password
-/// question, is shown as it arrives. On failure the dropped lines are shown.
-pub(crate) fn quietly_attended(mut child: std::process::Child, why: &str) -> Result<()> {
-    let output = child.stdout.take().map(|mut stream| {
-        std::thread::spawn(move || {
-            use std::io::Read;
-            let mut bytes = Vec::new();
-            stream.read_to_end(&mut bytes).map(|_| bytes)
-        })
-    });
-
-    let stream = child
-        .stderr
-        .take()
-        .ok_or_else(|| problem("The command has no error output"))?;
-    let receiver = forward(stream);
-
-    let log_line = |bytes: &[u8]| {
-        // "2026-10-11 14:28:19.767 sysadminctl[…]": a date, then a time.
-        bytes.len() > 20
-            && bytes[..4].iter().all(u8::is_ascii_digit)
-            && bytes[4] == b'-'
-            && bytes[10] == b' '
-            && bytes[13] == b':'
-    };
-
-    let mut dropped = Vec::new();
-    let mut pending = Vec::new();
-    let mut terminal = std::io::stderr();
-
-    loop {
-        match receiver.recv_timeout(Duration::from_millis(250)) {
-            Ok(bytes) => {
-                pending.extend(bytes);
-
-                while let Some(end) = pending.iter().position(|&byte| byte == b'\n') {
-                    let line: Vec<u8> = pending.drain(..=end).collect();
-                    if log_line(&line) {
-                        dropped.extend(line);
-                    } else {
-                        let _ = terminal.write_all(&line);
-                    }
-                }
-            }
-            // A question waits for an answer without ending its line.
-            Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {
-                if !pending.is_empty() && !log_line(&pending) {
-                    let _ = terminal.write_all(&pending);
-                    let _ = terminal.flush();
-                    pending.clear();
-                }
-            }
-            Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => break,
-        }
-    }
-
-    let status = child.wait()?;
-    let output = output
-        .and_then(|reader| reader.join().ok())
-        .transpose()?
-        .unwrap_or_default();
-    if status.success() {
-        return Ok(());
-    }
-
-    let _ = terminal.write_all(&dropped);
-    let _ = terminal.write_all(&pending);
-    let _ = terminal.write_all(&output);
-
-    Err(problem(why.to_owned()))
-}
-
 /// A command with cached administrator rights (`sudo -n`), never prompting.
 fn sudo(args: &[&str]) -> Result<std::process::Output> {
     Ok(Command::new("/usr/bin/sudo")
         .arg("-n")
         .args(args)
         .output()?)
-}
-
-/// Whether `name` can be a new account's short name.
-pub(crate) fn valid_account_name(name: &str) -> std::result::Result<(), String> {
-    if name.chars().any(char::is_whitespace) {
-        return Err("Account names can't have spaces.".into());
-    }
-
-    if !name
-        .bytes()
-        .all(|c| c.is_ascii_alphanumeric() || b"._-".contains(&c))
-    {
-        return Err(
-            "Account names can only use letters, numbers, dots, dashes and underscores.".into(),
-        );
-    }
-
-    if name.starts_with(['.', '-']) {
-        return Err("Account names start with a letter or a number.".into());
-    }
-
-    if name.is_empty() || name.len() > 31 {
-        return Err("Account names are 1 to 31 characters.".into());
-    }
-
-    // macOS reads a name of only digits as a user ID.
-    if name.bytes().all(|c| c.is_ascii_digit()) {
-        return Err("Account names need at least one letter.".into());
-    }
-
-    Ok(())
 }
 
 /// Choose an existing standard account, or (only when asked for, and
@@ -266,105 +151,6 @@ fn record_selected(
     record(helper, expected)
 }
 
-/// The full name a new helper account gets.
-pub const FULL_NAME: &str = "Atlas";
-
-/// macOS's account tool, which creates the helper account.
-pub(crate) const SYSADMINCTL: &str = "/usr/sbin/sysadminctl";
-
-/// The arguments that make `sysadminctl` create a standard account `name`
-/// called `full_name` with user ID `uid`, asking for its password itself
-/// (`-password -`), with Atlas's picture when it is at hand.
-pub(crate) fn add_user_args(name: &str, full_name: &str, uid: u32) -> Vec<String> {
-    let mut args: Vec<String> = [
-        "-addUser",
-        name,
-        "-fullName",
-        full_name,
-        "-UID",
-        &uid.to_string(),
-        "-password",
-        "-",
-    ]
-    .map(str::to_owned)
-    .to_vec();
-
-    if let Some(picture) = helper_picture() {
-        args.extend(["-picture".to_owned(), picture]);
-    }
-
-    args
-}
-
-/// The picture a new helper account gets, Atlas's mark: shipped in
-/// Atlas.app, or in a development checkout drawn into app/Resources.
-/// macOS keeps a copy on the account, so the file need not stay.
-pub(crate) fn helper_picture() -> Option<String> {
-    let bundled = crate::update::installed_app()
-        .ok()
-        .map(|app| app.join("Contents/Resources/HelperPicture.png"));
-    let checkout = Path::new(env!("CARGO_MANIFEST_DIR")).join("app/Resources/HelperPicture.png");
-    [bundled, Some(checkout)]
-        .into_iter()
-        .flatten()
-        .find(|path| path.is_file())
-        .and_then(|path| path.to_str().map(str::to_owned))
-}
-
-/// The lowest user ID from the first user ID (501) that no account has and
-/// no process runs as: a deleted account's session can outlive it, and
-/// sharing its ID would mix that session with the helper's.
-pub(crate) fn free_uid() -> Result<u32> {
-    let taken = |program: &str, args: &[&str]| -> Result<Vec<u32>> {
-        let output =
-            crate::bounded::output(Command::new(program).args(args), crate::bounded::LISTING)?;
-        if !output.status.success() {
-            return Err(problem("Could not list the user IDs in use"));
-        }
-        used_uids(
-            &String::from_utf8(output.stdout)
-                .map_err(|_| problem("Could not read the user IDs in use"))?,
-        )
-    };
-
-    let accounts = taken("/usr/bin/dscl", &["/Search", "-list", "/Users", "UniqueID"])?;
-    let running = taken("/bin/ps", &["-axo", "uid="])?;
-    available_uid(&accounts, &running, |uid| {
-        Ok(setup::account_with_uid(uid)?.is_some())
-    })
-}
-
-/// Directory services can list negative system IDs, which cannot collide
-/// with the helper. Any unreadable ID still makes the whole list unusable.
-fn used_uids(listing: &str) -> Result<Vec<u32>> {
-    let mut uids = Vec::new();
-    for line in listing.lines() {
-        let unreadable = || problem("Could not read a user ID in use");
-        let uid = line
-            .split_whitespace()
-            .last()
-            .and_then(|word| word.parse::<i64>().ok())
-            .ok_or_else(unreadable)?;
-        if uid >= 0 {
-            uids.push(u32::try_from(uid).map_err(|_| unreadable())?);
-        }
-    }
-    Ok(uids)
-}
-
-fn available_uid(
-    accounts: &[u32],
-    running: &[u32],
-    mut resolves: impl FnMut(u32) -> Result<bool>,
-) -> Result<u32> {
-    for uid in setup::FIRST_USER_UID..600 {
-        if !accounts.contains(&uid) && !running.contains(&uid) && !resolves(uid)? {
-            return Ok(uid);
-        }
-    }
-    Err(problem("No free user ID for the helper account"))
-}
-
 /// Keep the administrator rights from `sudo -v` fresh while init waits
 /// for the person (sudo forgets them after five minutes otherwise).
 fn keep_sudo_alive() {
@@ -391,112 +177,6 @@ fn administrator_rights(why: &str) -> Result<()> {
     done("Administrator rights", "");
 
     Ok(())
-}
-
-/// The helper's background job as this Atlas writes it, for `helper` and
-/// the app's `executable`, with the layout it lives in.
-fn helper_agent(helper: &setup::Account, executable: &Path) -> Result<(Agent, Layout)> {
-    let controller = setup::account_with_uid(nix::unistd::getuid().as_raw())?
-        .ok_or_else(|| problem("This account cannot be resolved"))?;
-    let layout = Layout {
-        uid: helper.uid,
-        home: helper.home.clone(),
-        guard: None,
-    };
-
-    let agent = Agent {
-        label: LABEL.to_owned(),
-        program: executable.to_path_buf(),
-        uid: helper.uid,
-        controller_uid: controller.uid,
-        socket: layout.socket(),
-    };
-
-    Ok((agent, layout))
-}
-
-/// Run one setup-helper request as the helper, inside its own login, with
-/// the administrator rights init holds.
-fn as_helper(
-    executable: &Path,
-    helper: &setup::Account,
-    request: &Request,
-    expected: &setup::identity::Identity,
-) -> Result<Value> {
-    let (succeeded, reply) = setup::request_as_helper(executable, helper, request, true, expected)?;
-    if !succeeded || reply["ok"] != true {
-        return Err(problem(format!(
-            "Setting up the helper failed: {}",
-            reply["error"].as_str().unwrap_or("no reply")
-        )));
-    }
-
-    Ok(reply)
-}
-
-/// Install the helper's background job `agent` through `run`, which runs one
-/// setup-helper request as the helper. An earlier Atlas's job (another app,
-/// another account, an older version) is set aside first, its definition
-/// kept as a backup, and comes back when the new one cannot go in.
-pub(crate) fn install_job(
-    run: impl Fn(&Request) -> Result<Value>,
-    uid: u32,
-    agent: Agent,
-    logs: &Path,
-) -> Result<Value> {
-    let inspected = run(&Request::Inspect {
-        uid,
-        labels: vec![LABEL.to_owned()],
-    })?;
-    let earlier = &inspected["jobs"][LABEL];
-    let expected = setup::helper::text_sha256(&setup::helper::plist(&agent, logs));
-    let retired = earlier["plistSha256"]
-        .as_str()
-        .filter(|sha| *sha != expected)
-        .map(str::to_owned);
-    if let Some(sha256) = &retired {
-        run(&Request::Retire {
-            uid,
-            label: LABEL.to_owned(),
-            sha256: sha256.clone(),
-            missing_ok: false,
-        })?;
-    }
-
-    let mut error = match run(&Request::Install { agent }) {
-        Ok(installed) => return Ok(installed),
-        Err(error) => error,
-    };
-
-    let Some(sha256) = retired else {
-        return Err(error);
-    };
-
-    // The earlier job comes back when the new one cannot go in. The new
-    // definition install may have written goes first, or it would block
-    // that return.
-    let restored = run(&Request::Retire {
-        uid,
-        label: LABEL.to_owned(),
-        sha256: expected,
-        missing_ok: true,
-    })
-    .and_then(|_| {
-        run(&Request::Restore {
-            uid,
-            label: LABEL.to_owned(),
-            sha256,
-        })
-    });
-
-    if let Err(lost) = restored {
-        error.error = format!(
-            "{}; the earlier helper job could not be put back: {}",
-            error.error, lost.error
-        );
-    }
-
-    Err(error)
 }
 
 /// Restart the helper daemon (launchd starts a fresh process) and wait for
@@ -835,18 +515,6 @@ fn mark_since_lock(step: &str) {
             crate::login_log::seconds(locked.elapsed())
         ));
     }
-}
-
-/// The permissions the helper still lacks, by their System Settings names.
-pub(crate) fn missing(status: &Value) -> Vec<&'static str> {
-    [
-        ("screenCapture", "Screen & System Audio Recording"),
-        ("accessibility", "Accessibility"),
-    ]
-    .into_iter()
-    .filter(|(key, _)| status["permissions"][*key] != true)
-    .map(|(_, pane)| pane)
-    .collect()
 }
 
 /// Guide the person from an installed app to a ready helper.
@@ -1343,47 +1011,6 @@ async fn start_helper(
     }
 
     Ok(())
-}
-
-/// Hold and claim synchronous setup before any worker can change the helper.
-/// Only a complete acknowledgement settles this transaction's generation.
-pub(crate) fn setup_transaction<T>(
-    controller: &crate::control::Controller,
-    act: impl FnOnce() -> Result<T>,
-) -> Result<T> {
-    let _ownership = controller.acquire(true)?;
-    setup_transaction_held(controller, act)
-}
-
-fn setup_transaction_held<T>(
-    controller: &crate::control::Controller,
-    act: impl FnOnce() -> Result<T>,
-) -> Result<T> {
-    let pending = controller.quarantine()?;
-    let _executors = crate::control::ExecutorClaims::new(std::slice::from_ref(&pending))?;
-    let outcome = act();
-    if outcome.is_ok() {
-        controller.clear_if(&pending)?;
-    }
-    outcome
-}
-
-/// Prepare and install under one claim, including rollback dispatches.
-async fn prepare_and_install(
-    client: &Client,
-    controller_name: &str,
-    agent: Agent,
-    logs: &Path,
-    run: impl Fn(&Request) -> Result<Value>,
-) -> Result<Value> {
-    let _ownership = client.service_change(true).await?;
-    setup_transaction_held(&client.controller, || {
-        run(&Request::Prepare {
-            uid: agent.uid,
-            controller: controller_name.to_owned(),
-        })?;
-        install_job(run, agent.uid, agent, logs)
-    })
 }
 
 /// Unless `status` has the helper in the background, wait until it is.

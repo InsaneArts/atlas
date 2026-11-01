@@ -83,6 +83,16 @@ pub(crate) fn plain(value: &str, max: usize) -> bool {
             .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'_' | b':' | b'-'))
 }
 
+/// Whether two names people or apps give things name the same thing:
+/// compared case-insensitively, so `textedit` and `TextEdit` (or `ÉDITEUR`
+/// and `Éditeur`) agree. App names and element names are both matched so.
+pub(crate) fn same_text(a: &str, b: &str) -> bool {
+    a == b
+        || a.chars()
+            .flat_map(char::to_lowercase)
+            .eq(b.chars().flat_map(char::to_lowercase))
+}
+
 #[cfg(test)]
 mod tests {
     use super::{hex, lower_hex, plain, random_hex};

@@ -2,7 +2,7 @@
 //! screenshots, apps, windows, elements and readiness.
 use super::{Rendered, failed, style, text};
 use crate::{
-    native::ax::{self, Stop},
+    screen::elements::{Stop, why},
     ui::table,
 };
 use serde_json::Value;
@@ -511,7 +511,7 @@ pub(super) fn elements(value: &Value) -> String {
 
     if value["scanIncomplete"] == true {
         let reasons = value["scan"]["reasons"].as_array().into_iter().flatten();
-        let why = ax::why(reasons.filter_map(Value::as_str).filter_map(Stop::parse))
+        let why = why(reasons.filter_map(Value::as_str).filter_map(Stop::parse))
             .map(|why| format!(" ({why})"))
             .unwrap_or_default();
         lines.push(format!(

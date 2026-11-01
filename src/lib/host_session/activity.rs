@@ -99,7 +99,7 @@ pub fn list(
         processes,
         work,
         rows: activity_log::recent(output, ROWS),
-        now: crate::client::timestamp(),
+        now: crate::time::timestamp(),
         store: &store,
         records: &records,
         tasks: crate::task::store::Store::at(output).all(),

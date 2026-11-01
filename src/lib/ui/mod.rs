@@ -2,7 +2,6 @@
 //! short plain text, asks one question at a time and shows progress; for
 //! programs (a pipe, `--json`, `ATLAS_JSON=1`) every result stays the
 //! same JSON it always was, so agents and scripts never see formatting.
-pub mod hints;
 pub mod progress;
 pub mod prompt;
 pub mod render;

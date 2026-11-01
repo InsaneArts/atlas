@@ -2,13 +2,13 @@ use super::*;
 use crate::{
     control::Note,
     doing::Doing,
+    error::advice as hints,
     error::{Code, Error},
     host_session::{
         Host, Instance, ancestry,
         store::{Kind, note},
     },
     test_support::client,
-    ui::hints,
 };
 use std::fs;
 
@@ -130,7 +130,7 @@ fn busy_from_the_person_never_names_a_session() {
 
 /// A row `seconds_ago` of an agent's command in `app` for `session`.
 fn row(seconds_ago: u64, session: &HostSession, app: &str) -> Value {
-    let at = crate::client::timestamp() - u128::from(seconds_ago) * 1_000_000_000;
+    let at = crate::time::timestamp() - u128::from(seconds_ago) * 1_000_000_000;
     json!({
         "at": at.to_string(), "operation": "input", "ok": true, "elapsedMs": 4.0,
         "actor": "agent", "verb": "click", "command": &crate::files::token()[..12],

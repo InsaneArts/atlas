@@ -76,7 +76,7 @@ impl Viewer {
         })
         .await
         .unwrap_or_default();
-        let now = crate::client::timestamp();
+        let now = crate::time::timestamp();
         let overview = crate::overview::overview(&doctor, active, pending, &activity, now);
         let mut status = crate::overview::Reading::new(doctor, overview, active, now);
         crate::overview::add_host_sessions(&mut status, &client, now).await;
@@ -108,7 +108,7 @@ impl Viewer {
         .map_err(|_| unreadable())?
         .map_err(|_| unreadable())?;
 
-        let now = crate::client::timestamp();
+        let now = crate::time::timestamp();
         let rows = rows
             .iter()
             .map(|row| activity_row(row, now))
@@ -126,11 +126,11 @@ impl Viewer {
         let client = self.client();
         // A folder that can't be read is said, never shown as no sessions.
         client.output_dir()?;
-        let now = crate::client::timestamp();
-        let facts = crate::overview::SessionFacts::local(&client.controller, now);
+        let now = crate::time::timestamp();
+        let facts = crate::host_session::reading::SessionFacts::local(&client.controller, now);
         let reading_client = client.clone();
         let reading = tokio::task::spawn_blocking(move || {
-            crate::overview::SessionReading::collect(&reading_client)
+            crate::host_session::reading::SessionReading::collect(&reading_client)
         })
         .await
         .ok()
@@ -495,10 +495,10 @@ async fn sessions_named<'a>(
     tokio::task::spawn_blocking(move || {
         let records = || seen.iter().map(|seen| &seen.record);
         let named = names(records());
-        let reading = crate::overview::SessionReading::collect(&client);
+        let reading = crate::host_session::reading::SessionReading::collect(&client);
         let processes = reading.as_ref().map(|reading| &reading.processes);
         let now = crate::host_session::now_ms();
-        let facts = crate::overview::SessionFacts::local(&client.controller, u128::from(now) * 1_000_000);
+        let facts = crate::host_session::reading::SessionFacts::local(&client.controller, u128::from(now) * 1_000_000);
         let sessions: Map<String, Value> = records()
             .filter(|record| wanted.contains(record.key.as_str()))
             .map(|record| {

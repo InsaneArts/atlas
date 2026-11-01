@@ -1433,7 +1433,7 @@ async fn activity_json_never_carries_typed_text() {
     let dir = tempfile::tempdir().unwrap();
     let viewer = unreachable(dir.path()).await;
     let output = viewer.client().output_dir().unwrap().to_path_buf();
-    let at = crate::client::timestamp() - 3_000_000_000;
+    let at = crate::time::timestamp() - 3_000_000_000;
     // Fields the log never keeps, written here all the same: none of
     // them may reach the app.
     let row = json!({
@@ -1541,7 +1541,7 @@ async fn activity_json_names_the_sessions_its_rows_mention() {
         )
         .unwrap();
     }
-    let at = crate::client::timestamp();
+    let at = crate::time::timestamp();
     let rows: String = [&named, &gone]
         .iter()
         .enumerate()
@@ -1886,7 +1886,7 @@ async fn sessions_json_never_carries_ids_paths_or_tokens() {
         &Ok(json!({"ok": true})),
     )
     .unwrap();
-    let at = crate::client::timestamp();
+    let at = crate::time::timestamp();
     let row = json!({"at": at.to_string(), "operation": "open", "ok": true, "actor": "agent",
         "verb": "open", "app": "Notes", "command": "000000000001", "session": session.key()});
     std::fs::write(output.join(crate::activity_log::FILE), format!("{row}\n")).unwrap();

@@ -11,16 +11,21 @@
 //! (a new account's) goes from the window, through a pipe, straight into
 //! macOS's own password prompt.
 mod acceptance;
+mod status;
+pub use status::status;
 pub(crate) mod as_root;
 pub use acceptance::accept_worker;
 
+use crate::setup::executor::setup_transaction;
+#[cfg(test)]
+use crate::setup::executor::without;
+use crate::setup::executor::{APPROVAL, Secret, answer_prompts, problem, read_secret};
 use crate::{
     approval::Refusal,
     client::Client,
     config::{self, Config},
     control::{Controller, Ownership},
     error::{Code, Error, Result},
-    init,
     setup::{
         self,
         helper::{Agent, LABEL, Layout},
@@ -31,11 +36,11 @@ use as_root::Target;
 use serde_json::{Value, json};
 use std::{
     fs,
-    io::{Read, Write},
+    io::Read,
     os::unix::fs::MetadataExt,
     path::{Path, PathBuf},
-    process::{Command, Stdio},
-    time::{Duration, Instant},
+    process::Command,
+    time::Duration,
 };
 
 /// Where the person's account names the helper it chose, for Atlas in the
@@ -45,14 +50,6 @@ pub const REQUEST: &str = "/Users/Shared/Atlas/onboarding.json";
 /// The onboarding window in the helper, while it is open: the helper's
 /// daemon then leaves telling the person to the window.
 pub const WINDOW_MARKER: &str = "onboarding-window";
-
-/// How long a step under the person's approval may take, the approval
-/// included.
-const APPROVAL: Duration = Duration::from_secs(10 * 60);
-
-fn problem(message: impl Into<String>) -> Error {
-    Error::new(Code::Onboarding, message)
-}
 
 /// An account (the controller) asking another one to be its helper.
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
@@ -163,266 +160,6 @@ fn home() -> Result<PathBuf> {
     Ok(setup::account_with_uid(uid)?
         .ok_or_else(|| problem("This account cannot be resolved"))?
         .home)
-}
-
-/// Whether Atlas is set up in this account as someone's helper already
-/// (its background job is installed here, as `atlas init` leaves it).
-fn helper_job_here(uid: u32) -> bool {
-    home().is_ok_and(|home| Layout::new(uid, home).agent_plist(LABEL).exists())
-}
-
-/// The app this runs from, whether it is signed by Atlas's developer, and
-/// whether `atlas` in a terminal reaches it.
-fn app() -> Value {
-    match setup::installed_app::app_executable() {
-        Ok(executable) => {
-            let link = config::home()
-                .map(|home| home.join(".local/bin/atlas"))
-                .ok();
-            let linked = link
-                .and_then(|link| fs::canonicalize(link).ok())
-                .is_some_and(|target| target == executable);
-
-            json!({
-                "installed": true,
-                "path": executable.parent().and_then(Path::parent).and_then(Path::parent),
-                "signed": setup::developer_id(&executable),
-                "linked": linked,
-            })
-        }
-        Err(error) => json!({"installed": false, "error": error.error}),
-    }
-}
-
-/// Everything the window needs to choose its step, read fresh each time.
-pub async fn status(config_path: &Path) -> Result<Value> {
-    let (uid, name, real) = me()?;
-    let me = json!({"uid": uid, "name": name, "realName": real});
-    let app = app();
-    let absent = matches!(
-        fs::symlink_metadata(config_path),
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound
-    );
-
-    // Atlas opened in an account another one chose as its helper (an
-    // account with Atlas settings of its own is a controller, whatever a
-    // shared file says).
-    if absent {
-        let pairing = request().filter(|pairing| pairing.helper_uid == uid);
-        if pairing.is_some() || helper_job_here(uid) {
-            return Ok(json!({
-                "ok": true,
-                "role": "helper",
-                "me": me,
-                "app": app,
-                "helper": helper_side(uid, pairing.as_ref()).await,
-            }));
-        }
-
-        let (leftovers, blockers) = logins(None);
-        return Ok(json!({
-            "ok": true,
-            "role": "controller",
-            "me": me,
-            "app": app,
-            "configured": false,
-            "candidates": candidates()?,
-            "menubarLogin": crate::menubar::login_decided(),
-            "leftoverLogins": leftovers,
-            "blockers": blockers,
-        }));
-    }
-
-    let config = Config::load(config_path)?;
-    let (leftovers, blockers) = logins(Some(config.helper_uid));
-    let Some(helper) = setup::account_with_uid(config.helper_uid)? else {
-        return Ok(json!({
-            "ok": true,
-            "role": "controller",
-            "me": me,
-            "app": app,
-            "configured": true,
-            "helper": {"exists": false, "uid": config.helper_uid},
-            "candidates": candidates()?,
-            "menubarLogin": crate::menubar::login_decided(),
-            "leftoverLogins": leftovers,
-            "blockers": blockers,
-        }));
-    };
-
-    let admin = setup::administrator(&helper.name);
-
-    // This account asked this helper: its request names it (the window), or
-    // a setup with it is recorded (`atlas init`, or the window's finish).
-    let paired = asked(uid, &helper);
-    let signed_in = crate::session::logged_in(helper.uid) == Some(true);
-
-    let client = Client::new(config.clone())?;
-    let acceptance = if let Some(pairing) = request()
-        .filter(|pairing| pairing.controller_uid == uid && pairing.helper_uid == helper.uid)
-    {
-        acceptance::observe(&config, pairing).await
-    } else {
-        json!(null)
-    };
-    let reply = client.status().await;
-    let hidden = crate::session::require_hidden(&reply, config.helper_uid).is_ok();
-    let answering = hidden || reply["daemon"]["pid"].is_number();
-    let ready = crate::capability::doctor(reply.clone(), config.helper_uid)["ready"] == true;
-    let finished =
-        ready && setup::migrate::settled(helper.uid) && crate::session::input_build_current(&reply);
-
-    // Never asked and silent (a choice cut short, or an `atlas init` stopped
-    // once it wrote settings): the window offers the choice again, and
-    // choosing another account replaces these settings. A helper already
-    // prepared for this account is the only choice, as `choose` keeps it.
-    let only_choice = !paired && !answering && prepared(&helper);
-    let candidates = if paired || answering {
-        Vec::new()
-    } else if only_choice {
-        candidates()?
-            .into_iter()
-            .filter(|candidate| candidate["uid"] == helper.uid)
-            .collect()
-    } else {
-        candidates()?
-    };
-
-    // Asked by this window but never answered: the request may be taken
-    // back, so another account can be chosen.
-    let forgettable = Asked {
-        requested: requested(uid, &helper),
-        recorded: setup::migrate::in_effect_for(helper.uid, &helper.home),
-        answered: answering || answers(&config),
-        prepared: prepared(&helper),
-    }
-    .may_forget();
-
-    Ok(json!({
-        "ok": true,
-        "role": "controller",
-        "me": me,
-        "app": app,
-        "configured": true,
-        "candidates": candidates,
-        "onlyChoice": only_choice,
-        "helper": {
-            "exists": true,
-            "uid": helper.uid,
-            "name": helper.name,
-            "realName": setup::real_name(&helper.name),
-            "administrator": admin,
-            "paired": paired,
-            "forgettable": forgettable,
-            "signedIn": signed_in,
-            "answering": answering,
-            "onConsole": reply["session"]["onConsole"] == true,
-            "hidden": hidden,
-            "permissions": {
-                "screenCapture": reply["permissions"]["screenCapture"] == true,
-                "accessibility": reply["permissions"]["accessibility"] == true,
-            },
-        },
-        "setupProblem": acceptance["error"].as_str().map(|error| format!("{error}. Open Atlas in the helper, then return here to retry. Any unfinished setup stays pending until recovery.")),
-        "acceptance": acceptance,
-        "finished": finished,
-        "menubarLogin": crate::menubar::login_decided(),
-        "leftoverLogins": leftovers,
-        "blockers": blockers,
-    }))
-}
-
-/// The logins of deleted accounts that are still open, and what would hold
-/// up a new login now, as the window reads them; `helper` is the configured
-/// helper. Both are empty when the process list could not be read.
-fn logins(helper: Option<u32>) -> (Value, Value) {
-    match crate::session::sessions(helper) {
-        Some(sessions) => (json!(sessions.leftovers()), json!(sessions.blockers)),
-        None => (json!([]), json!([])),
-    }
-}
-
-/// The helper's side of the status: who asked (unknown when `atlas init`
-/// set it up), whether its job runs here, and its permissions as that job,
-/// the process that uses them, reports them.
-async fn helper_side(uid: u32, pairing: Option<&Pairing>) -> Value {
-    let layout = home().map(|home| Layout::new(uid, home));
-
-    // Installed for the account asking now: a job left by an earlier Atlas
-    // (another app, another account) needs Allow again.
-    let installed = layout.as_ref().is_ok_and(|layout| {
-        let current = read_text(&layout.agent_plist(LABEL), 64 * 1024);
-        match (current, pairing) {
-            (None, _) => false,
-            (Some(_), None) => true,
-            (Some(text), Some(pairing)) => expected_agent(layout, pairing.controller_uid)
-                .is_ok_and(|agent| text == setup::helper::plist(&agent, &layout.logs())),
-        }
-    });
-    let accepted = pairing.is_some_and(acceptance::accepted);
-    // A lost acceptance process changes no jobs on its own. Reopening this
-    // window can safely restore its listener using the same consent record.
-    if accepted
-        && !acceptance::listening(uid)
-        && let Some(pairing) = pairing
-    {
-        let _ = acceptance::signal(pairing);
-    }
-    let running = layout
-        .as_ref()
-        .is_ok_and(|layout| setup::helper::job_pid(layout, LABEL).is_some());
-
-    // macOS counts a process the window starts as the window's own, so only
-    // the job's answer tells what Atlas itself may do here. Without one (not
-    // running, or restarting to pick up Screen Recording) they are unknown,
-    // not off.
-    let mut hello = None;
-    if let (true, Ok(layout)) = (running, &layout) {
-        let transport = crate::transport::Transport {
-            path: layout.socket(),
-            timeout: Duration::from_secs(3),
-            peer_uid: uid,
-        };
-        hello = transport.call(&json!({"op": "hello"})).await.ok();
-    }
-    let permissions = permissions_from(hello.as_ref());
-
-    let controller = pairing.map_or(json!(null), |pairing| {
-        json!({
-            "uid": pairing.controller_uid,
-            "name": pairing.controller_name,
-            "realName": setup::real_name(&pairing.controller_name),
-        })
-    });
-
-    json!({
-        "controller": controller,
-        "installed": installed,
-        "accepted": accepted,
-        "running": running,
-        "permissions": permissions,
-    })
-}
-
-/// The two permissions as the job's `hello` reports them, or unknown
-/// (`null`) without one, never off.
-fn permissions_from(hello: Option<&Value>) -> Value {
-    hello.map_or(Value::Null, |hello| {
-        json!({
-            "screenCapture": hello["permissions"]["screenCapture"] == true,
-            "accessibility": hello["permissions"]["accessibility"] == true,
-        })
-    })
-}
-
-/// Standard accounts that could be the helper.
-fn candidates() -> Result<Vec<Value>> {
-    Ok(crate::switch::standard_accounts()?
-        .into_iter()
-        .map(|account| {
-            json!({"name": account.name, "uid": account.uid, "realName": account.real_name})
-        })
-        .collect())
 }
 
 /// The settings at `config_path`, when there are any.
@@ -1133,7 +870,7 @@ pub fn forget(config_path: &Path) -> Result<Value> {
 /// readied for its first login (see `as_root`); on a macOS without that
 /// approval, sysadminctl asks for it in its own dialog instead.
 pub fn create(config_path: &Path, name: &str, full_name: &str) -> Result<Value> {
-    init::valid_account_name(name).map_err(problem)?;
+    setup::account::valid_account_name(name).map_err(problem)?;
 
     if full_name.is_empty()
         || full_name.chars().count() > 64
@@ -1155,7 +892,7 @@ pub fn create(config_path: &Path, name: &str, full_name: &str) -> Result<Value> 
     ready_to_choose(config_path, uid, None)?;
 
     let password = Secret(read_secret(std::io::stdin())?);
-    let next_uid = init::free_uid()?;
+    let next_uid = setup::account::free_uid()?;
     let mut readied = true;
     let orphans = orphans_now()?;
     let made = closing_first(next_uid, &orphans, || {
@@ -1164,13 +901,13 @@ pub fn create(config_path: &Path, name: &str, full_name: &str) -> Result<Value> 
     let account = match made {
         Ok(()) => created(name, None)?,
         // Looked at again: a login may have been left open since.
-        Err(Refusal::Unavailable) => init::setup_transaction(&Controller::new(next_uid)?, || {
+        Err(Refusal::Unavailable) => setup_transaction(&Controller::new(next_uid)?, || {
             without_approval(&orphans_now()?, || {
                 readied = false;
-                let mut args = init::add_user_args(name, full_name, next_uid);
+                let mut args = setup::account::add_user_args(name, full_name, next_uid);
                 args.push("interactive".to_owned());
                 let args: Vec<&str> = args.iter().map(String::as_str).collect();
-                answer_prompts(init::SYSADMINCTL, &args, &password.0, APPROVAL)?;
+                answer_prompts(setup::account::SYSADMINCTL, &args, &password.0, APPROVAL)?;
                 created(name, None)
             })
         })?,
@@ -1229,200 +966,6 @@ fn created(name: &str, detail: Option<String>) -> Result<setup::Account> {
     }
 
     Ok(account)
-}
-
-/// A password, zeroed when dropped.
-struct Secret(Vec<u8>);
-
-impl Drop for Secret {
-    fn drop(&mut self) {
-        self.0.fill(0);
-    }
-}
-
-/// The last thing a program said: its last line that is not empty and not a
-/// password question.
-fn last_words(text: &str) -> Option<&str> {
-    text.lines()
-        .map(str::trim)
-        .rfind(|line| !line.is_empty() && !line.to_ascii_lowercase().ends_with("password:"))
-}
-
-/// A password from standard input: one line of 1 to 256 bytes, with no
-/// control characters (a terminal would edit the line with them, so macOS
-/// would receive a different password than the one typed).
-fn read_secret(input: impl Read) -> Result<Vec<u8>> {
-    // To the end: the window closes its input after the password.
-    let mut secret = Vec::new();
-    input.take(258).read_to_end(&mut secret)?;
-
-    if secret.last() == Some(&b'\n') {
-        secret.pop();
-    }
-
-    if secret.is_empty()
-        || secret.len() > 256
-        || secret.iter().any(|byte| *byte < 0x20 || *byte == 0x7F)
-    {
-        secret.fill(0);
-        return Err(problem(
-            "Give one password of 1 to 256 characters, without control characters",
-        ));
-    }
-
-    Ok(secret)
-}
-
-/// Bind the terminal worker before it executes `program`, then type `secret`
-/// only when asked. Its exact PID stays in the transaction's live claim even
-/// if the caller dies; the secret is cut out of anything kept from output.
-fn answer_prompts(
-    program: &str,
-    args: &[&str],
-    secret: &[u8],
-    patience: Duration,
-) -> Result<String> {
-    let script = [as_root::EXECUTOR, "exec \"$@\"\n"].concat();
-    let (mut child, executor) = as_root::start_executor(
-        Command::new("/usr/bin/script")
-            .args([
-                "-q",
-                "/dev/null",
-                "/bin/zsh",
-                "-f",
-                "-c",
-                &script,
-                "zsh",
-                program,
-            ])
-            .args(args)
-            .stderr(Stdio::piped()),
-    )
-    .map_err(|refusal| {
-        problem(format!("The terminal worker did not start: {refusal:?}")).uncertain()
-    })?;
-
-    let mut input = child.stdin.take().ok_or_else(|| problem("No input pipe"))?;
-    let output = child
-        .stdout
-        .take()
-        .ok_or_else(|| problem("No output pipe"))?;
-    let errors = child
-        .stderr
-        .take()
-        .ok_or_else(|| problem("No error pipe"))?;
-
-    let receiver = init::forward(output);
-    // Drained as it comes, so a chatty program never blocks on it.
-    let complaints = init::forward(errors);
-    let mut seen = Vec::new();
-    let answered = answer(
-        &mut input,
-        &receiver,
-        secret,
-        MAX_ANSWERS,
-        Instant::now() + patience,
-        &mut seen,
-    );
-    if let Err(error) = answered {
-        let _ = child.kill();
-        let _ = child.wait();
-        as_root::wait_until_ended(executor);
-        seen.fill(0);
-        return Err(error);
-    }
-
-    drop(input);
-    let status = child.wait()?;
-    as_root::wait_until_ended(executor);
-
-    // The secret is cut out byte for byte, never copied into a string.
-    let kept = without(&seen, secret);
-    seen.fill(0);
-    let text = String::from_utf8_lossy(&kept).into_owned();
-
-    if status.success() {
-        return Ok(text);
-    }
-
-    let complained: Vec<u8> = complaints.try_iter().flatten().collect();
-    let complained = String::from_utf8_lossy(&without(&complained, secret)).into_owned();
-    let summary = last_words(&text)
-        .or_else(|| last_words(&complained))
-        .unwrap_or_default()
-        .to_owned();
-
-    Err(problem(summary))
-}
-
-/// Read what a program writes until it stops (its output closes) or
-/// `deadline` passes, collecting it into `seen`, and type `secret` and a
-/// newline into `input` each time it has asked for a password, up to
-/// `answers` times.
-fn answer(
-    input: &mut impl Write,
-    receiver: &std::sync::mpsc::Receiver<Vec<u8>>,
-    secret: &[u8],
-    answers: usize,
-    deadline: Instant,
-    seen: &mut Vec<u8>,
-) -> Result<()> {
-    let mut answered = 0;
-
-    loop {
-        match receiver.recv_timeout(Duration::from_millis(100)) {
-            Ok(bytes) => seen.extend(bytes),
-            Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {}
-            Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => return Ok(()),
-        }
-
-        // A question ends without a newline: "User password:".
-        let asked = seen
-            .windows(PROMPT.len())
-            .filter(|window| window.eq_ignore_ascii_case(PROMPT))
-            .count();
-        if asked > answered && answered < answers {
-            // Let the prompt turn echo off before typing.
-            std::thread::sleep(Duration::from_millis(150));
-
-            input
-                .write_all(secret)
-                .and_then(|()| input.write_all(b"\n"))
-                .and_then(|()| input.flush())?;
-            answered += 1;
-        }
-
-        if Instant::now() >= deadline {
-            return Err(problem("The step took too long and was stopped"));
-        }
-    }
-}
-
-/// What a password question ends with, in any case.
-const PROMPT: &[u8] = b"password:";
-
-/// The most password questions answered, so a program that keeps asking
-/// (after a refused password, say) is not fed the secret forever.
-const MAX_ANSWERS: usize = 3;
-
-/// `bytes` with every occurrence of `secret` cut out.
-fn without(bytes: &[u8], secret: &[u8]) -> Vec<u8> {
-    if secret.is_empty() {
-        return bytes.to_vec();
-    }
-
-    let mut kept = Vec::with_capacity(bytes.len());
-    let mut rest = bytes;
-    while !rest.is_empty() {
-        if rest.starts_with(secret) {
-            rest = &rest[secret.len()..];
-        } else {
-            kept.push(rest[0]);
-            rest = &rest[1..];
-        }
-    }
-
-    kept
 }
 
 /// In the helper: record Allow and open a setup worker, without authorization
@@ -1538,7 +1081,7 @@ pub async fn finish(config_path: &Path) -> Result<Value> {
     let status = client.status().await;
     crate::session::require_hidden(&status, config.helper_uid)?;
 
-    if !init::missing(&status).is_empty() {
+    if !setup::missing(&status).is_empty() {
         return Err(problem(
             "Screen Recording or Accessibility is still off in the helper",
         ));
@@ -1600,6 +1143,7 @@ pub fn login(config_path: &Path, on: bool) -> Result<Value> {
 
 #[cfg(test)]
 mod tests {
+    use super::status::permissions_from;
     #[test]
     fn settings_are_absent_only_when_the_configuration_is_missing() {
         use std::os::unix::fs::symlink;
@@ -1678,7 +1222,7 @@ mod tests {
         };
         if std::env::var("ATLAS_MUTATION_TEST_MODE").unwrap() == "interactive" {
             let controller = Controller::at(crate::test_support::UID, &directory.join("state"));
-            init::setup_transaction(&controller, || {
+            setup::executor::setup_transaction(&controller, || {
                 // Ignore terminal hangup before exec so the worker survives
                 // its caller. The worker publishes readiness itself, with
                 // no external command still running when the caller dies.

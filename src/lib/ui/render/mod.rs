@@ -8,7 +8,8 @@ mod jobs;
 mod manage;
 mod observe;
 
-use super::{hints, style, text};
+use super::{style, text};
+use crate::error::advice as hints;
 use crate::error::{Code, Error};
 use serde_json::Value;
 

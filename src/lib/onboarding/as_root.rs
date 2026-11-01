@@ -12,82 +12,19 @@
 //! under the helper's user ID is closed while its account exists, and only
 //! while that account is still the one Atlas recorded, by asking launchd to
 //! end it, never by killing its processes.
-use super::{APPROVAL, MAX_ANSWERS, answer, last_words, signed_executable, without};
+use super::signed_executable;
+#[cfg(test)]
+use crate::setup::executor::converse;
+use crate::setup::executor::{
+    APPROVAL, BECOME_ROOT, EXECUTOR, MARK, finish_executor, last_words, staging, start_executor,
+    tracked_output, wait_until_ended,
+};
 use crate::{
     approval::{self, Refusal},
-    init,
-    setup::identity::Identity,
+    setup::{self, identity::Identity},
 };
 use serde_json::Value;
-use std::{os::unix::net::UnixStream, path::Path, process::Command, time::Instant};
-
-/// What each line the script reports a step's outcome with starts with.
-const MARK: &str = "@atlas ";
-
-/// Identify the approved executor before it can act. If its caller cannot
-/// read the identity or goes away before acknowledging it, the script exits
-/// without reaching any privileged work.
-pub(crate) const EXECUTOR: &str = r##"print -r -- "@atlas executor $$"
-IFS= read -r acknowledgement || exit 1
-[[ $acknowledgement == "@atlas continue $$" ]] || exit 1
-"##;
-
-/// Root for good, with root's own environment: zsh sets every user ID on
-/// `UID=0` when it may, and a refusal would end zsh itself, so it is tried
-/// in a subshell first. The account asking is noted first: sudo names it,
-/// and macOS's approval keeps it as the real user ID. Standard error goes
-/// nowhere (it is the asking Atlas's own), and nothing of the asking process
-/// carries over that could shape what root makes: its file mode mask or its
-/// limits.
-pub(crate) const BECOME_ROOT: &str = r##"asker=${SUDO_UID:-$UID}
-if ! ( UID=0 ) 2>/dev/null; then print -r -- "@atlas error macOS did not let Atlas act as an administrator"; exit 1; fi
-UID=0
-GID=0
-exec 2>/dev/null
-umask 022
-ulimit -f unlimited
-export HOME=/var/root LOGNAME=root USER=root
-unset OLDPWD
-cd /
-"##;
-
-/// Protect and verify the root run's worker, then remove its copy on exit.
-/// The directory is private until copying, ownership, permissions and
-/// signature verification finish; neither account can replace or edit it.
-const STAGING: &str = r##"staged=
-trap '[[ -z $staged ]] || /bin/rm -rf -- "$staged"' EXIT
-trap 'exit 1' HUP INT TERM
-trap '' PIPE
-stage_executable() {
-  [[ $executable == /*/Contents/MacOS/atlas ]] || refuse "Atlas has no app bundle"
-  local source=${executable%/Contents/MacOS/atlas} bad
-  staged=$(/usr/bin/mktemp -d /private/var/tmp/atlas-approved.XXXXXXXX) || refuse "macOS could not protect a copy of Atlas"
-  # Remove any inherited ACL before copying anything into this directory.
-  /bin/chmod -N $staged && /bin/chmod 700 $staged || refuse "macOS could not protect the copy's folder"
-  /usr/bin/ditto --noacl --noextattr --norsrc $source $staged/Atlas.app || refuse "Atlas could not be copied"
-  # Links or special files could escape the protected bundle. Inspect them
-  # before any recursive ownership or permission change.
-  bad=$(/usr/bin/find $staged ! -type d ! -type f -print) || refuse "Atlas's copy could not be inspected"
-  [[ -z $bad ]] || refuse "Atlas's copy contains links or special files"
-  /usr/sbin/chown -R 0:0 $staged && /bin/chmod -RN $staged && /bin/chmod -R u+rwX,go+rX,go-w,u-s,g-s $staged/Atlas.app || refuse "Atlas's copy could not be protected"
-  /usr/bin/codesign --verify --strict --deep -R '=ATLAS_WORKER_REQUIREMENT' $staged/Atlas.app &&
-    /usr/bin/codesign --verify --strict -R '=ATLAS_APP_REQUIREMENT' $staged/Atlas.app/Contents/MacOS/AtlasApp || refuse "Atlas's protected copy is not signed by Atlas's developer"
-  /bin/chmod 755 $staged || refuse "Atlas's verified copy could not be opened"
-  executable=$staged/Atlas.app/Contents/MacOS/atlas
-}
-"##;
-
-pub(crate) fn staging() -> String {
-    STAGING
-        .replace(
-            "ATLAS_WORKER_REQUIREMENT",
-            &crate::setup::requirement_for(crate::setup::IDENTIFIER),
-        )
-        .replace(
-            "ATLAS_APP_REQUIREMENT",
-            &crate::setup::requirement_for(crate::setup::APP_IDENTIFIER),
-        )
-}
+use std::{path::Path, process::Command, time::Instant};
 
 fn steps() -> String {
     [staging().as_str(), STEPS].concat()
@@ -492,7 +429,7 @@ pub(crate) fn create_in_terminal(
     .concat();
     let asker = format!("SUDO_UID={}", nix::unistd::getuid().as_raw());
     let uid = uid.to_string();
-    let picture = init::helper_picture().unwrap_or_default();
+    let picture = setup::account::helper_picture().unwrap_or_default();
     let orphans = numbers(orphans);
     let mut arguments = vec![
         "/usr/bin/env",
@@ -523,7 +460,8 @@ pub(crate) fn create_in_terminal(
         acted: true,
         ended: false,
     })?;
-    let outcome = init::quietly_attended(child, "The helper account could not be created");
+    let outcome =
+        setup::executor::quietly_attended(child, "The helper account could not be created");
     wait_until_ended(pid);
     outcome.map_err(|error| Unclosed {
         refusal: Refusal::Failed(error.error),
@@ -776,172 +714,6 @@ fn run_to_end(
     }
 }
 
-/// Run a privileged command with the durable executor handshake. Its script
-/// starts with [`EXECUTOR`]. Interactive tools use the controlling tty; stdin
-/// carries only the acknowledgement sent after all bound claims are synced.
-pub(crate) fn tracked_output(command: &mut Command) -> Result<std::process::Output, Refusal> {
-    let (child, pid) = start_executor(command)?;
-    let output = child
-        .wait_with_output()
-        .map_err(|error| Refusal::Failed(error.to_string()))?;
-    wait_until_ended(pid);
-    Ok(output)
-}
-
-/// Start the fixed executor and durably identify it before permitting work.
-#[allow(clippy::expect_used, reason = "spawn creates both requested pipes")]
-pub(super) fn start_executor(
-    command: &mut Command,
-) -> Result<(std::process::Child, nix::unistd::Pid), Refusal> {
-    use std::{io::Write, process::Stdio};
-    let failed = |error: std::io::Error| Refusal::Failed(error.to_string());
-    let mut child = command
-        .stdin(Stdio::piped())
-        .stdout(Stdio::piped())
-        .spawn()
-        .map_err(failed)?;
-    let mut output = child.stdout.take().expect("piped executor output");
-    let mut input = child.stdin.take().expect("piped executor input");
-    let started = executor(&mut output).and_then(|pid| {
-        crate::control::record_executor(pid).map_err(|error| Refusal::Failed(error.to_string()))?;
-        writeln!(input, "@atlas continue {}", pid.as_raw()).map_err(failed)?;
-        Ok(pid)
-    });
-    child.stdin = Some(input);
-    child.stdout = Some(output);
-    match started {
-        Ok(pid) => Ok((child, pid)),
-        Err(refusal) => {
-            let _ = child.wait_with_output();
-            Err(refusal)
-        }
-    }
-}
-
-/// A sudo dispatcher can outlive its launcher: wait for the executor itself,
-/// treating inaccessible process state as live rather than as proof of exit.
-pub(super) fn wait_until_ended(pid: nix::unistd::Pid) {
-    while nix::sys::signal::kill(pid, None) != Err(nix::errno::Errno::ESRCH) {
-        std::thread::sleep(std::time::Duration::from_millis(20));
-    }
-}
-
-/// Keep the caller, its ownership and its claims alive until this exact
-/// executor exits, even if its reply times out or its output closes early.
-fn finish_executor(
-    mut stream: UnixStream,
-    secret: Option<&[u8]>,
-    deadline: Instant,
-) -> (Result<String, Refusal>, bool) {
-    let executor = match executor(&mut stream) {
-        Ok(executor) => executor,
-        Err(refusal) => return (Err(refusal), false),
-    };
-    if let Err(error) = crate::control::record_executor(executor) {
-        drop(stream);
-        return (Err(Refusal::Failed(error.to_string())), reap(executor));
-    }
-    use std::io::Write;
-    if let Err(error) = writeln!(stream, "@atlas continue {}", executor.as_raw()) {
-        return (Err(Refusal::Failed(error.to_string())), reap(executor));
-    }
-    let (_, text) = converse_until(stream, secret, deadline);
-    (text, reap(executor))
-}
-
-/// Talk with the approved step over its channel until it ends: each
-/// password question answered with `secret`, and everything kept. Whether
-/// it ended (rather than Atlas giving up on it), and what it said. The step
-/// never writes the secret back; only what sysadminctl wrote before the
-/// first step's line could hold it, and it is cut out there.
-#[cfg(test)]
-fn converse(stream: UnixStream, secret: Option<&[u8]>) -> (bool, Result<String, Refusal>) {
-    converse_until(stream, secret, Instant::now() + APPROVAL)
-}
-
-fn converse_until(
-    mut stream: UnixStream,
-    secret: Option<&[u8]>,
-    deadline: Instant,
-) -> (bool, Result<String, Refusal>) {
-    let (secret, answers) = secret.map_or((&[][..], 0), |secret| (secret, MAX_ANSWERS));
-    let channel = match stream.try_clone() {
-        Ok(channel) => channel,
-        Err(error) => return (false, Err(Refusal::Failed(error.to_string()))),
-    };
-    let receiver = init::forward(channel);
-    let mut seen = Vec::new();
-    let answered = answer(&mut stream, &receiver, secret, answers, deadline, &mut seen);
-    drop(stream);
-
-    let marked = seen
-        .windows(MARK.len())
-        .position(|window| window == MARK.as_bytes())
-        .unwrap_or(seen.len());
-    let mut kept = without(&seen[..marked], secret);
-    kept.extend_from_slice(&seen[marked..]);
-    seen.fill(0);
-    let text = String::from_utf8_lossy(&kept).into_owned();
-    kept.fill(0);
-
-    let finished = answered.is_ok();
-    let said = match answered {
-        Ok(()) => Ok(text),
-        // A step that stopped early (refusing the account, say) closed its
-        // channel before the password went in: its own line says why.
-        Err(_) if text.contains(MARK) => Ok(text),
-        Err(_) => Err(Refusal::Failed(
-            "Atlas stopped waiting for the approved step, which may still finish".into(),
-        )),
-    };
-    (finished, said)
-}
-
-/// Reap the approved step, this process's child, waiting for it to exit
-/// even when its reply never came: a step that may still act holds this
-/// process, and with it the control and claims it runs under, until it
-/// ends. Whether it was seen to exit.
-fn reap(executor: nix::unistd::Pid) -> bool {
-    use nix::{
-        errno::Errno,
-        sys::wait::{WaitStatus, waitpid},
-    };
-    loop {
-        match waitpid(executor, None) {
-            Ok(WaitStatus::Exited(..) | WaitStatus::Signaled(..)) => return true,
-            Err(Errno::EINTR) => continue,
-            _ => return false,
-        }
-    }
-}
-
-/// Read the executor's own PID before its script can mutate anything.
-/// Waiting for this exact child cannot accidentally reap an unrelated process.
-fn executor(stream: &mut impl std::io::Read) -> Result<nix::unistd::Pid, Refusal> {
-    let mut line = Vec::new();
-    for _ in 0..64 {
-        let mut byte = [0];
-        if stream.read_exact(&mut byte).is_err() {
-            break;
-        }
-        if byte[0] == b'\n' {
-            let pid = String::from_utf8_lossy(&line)
-                .trim_end_matches('\r')
-                .strip_prefix("@atlas executor ")
-                .and_then(|pid| pid.parse::<i32>().ok())
-                .filter(|pid| *pid > 0);
-            if let Some(pid) = pid {
-                return Ok(nix::unistd::Pid::from_raw(pid));
-            }
-            break;
-        }
-        line.push(byte[0]);
-    }
-    Err(Refusal::Failed(
-        "Atlas could not identify the approved executor; its work remains pending".into(),
-    ))
-}
-
 /// The refusal in the steps' lines, if they refused.
 fn refused(text: &str) -> Result<(), Refusal> {
     match text
@@ -1014,6 +786,7 @@ fn outcome(text: &str) -> Result<(), Refusal> {
 
 #[cfg(test)]
 mod tests {
+    use std::os::unix::net::UnixStream;
     #[test]
     fn combined_setup_with_leftover_logins_requests_authorization_once() {
         for arguments in [

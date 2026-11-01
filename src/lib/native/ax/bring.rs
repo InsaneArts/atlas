@@ -7,13 +7,13 @@ use super::{
 use crate::{
     actions::Expect,
     error::{Code, Error, Result},
+    name::same_text,
     native::{
         focus::{CHECK_BUDGET, FIELDS, Need},
         windows::{self, Kind, Listed, Window},
     },
     process::{Info, Instance},
-    select::{ElementFilter, NameMatch},
-    ui::text::same_text,
+    screen::select::{ElementFilter, NameMatch},
 };
 use objc2_application_services::AXError;
 use objc2_core_foundation::{CFArray, CFString, CFType, Type};

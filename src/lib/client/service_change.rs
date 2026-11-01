@@ -1,4 +1,9 @@
 //! Deferring service replacement while another session or a job is active.
+mod sessions;
+pub(crate) use sessions::service_blocker;
+#[cfg(test)]
+pub(crate) use sessions::service_blocker_with;
+
 use super::Client;
 use crate::{
     control::Ownership,
@@ -47,7 +52,7 @@ impl Client {
         let client = self.clone();
         let blocker = tokio::task::spawn_blocking(move || {
             client.output_dir()?;
-            Ok::<_, Error>(crate::overview::service_blocker(
+            Ok::<_, Error>(crate::client::service_change::service_blocker(
                 &client,
                 recovery,
                 super::timestamp(),

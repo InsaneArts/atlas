@@ -2,7 +2,7 @@
 use super::{Client, Verified};
 use crate::{
     error::{Code, Error, Result},
-    native::windows::{Shown, from_reply},
+    screen::windows::{Shown, from_reply},
     transport::refusal,
 };
 use serde_json::{Value, json};

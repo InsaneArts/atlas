@@ -1,6 +1,7 @@
 //! The overview's checks: each mode, state and headline, the sessions a
 //! status lists, and how each logged row is shown.
 use super::{activity::*, sessions::*, *};
+use crate::host_session::reading::{SessionReading, first_command_running};
 use std::{collections::BTreeMap, fs};
 
 fn host_sessions(client: &Client, facts: SessionFacts) -> HostSessions {
@@ -135,7 +136,7 @@ fn the_status_lists_recent_host_sessions_and_who_holds_the_helper() {
         .acquire(true)
         .unwrap();
 
-    let listed = host_sessions(&client, facts(true, crate::client::timestamp()));
+    let listed = host_sessions(&client, facts(true, crate::time::timestamp()));
     assert_eq!(listed.sessions.len(), 8);
     assert_eq!(listed.more, 3);
     assert!(listed.shown, "ten live sessions");
@@ -174,7 +175,7 @@ fn the_status_lists_recent_host_sessions_and_who_holds_the_helper() {
 
     let listed = host_sessions(
         &client,
-        facts(true, crate::client::timestamp() + 2 * 3_600_000_000_000),
+        facts(true, crate::time::timestamp() + 2 * 3_600_000_000_000),
     );
     assert_eq!(
         listed.sessions.len(),
@@ -205,7 +206,7 @@ fn the_agents_commands_no_host_named_are_listed_as_terminal_beside_the_hosts() {
         &Ok(json!({"ok": true})),
     )
     .unwrap();
-    let now = crate::client::timestamp();
+    let now = crate::time::timestamp();
     let rows = [
         json!({"at": (now - 1_000_000_000).to_string(), "operation": "input", "ok": true,
             "actor": "agent", "verb": "click", "app": "Notes", "command": "000000000001"}),
@@ -252,7 +253,7 @@ fn a_session_on_its_first_command_is_listed_from_its_note() {
         .acquire(true)
         .unwrap();
 
-    let listed = host_sessions(&client, facts(false, crate::client::timestamp()));
+    let listed = host_sessions(&client, facts(false, crate::time::timestamp()));
     assert_eq!(listed.sessions.len(), 1);
     let entry = &listed.sessions[0].1;
     assert_eq!(entry["key"], session.key().as_str());
@@ -262,7 +263,7 @@ fn a_session_on_its_first_command_is_listed_from_its_note() {
     assert_eq!(listed.holder.as_deref(), Some(session.key().as_str()));
     drop(holding);
 
-    let listed = host_sessions(&client, facts(false, crate::client::timestamp()));
+    let listed = host_sessions(&client, facts(false, crate::time::timestamp()));
     assert!(listed.sessions.is_empty(), "gone with its note");
 }
 
@@ -282,7 +283,7 @@ fn a_session_on_its_first_command_is_named_by_its_host_and_folder_as_its_record_
         .acquire(true)
         .unwrap();
 
-    let listed = host_sessions(&client, facts(false, crate::client::timestamp()));
+    let listed = host_sessions(&client, facts(false, crate::time::timestamp()));
     let entry = &listed.sessions[0].1;
     assert_eq!(entry["name"], "Codex · left");
     assert_eq!(entry["folder"], "left");
@@ -300,7 +301,7 @@ fn a_session_on_its_first_command_is_named_by_its_host_and_folder_as_its_record_
         &Ok(json!({"ok": true})),
     )
     .unwrap();
-    let listed = host_sessions(&client, facts(false, crate::client::timestamp()));
+    let listed = host_sessions(&client, facts(false, crate::time::timestamp()));
     let names: BTreeMap<&str, &str> = listed
         .sessions
         .iter()
@@ -331,7 +332,7 @@ fn a_session_on_its_first_command_is_named_by_its_host_and_folder_as_its_record_
         .labelled(Some(&named))
         .acquire(true)
         .unwrap();
-    let listed = host_sessions(&client, facts(false, crate::client::timestamp()));
+    let listed = host_sessions(&client, facts(false, crate::time::timestamp()));
     let entry = listed
         .sessions
         .iter()
@@ -389,13 +390,13 @@ fn a_first_commands_name_stays_once_its_record_is_written() {
 
     let before = name(&host_sessions(
         &client,
-        facts(false, crate::client::timestamp()),
+        facts(false, crate::time::timestamp()),
     ));
     assert!(before.0.as_str().unwrap().starts_with("Codex · left · "));
     worked(&first);
     let after = name(&host_sessions(
         &client,
-        facts(false, crate::client::timestamp()),
+        facts(false, crate::time::timestamp()),
     ));
     assert_eq!(after, before);
     drop(holding);
@@ -420,7 +421,7 @@ fn a_session_running_its_first_command_is_listed_acting_by_its_name() {
         .unwrap();
     assert!(client.controller.holder_note().is_none());
 
-    let listed = host_sessions(&client, facts(false, crate::client::timestamp()));
+    let listed = host_sessions(&client, facts(false, crate::time::timestamp()));
     let entry = listed
         .sessions
         .iter()
@@ -435,7 +436,7 @@ fn a_session_running_its_first_command_is_listed_acting_by_its_name() {
 
     client.controller.clear_if(&command).unwrap();
     drop(command);
-    let listed = host_sessions(&client, facts(false, crate::client::timestamp()));
+    let listed = host_sessions(&client, facts(false, crate::time::timestamp()));
     assert!(
         listed
             .sessions
@@ -466,7 +467,7 @@ fn a_session_at_work_has_never_ended_whatever_its_record_says() {
         &Ok(json!({"ok": true})),
     )
     .unwrap();
-    let listed = host_sessions(&client, facts(false, crate::client::timestamp()));
+    let listed = host_sessions(&client, facts(false, crate::time::timestamp()));
     assert!(listed.sessions.is_empty(), "the process it names is gone");
 
     // Resumed in a new process, the one this command runs in: its
@@ -482,7 +483,7 @@ fn a_session_at_work_has_never_ended_whatever_its_record_says() {
         .labelled(Some(&resumed))
         .acquire(true)
         .unwrap();
-    let listed = host_sessions(&client, facts(false, crate::client::timestamp()));
+    let listed = host_sessions(&client, facts(false, crate::time::timestamp()));
     let entry = &listed.sessions[0].1;
     assert_eq!(entry["state"], "acting");
     assert_eq!(
@@ -493,7 +494,7 @@ fn a_session_at_work_has_never_ended_whatever_its_record_says() {
 
     // Any command of it refreshes its record, a read too.
     touch(&client, &resumed).unwrap();
-    let listed = host_sessions(&client, facts(false, crate::client::timestamp()));
+    let listed = host_sessions(&client, facts(false, crate::time::timestamp()));
     let entry = &listed.sessions[0].1;
     assert_eq!(entry["state"], "idle");
     assert_eq!(
@@ -518,7 +519,7 @@ fn an_ended_session_waits_for_no_recovery() {
     )
     .unwrap();
     let output = client.output_dir().unwrap().to_path_buf();
-    let now = crate::client::timestamp();
+    let now = crate::time::timestamp();
     let row = json!({"at": (now - 1_000_000_000).to_string(), "operation": "input",
         "ok": true, "actor": "agent", "verb": "click", "session": session.key()});
     fs::write(output.join(activity_log::FILE), format!("{row}\n")).unwrap();
@@ -565,7 +566,7 @@ fn ended_sessions_are_neither_listed_nor_counted_as_more() {
         fs::write(&path, record.to_string()).unwrap();
     }
 
-    let listed = host_sessions(&client, facts(false, crate::client::timestamp()));
+    let listed = host_sessions(&client, facts(false, crate::time::timestamp()));
     assert_eq!(listed.sessions.len(), 2, "ten ended");
     assert_eq!(listed.more, 0);
     assert!(
@@ -581,7 +582,7 @@ fn ended_sessions_are_neither_listed_nor_counted_as_more() {
 fn an_overview_with_no_records_has_no_sessions() {
     let directory = tempfile::tempdir().unwrap();
     let client = crate::test_support::client(directory.path());
-    let listed = host_sessions(&client, facts(false, crate::client::timestamp()));
+    let listed = host_sessions(&client, facts(false, crate::time::timestamp()));
     assert!(listed.sessions.is_empty() && !listed.shown);
     assert_eq!((listed.more, listed.holder), (0, None));
 }
@@ -1128,7 +1129,7 @@ fn candidate_collection_and_projection_share_one_bounded_process_batch() {
             crate::host_session::liveness::Snapshot::sample(instances, |instance| instance.state())
         })
         .unwrap();
-        let entries = reading.entries(facts(false, crate::client::timestamp()));
+        let entries = reading.entries(facts(false, crate::time::timestamp()));
         (reading, entries)
     });
     assert_eq!(samples, 1, "the holder and record share one exact identity");
@@ -1164,7 +1165,7 @@ fn an_ended_causer_is_visible_without_being_live() {
             .quarantine()
             .unwrap(),
     );
-    let listed = host_sessions(&client, facts(true, crate::client::timestamp()));
+    let listed = host_sessions(&client, facts(true, crate::time::timestamp()));
     let entry = &listed.sessions[0].1;
     assert!(entry["ended"].is_number());
     assert_eq!(entry["live"], false);
@@ -1210,7 +1211,7 @@ fn surviving_work(explicit: bool) {
         .unwrap()
     };
     let reading = read();
-    let facts = facts(false, crate::client::timestamp());
+    let facts = facts(false, crate::time::timestamp());
     let entries = reading.entries(facts);
     let entry = entries
         .iter()
@@ -1300,7 +1301,7 @@ fn a_verified_idle_host_does_not_expire_while_it_runs() {
             causes: &[],
             pending: false,
             agent_holds: false,
-            now: crate::client::timestamp(),
+            now: crate::time::timestamp(),
         };
         let (shown, lifetime) = scene.project(&record);
         assert!(shown.live && shown.relevant());
@@ -1356,7 +1357,7 @@ fn marker_contention_preserves_a_gone_hosts_verified_running_work() {
         .unwrap()
     };
     let reading = read();
-    let now = crate::client::timestamp();
+    let now = crate::time::timestamp();
     let facts = facts(false, now);
     let entries = reading.entries(facts);
     let entry = entries

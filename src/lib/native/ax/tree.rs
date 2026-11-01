@@ -446,7 +446,7 @@ mod tests {
     use super::*;
     use crate::{
         native::ax::batch::{BATCH, Slot},
-        select::ElementFilter,
+        screen::select::ElementFilter,
     };
     use objc2_core_foundation::{CFBoolean, CFNumber, CFString, Type};
 

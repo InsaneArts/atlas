@@ -76,7 +76,7 @@ fn an_update_waits_for_a_running_command() {
         assert_eq!(refused.details["running"], "command");
         assert_eq!(
             refused.details["next"],
-            crate::ui::hints::COMMAND_RUNNING,
+            crate::error::advice::COMMAND_RUNNING,
             "nobody is told to recover it"
         );
     }

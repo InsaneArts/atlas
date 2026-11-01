@@ -11,7 +11,7 @@ use super::{
 use crate::{
     actions::{Action, Expect},
     error::{Code, Error, Result},
-    select::{ElementFilter, shown_name},
+    screen::select::{ElementFilter, shown_name},
 };
 use serde::Serialize;
 use serde_json::json;

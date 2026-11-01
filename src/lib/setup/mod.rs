@@ -10,6 +10,18 @@ pub mod identity;
 pub(crate) mod installed_app;
 pub mod migrate;
 
+pub(crate) mod account;
+pub use account::FULL_NAME;
+pub use account::{
+    Account, FIRST_USER_UID, account_named, account_with_uid, administrator, real_name,
+};
+pub(crate) use account::{Title, asked_real_name};
+pub(crate) mod executor;
+mod signature;
+pub(crate) use signature::requirement_for;
+pub use signature::{APP_IDENTIFIER, IDENTIFIER, TEAM, app_signed, developer_id, runs_current};
+use signature::{executable_of, running_developer_id, signature};
+
 use crate::{
     acl::Acl,
     client::Client,
@@ -22,151 +34,11 @@ use crate::{
 use serde::Serialize;
 use serde_json::{Value, json};
 use std::{
-    ffi::{CStr, CString},
     fs,
     os::unix::fs::{FileTypeExt, MetadataExt},
     path::{Path, PathBuf},
     process::Command,
 };
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
-pub struct Account {
-    pub name: String,
-    pub uid: u32,
-    pub home: PathBuf,
-}
-
-enum Lookup {
-    Name(CString),
-    Uid(u32),
-}
-
-/// macOS numbers people's accounts from this user ID; lower ones belong to
-/// the system.
-pub const FIRST_USER_UID: u32 = 501;
-
-#[allow(
-    unsafe_code,
-    reason = "FFI: getpw*_r, whose ERANGE nix misreads on macOS"
-)]
-fn lookup(key: Lookup) -> Result<Option<Account>> {
-    // SAFETY: passwd is plain C data for which all-zero is a valid value.
-    let mut entry: libc::passwd = unsafe { std::mem::zeroed() };
-    let mut found = std::ptr::null_mut();
-    let mut buffer = Vec::new();
-    let mut status = libc::ERANGE;
-
-    // Directory-service records can exceed any fixed buffer; grow on ERANGE.
-    // The error is the return value: macOS need not set errno here.
-    for size in [16 << 10, 64 << 10, 256 << 10, 1 << 20] {
-        buffer.resize(size, 0);
-
-        // SAFETY: valid entry, buffer and result pointers that outlive the call;
-        // the strings in `entry` point into `buffer` and are copied before return.
-        status = unsafe {
-            match &key {
-                Lookup::Name(name) => libc::getpwnam_r(
-                    name.as_ptr(),
-                    &mut entry,
-                    buffer.as_mut_ptr(),
-                    buffer.len(),
-                    &mut found,
-                ),
-                Lookup::Uid(uid) => libc::getpwuid_r(
-                    *uid,
-                    &mut entry,
-                    buffer.as_mut_ptr(),
-                    buffer.len(),
-                    &mut found,
-                ),
-            }
-        };
-
-        if status != libc::ERANGE {
-            break;
-        }
-    }
-
-    if status != 0 {
-        return Err(std::io::Error::from_raw_os_error(status).into());
-    }
-
-    if found.is_null() {
-        return Ok(None);
-    }
-
-    // SAFETY: getpw*_r succeeded, so both fields are NUL-terminated strings.
-    let text = |field| {
-        // SAFETY: see above.
-        unsafe { CStr::from_ptr(field) }
-            .to_string_lossy()
-            .into_owned()
-    };
-
-    Ok(Some(Account {
-        name: text(entry.pw_name),
-        uid: entry.pw_uid,
-        home: PathBuf::from(text(entry.pw_dir)),
-    }))
-}
-
-/// Resolve an account through directory services by short name.
-pub fn account_named(name: &str) -> Result<Option<Account>> {
-    let name = CString::new(name)
-        .map_err(|_| Error::new(Code::Setup, "Account names cannot contain NUL"))?;
-    lookup(Lookup::Name(name))
-}
-
-/// Resolve an account through directory services by UID.
-pub fn account_with_uid(uid: u32) -> Result<Option<Account>> {
-    lookup(Lookup::Uid(uid))
-}
-
-/// The full name of account `name`, as people know it, if it has one.
-pub fn real_name(name: &str) -> Option<String> {
-    asked_real_name(name).titled()
-}
-
-/// What directory services say of an account's full name.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub(crate) enum Title {
-    /// They did not answer in time.
-    Unknown,
-    /// The account has none.
-    Untitled,
-    /// The account's full name.
-    Titled(String),
-}
-
-impl Title {
-    /// The full name, when the account has one.
-    pub(crate) fn titled(self) -> Option<String> {
-        match self {
-            Self::Titled(title) => Some(title),
-            Self::Unknown | Self::Untitled => None,
-        }
-    }
-}
-
-/// What directory services say of account `name`'s full name.
-pub(crate) fn asked_real_name(name: &str) -> Title {
-    let Ok(output) = crate::bounded::output(
-        Command::new("/usr/bin/dscl").args([".", "-read", &format!("/Users/{name}"), "RealName"]),
-        crate::bounded::LOOKUP,
-    ) else {
-        return Title::Unknown;
-    };
-
-    parse_real_name(&output.stdout).map_or(Title::Untitled, Title::Titled)
-}
-
-/// The full name in `dscl -read`'s answer for RealName, if it has one.
-fn parse_real_name(answer: &[u8]) -> Option<String> {
-    let text = std::str::from_utf8(answer).ok()?;
-    let value = text.strip_prefix("RealName:")?.trim().to_owned();
-
-    (!value.is_empty()).then_some(value)
-}
 
 /// The privileged dispatcher checks the chosen account after authorization,
 /// immediately before entering its launchd session. The worker repeats the
@@ -264,9 +136,9 @@ fn run_as_helper(
         command.arg("-n");
     }
     let script = [
-        crate::onboarding::as_root::EXECUTOR,
-        crate::onboarding::as_root::BECOME_ROOT,
-        &crate::onboarding::as_root::staging(),
+        crate::setup::executor::EXECUTOR,
+        crate::setup::executor::BECOME_ROOT,
+        &crate::setup::executor::staging(),
         DISPATCH,
     ]
     .concat();
@@ -292,7 +164,7 @@ fn run_as_helper(
         .arg(serde_json::to_string(expected)?)
         .arg(if logged_out { "--logged-out" } else { "--" })
         .stderr(std::process::Stdio::piped());
-    let output = crate::onboarding::as_root::tracked_output(&mut command).map_err(|refusal| {
+    let output = crate::setup::executor::tracked_output(&mut command).map_err(|refusal| {
         Error::new(
             Code::Setup,
             format!("The setup executor did not finish: {refusal:?}"),
@@ -311,173 +183,6 @@ fn worker_reply(output: &std::process::Output) -> (bool, Value) {
         .unwrap_or(Value::Null);
 
     (output.status.success(), reply)
-}
-
-#[derive(Debug, Default, PartialEq, Eq, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct Signature {
-    pub identifier: Option<String>,
-    pub cdhash: Option<String>,
-    pub kind: Option<String>,
-    pub team: Option<String>,
-}
-
-/// Parse `codesign -dvvv` diagnostics (written to stderr).
-pub fn parse_signature(text: &str) -> Signature {
-    let field = |key: &str| {
-        text.lines()
-            .find_map(|line| line.strip_prefix(key))
-            .map(str::trim)
-            .filter(|value| !value.is_empty())
-            .map(str::to_owned)
-    };
-
-    Signature {
-        identifier: field("Identifier="),
-        cdhash: field("CDHash="),
-        kind: field("Signature="),
-        team: field("TeamIdentifier=").filter(|team| team != "not set"),
-    }
-}
-
-fn signature(path: &Path) -> Option<Signature> {
-    let output = Command::new("/usr/bin/codesign")
-        .arg("-dvvv")
-        .arg(path)
-        .output()
-        .ok()?;
-
-    output
-        .status
-        .success()
-        .then(|| parse_signature(&String::from_utf8_lossy(&output.stderr)))
-}
-
-/// The bundle identifier the helper daemon must be signed as.
-pub const IDENTIFIER: &str = "com.insanearts.atlas";
-/// The Developer ID team that signs Atlas; consent follows it.
-pub const TEAM: &str = "A474HM679A";
-/// The identifier the app's executable inside Atlas.app is signed as.
-pub const APP_IDENTIFIER: &str = "com.insanearts.atlas.bar";
-
-/// The code requirement for code signed as `identifier`: a Developer ID
-/// Application signature by Atlas's team. install.sh checks the same.
-pub(crate) fn requirement_for(identifier: &str) -> String {
-    format!(
-        "anchor apple generic and identifier \"{identifier}\" \
-         and certificate 1[field.1.2.840.113635.100.6.2.6] \
-         and certificate leaf[field.1.2.840.113635.100.6.1.13] \
-         and certificate leaf[subject.OU] = \"{TEAM}\""
-    )
-}
-
-/// Whether `target` (a path, or a PID as text) validly satisfies a
-/// Developer ID Application signature for Atlas by its team, the
-/// requirement under which macOS consent persists. For a running process
-/// this also checks that its loaded code still matches the file on disk.
-fn satisfies_developer_id(target: &std::ffi::OsStr) -> bool {
-    satisfies(target, IDENTIFIER)
-}
-
-/// Whether `target` validly satisfies the requirement for `identifier`.
-fn satisfies(target: &std::ffi::OsStr, identifier: &str) -> bool {
-    Command::new("/usr/bin/codesign")
-        .args(["--verify", "--strict", "-R"])
-        .arg(format!("={}", requirement_for(identifier)))
-        .arg(target)
-        .output()
-        .is_ok_and(|output| output.status.success())
-}
-
-/// Whether `name` administers this Mac (a helper must not); None when macOS
-/// cannot say, which never counts as "no".
-pub fn administrator(name: &str) -> Option<bool> {
-    // An agent's sandbox may keep dseditgroup from the directory service;
-    // the account's group list still answers there.
-    directory_member(name).or_else(|| listed_member(name))
-}
-
-/// What the directory service says of `name` in the admin group.
-fn directory_member(name: &str) -> Option<bool> {
-    let output = crate::bounded::output(
-        Command::new("/usr/sbin/dseditgroup").args(["-o", "checkmember", "-m", name, "admin"]),
-        crate::bounded::LOOKUP,
-    )
-    .ok()?;
-
-    let answer = String::from_utf8_lossy(&output.stdout);
-    if answer.starts_with("yes ") {
-        Some(true)
-    } else if answer.starts_with("no ") {
-        Some(false)
-    } else {
-        None
-    }
-}
-
-/// The admin group's ID, the same on every Mac.
-const ADMIN_GID: &str = "80";
-
-/// Whether the admin group is among the group IDs `id` lists for `name`.
-/// IDs, not names: a name `id` cannot resolve is printed as its number.
-fn listed_member(name: &str) -> Option<bool> {
-    let output = crate::bounded::output(
-        Command::new("/usr/bin/id").args(["-G", name]),
-        crate::bounded::LOOKUP,
-    )
-    .ok()
-    .filter(|output| output.status.success())?;
-
-    parse_admin_listed(&String::from_utf8_lossy(&output.stdout))
-}
-
-/// Whether `id -G`'s list holds the admin group's ID; None for no list.
-fn parse_admin_listed(groups: &str) -> Option<bool> {
-    let mut groups = groups.split_whitespace().peekable();
-    groups.peek()?;
-
-    Some(groups.any(|group| group == ADMIN_GID))
-}
-
-/// Whether the file at `path` is Atlas signed by its Developer ID.
-pub fn developer_id(path: &Path) -> bool {
-    satisfies_developer_id(path.as_os_str())
-}
-
-/// Whether the file at `path` is the app's executable signed by Atlas's
-/// Developer ID.
-pub fn app_signed(path: &Path) -> bool {
-    satisfies(path.as_os_str(), APP_IDENTIFIER)
-}
-
-/// Whether process `pid` runs Atlas signed by its Developer ID, and
-/// its loaded code is exactly the file now on disk. (`codesign -d` on a PID
-/// describes the file at its path, so only verification proves this.)
-fn running_developer_id(pid: u32) -> bool {
-    satisfies_developer_id(pid.to_string().as_ref())
-}
-
-/// Whether helper daemon `pid` runs `executable` exactly as it is on disk
-/// now. False for a daemon still running a build an update replaced: its
-/// file moved aside, or its loaded code no longer matches the file.
-pub fn runs_current(pid: u32, executable: &Path) -> bool {
-    let running = executable_of(pid).and_then(|path| fs::canonicalize(path).ok());
-
-    running.is_some() && running == fs::canonicalize(executable).ok() && running_developer_id(pid)
-}
-
-#[allow(unsafe_code, reason = "FFI: proc_pidpath has no safe binding")]
-fn executable_of(pid: u32) -> Option<PathBuf> {
-    let size = u32::try_from(libc::PROC_PIDPATHINFO_MAXSIZE).ok()?;
-    let mut buffer = vec![0_u8; usize::try_from(size).ok()?];
-
-    // SAFETY: the buffer is writable for the length passed.
-    let length =
-        unsafe { libc::proc_pidpath(i32::try_from(pid).ok()?, buffer.as_mut_ptr().cast(), size) };
-    let length = usize::try_from(length).ok().filter(|length| *length > 0)?;
-    buffer.truncate(length);
-
-    Some(PathBuf::from(String::from_utf8_lossy(&buffer).into_owned()))
 }
 
 /// Parse `launchctl print-disabled` output for one service.
@@ -897,6 +602,18 @@ fn next_steps(report: &Value) -> Vec<String> {
     steps
 }
 
+/// The permissions the helper still lacks, by their System Settings names.
+pub(crate) fn missing(status: &Value) -> Vec<&'static str> {
+    [
+        ("screenCapture", "Screen & System Audio Recording"),
+        ("accessibility", "Accessibility"),
+    ]
+    .into_iter()
+    .filter(|(key, _)| status["permissions"][*key] != true)
+    .map(|(_, pane)| pane)
+    .collect()
+}
+
 #[cfg(test)]
 mod tests {
     #[test]
@@ -910,7 +627,7 @@ mod tests {
             fs::write(source.join("atlas"), "worker").unwrap();
             fs::write(source.join("AtlasApp"), "app").unwrap();
             let guid = "6DB4B7AF-BE3C-486C-BD46-1B4558946919";
-            let mut script = [crate::onboarding::as_root::staging().as_str(), DISPATCH]
+            let mut script = [crate::setup::executor::staging().as_str(), DISPATCH]
                 .concat()
                 .replace(
                     "/private/var/tmp/atlas-approved.XXXXXXXX",
@@ -1076,73 +793,6 @@ mod tests {
 
     use super::*;
 
-    /// The installer verifies downloads against exactly setup's requirement.
-    #[test]
-    fn the_installer_checks_the_same_requirement() {
-        let script = include_str!("../../../install.sh");
-        let line = script
-            .lines()
-            .find_map(|line| line.strip_prefix("REQUIREMENT=\""))
-            .and_then(|line| line.strip_suffix('"'))
-            .expect("install.sh sets REQUIREMENT");
-
-        let expanded = line
-            .replace("\\\"", "\"")
-            .replace("$IDENTIFIER", IDENTIFIER)
-            .replace("$TEAM", TEAM);
-        assert_eq!(expanded, requirement_for(IDENTIFIER));
-        assert!(script.contains(&format!("IDENTIFIER=\"{IDENTIFIER}\"")));
-        assert!(script.contains(&format!("TEAM=\"{TEAM}\"")));
-    }
-
-    /// Only Atlas signed by its own Developer ID team passes, as a file
-    /// or as a running process.
-    #[test]
-    fn signatures_are_checked_against_atlass_identity() {
-        assert!(
-            !developer_id(Path::new("/bin/ls")),
-            "Apple-signed, not ours"
-        );
-
-        let test = std::env::current_exe().unwrap();
-        assert!(!developer_id(&test), "ad-hoc signed test build");
-        assert!(
-            !running_developer_id(std::process::id()),
-            "this ad-hoc test process is not Atlas's Developer ID"
-        );
-        assert!(
-            !runs_current(std::process::id(), &test),
-            "only Atlas's own signed build is current"
-        );
-        assert!(!runs_current(std::process::id(), Path::new("/bin/ls")));
-    }
-
-    #[test]
-    fn accounts_resolve_through_directory_services() {
-        let me = account_with_uid(nix::unistd::getuid().as_raw())
-            .unwrap()
-            .unwrap();
-        assert_eq!(account_named(&me.name).unwrap(), Some(me.clone()));
-        assert!(account_named("no-such-atlas-account").unwrap().is_none());
-        assert!(account_named("bad\0name").is_err());
-    }
-
-    #[test]
-    fn codesign_diagnostics_parse_without_inventing_fields() {
-        let text = "Executable=/x\nIdentifier=com.example.sessiond\nCDHash=0c61eed3\n\
-                    Signature=adhoc\nTeamIdentifier=not set\n";
-        assert_eq!(
-            parse_signature(text),
-            Signature {
-                identifier: Some("com.example.sessiond".into()),
-                cdhash: Some("0c61eed3".into()),
-                kind: Some("adhoc".into()),
-                team: None,
-            }
-        );
-        assert_eq!(parse_signature(""), Signature::default());
-    }
-
     #[test]
     fn disabled_services_parse_exactly() {
         let text = "disabled services = {\n\t\t\"com.apple.screensharing\" => disabled\n\
@@ -1150,16 +800,6 @@ mod tests {
         assert_eq!(parse_disabled(text, "com.apple.screensharing"), Some(true));
         assert_eq!(parse_disabled(text, "com.openssh.sshd"), Some(false));
         assert_eq!(parse_disabled(text, "com.apple.screen"), None);
-    }
-
-    #[test]
-    fn group_lists_name_the_admin_group_exactly() {
-        assert_eq!(parse_admin_listed("20 12 80 61\n"), Some(true));
-
-        // An ID merely starting with 80 is not the admin group.
-        assert_eq!(parse_admin_listed("20 12 801 61\n"), Some(false));
-
-        assert_eq!(parse_admin_listed("\n"), None);
     }
 
     #[test]
@@ -1323,18 +963,5 @@ mod tests {
                 "screenSharing": {"service": service}}));
             assert!(!steps.join(" ").contains("Screen Sharing"), "{service}");
         }
-    }
-    #[test]
-    fn a_full_name_is_read_from_directory_services_answer_on_one_line_or_the_next() {
-        assert_eq!(
-            parse_real_name(b"RealName: Atlas\n").as_deref(),
-            Some("Atlas")
-        );
-        assert_eq!(
-            parse_real_name(b"RealName:\n Atlas Helper\n").as_deref(),
-            Some("Atlas Helper")
-        );
-        assert_eq!(parse_real_name(b"RealName:\n"), None);
-        assert_eq!(parse_real_name(b"No such key: RealName\n"), None);
     }
 }

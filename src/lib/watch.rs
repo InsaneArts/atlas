@@ -223,13 +223,8 @@ impl Watch {
         if let Some((_, entry)) = status.sessions.iter().find(|(key, _)| key == own.as_str()) {
             status.value["overview"]["ownSession"] = entry.clone();
         } else {
-            crate::overview::add_sessions_for(
-                status,
-                client,
-                crate::client::timestamp(),
-                Some(own),
-            )
-            .await;
+            crate::overview::add_sessions_for(status, client, crate::time::timestamp(), Some(own))
+                .await;
         }
     }
 

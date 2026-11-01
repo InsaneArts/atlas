@@ -1,5 +1,5 @@
 //! Times as Atlas records and sends them.
-use std::time::Duration;
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 /// `duration` in whole milliseconds, or the most a `u64` holds for one
 /// longer than that.
@@ -38,6 +38,13 @@ fn local_time(seconds: i64) -> Option<libc::tm> {
     // SAFETY: both pointers are live and aligned; localtime_r only writes local.
     let filled = unsafe { libc::localtime_r(&time, &mut local) };
     (!filled.is_null()).then_some(local)
+}
+
+pub fn timestamp() -> u128 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_nanos()
 }
 
 #[cfg(test)]

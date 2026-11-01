@@ -12,7 +12,7 @@ mod target;
 mod windows;
 
 pub use crate::app_selection::Closing;
-pub use crate::select::ElementFilter;
+pub use crate::screen::select::ElementFilter;
 pub use elements::{click_element, elements, screenshot};
 pub use expect::{Expected, act};
 #[cfg(test)]

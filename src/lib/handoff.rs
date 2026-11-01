@@ -9,9 +9,9 @@ use crate::{
     error::{Code, Error, Result},
     files::Token,
     host_session::{HostSession, Key},
+    name::same_text,
     task::{Claims, Owned, State},
     transport::run_output,
-    ui::text::same_text,
 };
 use serde::Serialize;
 use std::{

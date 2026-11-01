@@ -1,5 +1,5 @@
 //! Allow records consent; the requesting Atlas owns and drives setup.
-use super::{Pairing, as_root, problem, request, signed_executable};
+use super::{Pairing, problem, request, signed_executable};
 use crate::{
     control::{Controller, ExecutorClaims},
     error::Result,
@@ -94,7 +94,7 @@ fn signal_using(command: &mut Command) -> Result<Value> {
         .stdout
         .take()
         .ok_or_else(|| problem("No setup pipe"))?;
-    let receiver = crate::init::forward(output);
+    let receiver = crate::setup::executor::forward(output);
     let deadline = std::time::Instant::now() + Duration::from_secs(10);
     let mut bytes = Vec::new();
     let ready = loop {
@@ -356,7 +356,7 @@ fn drive(
     // Closing the channel stops future commands. Retain ownership while any
     // dispatched filesystem/launchd operation finishes after a lost reply.
     drop(channel);
-    as_root::wait_until_ended(executor);
+    crate::setup::executor::wait_until_ended(executor);
     if outcome.is_ok() {
         controller.clear_if(&pending)?;
     }
@@ -374,7 +374,7 @@ fn complete_setup(
         uid,
         controller: controller_name.to_owned(),
     })?;
-    let installed = crate::init::install_job(&run, uid, agent, logs)?;
+    let installed = crate::setup::helper::install_job(&run, uid, agent, logs)?;
     run(&Request::ForgetOpener { uid })?;
     if installed["pid"].is_null() {
         run(&Request::Kickstart { uid })?;

@@ -9,8 +9,8 @@ use super::{
     telling,
     text::{TEXT_LIMIT, TEXT_ROLES, bounded_string, prefix_range, prefix_text},
     tree::{reachable, sheet_window, unreachable},
-    why,
 };
+use crate::screen::elements::why;
 use objc2_application_services::{AXError, AXUIElement};
 use objc2_core_foundation::{
     CFArray, CFBoolean, CFIndex, CFNumber, CFRetained, CFString, CFType, Type,

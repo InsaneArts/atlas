@@ -2,6 +2,9 @@
 //! It asks first, logs the helper out before anything of it goes, keeps the
 //! helper account unless asked to delete it (and says how, once it is
 //! logged out), and moves the app to the Trash rather than deleting it.
+mod inspection;
+use inspection::{Found, survey};
+
 use crate::{
     approval::Refusal,
     client::Client,
@@ -644,63 +647,6 @@ fn rest(
     remove_settings(config_path, keep_config, &found.data, removed)?;
 
     Ok(())
-}
-
-/// What uninstall finds before it asks.
-struct Found {
-    app: PathBuf,
-    executable: PathBuf,
-    /// For the settings, when they load.
-    client: Option<Client>,
-    /// Why settings that exist do not load: they name no helper, so its
-    /// job stays.
-    unloaded: Option<String>,
-    /// The helper account's name, when it still exists and is not known
-    /// to be another account.
-    helper: Option<String>,
-    /// Whether the account with the helper's user ID is the one recorded;
-    /// `None` without settings or an account.
-    known: Option<Known>,
-    data: PathBuf,
-    leftovers: Vec<PathBuf>,
-}
-
-/// Find what uninstall would remove and what it keeps, changing nothing.
-fn survey(config_path: &Path) -> Result<Found> {
-    let app = crate::update::installed_app()?;
-    let executable = crate::update::installed_executable()?;
-
-    // Settings that exist but do not load name no helper, so its job stays.
-    let (client, unloaded) = match Config::load(config_path) {
-        Ok(config) => (Some(Client::new(config)?), None),
-        Err(error) if error.code == Code::ConfigInvalid => (None, Some(error.error)),
-        Err(_) => (None, None),
-    };
-
-    let config = client.as_ref().map(|client| &client.config);
-    let account =
-        config.and_then(|config| setup::account_with_uid(config.helper_uid).ok().flatten());
-    let known = account
-        .as_ref()
-        .map(|account| known(setup::identity::standing_of(account)));
-    let helper = account
-        .filter(|_| known != Some(Known::Other))
-        .map(|account| account.name);
-    let data = config::home()?.join("Library/Application Support/Atlas");
-    let leftovers = config
-        .map(|config| handed_over(&config.identity_probe))
-        .unwrap_or_default();
-
-    Ok(Found {
-        app,
-        executable,
-        client,
-        unloaded,
-        helper,
-        known,
-        data,
-        leftovers,
-    })
 }
 
 /// Say what goes and what stays, and ask.

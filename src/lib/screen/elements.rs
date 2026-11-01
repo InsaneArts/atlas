@@ -1,47 +1,8 @@
 //! What a scan reports: the elements it read with their frames, the
 //! snapshot that holds them, and the bounds a scan keeps to.
-use super::Stop;
-use crate::native::windows;
+pub use super::geometry::Frame;
 use serde::{Deserialize, Serialize};
 use std::{collections::BTreeSet, time::Duration};
-
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub struct Frame {
-    pub x: f64,
-    pub y: f64,
-    pub width: f64,
-    pub height: f64,
-}
-
-impl Frame {
-    pub fn center(&self) -> (f64, f64) {
-        (
-            (self.x + self.width / 2.0).round(),
-            (self.y + self.height / 2.0).round(),
-        )
-    }
-
-    /// Whether two frames are the same within a point.
-    pub fn matches(&self, other: &Frame) -> bool {
-        let near = |a: f64, b: f64| (a - b).abs() <= 1.0;
-        near(self.x, other.x)
-            && near(self.y, other.y)
-            && near(self.width, other.width)
-            && near(self.height, other.height)
-    }
-}
-
-impl From<&windows::Bounds> for Frame {
-    /// A window's bounds, as Accessibility gives an element's frame.
-    fn from(bounds: &windows::Bounds) -> Self {
-        Self {
-            x: bounds.x,
-            y: bounds.y,
-            width: bounds.width,
-            height: bounds.height,
-        }
-    }
-}
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -110,6 +71,73 @@ pub struct Limits {
     pub depth: usize,
     pub count: usize,
     pub time: Duration,
+}
+
+/// Why a scan is incomplete.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize)]
+#[serde(rename_all = "lowercase")]
+pub enum Stop {
+    /// Some elements are nested deeper than the scan reads.
+    Depth,
+    /// The app has more elements than the scan reads.
+    Count,
+    /// The scan ran out of time.
+    Time,
+    /// Part of the app could not be read.
+    Unread,
+    /// The app handed back itself in place of its windows.
+    Withheld,
+}
+
+impl Stop {
+    pub(crate) const ALL: [Stop; 5] = [
+        Stop::Depth,
+        Stop::Count,
+        Stop::Time,
+        Stop::Unread,
+        Stop::Withheld,
+    ];
+
+    /// The word a reply names it by.
+    pub(crate) fn word(self) -> &'static str {
+        match self {
+            Stop::Depth => "depth",
+            Stop::Count => "count",
+            Stop::Time => "time",
+            Stop::Unread => "unread",
+            Stop::Withheld => "withheld",
+        }
+    }
+
+    /// The reason a reply names by `word`, if it is one of these.
+    pub(crate) fn parse(word: &str) -> Option<Stop> {
+        Stop::ALL.into_iter().find(|stop| stop.word() == word)
+    }
+
+    /// Why the scan stopped, in plain words.
+    pub(crate) fn said(self) -> &'static str {
+        match self {
+            Stop::Time => "it ran out of time",
+            Stop::Count => "the app has more elements than Atlas reads",
+            Stop::Depth => "some elements are nested too deep",
+            Stop::Unread => "part of the app could not be read",
+            Stop::Withheld => {
+                "the app withheld its windows, as macOS does while the Mac's screen is locked"
+            }
+        }
+    }
+}
+
+/// Why a scan stopped, in plain words joined into one phrase; None when
+/// there is no reason.
+pub(crate) fn why(stops: impl IntoIterator<Item = Stop>) -> Option<String> {
+    let said: Vec<&str> = stops.into_iter().map(Stop::said).collect();
+
+    match said.as_slice() {
+        [] => None,
+        [one] => Some((*one).to_owned()),
+        [rest @ .., last] => Some(format!("{} and {last}", rest.join(", "))),
+    }
 }
 
 impl Default for Limits {

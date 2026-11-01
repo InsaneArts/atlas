@@ -2,7 +2,7 @@
 //! with a small margin, or a region cut to the display.
 use crate::{
     daemon::protocol::Region,
-    native::windows::{Bounds, Dock, MENU_BAR_LAYER, Window},
+    screen::windows::{Bounds, Dock, MENU_BAR_LAYER, Window},
 };
 
 /// Points of the display shown around an app's windows, so their edges and

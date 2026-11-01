@@ -4,13 +4,9 @@
 mod activity;
 mod sessions;
 
+use crate::host_session::reading::SessionFacts;
 pub(crate) use activity::shown;
-#[cfg(test)]
-pub(crate) use sessions::service_blocker_with;
-pub(crate) use sessions::{
-    SessionFacts, SessionReading, add_host_sessions, add_sessions_for, first_command_running,
-    service_blocker,
-};
+pub(crate) use sessions::{add_host_sessions, add_sessions_for};
 
 use crate::{
     activity_log::{self, Op, Row},
@@ -142,7 +138,7 @@ pub(crate) async fn read(client: &Client) -> Reading {
         .map(|directory| activity_log::recent(directory, ROWS))
         .unwrap_or_default();
 
-    let now = crate::client::timestamp();
+    let now = crate::time::timestamp();
     let overview = overview(&doctor, false, pending, &activity, now);
     let mut reading = Reading::new(doctor, overview, false, now);
     add_host_sessions(&mut reading, client, now).await;
@@ -290,7 +286,7 @@ impl Reading {
     pub(crate) fn decode(value: Value) -> Self {
         let overview = &value["overview"];
         let state = State::decode(&overview["state"]);
-        let facts = SessionFacts::decode(&value, crate::client::timestamp());
+        let facts = SessionFacts::decode(&value, crate::time::timestamp());
         let sessions = overview["hostSessions"]
             .as_array()
             .into_iter()

@@ -12,11 +12,12 @@ use crate::{
     client::{Check, Client, Run, Verified},
     daemon::protocol::{Crop, Region},
     error::{Code, Error, Result},
-    native::{
-        ax::{self, Element, Frame, Stop},
+    native::ax,
+    screen::select::{ElementFilter, NameMatch, closeness, names, shown_name},
+    screen::{
+        elements::{Element, Frame, Stop, why},
         windows::{Shown, Window, owning_window},
     },
-    select::{ElementFilter, NameMatch, closeness, names, shown_name},
     transport::run_output,
 };
 use serde_json::{Value, json};
@@ -101,7 +102,7 @@ impl Scanned {
 
     /// A named click refused because the scan was incomplete.
     pub(super) fn refusal(&self) -> Error {
-        let why = ax::why(self.reasons.iter().copied())
+        let why = why(self.reasons.iter().copied())
             .map(|why| format!(" ({why})"))
             .unwrap_or_default();
         let mut error = Error::new(
@@ -455,7 +456,7 @@ pub(super) fn choose<'a>(elements: &'a [Element], filter: &ElementFilter) -> Res
             Code::Input,
             "The selected control is disabled; no click was sent",
         )
-        .with("next", json!(crate::ui::hints::DISABLED_CONTROL)));
+        .with("next", json!(crate::error::advice::DISABLED_CONTROL)));
     }
 
     Ok(element)

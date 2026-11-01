@@ -6,11 +6,11 @@ use crate::{
     app_selection::{Closing, Process},
     error::{Code, Error, Holder, Result},
     interrupt::Interrupt,
-    native::{
-        ax::{Element, Frame, Stop},
+    screen::select::{ElementFilter, NameMatch},
+    screen::{
+        elements::{Element, Frame, Stop},
         windows::{Bounds, MENU_BAR_LAYER, MENU_LAYER, Window, owning_window},
     },
-    select::{ElementFilter, NameMatch},
     session::Display,
 };
 use serde_json::{Value, json};
@@ -54,7 +54,7 @@ fn window_snapshot_identities_are_read_but_never_appear_in_the_public_window_row
     let reply = json!({
         "ok":true,"starts":{"812":[123,456]},"windows":[window(42,812,"Editor",0)]
     });
-    let snapshot = crate::native::windows::from_reply(&reply).unwrap();
+    let snapshot = crate::screen::windows::from_reply(&reply).unwrap();
     let expect = snapshot_expect(snapshot.windows[0].pid, snapshot.starts.as_ref()).unwrap();
     assert_eq!(
         serde_json::to_value(expect).unwrap(),
@@ -3389,7 +3389,7 @@ async fn a_changed_look_refuses_point_actions_before_control_is_acquired() {
 async fn a_failed_window_read_preserves_memory_and_stops_the_look() {
     use crate::{
         host_session::{Host, HostSession},
-        native::windows::HitWindow,
+        screen::windows::HitWindow,
         test_support::{Helper, UID},
     };
     use std::cell::Cell;

@@ -8,8 +8,8 @@ use crate::{
     doing::bounded,
     handoff,
     helper_info::bundle_of,
+    name::same_text,
     task::{Owned, State, record::Record},
-    ui::text::same_text,
 };
 use serde::Serialize;
 use serde_json::Value;

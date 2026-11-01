@@ -40,7 +40,7 @@ pub(crate) mod overview;
 pub mod process;
 pub mod readiness;
 mod record_folder;
-mod select;
+mod screen;
 pub mod session;
 mod session_view;
 pub mod setup;

@@ -685,7 +685,7 @@ fn waiting_gives_up_with_busy_after_its_wait_and_says_how_long() {
         refused.error
     );
     assert_eq!(refused.details["waited"], 1);
-    assert_eq!(refused.details["next"], crate::ui::hints::WAITED);
+    assert_eq!(refused.details["next"], crate::error::advice::WAITED);
     assert!(
         events.try_recv().is_err(),
         "a single try sends no wait notices"
@@ -737,7 +737,7 @@ fn one_wait_is_shared_by_every_acquire_of_a_command() {
             let refused = again.try_take(&lock, now, true, || now).unwrap_err();
             assert_eq!(refused.code, "busy");
             assert_eq!(refused.details["waited"], 0);
-            assert_eq!(refused.details["next"], crate::ui::hints::WAITED);
+            assert_eq!(refused.details["next"], crate::error::advice::WAITED);
         }
     }
 }

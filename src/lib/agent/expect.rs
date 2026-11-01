@@ -10,7 +10,7 @@ use crate::{
     client::{Check, Client, Verified},
     error::{Code, Error, Result},
     last_capture::{Observation, recorded_epoch},
-    native::windows::{DOCK_LAYER, HitWindow, Window},
+    screen::windows::{DOCK_LAYER, HitWindow, Window},
 };
 use serde_json::Value;
 
@@ -235,7 +235,7 @@ mod tests {
         actions::Button,
         agent::{click, drag, keys, move_to, scroll},
         host_session::{Host, HostSession},
-        native::windows::{Bounds, Dock, hit_windows},
+        screen::windows::{Bounds, Dock, hit_windows},
     };
     use serde_json::json;
 
@@ -896,8 +896,8 @@ mod tests {
                 ),
                 &epoch(),
             );
-            let screen = crate::native::windows::Screen::new(display.clone(), dock);
-            let top = crate::native::windows::top_at(&windows, 30.0, 40.0, &screen).unwrap();
+            let screen = crate::screen::windows::Screen::new(display.clone(), dock);
+            let top = crate::screen::windows::top_at(&windows, 30.0, 40.0, &screen).unwrap();
             assert_eq!(
                 number(&client, None, &move_to(30.0, 40.0)),
                 top.is_apps().then_some(top.number)

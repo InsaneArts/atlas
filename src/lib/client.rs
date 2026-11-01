@@ -11,7 +11,7 @@ mod mutate;
 mod record;
 mod run;
 mod service;
-mod service_change;
+pub(crate) mod service_change;
 mod session;
 mod stop;
 #[cfg(test)]
@@ -28,6 +28,7 @@ pub(crate) use record::PersonInput;
 pub(crate) use run::Run;
 pub use run::{RUN_TIMEOUT, RUN_TIMEOUT_MAX};
 
+pub use crate::time::timestamp;
 use crate::{
     config::Config,
     control::Controller,
@@ -40,12 +41,13 @@ use crate::{
     transport::{Transport, run_output},
 };
 use serde_json::{Value, json};
+
 use std::{
     fs,
     os::unix::fs::{DirBuilderExt, MetadataExt},
     path::Path,
     sync::Arc,
-    time::{Duration, SystemTime, UNIX_EPOCH},
+    time::Duration,
 };
 
 /// Identity (device, inode, size, mtime) of the installed executable and its hash.
@@ -120,13 +122,6 @@ pub struct Client {
     /// logged; none for every other client, whose rows are written at once.
     pub(crate) person_input: Option<record::PersonInput>,
     installed: BuildCache,
-}
-
-pub fn timestamp() -> u128 {
-    SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .unwrap_or_default()
-        .as_nanos()
 }
 
 impl Client {

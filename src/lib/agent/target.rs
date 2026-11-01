@@ -5,9 +5,9 @@ use crate::{
     actions::Expect,
     client::{AppList, AppRow, Client, Verified},
     error::{Code, Error, Result},
-    native::windows::{MENU_LAYER, Shown, Window},
+    name::same_text,
     process::{Instance, Start},
-    ui::text::same_text,
+    screen::windows::{MENU_LAYER, Shown, Window},
 };
 use std::collections::BTreeMap;
 

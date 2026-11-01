@@ -2,7 +2,7 @@
 //! elements --name` matches them: shared by the commands that list and click
 //! elements and by the helper's check of the focused field. A name that
 //! picks out nothing is judged by how close it comes to the names there are.
-use crate::{native::ax::Element, ui::text::same_text};
+use crate::{name::same_text, screen::elements::Element};
 
 /// Which accessibility elements a command is about.
 #[derive(Debug, Default, Clone)]

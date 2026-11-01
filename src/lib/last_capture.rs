@@ -16,8 +16,8 @@ use crate::{
     files::{Durability, write_private},
     helper_info::capture_time,
     host_session::Key,
-    native::windows::HitWindow,
     record_folder::{RecordFolder, Records},
+    screen::windows::HitWindow,
     session::Epoch,
 };
 use fs2::FileExt;
@@ -710,7 +710,7 @@ mod tests {
             number: 42,
             pid: 812,
             layer: 0,
-            bounds: crate::native::windows::Bounds::display(1000.0, 800.0),
+            bounds: crate::screen::windows::Bounds::display(1000.0, 800.0),
         };
         remember_windows(dir.path(), "one", &[window], &epoch()).unwrap();
         let _lock = locked(dir.path()).unwrap();
@@ -788,7 +788,7 @@ mod tests {
             number: 42,
             pid: 812,
             layer: 0,
-            bounds: crate::native::windows::Bounds::display(1000.0, 800.0),
+            bounds: crate::screen::windows::Bounds::display(1000.0, 800.0),
         };
         remember_windows(dir.path(), "large", &[], &epoch()).unwrap();
         assert!(remember_windows(dir.path(), "large", &vec![large; 1024], &epoch()).is_err());

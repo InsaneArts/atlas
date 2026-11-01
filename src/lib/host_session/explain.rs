@@ -11,7 +11,7 @@ use super::{
 use crate::{
     client::Client,
     error::{Holder, Result},
-    ui::text::same_text,
+    name::same_text,
 };
 use serde_json::{Value, json};
 use std::{collections::BTreeMap, time::Duration};
@@ -201,7 +201,7 @@ fn last_used_by(
     own: Option<&Key>,
     names: &BTreeMap<Key, String>,
 ) -> Vec<(&'static str, Value)> {
-    let now = crate::client::timestamp();
+    let now = crate::time::timestamp();
     let within = LAST_USED_WITHIN.as_nanos();
     let found = crate::activity_log::recent(output, ROWS)
         .into_iter()
