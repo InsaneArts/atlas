@@ -3647,7 +3647,8 @@ impl Client {
         if let Some(session) = &self.host_session
             && let Ok(output) = self.output_dir()
         {
-            crate::last_capture::remember_windows(output, session.key().as_str(), windows, epoch);
+            crate::last_capture::remember_windows(output, session.key().as_str(), windows, epoch)
+                .unwrap();
         }
     }
 

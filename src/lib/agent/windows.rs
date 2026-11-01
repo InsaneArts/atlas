@@ -78,7 +78,7 @@ pub async fn list(client: &Client, filter: &WindowFilter) -> Result<Value> {
     let windows = if client.host_session.is_some() {
         let verified = client.verify().await?;
         let snapshot = window_snapshot(client, &verified, DockRead::Read).await?;
-        client.remember_look(&verified, Some(&snapshot));
+        client.remember_look(&verified, Some(&snapshot))?;
         snapshot.windows
     } else {
         window_list(client, PROBE_LIMIT).await?
@@ -209,13 +209,13 @@ impl Client {
                 .as_ref()
                 .is_some_and(|after| same_routing(&before.windows, &after.windows))
         });
-        self.remember_look(verified, unchanged);
+        self.remember_look(verified, unchanged)?;
         Ok(result)
     }
 
-    fn remember_look(&self, verified: &Verified, snapshot: Option<&Shown>) {
+    fn remember_look(&self, verified: &Verified, snapshot: Option<&Shown>) -> Result<()> {
         let Some(session) = &self.host_session else {
-            return;
+            return Ok(());
         };
         let epoch = &verified.session().epoch;
         let display = &epoch.display;
@@ -227,8 +227,6 @@ impl Client {
                 snapshot.starts.as_ref(),
             )
         });
-        if let Ok(output) = self.output_dir() {
-            last_capture::remember_windows(output, session.key().as_str(), &windows, epoch);
-        }
+        last_capture::remember_windows(self.output_dir()?, session.key().as_str(), &windows, epoch)
     }
 }

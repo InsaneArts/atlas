@@ -611,6 +611,19 @@ fn the_skill_core_keeps_every_rule_an_agent_needs_from_the_start() {
     }
 }
 
+#[test]
+fn the_guides_limit_window_memory_to_untargeted_points_and_name_windows_in_shared_apps() {
+    for guide in [CORE, GUIDE, include_str!("../../../docs/cli.md")] {
+        assert!(guide.contains("Untargeted points"));
+        assert!(guide.contains("bypasses this memory"));
+        assert!(
+            guide
+                .lines()
+                .any(|line| { line.contains("shared app") && line.contains("`--window") })
+        );
+    }
+}
+
 /// Spans in backticks in the full guide and the error reference.
 fn shown_spans() -> impl Iterator<Item = &'static str> {
     [GUIDE, ERRORS]
@@ -3097,7 +3110,7 @@ async fn pictures_compare_two_readings_and_window_lists_remember_their_own_readi
 
     for named in [false, true] {
         for command in 0..4 {
-            for change in 0..9 {
+            for change in 0..10 {
                 let directory = tempfile::tempdir().unwrap();
                 let (mut client, helper) = Helper::client(directory.path(), UID);
                 if named {
@@ -3146,6 +3159,7 @@ async fn pictures_compare_two_readings_and_window_lists_remember_their_own_readi
                             5 => windows[0].alpha = 0.0,
                             7 => windows[0].alpha = 0.5,
                             8 => windows.insert(0, window(99, 900, "SystemUIServer", 25)),
+                            9 => windows.insert(0, window(100, 812, "Editor", crate::native::windows::MENU_LAYER)),
                             _ => {}
                         }
                     }
@@ -3180,12 +3194,53 @@ async fn pictures_compare_two_readings_and_window_lists_remember_their_own_readi
                     let memory = client.remembered_windows().unwrap();
                     assert_eq!(
                         memory.windows.is_empty(),
-                        command != 2 && !matches!(change, 0 | 4 | 7 | 8)
+                        command != 2 && !matches!(change, 0 | 4 | 7)
                     );
                 } else {
                     assert!(client.remembered_windows().is_none());
                 }
             }
         }
+    }
+}
+
+#[tokio::test]
+async fn looks_and_window_lists_fail_when_window_memory_cannot_be_replaced() {
+    use crate::{
+        host_session::{Host, HostSession},
+        test_support::{Helper, UID},
+    };
+    use std::os::unix::fs::PermissionsExt;
+
+    for listing in [false, true] {
+        let directory = tempfile::tempdir().unwrap();
+        let (mut client, helper) = Helper::client(directory.path(), UID);
+        client.host_session = Some(HostSession::new(Host::Named, "one").unwrap());
+        let verified = helper
+            .serve(client.verify(), |_| {
+                panic!("only identity reads are needed")
+            })
+            .await
+            .unwrap();
+        let output = client.output_dir().unwrap();
+        client.remember_windows(&[], &verified.session().epoch);
+        std::fs::set_permissions(output, std::fs::Permissions::from_mode(0o500)).unwrap();
+        let result = helper
+            .serve(
+                async {
+                    if listing {
+                        list(&client, &WindowFilter::default()).await.map(|_| ())
+                    } else {
+                        client.look(&verified, async { Ok(()) }).await
+                    }
+                },
+                |request| {
+                    assert_eq!(request["op"], "windows");
+                    Some(json!({"ok": true, "windows": [], "dock": "unread"}))
+                },
+            )
+            .await;
+        std::fs::set_permissions(output, std::fs::Permissions::from_mode(0o700)).unwrap();
+        assert!(result.is_err(), "listing: {listing}");
     }
 }

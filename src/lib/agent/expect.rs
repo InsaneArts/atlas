@@ -575,12 +575,21 @@ mod tests {
         let mut observed = window(42, 10.0);
         observed.title = Some("private document".into());
         remember(&client, &[observed]);
-        let bytes = std::fs::read(client.config.output_dir.join("last-captures.json")).unwrap();
+        let path = std::fs::read_dir(&client.config.output_dir)
+            .unwrap()
+            .map(|entry| entry.unwrap().path())
+            .find(|path| {
+                path.file_name()
+                    .unwrap()
+                    .to_string_lossy()
+                    .starts_with("last-windows-")
+            })
+            .unwrap();
+        let bytes = std::fs::read(&path).unwrap();
         let text = String::from_utf8(bytes.clone()).unwrap();
         assert!(!text.contains("private document") && !text.contains("Editor"));
         let record: Value = serde_json::from_slice(&bytes).unwrap();
-        let windows = &record["targets"]
-            [format!("session:{}", client.host_session.as_ref().unwrap().key())]["windows"];
+        let windows = &record["windows"];
         let fields: Vec<_> = windows[0]
             .as_object()
             .unwrap()
@@ -593,11 +602,7 @@ mod tests {
             std::fs::read_to_string(sessions.join("record.json")).unwrap(),
             "unchanged"
         );
-        std::fs::write(
-            client.config.output_dir.join("last-captures.json"),
-            "unreadable json",
-        )
-        .unwrap();
+        std::fs::write(path, "unreadable json").unwrap();
         assert!(client.remembered_windows().is_none());
     }
 }
