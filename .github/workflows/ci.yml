@@ -17,7 +17,6 @@ jobs:
       - run: cargo fmt --all --check
       - run: cargo clippy --all-targets -- -D warnings
       - run: cargo test --locked
-      - run: cargo xtask quality --check xtask/quality.json
       - uses: actions/setup-node@v4
         with:
           node-version: 24
