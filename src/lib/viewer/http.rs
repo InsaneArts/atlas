@@ -52,17 +52,10 @@ pub(super) async fn bind(
                 Code::PortInUse,
                 format!("Port {port} is in use by another program."),
             ),
-            _ => crate::context::context(format_args!("Bind viewer listener at 127.0.0.1:{port}"))(
-                error,
-            ),
+            _ => error.into(),
         })?;
 
-    let authority = listener
-        .local_addr()
-        .map_err(crate::context::context(
-            "Read bound viewer listener address",
-        ))?
-        .to_string();
+    let authority = listener.local_addr()?.to_string();
     Ok((listener, configured(client, authority, settings)))
 }
 

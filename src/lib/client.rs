@@ -176,9 +176,8 @@ impl Client {
                 .map_err(|error| Error::writing(path, error))?;
         }
 
-        let metadata = fs::symlink_metadata(path).map_err(crate::context::context(
-            format_args!("Inspect output directory {}", path.display()),
-        ))?;
+        let metadata = fs::symlink_metadata(path)
+            .map_err(crate::context::context("Inspect output directory", path))?;
         if !metadata.is_dir()
             || metadata.uid() != nix::unistd::getuid().as_raw()
             || metadata.mode() & 0o077 != 0

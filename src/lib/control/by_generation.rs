@@ -93,12 +93,7 @@ pub(super) fn keep_with<T: Entries>(
     entries.retain_pending(pending);
     if entries.is_empty() {
         return match fs::remove_file(path) {
-            Err(error) if error.kind() != std::io::ErrorKind::NotFound => {
-                Err(crate::context::context(format_args!(
-                    "Remove generation labels {}",
-                    path.display()
-                ))(error))
-            }
+            Err(error) if error.kind() != std::io::ErrorKind::NotFound => Err(error.into()),
             _ => Ok(()),
         };
     }

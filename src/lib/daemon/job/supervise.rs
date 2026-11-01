@@ -440,20 +440,11 @@ fn note_seen(record: &mut Record, processes: Option<&[Info]>, jobs: &Jobs) {
 /// while one is stopping. A Stop is seen through the input service's
 /// saved `stop_marker`; the helper on screen through `on_console`.
 pub async fn supervise(jobs: Arc<Jobs>, stop_marker: PathBuf, on_console: fn() -> bool) {
-    supervise_with(jobs, stop_marker, on_console, crate::diagnostics::report).await;
-}
-
-pub(super) async fn supervise_with(
-    jobs: Arc<Jobs>,
-    stop_marker: PathBuf,
-    on_console: fn() -> bool,
-    mut diagnostics: impl FnMut(String),
-) {
     loop {
         tokio::time::sleep(jobs.interval()).await;
         let watched = jobs.clone();
         let marker = stop_marker.clone();
-        if tokio::task::spawn_blocking(move || {
+        let _ = tokio::task::spawn_blocking(move || {
             let stopped = marker.exists();
             watched.watch_once(if on_console() {
                 Some(How::OnConsole)
@@ -461,13 +452,6 @@ pub(super) async fn supervise_with(
                 stopped.then_some(How::Person)
             });
         })
-        .await
-        .is_err()
-        {
-            // Keep supervising; neither a panic nor a cancelled worker proves a job ended.
-            diagnostics(
-                "Job supervision worker failed; job outcomes remain unverified and supervision will retry".into(),
-            );
-        }
+        .await;
     }
 }

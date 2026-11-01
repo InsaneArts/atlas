@@ -62,10 +62,7 @@ fn grant_search(directory: &Path, controller: u32) -> Result<()> {
         .args(["+a", &format!("user:{name} allow search")])
         .arg(directory)
         .status()
-        .map_err(context(format_args!(
-            "Grant search access to {}",
-            directory.display()
-        )))?;
+        .map_err(context("Grant search access to", directory))?;
     if !granted.success() {
         return Err(Error::new(
             Code::Identity,
@@ -84,24 +81,16 @@ fn prepare(parent: &Path, uid: u32, role: &str, policy: Directory) -> Result<()>
     };
 
     match fs::create_dir(parent) {
-        Ok(()) => {
-            fs::set_permissions(parent, fs::Permissions::from_mode(mode)).map_err(context(
-                format_args!("Set socket directory permissions {}", parent.display()),
-            ))?
-        }
+        Ok(()) => fs::set_permissions(parent, fs::Permissions::from_mode(mode))
+            .map_err(context("Set socket directory permissions", parent))?,
         Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {}
         Err(error) => {
-            return Err(context(format_args!(
-                "Create socket directory {}",
-                parent.display()
-            ))(error));
+            return Err(context("Create socket directory", parent)(error));
         }
     }
 
-    let metadata = fs::symlink_metadata(parent).map_err(context(format_args!(
-        "Inspect socket directory {}",
-        parent.display()
-    )))?;
+    let metadata =
+        fs::symlink_metadata(parent).map_err(context("Inspect socket directory", parent))?;
     if !metadata.is_dir() || metadata.uid() != uid {
         return Err(refuse(role, "be a directory"));
     }
@@ -110,10 +99,8 @@ fn prepare(parent: &Path, uid: u32, role: &str, policy: Directory) -> Result<()>
         // An ACL may grant writes the mode bits do not show.
         Directory::Shared(_) => {
             if metadata.mode() & 0o022 != 0
-                || crate::acl::allows_write(parent).map_err(context(format_args!(
-                    "Read socket directory ACL {}",
-                    parent.display()
-                )))?
+                || crate::acl::allows_write(parent)
+                    .map_err(context("Read socket directory ACL", parent))?
             {
                 return Err(refuse(role, "deny writes by others"));
             }
@@ -156,10 +143,7 @@ pub(crate) async fn bind(
         .mode(0o600)
         .custom_flags(libc::O_NOFOLLOW)
         .open(parent.join("service.lock"))
-        .map_err(context(format_args!(
-            "Open service lock in {}",
-            parent.display()
-        )))?;
+        .map_err(context("Open service lock in", parent))?;
 
     FileExt::try_lock_exclusive(&lock).map_err(|_| {
         Error::new(
@@ -183,10 +167,7 @@ pub(crate) async fn bind(
                     std::io::ErrorKind::ConnectionRefused | std::io::ErrorKind::NotFound
                 ) =>
             {
-                fs::remove_file(socket).map_err(context(format_args!(
-                    "Remove stale socket {}",
-                    socket.display()
-                )))?
+                fs::remove_file(socket)?
             }
             _ => {
                 return Err(Error::new(
@@ -199,21 +180,14 @@ pub(crate) async fn bind(
         }
     }
 
-    let listener = UnixListener::bind(socket).map_err(context(format_args!(
-        "Bind {role} socket {}",
-        socket.display()
-    )))?;
-    fs::set_permissions(socket, fs::Permissions::from_mode(0o666)).map_err(context(
-        format_args!("Set socket permissions {}", socket.display()),
-    ))?;
+    let listener = UnixListener::bind(socket).map_err(context("Bind service socket", socket))?;
+    fs::set_permissions(socket, fs::Permissions::from_mode(0o666))
+        .map_err(context("Set socket permissions", socket))?;
 
     let endpoint = Endpoint {
         socket: socket.to_owned(),
         inode: fs::symlink_metadata(socket)
-            .map_err(context(format_args!(
-                "Inspect bound socket {}",
-                socket.display()
-            )))?
+            .map_err(context("Inspect bound socket", socket))?
             .ino(),
         _lock: lock,
     };
@@ -249,10 +223,7 @@ pub(crate) async fn read_line<R: AsyncRead + Unpin>(
         let mut buffer = [0; 4096];
 
         loop {
-            let n = stream
-                .read(&mut buffer)
-                .await
-                .map_err(context("Read service request"))?;
+            let n = stream.read(&mut buffer).await?;
             if n == 0 {
                 return Err(Error::new(Code::Protocol, "Incomplete request"));
             }

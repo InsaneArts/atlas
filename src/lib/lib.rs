@@ -15,7 +15,6 @@ pub mod config;
 mod context;
 pub mod control;
 pub mod daemon;
-mod diagnostics;
 pub mod digest;
 pub mod doing;
 pub mod environment;

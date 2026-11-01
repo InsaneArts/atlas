@@ -95,9 +95,7 @@ fn read(stream: Option<impl Read + Send + 'static>) -> io::Result<mpsc::Receiver
         .name("atlas-output".to_owned())
         .spawn(move || {
             let mut bytes = Vec::new();
-            // A read failure closes the channel and keeps the caller's bounded failure policy.
             if stream.read_to_end(&mut bytes).is_ok() {
-                // The caller may have timed out; a lost notification changes no cleanup outcome.
                 let _ = sender.send(bytes);
             }
         })?;
@@ -107,47 +105,12 @@ fn read(stream: Option<impl Read + Send + 'static>) -> io::Result<mpsc::Receiver
 /// Kill `child` with its process group and reap it. A child that could not
 /// be killed is reaped only if it already ended, so this never waits on it.
 fn stop(child: &mut Child) {
-    stop_with(
-        child,
-        |group| killpg(group, Signal::SIGKILL),
-        crate::diagnostics::report,
-    );
-}
-
-fn stop_with(
-    child: &mut Child,
-    kill_group: impl FnOnce(Pid) -> nix::Result<()>,
-    mut diagnostics: impl FnMut(String),
-) {
     let group = i32::try_from(child.id()).ok().map(Pid::from_raw);
-    let stopped = group.map(kill_group);
-    let grouped = matches!(stopped, Some(Ok(())));
-    let (action, reaped) = if grouped || child.kill().is_ok() {
-        ("Reap", child.wait().map(Some))
+    let grouped = group.is_some_and(|group| killpg(group, Signal::SIGKILL).is_ok());
+    if grouped || child.kill().is_ok() {
+        let _ = child.wait();
     } else {
-        // Never block on a child we could not stop. Failure is tolerated, not an exit acknowledgement.
-        ("Inspect", child.try_wait())
-    };
-    if let Some(Err(error)) = stopped
-        && error != nix::errno::Errno::ESRCH
-        && let Some(group) = group
-    {
-        diagnostics(format!("Stop bounded command group {group}: {error}"));
-    }
-    match reaped {
-        Ok(Some(_)) => {}
-        Ok(None) => {
-            diagnostics(format!(
-                "Stop bounded command {} was not confirmed",
-                child.id()
-            ));
-        }
-        Err(error) => {
-            diagnostics(format!(
-                "{action} bounded command {} after stopping it: {error}",
-                child.id()
-            ));
-        }
+        let _ = child.try_wait();
     }
 }
 
@@ -161,53 +124,12 @@ fn late() -> io::Error {
 
 #[cfg(test)]
 mod tests {
-    use super::{LISTING, LOOKUP, output, stop_with};
+    use super::{LISTING, LOOKUP, output};
     use std::{
         io::ErrorKind,
-        os::unix::process::{CommandExt, ExitStatusExt},
         process::Command,
         time::{Duration, Instant},
     };
-
-    #[test]
-    fn stalled_diagnostics_do_not_delay_killing_and_reaping_a_child() {
-        let (diagnostics, writing, resume) = crate::test_support::stalled_diagnostics();
-        diagnostics.report("first diagnostic".into());
-        writing.recv_timeout(Duration::from_secs(1)).unwrap();
-        let (finished, stopped) = std::sync::mpsc::channel();
-        let worker = std::thread::spawn(move || {
-            // Fill the queue while its writer is stalled.
-            for _ in 0..64 {
-                diagnostics.report("queued diagnostic".into());
-            }
-            let mut child = Command::new("/bin/sleep")
-                .arg("5")
-                .process_group(0)
-                .spawn()
-                .unwrap();
-            let mut messages = Vec::new();
-            stop_with(
-                &mut child,
-                |_| Err(nix::errno::Errno::EPERM),
-                |message| {
-                    diagnostics.report(message.clone());
-                    messages.push(message);
-                },
-            );
-            let status = child.try_wait().unwrap();
-            let _ = child.kill();
-            let _ = child.wait();
-            let _ = finished.send((status, messages));
-        });
-        let result = stopped.recv_timeout(Duration::from_secs(1));
-        let _ = resume.send(());
-        worker.join().unwrap();
-
-        let (status, messages) = result.expect("cleanup must finish while diagnostics are stalled");
-        assert_eq!(status.unwrap().signal(), Some(libc::SIGKILL));
-        assert_eq!(messages.len(), 1);
-        assert!(messages[0].contains("EPERM"));
-    }
 
     #[test]
     fn a_command_that_ends_in_time_gives_its_output_and_status() {

@@ -57,10 +57,11 @@ impl Controller {
 
     /// Read unsettled state while the caller holds the marker lock.
     pub(super) fn read_unsettled(&self) -> Result<Unsettled> {
-        if !self.marker.try_exists().map_err(context(format_args!(
-            "Inspect pending marker {}",
-            self.marker.display()
-        )))? {
+        if !self
+            .marker
+            .try_exists()
+            .map_err(context("Inspect pending marker", &self.marker))?
+        {
             return Ok(Unsettled::Nothing);
         }
 
@@ -77,10 +78,8 @@ impl Controller {
     pub(super) fn lock_marker(&self) -> Result<File> {
         self.make_directory()?;
         let file = open_lock(&self.marker_lock)?;
-        FileExt::lock_exclusive(&file).map_err(context(format_args!(
-            "Lock pending marker {}",
-            self.marker_lock.display()
-        )))?;
+        FileExt::lock_exclusive(&file)
+            .map_err(context("Lock pending marker", &self.marker_lock))?;
 
         Ok(file)
     }
@@ -102,10 +101,11 @@ impl Controller {
     /// it out, and the host session that claimed it when one is recorded;
     /// from one locked read of the marker, or none when there is no marker.
     pub fn pending_causes(&self) -> Result<Vec<Cause>> {
-        if !self.marker.try_exists().map_err(context(format_args!(
-            "Inspect pending marker {}",
-            self.marker.display()
-        )))? {
+        if !self
+            .marker
+            .try_exists()
+            .map_err(context("Inspect pending marker", &self.marker))?
+        {
             return Ok(Vec::new());
         }
 
@@ -116,10 +116,11 @@ impl Controller {
     /// Read one pending snapshot, waiting at most `wait` for its lock.
     /// An absent marker creates neither its directory nor its lock.
     pub fn pending_causes_within(&self, wait: Duration) -> Result<Vec<Cause>> {
-        if !self.marker.try_exists().map_err(context(format_args!(
-            "Inspect pending marker {}",
-            self.marker.display()
-        )))? {
+        if !self
+            .marker
+            .try_exists()
+            .map_err(context("Inspect pending marker", &self.marker))?
+        {
             return Ok(Vec::new());
         }
         let _lock = self.lock_marker_within(wait)?;
@@ -338,8 +339,6 @@ impl Controller {
                 .into_iter()
                 .filter(|entry| entry != claim.generation())
                 .collect();
-            // Dropping the live claim prevents a stale command label from authorizing work.
-            // Its pending marker is retained even when this label cannot be removed.
             let _ = commands::keep(&self.commands, &kept);
         }
         drop(claim);
@@ -357,8 +356,6 @@ impl Controller {
 
         let mut pending = pending(&self.marker)?;
         pending.retain(|entry| entry != generation);
-        // Labels are read only against pending generations and live claims. Failed pruning
-        // cannot settle a different generation; the marker write below decides settlement.
         let _ = by_generation::keep::<Key>(&self.causes, &pending);
         let _ = commands::keep(&self.commands, &pending);
         let _ = by_generation::keep::<Note>(&self.running, &pending);
@@ -383,13 +380,7 @@ impl Controller {
         let prefix = format!("{}.", self.name);
         let replacing = format!(".{prefix}");
 
-        for entry in fs::read_dir(&self.directory)
-            .map_err(context(format_args!(
-                "List pending claims in {}",
-                self.directory.display()
-            )))?
-            .flatten()
-        {
+        for entry in fs::read_dir(&self.directory)?.flatten() {
             let name = entry.file_name();
             // Only a writer holding the marker lock has a replacement under
             // way, so one found now was left by a writer that was killed.
@@ -425,7 +416,6 @@ impl Controller {
                 let _ = fs::remove_file(entry.path());
             }
         }
-        // Stale labels and temporary names never acknowledge a pending mutation.
         let _ = by_generation::keep::<Key>(&self.causes, &running);
         let _ = commands::keep(&self.commands, &running);
         let _ = by_generation::keep::<Note>(&self.running, &running);
@@ -500,19 +490,13 @@ pub(super) fn pending(marker: &Path) -> Result<Vec<String>> {
             Ok(serde_json::from_str(&text).unwrap_or_else(|_| vec!["legacy-unknown".into()]))
         }
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(Vec::new()),
-        Err(error) => Err(context(format_args!(
-            "Read pending marker {}",
-            marker.display()
-        ))(error)),
+        Err(error) => Err(context("Read pending marker", marker)(error)),
     }
 }
 
 fn remove_marker(path: &Path) -> Result<()> {
     match fs::remove_file(path) {
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
-        other => other.map_err(context(format_args!(
-            "Remove pending marker {}",
-            path.display()
-        ))),
+        other => Ok(other?),
     }
 }

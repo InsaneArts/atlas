@@ -339,11 +339,7 @@ fn boot_named(name: &CStr) -> Result<String> {
         )
     };
     if status != 0 || size != std::mem::size_of_val(&boot) {
-        let error = std::io::Error::last_os_error();
-        return Err(crate::context::context(format_args!(
-            "Read boot identity with sysctl {}",
-            name.to_string_lossy()
-        ))(error));
+        return Err(std::io::Error::last_os_error().into());
     }
     CStr::from_bytes_with_nul(&boot)
         .ok()
@@ -427,10 +423,7 @@ fn listed(name: &mut [libc::c_int]) -> Result<Vec<Info>> {
             )
         };
         if status != 0 {
-            let error = std::io::Error::last_os_error();
-            return Err(crate::context::context(format_args!(
-                "Size process query with sysctl {name:?}"
-            ))(error));
+            return Err(std::io::Error::last_os_error().into());
         }
         if size == 0 {
             return Ok(Vec::new());
@@ -455,9 +448,7 @@ fn listed(name: &mut [libc::c_int]) -> Result<Vec<Info>> {
             if error.raw_os_error() == Some(libc::ENOMEM) {
                 continue;
             }
-            return Err(crate::context::context(format_args!(
-                "Read process query with sysctl {name:?}"
-            ))(error));
+            return Err(error.into());
         }
         if size > buffer.len() || !size.is_multiple_of(KINFO_PROC) {
             return Err(Error::new(Code::State, "The process list is malformed"));

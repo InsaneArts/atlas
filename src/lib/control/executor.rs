@@ -37,10 +37,7 @@ impl ExecutorClaims {
                     .lock
                     .try_clone()
                     .map(|file| (claim.live.clone(), file))
-                    .map_err(context(format_args!(
-                        "Clone executor claim {}",
-                        claim.live.display()
-                    )))
+                    .map_err(context("Clone executor claim", &claim.live))
             })
             .collect::<Result<Vec<_>>>()?;
         Ok(Self(EXECUTOR_CLAIMS.with(|bound| bound.replace(files))))
@@ -81,10 +78,7 @@ pub(super) fn record_executor_with(
                 .and_then(|()| file.seek(SeekFrom::Start(0)))
                 .and_then(|_| file.write_all(&record))
                 .and_then(|()| file.sync_all())
-                .map_err(context(format_args!(
-                    "Persist executor claim {}",
-                    live.display()
-                )))?;
+                .map_err(context("Persist executor claim", live))?;
         }
         Ok(())
     })
@@ -114,10 +108,7 @@ pub(super) fn publish_executor_with(
         .mode(0o600)
         .custom_flags(libc::O_NOFOLLOW)
         .open(&temporary)
-        .map_err(context(format_args!(
-            "Create executor record for {}",
-            live.display()
-        )))?;
+        .map_err(context("Create executor record for", live))?;
     let result = (|| {
         write(&mut file, record)?;
         file.sync_all()?;
@@ -126,9 +117,7 @@ pub(super) fn publish_executor_with(
         Ok(())
     })();
     let _ = fs::remove_file(temporary);
-    result.map_err(|error: Error| {
-        context(format_args!("Publish executor record {}", path.display()))(error)
-    })
+    result.map_err(|error: Error| context("Publish executor record", &path)(error))
 }
 
 pub(super) fn claim_executor_running(file: &File, live: &Path) -> bool {

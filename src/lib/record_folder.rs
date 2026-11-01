@@ -239,17 +239,16 @@ impl<K: RecordName> RecordFolder<K> {
     pub(crate) fn write(&self, key: &K, bytes: &[u8]) -> Result<()> {
         let path = self.path(key);
         let partial = path.with_extension("json.partial");
-        write_private_with(&partial, bytes, self.records.durability).map_err(
-            crate::context::context(format_args!("Write record {}", path.display())),
-        )?;
+        write_private_with(&partial, bytes, self.records.durability)
+            .map_err(crate::context::context("Write record", &path))?;
         fs::rename(&partial, &path).map_err(|error| Error::writing(&path, error))?;
         if self.records.durability == Durability::Disk {
             File::open(&self.directory)
                 .and_then(|file| file.sync_all())
-                .map_err(crate::context::context(format_args!(
-                    "Sync record directory {}",
-                    self.directory.display()
-                )))?;
+                .map_err(crate::context::context(
+                    "Sync record directory",
+                    &self.directory,
+                ))?;
         }
         Ok(())
     }
@@ -281,10 +280,7 @@ impl<K: RecordName> RecordFolder<K> {
             .map_err(|error| Error::writing(&path, error))?;
         if !lock
             .metadata()
-            .map_err(crate::context::context(format_args!(
-                "Inspect record lock {}",
-                path.display()
-            )))?
+            .map_err(crate::context::context("Inspect record lock", &path))?
             .is_file()
         {
             return Err(Error::new(
@@ -317,10 +313,10 @@ impl<K: RecordName> RecordFolder<K> {
                 if let Some(output) = self.directory.parent() {
                     File::open(output)
                         .and_then(|file| file.sync_all())
-                        .map_err(crate::context::context(format_args!(
-                            "Sync record parent directory {}",
-                            output.display()
-                        )))?;
+                        .map_err(crate::context::context(
+                            "Sync record parent directory",
+                            output,
+                        ))?;
                 }
             }
             Err(error) if error.kind() != std::io::ErrorKind::AlreadyExists => {

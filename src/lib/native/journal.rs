@@ -75,17 +75,13 @@ pub(super) fn load(path: &Path, epoch: &InputEpoch) -> Result<Option<Held>> {
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
         Err(error) if error.raw_os_error() == Some(libc::ELOOP) => return Err(foreign()),
         Err(error) => {
-            return Err(context(format_args!(
-                "Open held-input journal {}",
-                path.display()
-            ))(error));
+            return Err(context("Open held-input journal", path)(error));
         }
     };
 
-    let metadata = file.metadata().map_err(context(format_args!(
-        "Inspect held-input journal {}",
-        path.display()
-    )))?;
+    let metadata = file
+        .metadata()
+        .map_err(context("Inspect held-input journal", path))?;
     if !metadata.is_file() || metadata.uid() != epoch.uid {
         return Err(foreign());
     }
@@ -94,19 +90,14 @@ pub(super) fn load(path: &Path, epoch: &InputEpoch) -> Result<Option<Held>> {
     (&mut file)
         .take(4097)
         .read_to_end(&mut bytes)
-        .map_err(context(format_args!(
-            "Read held-input journal {}",
-            path.display()
-        )))?;
+        .map_err(context("Read held-input journal", path))?;
 
     if bytes.len() > 4096 {
         return Err(Error::new(Code::Native, "Held-input journal is invalid"));
     }
 
-    let held: Held = serde_json::from_slice(&bytes).map_err(context(format_args!(
-        "Decode held-input journal {}",
-        path.display()
-    )))?;
+    let held: Held =
+        serde_json::from_slice(&bytes).map_err(context("Decode held-input journal", path))?;
     if held.epoch.uid != epoch.uid
         || !held.x.is_finite()
         || !held.y.is_finite()
@@ -182,18 +173,10 @@ fn set_aside(path: &Path, held: &Held) -> Result<PathBuf> {
 /// replayed.
 pub(super) fn store(path: &Path, held: &Held) -> Result<()> {
     let temporary = path.with_extension("pending");
-    let bytes = serde_json::to_vec(held).map_err(context(format_args!(
-        "Encode held-input journal {}",
-        path.display()
-    )))?;
-    write_private_with(&temporary, &bytes, Durability::Kernel).map_err(context(format_args!(
-        "Write held-input journal {}",
-        path.display()
-    )))?;
-    fs::rename(temporary, path).map_err(context(format_args!(
-        "Replace held-input journal {}",
-        path.display()
-    )))?;
+    let bytes = serde_json::to_vec(held).map_err(context("Encode held-input journal", path))?;
+    write_private_with(&temporary, &bytes, Durability::Kernel)
+        .map_err(context("Write held-input journal", path))?;
+    fs::rename(temporary, path).map_err(context("Replace held-input journal", path))?;
     Ok(())
 }
 

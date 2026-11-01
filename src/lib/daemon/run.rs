@@ -369,12 +369,7 @@ async fn run_at(
 
     let (reader, writer) = match std::io::pipe() {
         Ok(pair) => pair,
-        Err(error) => {
-            return failure(
-                Code::SpawnFailed,
-                format!("Create command output pipe: {error}"),
-            );
-        }
+        Err(error) => return failure(Code::SpawnFailed, error.to_string()),
     };
 
     let spawned = (|| {
@@ -402,12 +397,7 @@ async fn run_at(
     })();
     let mut child = match spawned {
         Ok(child) => child,
-        Err(error) => {
-            return failure(
-                Code::SpawnFailed,
-                format!("Spawn {}: {error}", program.display()),
-            );
-        }
+        Err(error) => return failure(Code::SpawnFailed, format!("{}: {error}", argv[0])),
     };
 
     let started = Instant::now();
@@ -427,13 +417,8 @@ async fn run_at(
         Ok(receiver) => receiver,
         Err(error) => {
             signal_group(group, Signal::SIGKILL);
-            let mut error = format!("Watch command output pipe: {error}");
-            if let Err(reaping) = child.wait().await {
-                error.push_str(&format!(
-                    "; reap command after failed output setup: {reaping}"
-                ));
-            }
-            return interrupted(Code::SpawnFailed, error);
+            let _ = child.wait().await;
+            return interrupted(Code::SpawnFailed, error.to_string());
         }
     };
 
