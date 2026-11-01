@@ -1452,8 +1452,9 @@ mod tests {
     fn a_failed_copy_takes_the_ones_before_it_and_each_is_settled_once_gone() {
         let dir = tempfile::tempdir().unwrap();
         let (root, output, claims, task) = claiming(dir.path());
+        let session = key("claiming");
         let owner = Owner {
-            session: Some(&key("claiming")),
+            session: Some(&session),
             claims: &claims,
             opened_with: &["TextEdit".to_owned()],
         };

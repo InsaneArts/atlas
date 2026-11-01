@@ -30,3 +30,10 @@ jobs:
         run: swift build -c release --package-path app
       - name: Test and lint app/ and every local package
         run: node scripts/check-swift.mjs
+  minimum-compiler:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@1.88.0
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo check --workspace --all-targets --locked
