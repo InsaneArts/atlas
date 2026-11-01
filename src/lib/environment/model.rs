@@ -221,18 +221,99 @@ pub(super) struct Directory {
     pub node: Option<Node>,
 }
 
+/// Write-ahead evidence can outlive an interrupted effect or acknowledgement.
+/// Restored files may have been untouched or kept, without ever being applied.
 #[derive(Clone, Debug, Serialize, Deserialize, Default)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub(super) struct Progress {
-    pub prepared: Option<Fingerprint>,
-    pub applied: bool,
-    pub restore: Option<Fingerprint>,
-    pub reverting: bool,
-    pub restored: bool,
+    prepared: Option<Fingerprint>,
+    applied: bool,
+    restore: Option<Fingerprint>,
+    reverting: bool,
+    restored: bool,
     /// Undoing left the file as the helper changed it. Written only when
     /// set, so records stay readable by earlier versions.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
-    pub kept: bool,
+    kept: bool,
+}
+
+impl Progress {
+    pub(super) fn prepared(&self) -> &Option<Fingerprint> {
+        &self.prepared
+    }
+
+    pub(super) fn applied(&self) -> bool {
+        self.applied
+    }
+
+    pub(super) fn restore(&self) -> &Option<Fingerprint> {
+        &self.restore
+    }
+
+    pub(super) fn reverting(&self) -> bool {
+        self.reverting
+    }
+
+    pub(super) fn restored(&self) -> bool {
+        self.restored
+    }
+
+    pub(super) fn kept(&self) -> bool {
+        self.kept
+    }
+
+    pub(super) fn record_prepared(&mut self, fingerprint: Fingerprint) {
+        self.prepared = Some(fingerprint);
+    }
+
+    pub(super) fn acknowledge_applied(&mut self) {
+        self.applied = true;
+    }
+
+    pub(super) fn record_restore(&mut self, fingerprint: Option<Fingerprint>) {
+        self.restore = fingerprint;
+    }
+
+    pub(super) fn begin_reverting(&mut self) {
+        self.reverting = true;
+    }
+
+    pub(super) fn acknowledge_restored(&mut self) {
+        self.restored = true;
+    }
+
+    pub(super) fn complete_kept(&mut self) {
+        self.kept = true;
+        self.restored = true;
+    }
+
+    pub(super) fn release_untouched(&mut self) {
+        self.prepared = None;
+        self.restored = true;
+    }
+
+    fn valid(&self, file: &PlannedFile, phase: Phase) -> bool {
+        if (self.kept && !self.restored)
+            || (self.applied && file.operation != Operation::Unchanged && self.prepared.is_none())
+            || (self.restore.is_some() && file.before.is_none())
+            || (self.reverting && file.before.is_some() && self.restore.is_none())
+            || (self.restored && !self.kept && !self.reverting && self.applied)
+        {
+            return false;
+        }
+
+        match phase {
+            Phase::Applying | Phase::Applied => {
+                self.restore.is_none()
+                    && !self.reverting
+                    && !self.restored
+                    && !self.kept
+                    && (phase != Phase::Applied || self.applied)
+            }
+            Phase::RollingBack => true,
+            Phase::RolledBack => self.restored,
+        }
+    }
 }
 
 #[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq, Eq)]
@@ -254,6 +335,17 @@ pub(super) struct Transaction {
     pub directories: Vec<Directory>,
     #[serde(default)]
     pub retained_directories: Vec<PathBuf>,
+}
+
+impl Transaction {
+    pub(super) fn valid_progress(&self) -> bool {
+        self.progress.len() == self.plan.files.len()
+            && self
+                .progress
+                .iter()
+                .zip(&self.plan.files)
+                .all(|(progress, file)| progress.valid(file, self.phase))
+    }
 }
 
 pub(super) fn validate_id(id: &str) -> Result<()> {

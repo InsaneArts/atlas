@@ -103,7 +103,7 @@ impl Store {
             if transaction.version != 1
                 || transaction.plan.version != 1
                 || transaction.plan.id != id
-                || transaction.progress.len() != transaction.plan.files.len()
+                || !transaction.valid_progress()
                 || transaction.plan.files.is_empty()
                 || transaction.plan.files.len() > 32
             {
@@ -127,6 +127,10 @@ impl Store {
     }
 
     pub(super) fn save(&self, transaction: &Transaction) -> Result<()> {
+        if !transaction.valid_progress() {
+            return Err(problem("Invalid transaction record"));
+        }
+
         self.write(
             &self.folder(&transaction.plan.id).join("transaction.json"),
             transaction,

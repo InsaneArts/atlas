@@ -518,10 +518,10 @@ fn install_state(
     }
 
     if entry == file.previous.as_ref() {
-        if current == file.before && !progress.applied {
+        if current == file.before && !progress.applied() {
             return Ok(Some(false));
         }
-        if progress.prepared.is_some() && current == progress.prepared {
+        if progress.prepared().is_some() && current == *progress.prepared() {
             return Ok(Some(true));
         }
     }
@@ -591,11 +591,11 @@ fn never_installed(
 ) -> Result<bool> {
     let file = &transaction.plan.files[index];
     let progress = &transaction.progress[index];
-    if progress.applied || recorded(transaction, index, ledger) {
+    if progress.applied() || recorded(transaction, index, ledger) {
         return Ok(false);
     }
 
-    let Some(prepared) = &progress.prepared else {
+    let Some(prepared) = progress.prepared() else {
         return Ok(true);
     };
 
@@ -623,7 +623,7 @@ fn apply_file(
         ensure_parents(home, transaction, &file.payload.target, store, guard)?;
         let candidate = candidate(&path, &transaction.plan.id, index, false)?;
 
-        if transaction.progress[index].prepared.is_none() {
+        if transaction.progress[index].prepared().is_none() {
             guard()?;
             let bytes = read_limited(&store.blob(&transaction.plan.id, index, false), MAX_FILE)?;
             if digest(&bytes) != file.payload.sha256 {
@@ -637,7 +637,7 @@ fn apply_file(
                 file.before.as_ref(),
                 file.operation == Operation::Update,
             )?;
-            transaction.progress[index].prepared = Some(prepared);
+            transaction.progress[index].record_prepared(prepared);
             store.save(transaction)?;
         }
 
@@ -646,13 +646,13 @@ fn apply_file(
             return finish_file(home, transaction, index, store, ledger);
         }
 
-        if fingerprint(&candidate)? != transaction.progress[index].prepared {
+        if fingerprint(&candidate)? != *transaction.progress[index].prepared() {
             return Err(problem("Prepared replacement changed or disappeared"));
         }
 
         install_prepared(&candidate, &path, file.before.is_none())?;
 
-        if fingerprint(&path)? != transaction.progress[index].prepared {
+        if fingerprint(&path)? != *transaction.progress[index].prepared() {
             return Err(problem("Installed file did not match its prepared inode"));
         }
     }
@@ -675,7 +675,7 @@ fn finish_file(
     let expected = if file.operation == Operation::Unchanged {
         &file.before
     } else {
-        &transaction.progress[index].prepared
+        transaction.progress[index].prepared()
     };
 
     if expected
@@ -695,7 +695,7 @@ fn finish_file(
     );
 
     store.save_ledger(ledger)?;
-    transaction.progress[index].applied = true;
+    transaction.progress[index].acknowledge_applied();
 
     store.save(transaction)
 }
@@ -821,7 +821,7 @@ pub(super) fn rollback(
                 && file.operation != Operation::Unchanged
                 && let Some(before) = &file.before
             {
-                if let Some(restore) = &transaction.progress[index].restore {
+                if let Some(restore) = transaction.progress[index].restore() {
                     let path = destination(home, &file.payload.target)?;
                     if fingerprint(&candidate(&path, id, index, true)?)?.as_ref() != Some(restore) {
                         return Err(problem("A prepared restore changed or disappeared"));
@@ -928,7 +928,7 @@ fn rollback_state(
     let progress = &transaction.progress[index];
 
     // What happens to the file once it is undone is the helper's business.
-    if progress.restored {
+    if progress.restored() {
         return Ok(RollbackState::Done);
     }
 
@@ -945,13 +945,14 @@ fn rollback_state(
     // An unchanged file stays as it is when undone: the helper's original,
     // or the copy a later plan's undo put back in its place.
     let restored = if file.operation == Operation::Unchanged {
-        progress.restore.as_ref().or(file.before.as_ref())
+        progress.restore().as_ref().or(file.before.as_ref())
     } else {
-        progress.restore.as_ref()
+        progress.restore().as_ref()
     };
 
     let previous = previous_entry(file, restored);
-    if progress.reverting && current.as_ref() == restored && (entry == previous.as_ref() || ours) {
+    if progress.reverting() && current.as_ref() == restored && (entry == previous.as_ref() || ours)
+    {
         return Ok(RollbackState::Restored);
     }
 
@@ -989,7 +990,7 @@ fn rollback_file(
 
     // The randomized candidate name is reserved in this durable transaction.
     // A crash can leave its inode prepared before the fingerprint was recorded.
-    if transaction.progress[index].prepared.is_none() {
+    if transaction.progress[index].prepared().is_none() {
         let candidate = candidate(&path, &transaction.plan.id, index, false)?;
         if let Some(prepared) = fingerprint(&candidate)? {
             if prepared.sha256 != file.payload.sha256
@@ -1000,7 +1001,7 @@ fn rollback_file(
                 ));
             }
 
-            transaction.progress[index].prepared = Some(prepared);
+            transaction.progress[index].record_prepared(prepared);
             guard()?;
             store.save(transaction)?;
         }
@@ -1019,7 +1020,7 @@ fn rollback_file(
 
     if status == RollbackState::Installed && file.operation != Operation::Unchanged {
         if let Some(before) = &file.before
-            && transaction.progress[index].restore.is_none()
+            && transaction.progress[index].restore().is_none()
         {
             let bytes = read_limited(&store.blob(&transaction.plan.id, index, true), MAX_FILE)?;
             if digest(&bytes) != before.sha256 {
@@ -1028,17 +1029,17 @@ fn rollback_file(
 
             let candidate = candidate(&path, &transaction.plan.id, index, true)?;
             guard()?;
-            transaction.progress[index].restore = Some(prepare_inode(
+            transaction.progress[index].record_restore(Some(prepare_inode(
                 &candidate,
                 &bytes,
                 before.mode,
                 Some(before),
                 false,
-            )?);
+            )?));
             store.save(transaction)?;
         }
 
-        transaction.progress[index].reverting = true;
+        transaction.progress[index].begin_reverting();
         guard()?;
         store.save(transaction)?;
         guard()?;
@@ -1049,7 +1050,7 @@ fn rollback_file(
 
         if file.before.is_some() {
             let candidate = candidate(&path, &transaction.plan.id, index, true)?;
-            if fingerprint(&candidate)? != transaction.progress[index].restore {
+            if fingerprint(&candidate)? != *transaction.progress[index].restore() {
                 return Err(problem("Prepared restore changed"));
             }
             install_prepared(&candidate, &path, false)?;
@@ -1062,28 +1063,29 @@ fn rollback_file(
         // on (an adopted file a later plan's undo put back is a new inode,
         // known from the ledger), never a fresh read: a helper edit made
         // since fails the check below and is kept on the next try.
-        transaction.progress[index].restore = match status {
+        let restore = match status {
             RollbackState::Installed => match ledger.files.get(&file.payload.target) {
                 Some(Entry::Managed {
                     generation,
                     fingerprint,
                 }) if generation == &transaction.plan.id => Some(fingerprint.clone()),
-                _ => transaction.progress[index].prepared.clone(),
+                _ => transaction.progress[index].prepared().clone(),
             },
             RollbackState::Restored => transaction.progress[index]
-                .restore
+                .restore()
                 .clone()
                 .or_else(|| file.before.clone()),
             _ => file.before.clone(),
         };
-        transaction.progress[index].reverting = true;
+        transaction.progress[index].record_restore(restore);
+        transaction.progress[index].begin_reverting();
         store.save(transaction)?;
     }
 
     guard()?;
     let restored = fingerprint(&path)?;
 
-    if restored != transaction.progress[index].restore {
+    if restored != *transaction.progress[index].restore() {
         return Err(problem("Restored file does not match its recorded inode"));
     }
 
@@ -1096,7 +1098,7 @@ fn rollback_file(
 
     ledger.version = 1;
     store.save_ledger(ledger)?;
-    transaction.progress[index].restored = true;
+    transaction.progress[index].acknowledge_restored();
     store.save(transaction)?;
 
     discard_candidates(&path, transaction, index, guard)
@@ -1126,8 +1128,7 @@ fn keep_changed(
     ledger.version = 1;
     store.save_ledger(ledger)?;
 
-    transaction.progress[index].kept = true;
-    transaction.progress[index].restored = true;
+    transaction.progress[index].complete_kept();
     store.save(transaction)?;
 
     discard_candidates(path, transaction, index, guard)
@@ -1149,9 +1150,9 @@ fn discard_candidates(
 
         if let Some(current) = fingerprint(&candidate)? {
             let expected = if restore {
-                &transaction.progress[index].restore
+                transaction.progress[index].restore()
             } else {
-                &transaction.progress[index].prepared
+                transaction.progress[index].prepared()
             };
 
             let backup = transaction.plan.files[index].before.as_ref();
@@ -1190,14 +1191,13 @@ fn release_untouched(
     discard_partial(&waiting)?;
 
     let current = fingerprint(&waiting)?;
-    if current.is_some() && current != transaction.progress[index].prepared {
+    if current.is_some() && current != *transaction.progress[index].prepared() {
         return Err(problem(
             "An unrecorded prepared file remains; resume or inspect before cleanup",
         ));
     }
 
-    transaction.progress[index].prepared = None;
-    transaction.progress[index].restored = true;
+    transaction.progress[index].release_untouched();
     guard()?;
     store.save(transaction)?;
 
@@ -1258,14 +1258,14 @@ fn report(transaction: &Transaction, result: Result<()>, rollback: bool) -> Valu
         .zip(&transaction.progress)
         .partition(|(_, progress)| {
             if rollback {
-                progress.restored
+                progress.restored()
             } else {
-                progress.applied
+                progress.applied()
             }
         });
     let (kept, completed): (Vec<_>, Vec<_>) = completed
         .into_iter()
-        .partition(|(_, progress)| rollback && progress.kept);
+        .partition(|(_, progress)| rollback && progress.kept());
 
     fn targets<'a>(files: Vec<(&'a PlannedFile, &'a Progress)>) -> Vec<&'a PathBuf> {
         files
