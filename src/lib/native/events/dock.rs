@@ -16,6 +16,21 @@ pub(super) struct Down {
 }
 
 impl Down {
+    fn take_ready(
+        down: &mut Option<Self>,
+        phase: PointerPhase,
+        point: Point,
+        button: Button,
+        targeted: bool,
+    ) -> Result<Option<Self>> {
+        // Readiness only borrows the press. Nothing can change the slot before
+        // the ready arm takes it; refusals and unchanged moves leave it intact.
+        match down {
+            Some(saved) if saved.ready(phase, point, button, targeted)? => Ok(down.take()),
+            _ => Ok(None),
+        }
+    }
+
     fn ready(
         &self,
         phase: PointerPhase,
@@ -108,11 +123,17 @@ impl Engine {
         modifiers: &[String],
         count: u8,
     ) -> Result<()> {
-        if let Some(down) = &self.dock_down {
-            if !down.ready(phase, point, button, self.target.is_some())? {
+        if self.dock_down.is_some() {
+            let Some(down) = Down::take_ready(
+                &mut self.dock_down,
+                phase,
+                point,
+                button,
+                self.target.is_some(),
+            )?
+            else {
                 return Ok(());
-            }
-            let down = self.dock_down.take().expect("the deferred down exists");
+            };
             if matches!(phase, PointerPhase::Up) {
                 // Resolve again: the Dock may have moved or magnified since down.
                 if !self.dock_click(point, down.button, modifiers, true).await? {
@@ -190,6 +211,179 @@ fn press_result(status: AXError) -> Result<()> {
 mod tests {
     use super::*;
     use std::cell::Cell;
+
+    fn deferred_engine() -> Engine {
+        let mut engine = Engine::idle(crate::session::InputEpoch {
+            uid: 502,
+            security_session_id: 12,
+            display_id: 34,
+            width: 1000.0,
+            height: 800.0,
+            process_id: 56,
+        });
+        engine.dock_down = Some(Down {
+            point: Point { x: 40.0, y: 50.0 },
+            button: Button::Left,
+            modifiers: vec!["shift".to_owned()],
+            count: 2,
+        });
+        engine
+    }
+
+    fn assert_original_press(down: &Down) {
+        assert_eq!(down.point, Point { x: 40.0, y: 50.0 });
+        assert_eq!(down.button, Button::Left);
+        assert_eq!(down.modifiers, ["shift"]);
+        assert_eq!(down.count, 2);
+    }
+
+    #[tokio::test]
+    async fn an_unchanged_deferred_move_keeps_its_press_without_posting() {
+        let mut engine = deferred_engine();
+        engine
+            .pointer(
+                PointerPhase::Move,
+                Point { x: 40.0, y: 50.0 },
+                Button::Right,
+                &["cmd".to_owned()],
+                1,
+            )
+            .await
+            .unwrap();
+        assert_original_press(engine.dock_down.as_ref().unwrap());
+        assert_eq!(engine.posted, 0);
+        assert!(engine.held.is_none());
+    }
+
+    #[tokio::test]
+    async fn a_refused_deferred_continuation_keeps_its_original_press() {
+        let mut engine = deferred_engine();
+        for (phase, button, code, message) in [
+            (
+                PointerPhase::Down,
+                Button::Left,
+                Code::Input,
+                "A mouse button is already held",
+            ),
+            (
+                PointerPhase::Up,
+                Button::Right,
+                Code::Input,
+                "Mouse button mismatch",
+            ),
+        ] {
+            let error = engine
+                .pointer(phase, Point { x: 45.0, y: 50.0 }, button, &[], 1)
+                .await
+                .unwrap_err();
+            assert_eq!(error.code, code);
+            assert_eq!(error.error, message);
+            assert!(error.details.is_empty());
+            assert!(!error.uncertain);
+            assert_original_press(engine.dock_down.as_ref().unwrap());
+            assert_eq!(engine.posted, 0);
+            assert!(engine.held.is_none());
+        }
+    }
+
+    #[tokio::test]
+    async fn a_targeted_deferred_continuation_keeps_its_original_press() {
+        let mut engine = deferred_engine();
+        engine.target = Some(crate::process::Instance::new(123, [4, 5]));
+        for phase in [PointerPhase::Down, PointerPhase::Move, PointerPhase::Up] {
+            let error = engine
+                .pointer(phase, Point { x: 45.0, y: 50.0 }, Button::Right, &[], 1)
+                .await
+                .unwrap_err();
+            assert_eq!(error.code, Code::FocusChanged);
+            assert_eq!(
+                error.error,
+                "A deferred Dock press cannot continue in the app; no input was sent"
+            );
+            assert_eq!(error.details["reason"], "point");
+            assert_eq!(error.details.len(), 1);
+            assert!(!error.uncertain);
+            assert_original_press(engine.dock_down.as_ref().unwrap());
+            assert_eq!(engine.posted, 0);
+            assert!(engine.held.is_none());
+        }
+    }
+
+    #[test]
+    fn a_ready_drag_consumes_exactly_the_original_down_for_flushing() {
+        let mut engine = deferred_engine();
+        let down = Down::take_ready(
+            &mut engine.dock_down,
+            PointerPhase::Move,
+            Point { x: 45.0, y: 50.0 },
+            Button::Right,
+            false,
+        )
+        .unwrap()
+        .unwrap();
+        assert_original_press(&down);
+        assert!(engine.dock_down.is_none());
+        assert!(
+            Down::take_ready(
+                &mut engine.dock_down,
+                PointerPhase::Move,
+                Point { x: 45.0, y: 50.0 },
+                Button::Right,
+                false,
+            )
+            .unwrap()
+            .is_none()
+        );
+        assert_eq!(engine.posted, 0);
+    }
+
+    #[test]
+    fn a_ready_tap_resolves_the_dock_again() {
+        for still_on_dock in [false, true] {
+            let mut engine = deferred_engine();
+            let posted = Cell::new(0);
+            let find_count = Cell::new(0);
+            let on_dock = Cell::new(true);
+            let find = || {
+                find_count.set(find_count.get() + 1);
+                Ok(on_dock.get().then_some(()))
+            };
+            let act = |_: &()| {
+                posted.set(posted.get() + 1);
+                AXError::Success
+            };
+            assert!(resolve(false, Button::Left, &[], false, || Ok(()), find, act).unwrap());
+            assert_eq!(posted.get(), 0);
+            on_dock.set(still_on_dock);
+            let down = Down::take_ready(
+                &mut engine.dock_down,
+                PointerPhase::Up,
+                Point { x: 45.0, y: 50.0 },
+                Button::Left,
+                false,
+            )
+            .unwrap()
+            .unwrap();
+            assert_original_press(&down);
+            assert_eq!(
+                resolve(false, down.button, &[], true, || Ok(()), find, act).unwrap(),
+                still_on_dock
+            );
+            assert_eq!(find_count.get(), 2);
+            assert_eq!(posted.get(), u8::from(still_on_dock));
+            assert!(engine.dock_down.is_none());
+        }
+    }
+
+    #[test]
+    fn releasing_a_deferred_press_posts_nothing() {
+        let mut engine = deferred_engine();
+        assert!(engine.held_input());
+        engine.release().unwrap();
+        assert!(engine.dock_down.is_none());
+        assert!(!engine.held_input());
+        assert_eq!(engine.posted, 0);
+    }
 
     #[test]
     fn a_dock_that_appears_after_target_verification_is_refused() {
