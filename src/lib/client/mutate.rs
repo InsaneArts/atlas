@@ -198,7 +198,10 @@ impl Client {
                 .max(Duration::from_millis(run) + RUN_MARGIN);
         }
 
-        transport.connect().await
+        transport.connect().await.map_err(crate::context::context(
+            "Connect mutation service",
+            &transport.path,
+        ))
     }
 
     /// The claim `op` is carried out under, marked as a running command for

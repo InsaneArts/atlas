@@ -4,6 +4,7 @@
 //! process that reused its PID.
 use super::Pending;
 use crate::{
+    context::context,
     error::{Code, Error, Result},
     files::token,
     process::Start,
@@ -37,8 +38,9 @@ impl ExecutorClaims {
                     .0
                     .try_clone()
                     .map(|file| (claim.live.clone(), file))
+                    .map_err(context("Clone executor claim", &claim.live))
             })
-            .collect::<std::io::Result<Vec<_>>>()?;
+            .collect::<Result<Vec<_>>>()?;
         Ok(Self(EXECUTOR_CLAIMS.with(|bound| bound.replace(files))))
     }
 }
@@ -73,10 +75,11 @@ pub(super) fn record_executor_with(
         for (live, file) in claims.iter() {
             publish_executor_with(live, &record, |file, record| file.write_all(record))?;
             let mut file = file;
-            file.set_len(0)?;
-            file.seek(SeekFrom::Start(0))?;
-            file.write_all(&record)?;
-            file.sync_all()?;
+            file.set_len(0)
+                .and_then(|()| file.seek(SeekFrom::Start(0)))
+                .and_then(|_| file.write_all(&record))
+                .and_then(|()| file.sync_all())
+                .map_err(context("Persist executor claim", live))?;
         }
         Ok(())
     })
@@ -105,7 +108,8 @@ pub(super) fn publish_executor_with(
         .write(true)
         .mode(0o600)
         .custom_flags(libc::O_NOFOLLOW)
-        .open(&temporary)?;
+        .open(&temporary)
+        .map_err(context("Create executor record for", live))?;
     let result = (|| {
         write(&mut file, record)?;
         file.sync_all()?;
@@ -114,7 +118,7 @@ pub(super) fn publish_executor_with(
         Ok(())
     })();
     let _ = fs::remove_file(temporary);
-    result
+    result.map_err(|error: Error| context("Publish executor record", &path)(error))
 }
 
 pub(super) fn claim_executor_running(file: &File, live: &Path) -> bool {

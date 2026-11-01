@@ -2,6 +2,7 @@
 //! release an interrupted press before accepting another controller.
 use crate::{
     actions::Button,
+    context::context,
     error::{Code, Error, Result},
     files::{Durability, write_private_with},
     session::InputEpoch,
@@ -73,22 +74,30 @@ pub(super) fn load(path: &Path, epoch: &InputEpoch) -> Result<Option<Held>> {
         Ok(file) => file,
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
         Err(error) if error.raw_os_error() == Some(libc::ELOOP) => return Err(foreign()),
-        Err(error) => return Err(error.into()),
+        Err(error) => {
+            return Err(context("Open held-input journal", path)(error));
+        }
     };
 
-    let metadata = file.metadata()?;
+    let metadata = file
+        .metadata()
+        .map_err(context("Inspect held-input journal", path))?;
     if !metadata.is_file() || metadata.uid() != epoch.uid {
         return Err(foreign());
     }
 
     let mut bytes = Vec::new();
-    (&mut file).take(4097).read_to_end(&mut bytes)?;
+    (&mut file)
+        .take(4097)
+        .read_to_end(&mut bytes)
+        .map_err(context("Read held-input journal", path))?;
 
     if bytes.len() > 4096 {
         return Err(Error::new(Code::Native, "Held-input journal is invalid"));
     }
 
-    let held: Held = serde_json::from_slice(&bytes)?;
+    let held: Held =
+        serde_json::from_slice(&bytes).map_err(context("Decode held-input journal", path))?;
     if held.epoch.uid != epoch.uid
         || !held.x.is_finite()
         || !held.y.is_finite()
@@ -164,14 +173,34 @@ fn set_aside(path: &Path, held: &Held) -> Result<PathBuf> {
 /// replayed.
 pub(super) fn store(path: &Path, held: &Held) -> Result<()> {
     let temporary = path.with_extension("pending");
-    write_private_with(&temporary, &serde_json::to_vec(held)?, Durability::Kernel)?;
-    fs::rename(temporary, path)?;
+    let bytes = serde_json::to_vec(held).map_err(context("Encode held-input journal", path))?;
+    write_private_with(&temporary, &bytes, Durability::Kernel)
+        .map_err(context("Write held-input journal", path))?;
+    fs::rename(temporary, path).map_err(context("Replace held-input journal", path))?;
     Ok(())
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn an_invalid_journal_names_the_decode_step_without_copying_its_contents() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("held.json");
+        fs::write(&path, b"private-journal-canary").unwrap();
+
+        let error = load(&path, &test_epoch()).err().unwrap();
+        assert_eq!(error.code, Code::InvalidJson);
+        assert!(!error.uncertain);
+        assert!(error.error.contains("Decode held-input journal"));
+        assert!(error.error.contains(&path.display().to_string()));
+        assert!(
+            !serde_json::to_string(&error)
+                .unwrap()
+                .contains("private-journal-canary")
+        );
+    }
 
     fn test_epoch() -> InputEpoch {
         InputEpoch {

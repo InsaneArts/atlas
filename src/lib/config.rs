@@ -1,6 +1,7 @@
 //! Atlas's settings: which account is the helper and where its sockets, the
 //! shared command and the screenshots live, read from a small TOML file
 //! whose relative paths resolve against the file itself.
+use crate::context::context;
 use crate::error::{Code, Error, Result};
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
 use std::{
@@ -135,9 +136,11 @@ impl Config {
         }
 
         let mut bytes = Vec::new();
-        fs::File::open(path)?
+        fs::File::open(path)
+            .map_err(|error| Error::new(Code::Io, format!("Open settings: {error}")))?
             .take(LIMIT + 1)
-            .read_to_end(&mut bytes)?;
+            .read_to_end(&mut bytes)
+            .map_err(|error| Error::new(Code::Io, format!("Read settings: {error}")))?;
 
         if bytes.len() as u64 > LIMIT {
             return Err(Error::new(Code::Config, "Configuration exceeds 16 KiB"));
@@ -260,9 +263,11 @@ pub(crate) fn write_beside(
             .write(true)
             .mode(mode)
             .custom_flags(libc::O_NOFOLLOW)
-            .open(&temporary)?;
-        write(&mut file)?;
-        file.sync_all()?;
+            .open(&temporary)
+            .map_err(context("Create replacement for", path))?;
+        write(&mut file).map_err(context("Write replacement for", path))?;
+        file.sync_all()
+            .map_err(context("Sync replacement for", path))?;
 
         place(&temporary)
     })();
@@ -285,7 +290,7 @@ pub(crate) fn write_atomic(path: &Path, bytes: &[u8], mode: u32) -> Result<()> {
             file.set_permissions(fs::Permissions::from_mode(mode))?;
             Ok(file.write_all(bytes)?)
         },
-        |temporary| Ok(fs::rename(temporary, path)?),
+        |temporary| fs::rename(temporary, path).map_err(context("Place replacement at", path)),
     )
 }
 
@@ -296,7 +301,8 @@ pub(crate) fn save_private(path: &Path, bytes: &[u8]) -> Result<()> {
         fs::DirBuilder::new()
             .recursive(true)
             .mode(0o700)
-            .create(parent)?;
+            .create(parent)
+            .map_err(context("Create private directory", parent))?;
     }
 
     write_atomic(path, bytes, 0o600)
@@ -318,7 +324,7 @@ pub fn resolve_parent(path: &Path) -> Result<PathBuf> {
 /// aliases of an absent socket share a lock.
 pub fn resolve_path(path: &Path) -> Result<PathBuf> {
     if path.exists() {
-        return Ok(fs::canonicalize(path)?);
+        return fs::canonicalize(path).map_err(context("Resolve path", path));
     }
 
     resolve_parent(path)
@@ -327,6 +333,34 @@ pub fn resolve_path(path: &Path) -> Result<PathBuf> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_settings_open_failure_names_only_the_step_and_cause() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("missing.toml");
+        let cause = fs::File::open(&path).unwrap_err();
+        let error = Config::read(&path).unwrap_err();
+        assert_eq!(error.code, Code::Io);
+        assert!(!error.uncertain);
+        assert_eq!(error.error, format!("Open settings: {cause}"));
+    }
+
+    #[test]
+    fn a_settings_read_failure_names_the_path_once_and_keeps_the_cause() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = fs::canonicalize(directory.path()).unwrap();
+        let cause = fs::read(&path).unwrap_err();
+        let error = Config::load(&path).unwrap_err();
+        assert_eq!(error.code, Code::ConfigInvalid);
+        assert!(!error.uncertain);
+        assert_eq!(
+            error.error,
+            format!(
+                "Atlas could not read its settings in {}: Read settings: {cause}",
+                crate::ui::text::tilde(&path)
+            )
+        );
+    }
 
     /// A probe that is a link keeps its own path, so install replaces the
     /// link and never the executable it points to.
@@ -364,13 +398,18 @@ mod tests {
             0o600
         );
 
-        let failed = write_beside(
+        let error = write_beside(
             &path,
             0o600,
-            |_| Err(Error::new(Code::Io, "no")),
+            |_| Err(std::io::Error::from_raw_os_error(libc::EACCES).into()),
             |_| unreachable!("nothing is placed after a failed write"),
-        );
-        assert!(failed.is_err());
+        )
+        .unwrap_err();
+        assert_eq!(error.code, Code::Io);
+        assert!(!error.uncertain);
+        assert!(error.error.starts_with("Write replacement for"), "{error}");
+        assert!(error.error.contains(&path.display().to_string()), "{error}");
+        assert!(error.error.contains("os error 13"), "{error}");
         assert_eq!(fs::read(&path).unwrap(), b"second");
         let entries = fs::read_dir(path.parent().unwrap()).unwrap().count();
         assert_eq!(entries, 1, "no temporary file is left behind");

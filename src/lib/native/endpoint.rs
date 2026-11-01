@@ -1,6 +1,7 @@
 //! The Unix socket a helper-side service listens on, and reading one bounded
 //! request line from it. Shared by the helper daemon and the input service.
 use crate::{
+    context::context,
     error::{Code, Error, Result},
     files::LockFile,
 };
@@ -61,7 +62,8 @@ fn grant_search(directory: &Path, controller: u32) -> Result<()> {
     let granted = std::process::Command::new("/bin/chmod")
         .args(["+a", &format!("user:{name} allow search")])
         .arg(directory)
-        .status()?;
+        .status()
+        .map_err(context("Grant search access to", directory))?;
     if !granted.success() {
         return Err(Error::new(
             Code::Identity,
@@ -80,12 +82,16 @@ fn prepare(parent: &Path, uid: u32, role: &str, policy: Directory) -> Result<()>
     };
 
     match fs::create_dir(parent) {
-        Ok(()) => fs::set_permissions(parent, fs::Permissions::from_mode(mode))?,
+        Ok(()) => fs::set_permissions(parent, fs::Permissions::from_mode(mode))
+            .map_err(context("Set socket directory permissions", parent))?,
         Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {}
-        Err(error) => return Err(error.into()),
+        Err(error) => {
+            return Err(context("Create socket directory", parent)(error));
+        }
     }
 
-    let metadata = fs::symlink_metadata(parent)?;
+    let metadata =
+        fs::symlink_metadata(parent).map_err(context("Inspect socket directory", parent))?;
     if !metadata.is_dir() || metadata.uid() != uid {
         return Err(refuse(role, "be a directory"));
     }
@@ -93,7 +99,10 @@ fn prepare(parent: &Path, uid: u32, role: &str, policy: Directory) -> Result<()>
     match policy {
         // An ACL may grant writes the mode bits do not show.
         Directory::Shared(_) => {
-            if metadata.mode() & 0o022 != 0 || crate::acl::allows_write(parent)? {
+            if metadata.mode() & 0o022 != 0
+                || crate::acl::allows_write(parent)
+                    .map_err(context("Read socket directory ACL", parent))?
+            {
                 return Err(refuse(role, "deny writes by others"));
             }
         }
@@ -134,7 +143,8 @@ pub(crate) async fn bind(
         .write(true)
         .mode(0o600)
         .custom_flags(libc::O_NOFOLLOW)
-        .open(parent.join("service.lock"))?;
+        .open(parent.join("service.lock"))
+        .map_err(context("Open service lock in", parent))?;
 
     let lock = LockFile(lock);
     FileExt::try_lock_exclusive(&lock.0).map_err(|_| {
@@ -172,12 +182,15 @@ pub(crate) async fn bind(
         }
     }
 
-    let listener = UnixListener::bind(socket)?;
-    fs::set_permissions(socket, fs::Permissions::from_mode(0o666))?;
+    let listener = UnixListener::bind(socket).map_err(context("Bind service socket", socket))?;
+    fs::set_permissions(socket, fs::Permissions::from_mode(0o666))
+        .map_err(context("Set socket permissions", socket))?;
 
     let endpoint = Endpoint {
         socket: socket.to_owned(),
-        inode: fs::symlink_metadata(socket)?.ino(),
+        inode: fs::symlink_metadata(socket)
+            .map_err(context("Inspect bound socket", socket))?
+            .ino(),
         _lock: lock,
     };
 

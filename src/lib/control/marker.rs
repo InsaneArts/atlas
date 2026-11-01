@@ -12,6 +12,7 @@ use super::{
     remove_claim,
 };
 use crate::{
+    context::context,
     error::{Code, Error, Result},
     files::{Held, Lock, LockFile, lock_within, open_lock, token},
     host_session::Key,
@@ -56,7 +57,11 @@ impl Controller {
 
     /// Read unsettled state while the caller holds the marker lock.
     pub(super) fn read_unsettled(&self) -> Result<Unsettled> {
-        if !self.marker.try_exists()? {
+        if !self
+            .marker
+            .try_exists()
+            .map_err(context("Inspect pending marker", &self.marker))?
+        {
             return Ok(Unsettled::Nothing);
         }
 
@@ -73,7 +78,8 @@ impl Controller {
     pub(super) fn lock_marker(&self) -> Result<LockFile> {
         self.make_directory()?;
         let file = open_lock(&self.marker_lock)?;
-        FileExt::lock_exclusive(&file.0)?;
+        FileExt::lock_exclusive(&file.0)
+            .map_err(context("Lock pending marker", &self.marker_lock))?;
 
         Ok(file)
     }
@@ -95,7 +101,11 @@ impl Controller {
     /// it out, and the host session that claimed it when one is recorded;
     /// from one locked read of the marker, or none when there is no marker.
     pub fn pending_causes(&self) -> Result<Vec<Cause>> {
-        if !self.marker.try_exists()? {
+        if !self
+            .marker
+            .try_exists()
+            .map_err(context("Inspect pending marker", &self.marker))?
+        {
             return Ok(Vec::new());
         }
 
@@ -106,7 +116,11 @@ impl Controller {
     /// Read one pending snapshot, waiting at most `wait` for its lock.
     /// An absent marker creates neither its directory nor its lock.
     pub fn pending_causes_within(&self, wait: Duration) -> Result<Vec<Cause>> {
-        if !self.marker.try_exists()? {
+        if !self
+            .marker
+            .try_exists()
+            .map_err(context("Inspect pending marker", &self.marker))?
+        {
             return Ok(Vec::new());
         }
         let _lock = self.lock_marker_within(wait)?;
@@ -476,7 +490,7 @@ pub(super) fn pending(marker: &Path) -> Result<Vec<String>> {
             Ok(serde_json::from_str(&text).unwrap_or_else(|_| vec!["legacy-unknown".into()]))
         }
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(Vec::new()),
-        Err(error) => Err(error.into()),
+        Err(error) => Err(context("Read pending marker", marker)(error)),
     }
 }
 

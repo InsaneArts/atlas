@@ -380,6 +380,7 @@ fn id(value: &Value) -> String {
 /// behind other writers, so it runs off any async runtime.
 pub(crate) fn append(directory: &Path, row: &Row) -> Result<()> {
     append_using(directory, row, |file, bytes| file.write_all(bytes))
+        .map_err(crate::context::context("Append activity log in", directory))
 }
 
 fn append_using(

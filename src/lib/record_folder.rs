@@ -242,10 +242,16 @@ impl<K: RecordName> RecordFolder<K> {
     pub(crate) fn write(&self, key: &K, bytes: &[u8]) -> Result<()> {
         let path = self.path(key);
         let partial = path.with_extension("json.partial");
-        write_private_with(&partial, bytes, self.records.durability)?;
+        write_private_with(&partial, bytes, self.records.durability)
+            .map_err(crate::context::context("Write record", &path))?;
         fs::rename(&partial, &path).map_err(|error| Error::writing(&path, error))?;
         if self.records.durability == Durability::Disk {
-            File::open(&self.directory)?.sync_all()?;
+            File::open(&self.directory)
+                .and_then(|file| file.sync_all())
+                .map_err(crate::context::context(
+                    "Sync record directory",
+                    &self.directory,
+                ))?;
         }
         Ok(())
     }
@@ -275,7 +281,11 @@ impl<K: RecordName> RecordFolder<K> {
             .custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK)
             .open(&path)
             .map_err(|error| Error::writing(&path, error))?;
-        if !lock.metadata()?.is_file() {
+        if !lock
+            .metadata()
+            .map_err(crate::context::context("Inspect record lock", &path))?
+            .is_file()
+        {
             return Err(Error::new(
                 Code::State,
                 format!(
@@ -305,7 +315,12 @@ impl<K: RecordName> RecordFolder<K> {
         match fs::DirBuilder::new().mode(0o700).create(&self.directory) {
             Ok(()) if self.records.durability == Durability::Disk => {
                 if let Some(output) = self.directory.parent() {
-                    File::open(output)?.sync_all()?;
+                    File::open(output)
+                        .and_then(|file| file.sync_all())
+                        .map_err(crate::context::context(
+                            "Sync record parent directory",
+                            output,
+                        ))?;
                 }
             }
             Err(error) if error.kind() != std::io::ErrorKind::AlreadyExists => {
