@@ -184,11 +184,11 @@ impl Store {
         {
             return Err(problem("Cursor's unfinished-copy record is invalid"));
         }
-        let entry = transaction
+        let (entry, digest) = transaction
             .after
             .as_ref()
             .and_then(|after| after.entries.get(&copying.entry))
-            .filter(|entry| entry.digest.is_some())
+            .and_then(|entry| entry.digest.as_ref().map(|digest| (entry, digest)))
             .ok_or_else(|| problem("Cursor's unfinished copy is not part of its payload"))?;
         let path = self.state.join(&copying.name);
         if !exists(&path)? {
@@ -212,7 +212,7 @@ impl Store {
             ));
         }
         if metadata.len() == copying.size
-            && format!("{:x}", Sha256::digest(read_file(&path)?)) != *entry.digest.as_ref().unwrap()
+            && format!("{:x}", Sha256::digest(read_file(&path)?)) != *digest
         {
             return Err(problem(
                 "Cursor's completed Atlas copy changed; it was kept",
@@ -549,7 +549,11 @@ fn materialize(
                 .mode(0o600)
                 .open(&temporary)?;
             let metadata = file.metadata()?;
-            transaction.copying.as_mut().unwrap().identity = Some((metadata.dev(), metadata.ino()));
+            #[allow(clippy::unwrap_used, reason = "The copy record was just inserted")]
+            {
+                transaction.copying.as_mut().unwrap().identity =
+                    Some((metadata.dev(), metadata.ino()));
+            }
             write_json(&store.transaction_path(), transaction)?;
             let middle = bytes.len() / 2;
             file.write_all(&bytes[..middle])?;

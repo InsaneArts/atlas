@@ -106,48 +106,51 @@ impl Cache {
             files[1] = None;
             revision[1] = None;
         }
-        let unchanged = self.kept.as_ref().is_some_and(|kept| {
+        if let Some(kept) = self.kept.as_ref().filter(|kept| {
             failure.is_none() && kept.directory == directory && kept.revision == revision
-        });
-        if !unchanged {
-            // Discard the previous candidates before allocating their
-            // replacement: the cache retains only one read budget of rows.
-            self.kept = None;
-            let mut rows = Vec::new();
-            let mut room = READ_LIMIT;
-            #[cfg(test)]
-            observed(directory);
-            for file in files.into_iter().flatten() {
-                if let Err(error) = read(file, &mut room, &mut rows) {
-                    failure.get_or_insert(error);
-                }
-            }
-            // Wall-clock time can move backwards during a command. Its last
-            // committed step wins by append order, before timestamps order
-            // the commands for display. Current-file rows precede rotated ones.
-            let mut commands = HashSet::new();
-            rows.retain(|row| {
-                row.command
-                    .as_ref()
-                    .is_none_or(|command| commands.insert(command.clone()))
-            });
-            rows.sort_by_key(|row| std::cmp::Reverse(row.at_nanos()));
-            if failure.is_some() {
-                // Status keeps the rows that read, but Activity reports the
-                // failure. Retry even if the revision has not changed.
-                return Reading {
-                    rows: selected(&rows, limit),
-                    failure,
-                };
-            }
-            self.kept = Some(Snapshot {
-                directory: directory.to_owned(),
-                revision,
-                rows,
-            });
+        }) {
+            return Reading {
+                rows: selected(&kept.rows, limit),
+                failure: None,
+            };
         }
+        // Discard the previous candidates before allocating their
+        // replacement: the cache retains only one read budget of rows.
+        self.kept = None;
+        let mut rows = Vec::new();
+        let mut room = READ_LIMIT;
+        #[cfg(test)]
+        observed(directory);
+        for file in files.into_iter().flatten() {
+            if let Err(error) = read(file, &mut room, &mut rows) {
+                failure.get_or_insert(error);
+            }
+        }
+        // Wall-clock time can move backwards during a command. Its last
+        // committed step wins by append order, before timestamps order
+        // the commands for display. Current-file rows precede rotated ones.
+        let mut commands = HashSet::new();
+        rows.retain(|row| {
+            row.command
+                .as_ref()
+                .is_none_or(|command| commands.insert(command.clone()))
+        });
+        rows.sort_by_key(|row| std::cmp::Reverse(row.at_nanos()));
+        if failure.is_some() {
+            // Status keeps the rows that read, but Activity reports the
+            // failure. Retry even if the revision has not changed.
+            return Reading {
+                rows: selected(&rows, limit),
+                failure,
+            };
+        }
+        let kept = self.kept.insert(Snapshot {
+            directory: directory.to_owned(),
+            revision,
+            rows,
+        });
         Reading {
-            rows: selected(&self.kept.as_ref().expect("snapshot was built").rows, limit),
+            rows: selected(&kept.rows, limit),
             failure: None,
         }
     }

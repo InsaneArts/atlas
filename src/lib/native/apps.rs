@@ -4,6 +4,13 @@
 use objc2_app_kit::{NSApplicationActivationPolicy, NSRunningApplication, NSWorkspace};
 use serde_json::{Value, json};
 
+#[derive(serde::Serialize)]
+pub struct Running {
+    pub pid: i32,
+    #[serde(flatten)]
+    fields: Value,
+}
+
 fn policy(policy: NSApplicationActivationPolicy) -> &'static str {
     match policy {
         NSApplicationActivationPolicy::Regular => "regular",
@@ -17,17 +24,17 @@ fn policy(policy: NSApplicationActivationPolicy) -> &'static str {
 /// those that have no process (macOS may still list one that quit, its
 /// process ID -1). Called on worker threads, so each call drains its own
 /// autorelease pool.
-pub fn running() -> Vec<Value> {
+pub fn running() -> Vec<Running> {
     objc2::rc::autoreleasepool(|_| {
         NSWorkspace::sharedWorkspace()
             .runningApplications()
             .iter()
             .filter(|app| app.processIdentifier() > 0)
-            .map(|app| {
-                json!({
+            .map(|app| Running {
+                pid: app.processIdentifier(),
+                fields: json!({
                     "name": app.localizedName().map(|name| name.to_string()),
                     "bundleId": app.bundleIdentifier().map(|id| id.to_string()),
-                    "pid": app.processIdentifier(),
                     "executable": app
                         .executableURL()
                         .and_then(|url| url.path())
@@ -36,7 +43,7 @@ pub fn running() -> Vec<Value> {
                     "hidden": app.isHidden(),
                     "policy": policy(app.activationPolicy()),
                     "launchedAt": launched_at(&app),
-                })
+                }),
             })
             .collect()
     })
@@ -77,6 +84,7 @@ mod tests {
         assert!(!apps.is_empty(), "a logged-in session always runs apps");
 
         for app in &apps {
+            let app = json!(app);
             assert!(app["pid"].as_i64().is_some_and(|pid| pid > 0));
             assert!(
                 ["regular", "accessory", "prohibited", "unknown"]

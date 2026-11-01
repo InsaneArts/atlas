@@ -45,7 +45,7 @@ pub(super) async fn open_in(
     // with `run` go on beside it.
     let ownership = client.controller.acquire_beside_commands()?;
     let verified = client.verify().await?;
-    let running = handoff::Running::listed(&client.apps_in(&verified).await?);
+    let running = handoff::Running::listed(&json!(client.apps_in(&verified).await?));
     task::settle_copies_gone(client, handoff::prune_in(copies, &running));
 
     let handed = handoff::hand_over(client, &ownership, wanted(app, targets), &running).await?;
@@ -95,6 +95,7 @@ pub(super) async fn open_in(
         && let Ok(current) = client.verify().await
         && current.session().epoch == verified.session().epoch
         && let Ok(apps) = client.apps_in(&verified).await
+        && let apps = json!(apps)
         && let Some(app) = super::target::named_app(&apps, name)
     {
         client.record_app_completion(app, started.elapsed()).await;

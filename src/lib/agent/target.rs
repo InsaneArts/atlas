@@ -154,6 +154,7 @@ pub(super) async fn target_among(
 
     let apps = client.apps_in(verified).await?;
     let starts: Option<BTreeMap<i64, Start>> = apps
+        .fields
         .get("starts")
         .map(|value| serde_json::from_value(value.clone()))
         .transpose()
@@ -163,10 +164,10 @@ pub(super) async fn target_among(
                 "The helper's process identities were malformed",
             )
         })?;
-    let rows = apps["apps"].as_array().expect("validated app list");
+    let rows = apps.apps;
     let name = match target {
         Target::Pid(pid) => {
-            if !rows.iter().any(|app| app["pid"] == *pid) {
+            if !rows.iter().any(|app| i64::from(app.pid) == *pid) {
                 return Err(Error::new(
                     Code::Elements,
                     format!(
@@ -178,11 +179,14 @@ pub(super) async fn target_among(
         }
         Target::Name(name) => name,
     };
-    let named: Vec<&Value> = rows.iter().filter(|app| app_named(app, name)).collect();
+    let named: Vec<_> = rows
+        .iter()
+        .filter(|app| app_named(&app.fields, name))
+        .collect();
     if let Some(pid) = named
         .iter()
-        .find(|app| app["active"] == true)
-        .and_then(|app| app["pid"].as_i64())
+        .find(|app| app.fields["active"] == true)
+        .map(|app| i64::from(app.pid))
     {
         return snapshot_expect(pid, starts.as_ref());
     }
