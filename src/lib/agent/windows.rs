@@ -215,7 +215,7 @@ impl Client {
         };
         let epoch = &verified.session().epoch;
         let display = &epoch.display;
-        let windows = snapshot.map_or_else(Vec::new, |snapshot| {
+        let windows = snapshot.map(|snapshot| {
             hit_windows(
                 &snapshot.windows,
                 &Bounds::display(display.width, display.height),
@@ -223,6 +223,6 @@ impl Client {
                 snapshot.starts.as_ref(),
             )
         });
-        last_capture::remember_windows(self.output_dir()?, session.key(), &windows, epoch)
+        last_capture::remember_windows(self.output_dir()?, session.key(), windows.as_deref(), epoch)
     }
 }

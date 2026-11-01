@@ -3694,7 +3694,10 @@ async fn a_missing_window_endpoint_preserves_memory_without_starting_the_look() 
     .expect("the missing endpoint is refused promptly");
     assert!(result.is_err());
     assert!(!looked.get());
-    assert_eq!(client.remembered_windows().unwrap().windows[0].number, 42);
+    assert_eq!(
+        client.remembered_windows().unwrap().windows.unwrap()[0].number,
+        42
+    );
 }
 
 impl Client {
@@ -3702,7 +3705,8 @@ impl Client {
         if let Some(session) = &self.host_session
             && let Ok(output) = self.output_dir()
         {
-            crate::last_capture::remember_windows(output, session.key(), windows, epoch).unwrap();
+            crate::last_capture::remember_windows(output, session.key(), Some(windows), epoch)
+                .unwrap();
         }
     }
 

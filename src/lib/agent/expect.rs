@@ -110,6 +110,12 @@ impl Expected {
         else {
             return Ok(None);
         };
+        let windows = windows.ok_or_else(|| {
+            Error::new(
+                Code::Windows,
+                "The windows changed while you looked; look again",
+            )
+        })?;
         Ok(windows
             .into_iter()
             .find(|window| window.bounds.contains(x, y))
@@ -505,7 +511,7 @@ mod tests {
             crate::last_capture::remember_windows(
                 &client.config.output_dir,
                 client.host_session.as_ref().unwrap().key(),
-                &[],
+                Some(&[]),
                 &epoch(),
             )
             .is_err()
@@ -545,6 +551,69 @@ mod tests {
                     .is_none()
             );
         }
+    }
+
+    #[tokio::test]
+    async fn oversized_window_memory_refuses_point_actions_before_control_is_acquired() {
+        let directory = tempfile::tempdir().unwrap();
+        let client = session(&crate::test_support::client(directory.path()), "one");
+        remember(&client, &[window(42, 10.0)]);
+        let windows = hit_windows(
+            &vec![window(42, 10.0); 1024],
+            &Bounds::display(display().width, display().height),
+            &Dock::Unread,
+            None,
+        );
+        let error = crate::last_capture::remember_windows(
+            &client.config.output_dir,
+            client.host_session.as_ref().unwrap().key(),
+            Some(&windows),
+            &epoch(),
+        )
+        .unwrap_err();
+        assert_eq!(error.code, Code::Io);
+        assert_eq!(
+            error.error,
+            "Too many window regions to remember; look again"
+        );
+        let _ownership = client.controller.acquire(false).unwrap();
+        for actions in [
+            click(30.0, 40.0, Button::Left, 1, &[]),
+            scroll((30.0, 40.0), (0, 1)),
+            drag((30.0, 40.0), (500.0, 500.0), Button::Left),
+            move_to(30.0, 40.0),
+        ] {
+            let error = tokio::time::timeout(
+                std::time::Duration::from_secs(1),
+                act(&client, None, &actions),
+            )
+            .await
+            .expect("unknown windows are refused without waiting for control")
+            .unwrap_err();
+            assert_eq!(error.code, Code::Windows);
+            assert_eq!(
+                error.error,
+                "The windows changed while you looked; look again"
+            );
+            for expected in [
+                Expected::new(Some(Target::Pid(812)), None, None).unwrap(),
+                Expected::new(None, Some(99), None).unwrap(),
+                Expected::new(Some(Target::Pid(812)), None, Some("Search".into())).unwrap(),
+            ] {
+                assert!(
+                    Expected::remembered(&client, expected.as_ref(), &actions)
+                        .unwrap()
+                        .is_none()
+                );
+            }
+        }
+        assert!(
+            Expected::remembered(&client, None, &keys(&["a".into()]).unwrap())
+                .unwrap()
+                .is_none()
+        );
+        remember(&client, &[window(99, 10.0)]);
+        assert_eq!(number(&client, None, &move_to(30.0, 40.0)), Some(99));
     }
 
     #[tokio::test]
@@ -634,10 +703,23 @@ mod tests {
         remember(&first, &[window(42, 10.0)]);
         assert!(second.remembered_windows().is_none());
         remember(&second, &[window(99, 10.0)]);
-        assert_eq!(first.remembered_windows().unwrap().windows[0].number, 42);
-        assert_eq!(second.remembered_windows().unwrap().windows[0].number, 99);
+        assert_eq!(
+            first.remembered_windows().unwrap().windows.unwrap()[0].number,
+            42
+        );
+        assert_eq!(
+            second.remembered_windows().unwrap().windows.unwrap()[0].number,
+            99
+        );
         remember(&first, &[]);
-        assert!(first.remembered_windows().unwrap().windows.is_empty());
+        assert!(
+            first
+                .remembered_windows()
+                .unwrap()
+                .windows
+                .unwrap()
+                .is_empty()
+        );
     }
 
     #[test]

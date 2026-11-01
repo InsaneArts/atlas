@@ -118,8 +118,8 @@ async fn atlas_windows_reads_once_and_remembers_that_reading() {
         assert_eq!(reply["windows"], json!([window(42, 812, "Editor", 0)]));
         if named {
             let memory = client.remembered_windows().unwrap();
-            assert_eq!(memory.windows.len(), 1);
-            assert_eq!(memory.windows[0].number, 42);
+            assert_eq!(memory.windows.as_ref().unwrap().len(), 1);
+            assert_eq!(memory.windows.unwrap()[0].number, 42);
         }
     }
 }
@@ -3202,7 +3202,7 @@ async fn pictures_compare_two_readings_and_window_lists_remember_their_own_readi
                 if named {
                     let memory = client.remembered_windows().unwrap();
                     assert_eq!(
-                        memory.windows.is_empty(),
+                        memory.windows.is_none(),
                         command != 2 && !matches!(change, 0 | 4 | 7)
                     );
                 } else {
@@ -3210,6 +3210,52 @@ async fn pictures_compare_two_readings_and_window_lists_remember_their_own_readi
                 }
             }
         }
+    }
+}
+
+#[tokio::test]
+async fn a_changed_look_refuses_point_actions_before_control_is_acquired() {
+    use crate::{
+        host_session::{Host, HostSession},
+        test_support::{Helper, UID},
+    };
+
+    for change in 0..3 {
+        let directory = tempfile::tempdir().unwrap();
+        let (mut client, helper) = Helper::client(directory.path(), UID);
+        client.host_session = Some(HostSession::new(Host::Named, "one").unwrap());
+        client.controller = client.controller.waiting(Duration::ZERO);
+        helper
+            .serve(
+                async {
+                    let verified = client.verify().await.unwrap();
+                    client.look(&verified, async { Ok(()) }).await.unwrap();
+                    let _ownership = client.controller.acquire(false).unwrap();
+                    for actions in [
+                        click(30.0, 40.0, Button::Left, 1, &[]),
+                        scroll((30.0, 40.0), (0, 1)),
+                        drag((30.0, 40.0), (50.0, 50.0), Button::Left),
+                        move_to(30.0, 40.0),
+                    ] {
+                        let error = act(&client, None, &actions).await.unwrap_err();
+                        assert_eq!(error.code, Code::Windows);
+                        assert_eq!(error.error, "The windows changed while you looked; look again");
+                    }
+                },
+                |request| {
+                    assert_eq!(request["op"], "windows");
+                    let mut windows = vec![window(42, 812, "Editor", 0), window(43, 812, "Editor", 0)];
+                    if request["dock"] == false {
+                        match change {
+                            0 => windows[0].bounds.x += 1.0,
+                            1 => windows.reverse(),
+                            _ => windows.insert(0, window(99, 812, "Editor", 0)),
+                        }
+                    }
+                    Some(json!({"ok":true,"windows":windows,"starts":{"812":[123,456]},"dock":"unread"}))
+                },
+            )
+            .await;
     }
 }
 
@@ -3266,7 +3312,10 @@ async fn a_failed_window_read_preserves_memory_and_stops_the_look() {
             assert!(result.is_err());
             assert_eq!(reads, failed_read);
             assert_eq!(looked.get(), failed_read == 2);
-            assert_eq!(client.remembered_windows().unwrap().windows[0].number, 42);
+            assert_eq!(
+                client.remembered_windows().unwrap().windows.unwrap()[0].number,
+                42
+            );
         }
     }
 }

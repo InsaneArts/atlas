@@ -83,25 +83,26 @@ struct Entry {
 
 #[derive(Debug, Deserialize, Serialize)]
 pub(crate) struct Observation {
-    pub windows: Vec<HitWindow>,
+    #[serde(deserialize_with = "Option::deserialize")]
+    pub windows: Option<Vec<HitWindow>>,
     pub epoch: Value,
 }
 
 pub(crate) fn remember_windows(
     output: &Path,
     key: &Key,
-    windows: &[HitWindow],
+    windows: Option<&[HitWindow]>,
     epoch: &Epoch,
 ) -> Result<()> {
     let folder = RecordFolder::at(output, &WINDOWS);
     let mut observation = Observation {
-        windows: windows.to_vec(),
+        windows: windows.map(<[_]>::to_vec),
         epoch: recorded_epoch(epoch),
     };
     let mut bytes = serde_json::to_vec(&observation)?;
     let oversized = bytes.len() as u64 > RECORD_LIMIT;
     if oversized {
-        observation.windows.clear();
+        observation.windows = None;
         bytes = serde_json::to_vec(&observation)?;
     }
     folder.make()?;
@@ -352,7 +353,7 @@ mod tests {
         windows: &[HitWindow],
         epoch: &Epoch,
     ) -> Result<()> {
-        super::remember_windows(output, &window_key(name), windows, epoch)
+        super::remember_windows(output, &window_key(name), Some(windows), epoch)
     }
 
     fn remembered_windows(output: &Path, name: &str) -> Option<Observation> {
@@ -718,6 +719,7 @@ mod tests {
             remembered_windows(dir.path(), "one")
                 .unwrap()
                 .windows
+                .unwrap()
                 .is_empty()
         );
     }
@@ -752,6 +754,7 @@ mod tests {
             json!("bad"),
             json!([]),
             json!({}),
+            json!({"epoch": {}}),
             json!({"windows": false, "epoch": {}}),
         ] {
             fs::write(window_record(dir.path(), "one"), entry.to_string()).unwrap();
@@ -770,13 +773,13 @@ mod tests {
         assert_eq!(
             remembered_windows(dir.path(), &TARGETS.to_string())
                 .map(|observation| observation.windows),
-            Some(vec![])
+            Some(Some(vec![]))
         );
         keep(dir.path(), "screen full", &screen(), None, false).unwrap();
         assert_eq!(
             remembered_windows(dir.path(), &TARGETS.to_string())
                 .map(|observation| observation.windows),
-            Some(vec![])
+            Some(Some(vec![]))
         );
         assert_eq!(record(dir.path())["targets"].as_object().unwrap().len(), 1);
         assert!(kept.path.exists());
@@ -793,7 +796,7 @@ mod tests {
             remembered_windows(dir.path(), "large")
                 .unwrap()
                 .windows
-                .is_empty()
+                .is_none()
         );
         assert!(fs::metadata(dir.path().join(RECORD)).unwrap().len() <= RECORD_LIMIT);
     }

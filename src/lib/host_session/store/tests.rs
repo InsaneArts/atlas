@@ -31,7 +31,8 @@ fn remember_windows(client: &Client, key: &Key) {
             scale: 1.0,
         },
     };
-    crate::last_capture::remember_windows(&client.config.output_dir, key, &[], &epoch).unwrap();
+    crate::last_capture::remember_windows(&client.config.output_dir, key, Some(&[]), &epoch)
+        .unwrap();
 }
 
 fn store(client: &Client) -> Store {
