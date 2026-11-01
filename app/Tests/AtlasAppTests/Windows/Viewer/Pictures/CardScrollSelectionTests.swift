@@ -84,6 +84,45 @@ struct CardScrollSelectionTests {
     #expect(held.executions == 1, "the uncancelled placement executes on release")
   }
 
+  @Test("a placement held across tile layout uses the tile's latest height")
+  func aPlacementUsesTheLatestTileHeight() async throws {
+    let selected = PreviewStates.viewerShotsMany
+    let held = HeldScrollPlacements()
+    defer { held.cancel() }
+    var holding = true
+    let placement = CardScrollPlacement { place in
+      (holding ? held.placement : CardScrollPlacement())
+        .schedule(place)
+    }
+    let host = ViewerHost(selected, animatesArrivals: false, reduceMotion: true, placement: placement)
+    let list = try #require(CardScrollTests.list(in: host))
+    let document = try #require(list.documentView)
+    var updated = CardScrollTests.stepped(selected)
+    host.show(updated)
+    try host.render(until: "the selected tile has not queued its placement") { !held.tasks.isEmpty }
+    try await held.clock.untilSleeping(for: HeldScrollPlacements.delay, "the placement waits for layout")
+    let previousHeight = document.frame.height
+    var shots = try #require({ if case .screenshots(let shots) = updated.pane { shots } else { nil } }())
+    shots.heldColumns = 3
+    updated.pane = .screenshots(shots)
+    host.show(updated)
+    try host.render(until: "the grid has not laid out its new column count") { document.frame.height != previousHeight }
+    try await held.clock.untilSleeping(for: HeldScrollPlacements.delay, "the updated placement waits for release")
+    holding = false
+    held.clock.advance(by: HeldScrollPlacements.delay)
+    try await Task { await held.finish() }
+      .value("the released placement never finished")
+    #expect(held.executions == 1)
+    try await Self.render(host) {
+      let end = document.frame.height - list.contentView.bounds.height
+      let offset = list.contentView.bounds.minY
+      return offset > end - Spacing.l && offset <= end
+    }
+    list.contentView.scroll(to: .zero)
+    list.reflectScrolledClipView(list.contentView)
+    try await Self.render(host) { list.contentView.bounds.minY == 0 }
+  }
+
   private static func render(_ host: ViewerHost, until done: () -> Bool) async throws {
     let deadline = ContinuousClock.now
       .advanced(by: Ceiling.work)

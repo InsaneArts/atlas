@@ -49,7 +49,7 @@ enum CardScrollRoom {
   /// Where to scroll a selected row so it stands in view clear of the small screen, scrolling only as far as it must:
   /// nil while it already stands clear of both ends' room (``revealReach(_:)``); else the anchor that brings its
   /// foot to the room at the bottom when it stands too low, or its head to the room at the top when it stands too high.
-  /// A row too tall to stand clear shows from its head.
+  /// A row too tall to stand clear shows from its head. A point of rounding at either edge counts as clear.
   ///
   /// - Parameters:
   ///   - row: The row's frame in the list's visible bounds, top left first.
@@ -58,11 +58,13 @@ enum CardScrollRoom {
   /// - Returns: The anchor to scroll the row to, or nil to leave the list where it is.
   static func revealAnchor(row: CGRect, viewport: CGFloat, clearance: MiniClearance) -> UnitPoint? {
     let reach = revealReach(clearance)
-    let low = row.maxY > viewport - reach.bottom
-    let high = row.minY < reach.top
+    let low = row.maxY > viewport - reach.bottom + Spacing.hairline
+    let high = row.minY < reach.top - Spacing.hairline
     guard low || high else { return nil }
     let room = viewport - row.height
-    guard room > reach.top + reach.bottom else { return UnitPoint(x: 0.5, y: .zero) }
+    guard room > reach.top + reach.bottom else {
+      return abs(row.minY) <= Spacing.hairline ? nil : UnitPoint(x: 0.5, y: .zero)
+    }
     // A row's point at `y` of its height lines up with the list's point at `y` of its height, so its head stands
     // `y × room` below the list's top.
     let head = low ? room - reach.bottom : reach.top
