@@ -17,16 +17,16 @@ fn adoption_is_refused_while_the_session_is_active_and_allowed_for_the_person() 
     )
     .unwrap();
     let output = client.output_dir().unwrap();
-    let record = Sessions::at(output).read(host.key()).unwrap();
+    let record = Sessions::at(output).read_file(host.key());
 
-    let error = may_adopt(Some(&record), &[]).unwrap_err();
+    let error = may_adopt(&record, &[]).unwrap_err();
     assert_eq!(error.code, "input");
     assert!(error.error.contains("may still be working"), "{error}");
 
-    let mut ended = record.clone();
+    let mut ended = record.as_ref().unwrap().clone();
     ended.ended = Some(ended.last_seen);
-    assert!(may_adopt(Some(&ended), &[]).is_ok());
-    assert!(may_adopt(None, &[]).is_ok());
+    assert!(may_adopt(&SessionRead::Record(Box::new(ended)), &[]).is_ok());
+    assert!(may_adopt(&SessionRead::Missing, &[]).is_ok());
 
     let person = Scope::for_person(host.key());
     assert!(person.adopting && person.named && person.task.is_none());
@@ -78,18 +78,18 @@ async fn an_adopted_session_is_noted_in_its_records_and_its_labels_are_checked_a
 fn fresh_task_records_keep_a_session_without_its_own_record_from_being_adopted() {
     let task = default_task(&session("records-only"));
     let mut record = crate::task::record::Record::new(&task, now_ms());
-    let error = may_adopt(None, std::slice::from_ref(&record)).unwrap_err();
+    let error = may_adopt(&SessionRead::Missing, std::slice::from_ref(&record)).unwrap_err();
     assert_eq!(error.code, "input");
 
     record.updated = now_ms() - 20 * 60 * 1000;
-    assert!(may_adopt(None, std::slice::from_ref(&record)).is_ok());
+    assert!(may_adopt(&SessionRead::Missing, std::slice::from_ref(&record)).is_ok());
     record.updated = now_ms();
     record.adopted_by = Some(Adoption {
         key: None,
         at: now_ms(),
     });
     assert!(
-        may_adopt(None, std::slice::from_ref(&record)).is_ok(),
+        may_adopt(&SessionRead::Missing, std::slice::from_ref(&record)).is_ok(),
         "a cleanup's own notes never count"
     );
 }
@@ -147,6 +147,55 @@ async fn an_agent_adopts_a_session_that_has_ended() {
 }
 
 #[tokio::test]
+async fn a_preserved_session_with_stale_tasks_cannot_be_adopted() {
+    let directory = tempfile::tempdir().unwrap();
+    let (client, neighbour) = ended_neighbour(directory.path());
+    let output = client.output_dir().unwrap();
+    let sessions = Sessions::at(output);
+    let process = crate::host_session::Instance::current().unwrap();
+    assert!(process.running());
+    let long_ago = sessions.read(neighbour.key()).unwrap().last_seen;
+    sessions
+        .update(&neighbour, long_ago, &client.controller, |record| {
+            record.host_process = Some(process);
+            record.ended = None;
+        })
+        .unwrap();
+    let record = sessions.read(neighbour.key()).unwrap();
+    assert!(scope::alive(&record));
+    let mut future = serde_json::to_value(&record).unwrap();
+    future["version"] = json!(record.version + 1);
+    future["futureField"] = json!("private durable canary");
+    let mut mismatched = serde_json::to_value(&record).unwrap();
+    mismatched["key"] = json!(session("different"));
+    let path = output.join(format!("sessions/{}.json", neighbour.key()));
+    let task = default_task(neighbour.key());
+    let task_path = output.join(format!("tasks/{}.json", task.key()));
+    let task_bytes = fs::read(&task_path).unwrap();
+    let tasks = Tasks::at(output).of_session(neighbour.key());
+    assert_eq!(tasks.len(), 1);
+    assert!(tasks.iter().all(|task| task.updated == long_ago));
+    let scope = Scope::of(&client, Some(neighbour.key()), None).unwrap();
+
+    for bytes in [
+        serde_json::to_vec(&future).unwrap(),
+        b"{malformed private durable canary".to_vec(),
+        serde_json::to_vec(&mismatched).unwrap(),
+    ] {
+        fs::write(&path, &bytes).unwrap();
+        let error = apply_scope(&client, &scope).await.unwrap_err();
+        assert_eq!(error.code, "input");
+        assert_eq!(
+            error.error,
+            "That session's record cannot be read by this version of Atlas and may still be working; ask the person."
+        );
+        assert_eq!(fs::read(&path).unwrap(), bytes);
+        assert_eq!(fs::read(&task_path).unwrap(), task_bytes);
+        assert!(Receipts::at(output).of_session(neighbour.key()).is_empty());
+    }
+}
+
+#[tokio::test]
 async fn a_recent_read_protects_an_unreadable_neighbour_with_old_tasks_from_cleanup() {
     let directory = tempfile::tempdir().unwrap();
     let (client, neighbour) = ended_neighbour(directory.path());
@@ -170,7 +219,7 @@ async fn a_recent_read_protects_an_unreadable_neighbour_with_old_tasks_from_clea
     assert!(record.last_seen > long_ago);
     assert_eq!(record.ended_at(), None);
     assert!(scope::alive(&record));
-    assert!(may_adopt(Some(&record), &tasks).is_err());
+    assert!(may_adopt(&sessions.read_file(neighbour.key()), &tasks).is_err());
 
     let scope = Scope::of(&client, Some(neighbour.key()), None).unwrap();
     let error = apply_scope(&client, &scope).await.unwrap_err();

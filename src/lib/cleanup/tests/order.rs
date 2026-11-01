@@ -320,6 +320,56 @@ async fn an_unknown_transaction_phase_keeps_the_plan_claim_and_cleanup_receipt()
 }
 
 #[tokio::test]
+async fn an_incomplete_receipt_stays_while_its_session_record_is_preserved() {
+    let place = Place::new();
+    let host = HostSession::new(Host::Codex, "preserved").unwrap();
+    let record = crate::host_session::record::Record::new(&host, 1, None);
+    let mut future = serde_json::to_value(&record).unwrap();
+    future["version"] = json!(record.version + 1);
+    future["futureField"] = json!("private durable canary");
+    let mut mismatched = serde_json::to_value(&record).unwrap();
+    mismatched["key"] = json!(session("different"));
+    fs::DirBuilder::new()
+        .mode(0o700)
+        .create(place.output.join("sessions"))
+        .unwrap();
+    let path = place.output.join(format!("sessions/{}.json", host.key()));
+    let mut receipt = Receipt::new(host.key().clone(), None, Actor::Agent);
+    receipt
+        .steps
+        .push(Entry::new(1, Step::UndoPlan { plan: Token::new() }, vec![]));
+    Receipts::at(&place.output).save(&mut receipt).unwrap();
+    receipt.updated = 1;
+    let receipt_path = place.output.join(format!("cleanup/{}.json", receipt.id));
+    let before = serde_json::to_vec(&receipt).unwrap();
+    fs::write(&receipt_path, &before).unwrap();
+    assert!(Tasks::at(&place.output).of_session(host.key()).is_empty());
+
+    for (n, preserved) in [
+        serde_json::to_vec(&future).unwrap(),
+        b"{malformed private durable canary".to_vec(),
+        serde_json::to_vec(&mismatched).unwrap(),
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        fs::write(&path, &preserved).unwrap();
+        let key = session(&format!("other-{n}"));
+        plan_claimed(&place, &default_task(&key));
+        let reply = place.apply(&Fake::at(&place.root), &own(&key)).await;
+        assert_eq!(reply["state"], "complete");
+        assert_eq!(fs::read(&receipt_path).unwrap(), before);
+        assert_eq!(fs::read(&path).unwrap(), preserved);
+    }
+
+    fs::remove_file(&path).unwrap();
+    let key = session("last");
+    plan_claimed(&place, &default_task(&key));
+    place.apply(&Fake::at(&place.root), &own(&key)).await;
+    assert!(!receipt_path.exists());
+}
+
+#[tokio::test]
 async fn new_work_after_an_unfinished_cleanup_is_added_to_the_same_receipt() {
     let place = Place::new();
     let key = session("more");

@@ -416,6 +416,49 @@ fn a_finished_task_goes_once_its_session_record_has_gone() {
 }
 
 #[test]
+fn a_finished_task_stays_while_its_session_record_is_preserved() {
+    let directory = tempfile::tempdir().unwrap();
+    let client = crate::test_support::client(directory.path());
+    let output = client.output_dir().unwrap();
+    let host = HostSession::new(Host::Codex, "preserved").unwrap();
+    let sessions = Sessions::at(output);
+    sessions
+        .update(&host, 1, &client.controller, |_| {})
+        .unwrap();
+    let record = sessions.read(host.key()).unwrap();
+    let mut future = serde_json::to_value(&record).unwrap();
+    future["version"] = json!(record.version + 1);
+    future["futureField"] = json!("private durable canary");
+    let mut mismatched = serde_json::to_value(&record).unwrap();
+    mismatched["key"] = json!(session("different"));
+    let path = output.join(format!("sessions/{}.json", host.key()));
+    let finished = Task::of(host.key(), Some("finished")).unwrap();
+    let store = Store::at(output);
+    store.update(&finished, 1, |_| Ok(())).unwrap();
+    let before = bytes(output, &finished);
+
+    for (n, preserved) in [
+        serde_json::to_vec(&future).unwrap(),
+        b"{malformed private durable canary".to_vec(),
+        serde_json::to_vec(&mismatched).unwrap(),
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        fs::write(&path, &preserved).unwrap();
+        store
+            .update(&task("new", Some(&format!("task-{n}"))), 2, |_| Ok(()))
+            .unwrap();
+        assert_eq!(bytes(output, &finished), before);
+        assert_eq!(fs::read(&path).unwrap(), preserved);
+    }
+
+    fs::remove_file(&path).unwrap();
+    store.update(&task("last", None), 3, |_| Ok(())).unwrap();
+    assert!(store.load(finished.key()).is_none());
+}
+
+#[test]
 fn a_record_holding_work_this_build_cannot_read_outlives_its_session() {
     let directory = tempfile::tempdir().unwrap();
     let folder = directory.path().join("tasks");

@@ -4,7 +4,10 @@
 //! and its session's record is gone. Each store prunes its own records by
 //! these rules and never reads the other's.
 use super::{record::Record, store::Store as Tasks};
-use crate::host_session::{Key, store::Store as Sessions};
+use crate::host_session::{
+    Key,
+    store::{Read as SessionRead, Store as Sessions},
+};
 use std::path::Path;
 
 /// The sessions in the output folder `output` whose tasks still hold
@@ -22,5 +25,9 @@ pub(crate) fn sessions_held(output: &Path) -> Vec<Key> {
 /// holds nothing that may still be in the helper, and its session's record
 /// is gone.
 pub(crate) fn finished(output: &Path, record: &Record) -> bool {
-    !record.holds_anything() && Sessions::at(output).read(&record.session).is_none()
+    !record.holds_anything()
+        && matches!(
+            Sessions::at(output).read_file(&record.session),
+            SessionRead::Missing
+        )
 }

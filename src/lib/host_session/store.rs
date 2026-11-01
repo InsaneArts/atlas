@@ -152,10 +152,19 @@ pub struct Store {
 }
 
 /// A record file, including bytes this build must preserve.
-enum Read {
+pub(crate) enum Read {
     Missing,
     Kept,
     Record(Box<Record>),
+}
+
+impl Read {
+    pub(crate) fn as_ref(&self) -> Option<&Record> {
+        match self {
+            Self::Record(record) => Some(record),
+            Self::Missing | Self::Kept => None,
+        }
+    }
 }
 
 fn preserved_record() -> Error {
@@ -204,7 +213,7 @@ impl Store {
         }
     }
 
-    fn read_file(&self, key: &Key) -> Read {
+    pub(crate) fn read_file(&self, key: &Key) -> Read {
         match self.folder.read_json::<Record>(key) {
             Some(record) if record.key == *key && record.version <= VERSION => {
                 Read::Record(Box::new(record))

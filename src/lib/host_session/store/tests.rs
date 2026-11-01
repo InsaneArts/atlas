@@ -1074,14 +1074,9 @@ fn a_record_through_a_link_or_too_large_or_with_foreign_names_is_not_read() {
 
 #[test]
 fn preserved_records_survive_recording_forgetting_predecessors_and_pruning_after_reopen() {
-    let directory = tempfile::tempdir().unwrap();
-    let client = client(directory.path());
     let process = Instance::current().unwrap();
     let owner = session("preserved").run_by(Some(process));
     let plan = Token::new();
-    let store = store(&client);
-    store.folder.make().unwrap();
-    let path = store.folder.path(owner.key());
     let mut record = Record::new(&owner, 1, None);
     record.planned(plan.clone(), Phase::Applied, 1);
     let mut future = serde_json::to_value(&record).unwrap();
@@ -1095,6 +1090,11 @@ fn preserved_records_survive_recording_forgetting_predecessors_and_pruning_after
         serde_json::to_vec(&future).unwrap(),
         serde_json::to_vec(&mismatched).unwrap(),
     ] {
+        let directory = tempfile::tempdir().unwrap();
+        let client = client(directory.path());
+        let store = store(&client);
+        store.folder.make().unwrap();
+        let path = store.folder.path(owner.key());
         fs::write(&path, &bytes).unwrap();
         for successor in ["first-successor", "reopened-successor"] {
             let reopened = Store::at(client.output_dir().unwrap());
@@ -1131,13 +1131,11 @@ fn preserved_records_survive_recording_forgetting_predecessors_and_pruning_after
             reopened.forget_plan(&plan).unwrap();
             assert_eq!(fs::read(&path).unwrap(), bytes);
             let successor = session(successor).run_by(Some(process));
+            assert!(matches!(reopened.read_file(successor.key()), Read::Missing));
             reopened
                 .update(&successor, TEST_NOW, &client.controller, |_| {})
                 .unwrap();
-            assert_ne!(
-                reopened.read(successor.key()).unwrap().previous.as_ref(),
-                Some(owner.key())
-            );
+            assert_eq!(reopened.read(successor.key()).unwrap().previous, None);
             assert_eq!(fs::read(&path).unwrap(), bytes);
 
             for n in 0..=MAX_RECORDS {
@@ -1150,6 +1148,7 @@ fn preserved_records_survive_recording_forgetting_predecessors_and_pruning_after
             }
             reopened.prune_at(successor.key(), &[], TEST_NOW);
             assert_eq!(fs::read(&path).unwrap(), bytes);
+            fs::remove_file(reopened.folder.path(successor.key())).unwrap();
         }
     }
 }

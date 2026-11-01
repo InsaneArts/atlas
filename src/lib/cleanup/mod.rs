@@ -22,7 +22,10 @@ use crate::{
     error::Result,
     files::Token,
     handoff,
-    host_session::{Key, now_ms, store::Store as Sessions},
+    host_session::{
+        Key, now_ms,
+        store::{Read as SessionRead, Store as Sessions},
+    },
     task::{
         Owned, State, Task,
         record::{Adoption, Record as TaskRecord},
@@ -74,7 +77,7 @@ pub async fn for_person(client: &Client, session: &Key, mode: Mode) -> Result<Va
     let mut reply = preview_scope(client, &scope).await?;
     let output = client.output_dir()?;
     let loaded = Loaded::of(output, &scope)?;
-    reply["active"] = json!(may_adopt(loaded.record.as_ref(), &loaded.tasks).is_err());
+    reply["active"] = json!(may_adopt(&loaded.record, &loaded.tasks).is_err());
     Ok(reply)
 }
 
@@ -240,7 +243,7 @@ async fn apply_scope(client: &Client, scope: &Scope) -> Result<Value> {
     let agent_adopts = scope.adopting && client.actor == Actor::Agent;
     if agent_adopts {
         let loaded = Loaded::of(output, scope)?;
-        may_adopt(loaded.record.as_ref(), &loaded.tasks)?;
+        may_adopt(&loaded.record, &loaded.tasks)?;
     }
     // Held to the end, as close holds it, so no other open, close or
     // cleanup interleaves with one. While an earlier outcome is unknown, it
@@ -250,7 +253,7 @@ async fn apply_scope(client: &Client, scope: &Scope) -> Result<Value> {
     // judged again, on what its records say now.
     let loaded = Loaded::of(output, scope)?;
     if agent_adopts {
-        may_adopt(loaded.record.as_ref(), &loaded.tasks)?;
+        may_adopt(&loaded.record, &loaded.tasks)?;
     }
     let adopter = scope.adopting.then(|| match &client.host_session {
         Some(host) if client.actor == Actor::Agent => Adopter::Session(host.key().clone()),
@@ -311,7 +314,8 @@ pub(crate) async fn apply(
 
     receipts.save(&mut receipt)?;
     receipts.prune(&receipt.id, |session| {
-        sessions.read(session).is_some() || !tasks.of_session(session).is_empty()
+        !matches!(sessions.read_file(session), SessionRead::Missing)
+            || !tasks.of_session(session).is_empty()
     });
     let adoption = adopter.map(|adopter| Adoption {
         key: adopter.key(),

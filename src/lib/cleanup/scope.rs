@@ -12,7 +12,7 @@ use crate::{
     host_session::{
         Key, now_ms,
         record::{ACTIVE_FOR, Record as SessionRecord},
-        store::Store as Sessions,
+        store::{Read as SessionRead, Store as Sessions},
     },
     task::{
         self, Owned, State, Task,
@@ -96,7 +96,7 @@ impl Adopter {
 /// What a scope's records say: the session's record, its tasks' records,
 /// the work in scope, and the receipts of earlier cleanups of the session.
 pub(crate) struct Loaded {
-    pub record: Option<SessionRecord>,
+    pub record: SessionRead,
     pub tasks: Vec<TaskRecord>,
     pub work: Vec<task::Work>,
     pub receipts: Vec<Receipt>,
@@ -109,7 +109,7 @@ impl Loaded {
     /// named that names no record is said. A task named by ATLAS_TASK with
     /// no record yet has nothing to clean up.
     pub(crate) fn of(output: &Path, scope: &Scope) -> Result<Self> {
-        let record = Sessions::at(output).read(&scope.session);
+        let record = Sessions::at(output).read_file(&scope.session);
         let tasks = Tasks::at(output).of_session(&scope.session);
         let nothing = || {
             Error::new(
@@ -117,7 +117,7 @@ impl Loaded {
                 "No session or task with that key is recorded here; atlas activity --all lists them",
             )
         };
-        if scope.named && record.is_none() && tasks.is_empty() {
+        if scope.named && record.as_ref().is_none() && tasks.is_empty() {
             return Err(nothing());
         }
         if let Some(task) = &scope.task
@@ -310,9 +310,15 @@ fn task_alive(task: &TaskRecord, now: u64) -> bool {
 
 /// Refuse an agent's cleanup of another session's work while that session
 /// may still be working, by its record or its tasks' records.
-pub(crate) fn may_adopt(record: Option<&SessionRecord>, tasks: &[TaskRecord]) -> Result<()> {
+pub(crate) fn may_adopt(record: &SessionRead, tasks: &[TaskRecord]) -> Result<()> {
+    if matches!(record, SessionRead::Kept) {
+        return Err(Error::new(
+            Code::Input,
+            "That session's record cannot be read by this version of Atlas and may still be working; ask the person.",
+        ));
+    }
     let now = now_ms();
-    let last = match record.filter(|record| alive(record)) {
+    let last = match record.as_ref().filter(|record| alive(record)) {
         Some(record) => record.last_seen,
         None => match tasks
             .iter()
