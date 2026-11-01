@@ -409,9 +409,19 @@ mod tests {
         );
         drop(fixture.caller.stdin.take());
         fixture.executor.as_mut().unwrap().wait().unwrap();
-        let exited = crate::process::info(pid).unwrap().unwrap();
-        assert_eq!(exited.instance, identity);
-        assert!(exited.zombie);
+        let started = Instant::now();
+        loop {
+            let exited = crate::process::info(pid).unwrap().unwrap();
+            assert_eq!(exited.instance, identity);
+            if exited.zombie {
+                break;
+            }
+            assert!(
+                started.elapsed() < LIMIT,
+                "executor zombie watchdog expired"
+            );
+            std::thread::sleep(Duration::from_millis(10));
+        }
         assert_eq!(
             fixture
                 .executor
