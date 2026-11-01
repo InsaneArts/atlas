@@ -247,16 +247,18 @@ impl<'a> Scan<'a> {
             quote::quote!(#sig #block),
             json!({"type":"function"}),
         );
-        let end = block.map_or(sig.span().end().line, |b| b.span().end().line);
-        let lines = end - sig.span().start().line + 1;
-        self.functions.push(json!({"path":self.path,"symbol":self.symbol(),"line":sig.span().start().line,"end":end,"lines":lines,"test":self.context.test,"fingerprint":fingerprint(&quote::quote!(#sig #block).to_string())}));
-        if lines > 80 {
-            self.emit(
-                "function_size",
-                sig.span(),
-                quote::quote!(#sig #block),
-                json!({"lines":lines}),
-            );
+        if let Some(block) = block {
+            let end = block.span().end().line;
+            let lines = end - sig.span().start().line + 1;
+            self.functions.push(json!({"path":self.path,"symbol":self.symbol(),"line":sig.span().start().line,"end":end,"lines":lines,"test":self.context.test,"fingerprint":fingerprint(&quote::quote!(#sig #block).to_string())}));
+            if lines > 80 {
+                self.emit(
+                    "function_size",
+                    sig.span(),
+                    quote::quote!(#sig #block),
+                    json!({"lines":lines}),
+                );
+            }
         }
         if sig.asyncness.is_some() {
             self.emit(
@@ -428,12 +430,7 @@ impl<'ast> Visit<'ast> for Scan<'_> {
             self.excluded
                 .push((item.span().start().line, item.span().end().line));
         }
-        if !self.context.test
-            && !matches!(
-                item,
-                syn::Item::Use(_) | syn::Item::Impl(_) | syn::Item::ForeignMod(_)
-            )
-        {
+        if !self.context.test && !matches!(item, syn::Item::Use(_) | syn::Item::Impl(_)) {
             self.declarations += 1;
         }
         if allowance(attrs) {
@@ -501,6 +498,102 @@ impl<'ast> Visit<'ast> for Scan<'_> {
         self.scope.pop();
     }
 
+    fn visit_impl_item(&mut self, item: &'ast syn::ImplItem) {
+        let attrs = match item {
+            syn::ImplItem::Const(item) => &item.attrs,
+            syn::ImplItem::Fn(item) => &item.attrs,
+            syn::ImplItem::Type(item) => &item.attrs,
+            syn::ImplItem::Macro(item) => &item.attrs,
+            _ => &[][..],
+        };
+        let context = self.context;
+        self.context.test |= testing(attrs);
+        if self.context.test && !context.test {
+            self.excluded
+                .push((item.span().start().line, item.span().end().line));
+        }
+        visit::visit_impl_item(self, item);
+        self.context = context;
+    }
+
+    fn visit_trait_item(&mut self, item: &'ast syn::TraitItem) {
+        let attrs = match item {
+            syn::TraitItem::Const(item) => &item.attrs,
+            syn::TraitItem::Fn(item) => &item.attrs,
+            syn::TraitItem::Type(item) => &item.attrs,
+            syn::TraitItem::Macro(item) => &item.attrs,
+            _ => &[][..],
+        };
+        let context = self.context;
+        self.context.test |= testing(attrs);
+        if self.context.test && !context.test {
+            self.excluded
+                .push((item.span().start().line, item.span().end().line));
+        }
+        visit::visit_trait_item(self, item);
+        self.context = context;
+    }
+
+    fn visit_item_foreign_mod(&mut self, item: &'ast syn::ItemForeignMod) {
+        self.scope.push(item.abi.to_token_stream().to_string());
+        self.emit(
+            "declaration",
+            item.span(),
+            item,
+            json!({"type":"extern block"}),
+        );
+        if item.unsafety.is_some() {
+            self.emit(
+                "unsafe_extern",
+                item.span(),
+                item,
+                json!({"allowed":self.context.allowed}),
+            );
+        }
+        visit::visit_item_foreign_mod(self, item);
+        self.scope.pop();
+    }
+
+    fn visit_foreign_item(&mut self, item: &'ast syn::ForeignItem) {
+        let (attrs, name) = match item {
+            syn::ForeignItem::Fn(item) => (&item.attrs[..], item.sig.ident.to_string()),
+            syn::ForeignItem::Static(item) => (&item.attrs[..], item.ident.to_string()),
+            syn::ForeignItem::Type(item) => (&item.attrs[..], item.ident.to_string()),
+            syn::ForeignItem::Macro(item) => {
+                (&item.attrs[..], item.mac.path.to_token_stream().to_string())
+            }
+            _ => (&[][..], String::new()),
+        };
+        let context = self.context;
+        self.context.test |= testing(attrs);
+        self.context.allowed |= allowance(attrs);
+        self.scope.push(name);
+        if self.context.test && !context.test {
+            self.excluded
+                .push((item.span().start().line, item.span().end().line));
+        }
+        if !self.context.test {
+            self.declarations += 1;
+        }
+        self.emit(
+            "declaration",
+            item.span(),
+            item,
+            json!({"type":"foreign","allowed":self.context.allowed}),
+        );
+        if allowance(attrs) {
+            self.emit(
+                "unsafe_allowance",
+                item.span(),
+                item,
+                json!({"candidate":"review exception scope and reason"}),
+            );
+        }
+        visit::visit_foreign_item(self, item);
+        self.scope.pop();
+        self.context = context;
+    }
+
     fn visit_item_trait(&mut self, item: &'ast syn::ItemTrait) {
         self.scope.push(item.ident.to_string());
         visit::visit_item_trait(self, item);
@@ -532,7 +625,7 @@ impl<'ast> Visit<'ast> for Scan<'_> {
         if !self.context.test && !testing(&item.attrs) {
             self.declarations += 1;
         }
-        self.function(&item.sig, item.default.as_ref(), &item.attrs, true);
+        self.function(&item.sig, item.default.as_ref(), &item.attrs, false);
     }
 
     fn visit_field(&mut self, field: &'ast syn::Field) {
@@ -1160,6 +1253,127 @@ mod tests {
             check(&report(&changed), &ledger(&scan.sites))
                 .unwrap_err()
                 .contains("stale")
+        );
+    }
+
+    #[test]
+    fn associated_test_items_exclude_attributes_and_documentation() {
+        let source = include_str!("../fixtures/quality/mixed_impl.rs");
+        let scan = scan(source);
+        assert_eq!(scan.excluded, [(4, 8), (9, 11)]);
+        assert_eq!(scan.declarations, 2);
+        assert!(!scan.sites.iter().any(|site| site["kind"] == "unwrap"));
+        let directory = fixture_tree(source);
+        let report = inventory(directory.path()).unwrap();
+        assert_eq!(report["files"][0]["production"], source.lines().count() - 8);
+        let changed = source.replace("#[cfg(test)]", "#[cfg(feature = \"live\")]");
+        fs::write(directory.path().join("src/lib.rs"), &changed).unwrap();
+        let report = inventory(directory.path()).unwrap();
+        assert_eq!(report["files"][0]["production"], source.lines().count());
+        assert!(
+            self::scan(&changed)
+                .sites
+                .iter()
+                .any(|site| site["kind"] == "unwrap")
+        );
+    }
+
+    #[test]
+    fn trait_signatures_are_declarations_without_bodies_or_public_syntax() {
+        let source = include_str!("../fixtures/quality/traits.rs");
+        let scan = scan(source);
+        assert_eq!(scan.declarations, 6);
+        assert_eq!(scan.public_nodes, 1);
+        assert_eq!(scan.excluded, [(4, 6)]);
+        let bodies = scan
+            .functions
+            .iter()
+            .filter(|function| function["test"] == false)
+            .collect::<Vec<_>>();
+        assert_eq!(bodies.len(), 2);
+        assert_eq!(bodies[0]["symbol"], "Private::body");
+        assert_eq!(bodies[1]["symbol"], "Public::body");
+        assert_eq!(
+            scan.sites
+                .iter()
+                .filter(|site| site["kind"] == "declaration")
+                .count(),
+            4
+        );
+        let changed = source.replace("fn signature(&self);", "fn signature(&self) {}");
+        assert_eq!(
+            self::scan(&changed)
+                .functions
+                .iter()
+                .filter(|function| function["test"] == false)
+                .count(),
+            4
+        );
+    }
+
+    #[test]
+    fn foreign_declarations_track_signatures_attributes_and_unsafe_context() {
+        let source = include_str!("../fixtures/quality/foreign.rs");
+        let original = scan(source);
+        assert_eq!(original.declarations, 5);
+        assert_eq!(original.public_nodes, 1);
+        assert!(original.functions.is_empty());
+        assert_eq!(original.excluded, [(10, 12)]);
+        let block = original
+            .sites
+            .iter()
+            .find(|site| site["kind"] == "unsafe_extern")
+            .unwrap();
+        assert_eq!(block["detail"]["allowed"], true);
+        let foreign = original
+            .sites
+            .iter()
+            .filter(|site| site["kind"] == "declaration" && site["detail"]["type"] == "foreign")
+            .collect::<Vec<_>>();
+        assert_eq!(foreign.len(), 3);
+        assert!(foreign.iter().all(|site| site["detail"]["allowed"] == true));
+        let function = foreign
+            .iter()
+            .find(|site| site["symbol"].as_str().unwrap().ends_with("::call"))
+            .unwrap();
+        for (from, to) in [
+            ("value: u8", "value: u16"),
+            ("foreign_call", "renamed_call"),
+            ("A foreign function.", "Updated foreign function."),
+        ] {
+            let changed_source = source.replace(from, to);
+            let changed = self::scan(&changed_source);
+            let updated = changed
+                .sites
+                .iter()
+                .find(|site| site["symbol"] == function["symbol"] && site["kind"] == "declaration")
+                .unwrap();
+            assert_ne!(function["fingerprint"], updated["fingerprint"]);
+            assert!(
+                check(&report(&changed), &ledger(&original.sites))
+                    .unwrap_err()
+                    .contains("stale")
+            );
+        }
+        let changed_source = source.replace("extern \"C\"", "extern \"system\"");
+        let changed = self::scan(&changed_source);
+        let updated = changed
+            .sites
+            .iter()
+            .find(|site| site["kind"] == "unsafe_extern")
+            .unwrap();
+        assert_ne!(block["fingerprint"], updated["fingerprint"]);
+        assert!(check(&report(&changed), &ledger(&original.sites)).is_err());
+        let changed_source = source.replace("#[allow(unsafe_code)]", "");
+        let changed = self::scan(&changed_source);
+        assert!(
+            changed
+                .sites
+                .iter()
+                .filter(
+                    |site| site["kind"] == "unsafe_extern" || site["detail"]["type"] == "foreign"
+                )
+                .all(|site| site["detail"]["allowed"] == false)
         );
     }
 
