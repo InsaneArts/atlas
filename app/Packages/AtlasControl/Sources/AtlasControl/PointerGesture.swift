@@ -91,7 +91,7 @@ public struct PointerGesture: Sendable {
   ///   - point: Where it is now, on the helper's display.
   ///   - scale: View points per point of the helper's display, as the view draws it now.
   ///   - modifiers: The modifier keys held.
-  /// - Returns: The move, or `nil` for another button or no movement.
+  /// - Returns: The move once dragging, or `nil` for another button or movement within the tap threshold.
   public mutating func move(
     _ button: MouseButton,
     to point: DesktopPoint,
@@ -104,6 +104,7 @@ public struct PointerGesture: Sendable {
     current.last = point
     current.moved = current.moved || point.distance(to: current.from) * scale > Self.dragFrom
     active = current
+    guard current.moved else { return nil }
     // Only the press carries the click count, as the service expects.
     return .pointer(
       phase: .move,

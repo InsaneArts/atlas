@@ -1,7 +1,10 @@
 ## Limits
 
-- A click on a Dock icon launches that app, and `--app` or `--pid` refuses
-  any click, scroll or drag on the Dock; start apps with `atlas open`.
+- A point click on a Dock item uses Accessibility's press action, including
+  a tap in the viewer. A point on the shelf or a separator is refused without
+  posting a click. `--app` or `--pid` refuses any click, scroll or drag on the
+  Dock; start apps with `atlas open`. The helper disables click-wallpaper-to-show-desktop
+  in its own preferences.
 - Drag-and-drop onto a target (selected text, files, list items) does not
   begin in the helper: macOS starts such a drag only from a real mouse.
   `atlas drag` still moves windows and sliders and selects text (a slider

@@ -21,10 +21,12 @@ mod text;
 mod tree;
 
 pub(crate) use bring::{bring, check_application, target_application};
+pub(crate) use ffi::act;
 pub(crate) use keyboard::{Focused, Judged, Keyboard, Unread, Within, frontmost, keyboard};
 pub use model::{Element, Frame, Limits, Snapshot};
 pub use stop::Stop;
 pub(crate) use stop::{telling, why};
+pub(crate) use system::dock_item;
 pub use system::{DOCK_TIMEOUT, dock, focused_pid};
 pub use tree::elements;
 

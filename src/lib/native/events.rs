@@ -24,6 +24,8 @@ use std::{
 };
 use unicode_segmentation::UnicodeSegmentation;
 
+mod dock;
+
 /// The only place events go: the helper login's own session event tap, never
 /// the global HID tap.
 const TAP: CGEventTapLocation = CGEventTapLocation::SessionEventTap;
@@ -91,11 +93,13 @@ pub(super) struct Engine {
     pub target: Option<crate::process::Instance>,
     journal: Option<Journal>,
     journal_dirty: bool,
-    /// Events posted so far: tells an action that posted some of its
-    /// events before failing from one that posted none.
+    /// Events posted or AX presses acknowledged so far: distinguishes input
+    /// that already changed something from input that changed nothing.
     pub(crate) posted: u64,
     source: Source,
     held: Option<Button>,
+    dock_down: Option<dock::Down>,
+    pub(super) dock_pressed: bool,
     held_keys: Vec<u16>,
     position: Point,
     click_count: u8,
@@ -121,6 +125,8 @@ impl Engine {
             posted: 0,
             source,
             held: None,
+            dock_down: None,
+            dock_pressed: false,
             held_keys: Vec::new(),
             position: Point { x: 0.0, y: 0.0 },
             click_count: 1,
@@ -295,6 +301,7 @@ impl Engine {
         // function flags would leave macOS reading function as held.
         CGEvent::set_flags(Some(&event), CGEventFlags(flags));
         CGEvent::post(TAP, Some(&event));
+        self.dock_pressed = false;
 
         self.posted += 1;
         self.flags = flags;
@@ -336,6 +343,7 @@ impl Engine {
     pub(super) fn release(&mut self) -> Result<()> {
         self.grant = None;
         self.target = None;
+        self.dock_down = None;
 
         if !self.held_input() {
             return if self.journal_dirty {
@@ -361,10 +369,13 @@ impl Engine {
     }
 
     pub(super) fn held_input(&self) -> bool {
-        self.held.is_some() || !self.held_keys.is_empty() || self.flags != 0
+        self.held.is_some()
+            || self.dock_down.is_some()
+            || !self.held_keys.is_empty()
+            || self.flags != 0
     }
 
-    async fn pointer(
+    async fn post_pointer(
         &mut self,
         phase: PointerPhase,
         point: Point,
@@ -551,16 +562,11 @@ impl Engine {
                 count,
                 modifiers,
             } => {
+                if self.held.is_some() || self.dock_down.is_some() {
+                    return Err(Error::new(Code::Input, "A mouse button is already held"));
+                }
                 for click in 1..=count {
-                    self.pointer(
-                        PointerPhase::Down,
-                        Point { x, y },
-                        button,
-                        &modifiers,
-                        click,
-                    )
-                    .await?;
-                    self.pointer(PointerPhase::Up, Point { x, y }, button, &modifiers, click)
+                    self.click(Point { x, y }, button, &modifiers, click)
                         .await?;
 
                     if click < count {

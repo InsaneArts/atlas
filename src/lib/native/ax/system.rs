@@ -6,7 +6,7 @@ use crate::{
     native::windows::{self, Dock},
 };
 use objc2_application_services::{AXError, AXUIElement};
-use objc2_core_foundation::CFString;
+use objc2_core_foundation::{CFRetained, CFString};
 use std::time::{Duration, Instant};
 
 /// The process of the application with keyboard focus in this login, as
@@ -104,4 +104,122 @@ pub fn dock(windows: &[windows::Window], timeout: Duration) -> Dock {
     }
 
     Dock::Icons(lists)
+}
+
+/// Find a pressable Dock item, or leave ordinary points to pointer input.
+pub(crate) fn dock_item(
+    display: windows::Bounds,
+    x: f64,
+    y: f64,
+) -> Result<Option<CFRetained<AXUIElement>>> {
+    let windows = windows::windows()?;
+    let screen = windows::Screen::new(display, dock(&windows, DOCK_TIMEOUT));
+    let Some(window) = windows::top_at(&windows, x, y, &screen).filter(|w| w.is_dock()) else {
+        return Ok(None);
+    };
+    let refused = || Error::new(Code::Input, "No pressable Dock item; no click was sent");
+    if !matches!(screen.dock(), Dock::Icons(_)) {
+        return Err(refused());
+    }
+    let app = libc::pid_t::try_from(window.pid)
+        .ok()
+        .and_then(ffi::application)
+        .ok_or_else(refused)?;
+    if ffi::set_timeout(&app, DOCK_TIMEOUT) != AXError::Success {
+        return Err(refused());
+    }
+    let item = ffi::element_at(&app, x as f32, y as f32)
+        .ok()
+        .flatten()
+        .ok_or_else(refused)?;
+    if ffi::set_timeout(&item, DOCK_TIMEOUT) != AXError::Success {
+        return Err(refused());
+    }
+    let mut scan = Scan::new(Instant::now() + DOCK_TIMEOUT);
+    let subrole = scan.text(Source::Element(&item), "AXSubrole");
+    let frame = scan.frame(Source::Element(&item));
+    let press = CFString::from_static_str("AXPress");
+    let supported = ffi::actions(&item).ok().flatten().is_some_and(|names| {
+        names.len() <= 64
+            && names
+                .iter()
+                .any(|name| name.downcast_ref::<CFString>() == Some(&*press))
+    });
+    if !scan.open() || !launchable(subrole.as_deref()) || !pressable_at(frame, supported, x, y) {
+        return Err(refused());
+    }
+    Ok(Some(item))
+}
+
+fn launchable(subrole: Option<&str>) -> bool {
+    matches!(
+        subrole,
+        Some(
+            "AXApplicationDockItem"
+                | "AXDocumentDockItem"
+                | "AXFolderDockItem"
+                | "AXMinimizedWindowDockItem"
+                | "AXURLDockItem"
+        )
+    )
+}
+
+fn pressable_at(frame: Option<super::Frame>, supported: bool, x: f64, y: f64) -> bool {
+    supported
+        && frame.is_some_and(|f| x >= f.x && y >= f.y && x < f.x + f.width && y < f.y + f.height)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn dock_gaps_and_separators_are_not_pressable() {
+        let frame = || {
+            Some(super::super::Frame {
+                x: 1120.0,
+                y: 920.0,
+                width: 16.0,
+                height: 40.0,
+            })
+        };
+        assert!(pressable_at(frame(), true, 1128.0, 940.0));
+        assert!(
+            !pressable_at(frame(), true, 1138.0, 940.0),
+            "gap beside an item"
+        );
+        assert!(
+            !pressable_at(frame(), false, 1128.0, 940.0),
+            "separator without AXPress"
+        );
+        assert!(!pressable_at(None, true, 1138.0, 940.0));
+    }
+
+    #[test]
+    fn only_launchable_dock_subroles_are_pressable_even_with_axpress() {
+        for (subrole, expected) in [
+            (Some("AXApplicationDockItem"), true),
+            (Some("AXDocumentDockItem"), true),
+            (Some("AXFolderDockItem"), true),
+            (Some("AXMinimizedWindowDockItem"), true),
+            (Some("AXURLDockItem"), true),
+            (Some("AXSeparatorDockItem"), false),
+            (Some("AXTrashDockItem"), false),
+            (Some("AXDockExtraDockItem"), false),
+            (Some("AXUnknownDockItem"), false),
+            (None, false),
+        ] {
+            let frame = Some(super::super::Frame {
+                x: 1120.0,
+                y: 920.0,
+                width: 40.0,
+                height: 40.0,
+            });
+            assert_eq!(
+                launchable(subrole) && pressable_at(frame, true, 1138.0, 940.0),
+                expected,
+                "{subrole:?}"
+            );
+        }
+    }
 }

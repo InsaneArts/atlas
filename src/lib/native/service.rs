@@ -545,22 +545,24 @@ impl Service {
                     .as_ref()
                     .map(super::ax::target_application)
                     .transpose()?;
+                engine.dock_pressed = false;
                 let result = run(&mut *engine, &gate, actions, expected.as_ref()).await;
                 engine.target = None;
-                Ok::<_, Error>(result)
+                Ok::<_, Error>(result.map(|field| (field, engine.dock_pressed)))
             })
             .await?;
         let result = outcome.await.map_err(|_| worker_failed())?;
-        let field = match result? {
+        let (field, dock_pressed) = match result? {
             Ok(field) => field,
             Err(reply) => return Ok(reply),
         };
 
-        // The app the input landed in, for an agent's activity log (only
-        // when asked, so a person's own control pays nothing): the owner of
-        // the frontmost ordinary window and its bundle identifier, read once
-        // the engine is free.
-        let landed = if request["app"] == true {
+        // The recipient for the agent's activity log, only when asked:
+        // Dock after AXPress, otherwise the owner of the frontmost ordinary
+        // window and its bundle identifier, read once the engine is free.
+        let landed = if request["app"] == true && dock_pressed {
+            Some(("Dock".to_owned(), Some("com.apple.dock".to_owned())))
+        } else if request["app"] == true {
             tokio::task::spawn_blocking(|| {
                 frontmost_app().map(|(app, pid)| (app, super::apps::bundle_id(pid)))
             })
@@ -615,9 +617,9 @@ trait Perform {
         budget: Duration,
         prepare: bool,
     ) -> Result<Option<&'static str>>;
-    /// Carry out one action, posting its events.
+    /// Carry out one action through posted events or a Dock AXPress.
     async fn perform(&mut self, action: Action) -> Result<()>;
-    /// Events posted so far.
+    /// Events posted or AX presses acknowledged so far.
     fn posted(&self) -> u64;
     fn held_input(&self) -> bool;
     /// Let go of every key and button still held.
@@ -1036,6 +1038,8 @@ mod tests {
         Unreadable,
         /// Post one event, then fail.
         Break,
+        UnacknowledgedPress,
+        DockRefusal,
     }
 
     /// An engine that logs each check and post, and does at each action
@@ -1137,6 +1141,18 @@ mod tests {
             self.assert_locked();
             let index = self.logged("post");
             self.log.push(format!("post {index}"));
+            if self.script.get(index) == Some(&Step::UnacknowledgedPress) {
+                return Err(
+                    Error::new(Code::Uncertain, "The Dock did not acknowledge the press")
+                        .uncertain(),
+                );
+            }
+            if self.script.get(index) == Some(&Step::DockRefusal) {
+                return Err(Error::new(
+                    Code::Input,
+                    "No pressable Dock item at that point; no click was sent",
+                ));
+            }
             self.posted += 1;
             if self.opens_sheet {
                 self.sheet = true;
@@ -1306,6 +1322,34 @@ mod tests {
         assert_eq!(reply["performed"], 0);
         assert_eq!(reply["partial"], true);
         assert_eq!(reply["uncertain"], true);
+    }
+
+    #[tokio::test]
+    async fn a_refused_or_unacknowledged_dock_click_reports_no_posted_events() {
+        for (step, uncertain, code) in [
+            (Step::DockRefusal, false, "input"),
+            (Step::UnacknowledgedPress, true, "uncertain"),
+        ] {
+            let stand = Stand::locked(&[step]);
+            let gate = Gate::default();
+            let action =
+                serde_json::from_value(json!({"type": "click", "x": 1138, "y": 940})).unwrap();
+            let mut engine = stand.lock().await;
+            let reply = tokio::time::timeout(
+                Duration::from_secs(1),
+                run(&mut *engine, &gate, vec![action], None),
+            )
+            .await
+            .unwrap()
+            .unwrap_err();
+            assert_eq!(reply["ok"], false);
+            assert_eq!(reply["code"], code);
+            assert_eq!(reply["performed"], 0);
+            assert_eq!(reply["partial"], false);
+            assert_eq!(reply["uncertain"], uncertain);
+            assert_eq!(engine.posted, 0);
+            assert_eq!(engine.releases, 1);
+        }
     }
 
     /// Run `actions` on a stand-in that posts each, expecting `expect`.
