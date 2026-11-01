@@ -10,8 +10,8 @@ use serde_json::{Value, json};
 /// refuses every agent's action until the helper is recovered.
 const NO_UNKNOWN_OUTCOME: &str = "No action of unknown outcome";
 
-/// Collect the report before its caller chooses full or summarized output.
-pub(super) async fn collect(client: &Client) -> Value {
+/// Read and enrich the report, retaining full facts for people or verbose output.
+pub(super) async fn report(client: &Client, verbose: bool) -> Value {
     let uid = client.config.helper_uid;
     let status = client.status().await;
     let account = atlas::setup::account_with_uid(uid).ok().flatten();
@@ -116,7 +116,11 @@ pub(super) async fn collect(client: &Client) -> Value {
         causes,
         asker(client.actor, session, ui::interactive()),
     );
-    report
+    if verbose || ui::human() {
+        report
+    } else {
+        atlas::capability::summary(report)
+    }
 }
 
 fn pending_result(

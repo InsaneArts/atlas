@@ -54,101 +54,88 @@ pub(super) fn app_only() -> Value {
     })
 }
 
-/// The tools: two the model sees, the rest only the view may call.
-pub(super) fn tools() -> Value {
-    let none = json!({"type": "object", "properties": {}, "additionalProperties": false});
-    let app = |name: &str, title: &str, description: &str, read_only: bool| {
-        json!({
-            "name": name,
-            "title": title,
-            "description": description,
-            "inputSchema": none,
-            "annotations": {"readOnlyHint": read_only, "openWorldHint": false},
-            "_meta": app_only(),
-        })
-    };
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(super) enum Audience {
+    Any,
+    Views,
+}
 
-    json!([
-        {
-            "name": "atlas_status",
-            "title": "Atlas status",
-            "description": "What is happening in Atlas's hidden helper now: whether an agent is \
-                working there, whether the person stopped agents, and the last actions. Read-only.",
-            "inputSchema": none,
-            "annotations": {"readOnlyHint": true, "openWorldHint": false},
-        },
-        {
-            "name": "show_screen",
-            "title": "Atlas",
-            "description": "Show the person the helper's screen live, with what the agent is \
-                doing and a Stop button. Call it once when visible work in the helper starts. \
-                Read-only.",
-            "inputSchema": none,
-            "annotations": {"readOnlyHint": true, "openWorldHint": false},
-            "_meta": {
-                "ui": ui(&["model", "app"]),
-                "ui/resourceUri": SCREEN_URI,
-                "openai/outputTemplate": SCREEN_URI,
-                "openai/widgetAccessible": true,
-                // The Codex app also offers it as a tab beside the thread.
-                "openai/ui": {"entrypoints": [{"type": "thread"}]},
-            },
-        },
-        {
-            "name": "screen_frame",
-            "title": "Helper screen",
-            "description": "The helper's newest screen and status, unless the screen is still \
-                the one named by since.",
-            "inputSchema": {
-                "type": "object",
-                "properties": {"since": {"type": "string"}},
-                "additionalProperties": false,
-            },
-            "annotations": {"readOnlyHint": true, "openWorldHint": false},
-            "_meta": app_only(),
-        },
-        app("stop_agent", "Stop Agent", "Stop agents in the helper until the person resumes them.", false),
-        app("resume_agent", "Resume Agent", "Let agents act in the helper again.", false),
-        app("recover", "Recover", "Recover the helper, as Atlas's menu bar does.", false),
-        app("open_viewer", "Open in Atlas", "Open Atlas's viewer window.", false),
-        app("take_control", "Take Control", "Take control of the helper for the person; agents wait.", false),
-        app("keep_control", "Keep Control", "Keep the person's control a while longer.", false),
-        app("give_back", "Give Back", "End the person's control of the helper.", false),
-        {
-            "name": "send_input",
-            "title": "Send input",
-            "description": "Send the person's clicks, scrolls and keys to the helper while they have control.",
-            "inputSchema": {
-                "type": "object",
-                "properties": {
-                    "frame": {"type": "string"},
-                    "actions": {"type": "array", "items": {"type": "object"}, "maxItems": ACTIONS},
-                },
-                "required": ["frame", "actions"],
-                "additionalProperties": false,
-            },
-            "annotations": {"readOnlyHint": false, "openWorldHint": false},
-            "_meta": app_only(),
-        },
-        app("activity", "Activity", "Everything done in the helper lately, newest first.", true),
-        app("helper_apps", "Apps", "The apps open in the helper and their windows.", true),
-        app("screenshots", "Screenshots", "The screenshots agents took in the helper.", true),
-        {
-            "name": "screenshot",
-            "title": "Screenshot",
-            "description": "One screenshot an agent took, as a thumbnail or full size.",
-            "inputSchema": {
-                "type": "object",
-                "properties": {"name": {"type": "string"}, "full": {"type": "boolean"}},
-                "required": ["name"],
-                "additionalProperties": false,
-            },
-            "annotations": {"readOnlyHint": true, "openWorldHint": false},
-            "_meta": app_only(),
-        },
-        app("switch_helper", "Switch to the Helper", "Lock the screen so the person can log in to the helper.", false),
-        app("log_out_helper", "Log Out the Helper", "Log the helper out; its apps quit.", false),
-    ])
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(super) enum Access {
+    Read,
+    Change,
+}
+
+enum Metadata {
+    Public,
+    Screen,
+    App,
+}
+
+/// A tool's identity, catalog and exposure decisions are declared together.
+macro_rules! tools {
+    ($none:ident; $($tool:ident => ($name:literal, $title:literal, $description:literal,
+        $audience:ident, $access:ident, $schema:expr, $metadata:ident)),+ $(,)?) => {
+        #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+        pub(super) enum Tool { $($tool),+ }
+
+        impl Tool {
+            pub(super) const ALL: [Self; [$($name),+].len()] = [$(Self::$tool),+];
+
+            pub(super) fn parse(name: &str) -> Option<Self> {
+                match name { $($name => Some(Self::$tool),)+ _ => None }
+            }
+
+            pub(super) fn policy(self) -> (Audience, Access) {
+                match self { $(Self::$tool => (Audience::$audience, Access::$access)),+ }
+            }
+
+            pub(super) fn catalog(self) -> Value {
+                let $none = json!({"type": "object", "properties": {}, "additionalProperties": false});
+                let (mut catalog, metadata) = match self {
+                    $(Self::$tool => (json!({
+                        "name": $name,
+                        "title": $title,
+                        "description": $description,
+                        "inputSchema": $schema,
+                        "annotations": {"readOnlyHint": Access::$access == Access::Read, "openWorldHint": false},
+                    }), Metadata::$metadata)),+
+                };
+                match metadata {
+                    Metadata::Public => {}
+                    Metadata::App => catalog["_meta"] = app_only(),
+                    Metadata::Screen => catalog["_meta"] = json!({
+                        "ui": ui(&["model", "app"]),
+                        "ui/resourceUri": SCREEN_URI,
+                        "openai/outputTemplate": SCREEN_URI,
+                        "openai/widgetAccessible": true,
+                        "openai/ui": {"entrypoints": [{"type": "thread"}]},
+                    }),
+                }
+                catalog
+            }
+        }
+    };
+}
+
+tools! { none;
+    Status => ("atlas_status", "Atlas status", "What is happening in Atlas's hidden helper now: whether an agent is working there, whether the person stopped agents, and the last actions. Read-only.", Any, Read, none, Public),
+    ShowScreen => ("show_screen", "Atlas", "Show the person the helper's screen live, with what the agent is doing and a Stop button. Call it once when visible work in the helper starts. Read-only.", Any, Read, none, Screen),
+    ScreenFrame => ("screen_frame", "Helper screen", "The helper's newest screen and status, unless the screen is still the one named by since.", Any, Read, json!({"type": "object", "properties": {"since": {"type": "string"}}, "additionalProperties": false}), App),
+    StopAgent => ("stop_agent", "Stop Agent", "Stop agents in the helper until the person resumes them.", Any, Change, none, App),
+    ResumeAgent => ("resume_agent", "Resume Agent", "Let agents act in the helper again.", Views, Change, none, App),
+    Recover => ("recover", "Recover", "Recover the helper, as Atlas's menu bar does.", Any, Change, none, App),
+    OpenViewer => ("open_viewer", "Open in Atlas", "Open Atlas's viewer window.", Any, Change, none, App),
+    TakeControl => ("take_control", "Take Control", "Take control of the helper for the person; agents wait.", Views, Change, none, App),
+    KeepControl => ("keep_control", "Keep Control", "Keep the person's control a while longer.", Views, Change, none, App),
+    GiveBack => ("give_back", "Give Back", "End the person's control of the helper.", Views, Change, none, App),
+    SendInput => ("send_input", "Send input", "Send the person's clicks, scrolls and keys to the helper while they have control.", Views, Change, json!({"type": "object", "properties": {"frame": {"type": "string"}, "actions": {"type": "array", "items": {"type": "object"}, "maxItems": ACTIONS}}, "required": ["frame", "actions"], "additionalProperties": false}), App),
+    Activity => ("activity", "Activity", "Everything done in the helper lately, newest first.", Views, Read, none, App),
+    HelperApps => ("helper_apps", "Apps", "The apps open in the helper and their windows.", Views, Read, none, App),
+    Screenshots => ("screenshots", "Screenshots", "The screenshots agents took in the helper.", Views, Read, none, App),
+    Screenshot => ("screenshot", "Screenshot", "One screenshot an agent took, as a thumbnail or full size.", Views, Read, json!({"type": "object", "properties": {"name": {"type": "string"}, "full": {"type": "boolean"}}, "required": ["name"], "additionalProperties": false}), App),
+    SwitchHelper => ("switch_helper", "Switch to the Helper", "Lock the screen so the person can log in to the helper.", Views, Change, none, App),
+    LogOutHelper => ("log_out_helper", "Log Out the Helper", "Log the helper out; its apps quit.", Views, Change, none, App),
 }
 
 /// The view's metadata: no network, no border of the app's own.
@@ -208,4 +195,12 @@ pub(super) fn logos() -> &'static str {
             .collect();
         format!("const LOGOS = {};", Value::Object(logos))
     })
+}
+
+#[cfg(test)]
+#[test]
+fn the_tool_catalog_keeps_its_fields_and_order() -> crate::error::Result<()> {
+    let expected: Value = serde_json::from_str(include_str!("tools.fixture.json"))?;
+    assert_eq!(json!(Tool::ALL.map(Tool::catalog)), expected);
+    Ok(())
 }

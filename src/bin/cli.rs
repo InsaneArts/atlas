@@ -1,4 +1,7 @@
 //! Command-line grammar, value parsing and argument adapters.
+//! The declarative grammar stays together so argument relationships and
+//! generated help remain beside their commands; parser and guide parity tests
+//! check the same schema.
 use atlas::{
     actions::Button,
     agent,
@@ -849,13 +852,21 @@ impl AgentPicks {
     /// The coding agents picked.
     pub(super) fn agents(&self) -> Vec<atlas::agents::Agent> {
         use atlas::agents::Agent;
+        let &Self {
+            claude,
+            codex,
+            opencode,
+            pi,
+            cursor,
+            app: _,
+        } = self;
 
         [
-            (self.claude, Agent::Claude),
-            (self.codex, Agent::Codex),
-            (self.opencode, Agent::Opencode),
-            (self.pi, Agent::Pi),
-            (self.cursor, Agent::Cursor),
+            (claude, Agent::Claude),
+            (codex, Agent::Codex),
+            (opencode, Agent::Opencode),
+            (pi, Agent::Pi),
+            (cursor, Agent::Cursor),
         ]
         .into_iter()
         .filter_map(|(on, agent)| on.then_some(agent))

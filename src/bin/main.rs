@@ -9,7 +9,6 @@ mod uninstall;
 mod update;
 
 use atlas::{
-    client::Client,
     config::Config,
     error::{Code, Error},
     interrupt::{Interrupt, Stopped},
@@ -20,7 +19,7 @@ use clap::FromArgMatches;
 use cli::{Cli, Command};
 use nix::sys::signal::Signal;
 use policy::Policy;
-use serde_json::{Value, json};
+use serde_json::json;
 use std::{
     io::{IsTerminal, Write},
     process::ExitCode,
@@ -109,6 +108,19 @@ fn main() -> ExitCode {
         };
     }
 
+    run(config, command, policy, wait, cli.allow_disrupt, format)
+}
+
+/// Keep runtime, interrupt ownership and result reporting alive for one command.
+fn run(
+    config: std::path::PathBuf,
+    command: Command,
+    policy: Policy,
+    wait: std::time::Duration,
+    allow_disrupt: bool,
+    format: Format,
+) -> ExitCode {
+    let machine = policy.machine_only;
     // A refusing environment worker exits distinctly, so its caller can tell
     // the refusal from the command it would have run.
     let worker = match &command {
@@ -155,14 +167,9 @@ fn main() -> ExitCode {
 
             interrupt
                 .unless_stopped(async {
-                    let result = dispatch::execute(
-                        config.clone(),
-                        command,
-                        &policy,
-                        wait,
-                        cli.allow_disrupt,
-                    )
-                    .await;
+                    let result =
+                        dispatch::execute(config.clone(), command, &policy, wait, allow_disrupt)
+                            .await;
 
                     // Being stopped: the stop ends Atlas in a moment and says
                     // so, so what the cut-short command gave is not reported.
@@ -398,20 +405,6 @@ fn stop_cleanly_on_interrupt(message: Option<&'static str>) {
 
         std::process::exit(code);
     });
-}
-
-/// `atlas doctor`: the helper's readiness, with the checks only this side
-/// can make (the account itself, and a leftover session of a deleted one).
-async fn doctor(client: &Client, verbose: bool) -> Value {
-    let report = doctor::collect(client).await;
-
-    // People see the summary either way; programs get the full status
-    // only when they ask for it.
-    if verbose || ui::human() {
-        report
-    } else {
-        atlas::capability::summary(report)
-    }
 }
 
 #[cfg(test)]

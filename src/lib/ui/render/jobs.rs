@@ -132,27 +132,7 @@ fn how_said(how: &str) -> &str {
 
 /// The processes `value` says still run outside the job, never signalled.
 fn left(value: &Value) -> Option<String> {
-    let left: Vec<String> = value["left"]
-        .as_array()
-        .into_iter()
-        .flatten()
-        .map(|process| {
-            format!(
-                "{} ({})",
-                text::printable(process["name"].as_str().unwrap_or("a process")),
-                process["pid"]
-            )
-        })
-        .collect();
-    (!left.is_empty()).then(|| {
-        format!(
-            "  {}",
-            style::dim(format!(
-                "still running, never signalled: {}",
-                left.join(", ")
-            ))
-        )
-    })
+    super::remaining_processes(&value["left"]).map(|left| format!("  {}", style::dim(left)))
 }
 
 /// The warnings `value` carries, each on a line.

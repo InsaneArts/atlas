@@ -179,6 +179,23 @@ pub fn render(view: &View, value: &Value) -> Rendered {
     }
 }
 
+/// The shared sanitized process list; callers keep their own indentation and streams.
+fn remaining_processes(processes: &Value) -> Option<String> {
+    let listed: Vec<String> = processes
+        .as_array()
+        .into_iter()
+        .flatten()
+        .map(|process| {
+            format!(
+                "{} ({})",
+                text::printable(process["name"].as_str().unwrap_or("a process")),
+                process["pid"]
+            )
+        })
+        .collect();
+    (!listed.is_empty()).then(|| format!("still running, never signalled: {}", listed.join(", ")))
+}
+
 /// A failed result (`ok: false`) as an error card on standard error.
 fn failed(value: &Value) -> Option<Rendered> {
     if value["ok"] != false {
@@ -282,7 +299,7 @@ fn point(at: &Value) -> Option<(f64, f64)> {
 /// `✗ what went wrong` and, when the message does not already say, `→ what
 /// to do`. Messages can carry text from the helper, so each line is made
 /// safe to print.
-pub fn card(message: &str, code: Option<Code>, uncertain: bool) -> String {
+pub(crate) fn card(message: &str, code: Option<Code>, uncertain: bool) -> String {
     let fix = if uncertain {
         Some(hints::UNCERTAIN)
     } else if message.to_lowercase().contains("run atlas ") {

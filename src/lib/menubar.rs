@@ -29,32 +29,6 @@ pub fn started_at_login() -> bool {
     std::env::var("XPC_SERVICE_NAME").is_ok_and(|job| job == LOGIN_JOB)
 }
 
-/// Start the menu bar in its own session, so it keeps running after this
-/// terminal closes, and report once it is up. It quits from its own menu.
-pub async fn start(config: &Path, port: u16, output: &Path) -> Result<()> {
-    let (already, record) = launch(config, port, output).await?;
-
-    if crate::ui::human() {
-        let what = if already {
-            "is already running"
-        } else {
-            "is running"
-        };
-
-        println!(
-            "{} The menu bar {what}. Click Atlas at the top of the screen; quit it from its menu.",
-            crate::ui::style::ok()
-        );
-    } else {
-        println!(
-            "{}",
-            serde_json::json!({"ok": true, "running": true, "alreadyRunning": already, "pid": record["pid"]})
-        );
-    }
-
-    Ok(())
-}
-
 /// Start the menu bar unless it runs already: whether it did, and its
 /// private record (pid and viewer URL). One start runs at a time; a start
 /// that fails is stopped, never left half-running.
@@ -596,7 +570,7 @@ pub fn executable() -> Result<PathBuf> {
 
 /// What to do with "Open at Login".
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Login {
+pub(crate) enum Login {
     On,
     Off,
     Status,
@@ -604,7 +578,7 @@ pub enum Login {
 
 impl Login {
     /// The state as the command line and the app name it.
-    pub fn parse(state: &str) -> Result<Self> {
+    pub(crate) fn parse(state: &str) -> Result<Self> {
         match state {
             "on" => Ok(Self::On),
             "off" => Ok(Self::Off),
@@ -633,7 +607,7 @@ pub fn login(state: &str) -> Result<serde_json::Value> {
 
 /// Apply `login`; only the app (as part of Atlas.app) can register its
 /// login agent.
-pub fn set_login(login: Login) -> Result<serde_json::Value> {
+pub(crate) fn set_login(login: Login) -> Result<serde_json::Value> {
     let output = std::process::Command::new(executable()?)
         .args(["--login", login.as_str()])
         .stdin(Stdio::null())
@@ -657,12 +631,12 @@ fn login_record() -> Option<PathBuf> {
 }
 
 /// Whether opening the menu bar at login was decided (by init or the person).
-pub fn login_decided() -> bool {
+pub(crate) fn login_decided() -> bool {
     login_record().is_some_and(|path| path.exists())
 }
 
 /// Remember that opening at login was decided.
-pub fn decide_login() {
+pub(crate) fn decide_login() {
     if let Some(path) = login_record() {
         if let Some(parent) = path.parent() {
             let _ = fs::create_dir_all(parent);
@@ -673,7 +647,7 @@ pub fn decide_login() {
 
 /// Forget that opening at login was decided, so setting Atlas up again
 /// decides it afresh.
-pub fn forget_login() {
+pub(crate) fn forget_login() {
     if let Some(path) = login_record() {
         let _ = fs::remove_file(path);
     }
@@ -681,8 +655,8 @@ pub fn forget_login() {
 
 /// The app to run, and the configuration its commands must use.
 pub struct Program {
-    pub executable: PathBuf,
-    pub config: PathBuf,
+    pub(crate) executable: PathBuf,
+    pub(crate) config: PathBuf,
 }
 
 impl Program {
@@ -724,7 +698,7 @@ async fn spawn(program: &Program, url: &str, args: &[&str]) -> Result<(Child, Ch
 
 /// A line the service sends the app on its stdin.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Line {
+pub(crate) enum Line {
     /// Bring the viewer window forward.
     Viewer,
 }
@@ -738,14 +712,14 @@ impl Line {
 }
 
 /// The running app. Dropping it stops the app.
-pub struct App {
+pub(crate) struct App {
     child: Child,
     writer: tokio::task::JoinHandle<()>,
 }
 
 impl App {
     /// Start the app; each of `lines` is passed on to it.
-    pub async fn launch(
+    pub(crate) async fn launch(
         program: &Program,
         url: &str,
         mut lines: tokio::sync::mpsc::UnboundedReceiver<Line>,
@@ -769,7 +743,7 @@ impl App {
     }
 
     /// Resolves when the person quits the app.
-    pub async fn exited(&mut self) {
+    pub(crate) async fn exited(&mut self) {
         let _ = self.child.wait().await;
     }
 }
@@ -795,7 +769,7 @@ fn render_args(path: &str, dark: bool) -> Vec<&str> {
 }
 
 /// Draw the app's panel, fed by the viewer at `url`, to a PNG.
-pub async fn render(program: &Program, url: &str, path: &Path, dark: bool) -> Result<()> {
+pub(crate) async fn render(program: &Program, url: &str, path: &Path, dark: bool) -> Result<()> {
     let target = path
         .to_str()
         .ok_or_else(|| Error::new(Code::Usage, "The render path must be UTF-8"))?;

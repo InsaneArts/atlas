@@ -38,8 +38,8 @@ use tokio::{
 mod guarded;
 mod resources;
 use resources::{
-    FRAME_META, SCREEN_URI, UI_EXTENSION, app_only, initialized, screen_contents, screen_resource,
-    tools,
+    Access, Audience, FRAME_META, SCREEN_URI, Tool, UI_EXTENSION, app_only, initialized,
+    screen_contents, screen_resource,
 };
 
 /// The longest request line read, in bytes.
@@ -63,32 +63,6 @@ const SHOTS: usize = 30;
 const ACTIONS: usize = 32;
 /// The input actions the view may send.
 const KINDS: [&str; 5] = ["pointer", "move", "scroll", "type", "key"];
-/// The tools only a client that draws views is offered: they are the
-/// person's, and only such a client keeps a view's tools from the model.
-const VIEW_ONLY: [&str; 11] = [
-    "resume_agent",
-    "take_control",
-    "keep_control",
-    "give_back",
-    "send_input",
-    "activity",
-    "helper_apps",
-    "screenshots",
-    "screenshot",
-    "switch_helper",
-    "log_out_helper",
-];
-/// The tools that only look, all a read-only server offers.
-const LOOKING: [&str; 7] = [
-    "atlas_status",
-    "show_screen",
-    "screen_frame",
-    "activity",
-    "helper_apps",
-    "screenshots",
-    "screenshot",
-];
-
 /// What the server needs to answer: the helper's client, and where to open
 /// Atlas's viewer from.
 struct Server {
@@ -376,7 +350,10 @@ impl Server {
                 "tools/call" if !self.offers(params["name"].as_str().unwrap_or_default()) => {
                     failure(id, -32602, "Unknown tool")
                 }
-                "tools/call" => success(id, self.call(params).await),
+                "tools/call" => match Tool::parse(params["name"].as_str().unwrap_or_default()) {
+                    Some(tool) => success(id, self.call(tool, &params["arguments"]).await),
+                    None => failure(id, -32602, "Unknown tool"),
+                },
                 "resources/list" => success(id, json!({"resources": [screen_resource()]})),
                 "resources/templates/list" => success(id, json!({"resourceTemplates": []})),
                 "resources/read" if params["uri"] == SCREEN_URI => {
@@ -389,34 +366,33 @@ impl Server {
     }
 
     /// The result of the tool `params` names, an error result when it fails.
-    async fn call(&self, params: &Value) -> Value {
-        let arguments = &params["arguments"];
-        let outcome = match params["name"].as_str().unwrap_or_default() {
-            "atlas_status" | "show_screen" => self.status().await.map(|status| said(&status)),
-            "screen_frame" => self.screen(arguments["since"].as_str()).await,
-            "stop_agent" => self.set_stopped(true).await,
-            "resume_agent" => self.set_stopped(false).await,
-            "recover" => self.recover().await,
-            "take_control" => self.take_control().await,
-            "keep_control" => self.keep_control().await,
-            "give_back" => self.give_back().await,
-            "send_input" => {
+    async fn call(&self, tool: Tool, arguments: &Value) -> Value {
+        let outcome = match tool {
+            Tool::Status | Tool::ShowScreen => self.status().await.map(|status| said(&status)),
+            Tool::ScreenFrame => self.screen(arguments["since"].as_str()).await,
+            Tool::StopAgent => self.set_stopped(true).await,
+            Tool::ResumeAgent => self.set_stopped(false).await,
+            Tool::Recover => self.recover().await,
+            Tool::TakeControl => self.take_control().await,
+            Tool::KeepControl => self.keep_control().await,
+            Tool::GiveBack => self.give_back().await,
+            Tool::SendInput => {
                 self.send_input(&arguments["frame"], &arguments["actions"])
                     .await
             }
-            "activity" => self.activity().await,
-            "helper_apps" => self.helper_apps().await,
-            "screenshots" => self.screenshots().await,
-            "screenshot" => {
+            Tool::Activity => self.activity().await,
+            Tool::HelperApps => self.helper_apps().await,
+            Tool::Screenshots => self.screenshots().await,
+            Tool::Screenshot => {
                 self.screenshot(
                     arguments["name"].as_str().unwrap_or_default(),
                     arguments["full"] == true,
                 )
                 .await
             }
-            "switch_helper" => self.switch_helper().await,
-            "log_out_helper" => self.log_out_helper().await,
-            _ => self.open_viewer().await,
+            Tool::SwitchHelper => self.switch_helper().await,
+            Tool::LogOutHelper => self.log_out_helper().await,
+            Tool::OpenViewer => self.open_viewer().await,
         };
 
         let mut result = outcome.unwrap_or_else(|error| {
@@ -439,15 +415,10 @@ impl Server {
     /// views.
     fn tools(&self) -> Value {
         let views = self.views.load(Ordering::Relaxed);
-        let named = |names: &[&str], tool: &Value| names.iter().any(|name| tool["name"] == *name);
-        let mut listed: Vec<Value> = tools()
-            .as_array()
+        let mut listed: Vec<Value> = Tool::ALL
             .into_iter()
-            .flatten()
-            .filter(|tool| views || !named(&VIEW_ONLY, tool))
-            .filter(|tool| !self.read_only || named(&LOOKING, tool))
-            .filter(|tool| self.app_views.get().is_none() || views || named(&LOOKING, tool))
-            .cloned()
+            .filter(|tool| self.offers_tool(*tool, views))
+            .map(Tool::catalog)
             .collect();
         if self.app_views.get().is_some() && views && !self.read_only {
             for tool in &mut listed {
@@ -463,9 +434,22 @@ impl Server {
 
     /// Whether this client is offered the tool `name`.
     fn offers(&self, name: &str) -> bool {
-        self.tools()
-            .as_array()
-            .is_some_and(|tools| tools.iter().any(|tool| tool["name"] == name))
+        Tool::parse(name).map_or_else(
+            || {
+                name == "view_close"
+                    && self.app_views.get().is_some()
+                    && self.views.load(Ordering::Relaxed)
+                    && !self.read_only
+            },
+            |tool| self.offers_tool(tool, self.views.load(Ordering::Relaxed)),
+        )
+    }
+
+    fn offers_tool(&self, tool: Tool, views: bool) -> bool {
+        let (audience, access) = tool.policy();
+        (views || audience == Audience::Any)
+            && (!self.read_only || access == Access::Read)
+            && (self.app_views.get().is_none() || views || access == Access::Read)
     }
 
     /// The helper's status as the view and the model read it.
@@ -1219,3 +1203,6 @@ fn checked(actions: &Value) -> Result<&Value> {
 
 #[cfg(test)]
 mod tests;
+
+#[cfg(test)]
+use tests::LOOKING;

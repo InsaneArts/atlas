@@ -30,7 +30,15 @@ impl Viewer {
 /// Serve the viewer for the menu bar app until the person quits it, or
 /// until interrupted, terminated or hung up: nothing to report then. When
 /// the menu bar already runs on `port`, it says so instead.
-pub async fn serve(client: Client, port: u16, program: crate::menubar::Program) -> Result<Value> {
+/// `ready` receives the redacted startup record after the app launches and its
+/// private record is saved, before accepting requests. Binding, launching or
+/// recording failures are returned without reporting readiness.
+pub async fn serve(
+    client: Client,
+    port: u16,
+    program: crate::menubar::Program,
+    ready: impl FnOnce(&Value),
+) -> Result<Value> {
     use tokio::signal::unix::{SignalKind, signal};
 
     let output = client.output_dir()?.to_path_buf();
@@ -68,11 +76,7 @@ pub async fn serve(client: Client, port: u16, program: crate::menubar::Program) 
     let mut shown = record.clone();
     shown["url"] = json!("held by the menu bar");
 
-    if crate::ui::human() {
-        println!("The menu bar is running. Quit it from its menu, or press Ctrl-C here.");
-    } else {
-        println!("{shown}");
-    }
+    ready(&shown);
 
     let timer_view = viewer.clone();
     let expiry = tokio::spawn(async move {

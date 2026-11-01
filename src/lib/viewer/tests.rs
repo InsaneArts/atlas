@@ -465,16 +465,13 @@ async fn revoking_ends_any_lease_and_keeps_unconfirmed_cleanup_pending() {
     let dir = tempfile::tempdir().unwrap();
     let viewer = unreachable(dir.path()).await;
     let controller = viewer.client().controller.clone();
-    let idle = viewer.control(Control::Revoke, &json!({})).await.unwrap();
+    let idle = viewer.control(Control::Revoke).await.unwrap();
     assert_eq!(idle, json!({"ok": true, "released": false}));
     viewer.lease.lock().await.acquire(&controller).unwrap();
 
     // The helper cannot confirm native cleanup, so control ends but the
     // release stays an unknown outcome for recovery.
-    let error = viewer
-        .control(Control::Revoke, &json!({}))
-        .await
-        .unwrap_err();
+    let error = viewer.control(Control::Revoke).await.unwrap_err();
     assert!(error.uncertain);
     assert!(!viewer.lease.lock().await.active());
     assert_eq!(controller.unresolved().unwrap().len(), 1);
@@ -2169,4 +2166,32 @@ async fn an_account_with_no_full_name_is_asked_once() {
     assert_eq!(account_title(&known, "atlas", ask).await, None);
     assert_eq!(account_title(&known, "atlas", ask).await, None);
     assert_eq!(ASKED.load(Ordering::SeqCst), 1);
+}
+
+#[tokio::test]
+async fn control_tokens_keep_their_validation_order_for_missing_and_non_string_fields()
+-> crate::error::Result<()> {
+    let directory = tempfile::tempdir()?;
+    let viewer = http::configured(client(directory.path()), "127.0.0.1:0".into(), None);
+    for body in [
+        json!({}),
+        json!({"lease":null,"frame":null}),
+        json!({"lease":true,"frame":false}),
+        json!({"lease":1,"frame":2}),
+        json!({"lease":[],"frame":{}}),
+        json!({"lease":"unknown","frame":"unknown","actions":"invalid"}),
+    ] {
+        for (route, code) in [
+            ("control/acquire", "stale-frame"),
+            ("control/renew", "lease-lost"),
+            ("input", "lease-lost"),
+        ] {
+            let (status, reply) = posted(&viewer, route, &body).await;
+            assert_eq!(status, 409, "{route}: {body}: {reply}");
+            assert_eq!(reply["code"], code, "{route}: {body}: {reply}");
+            assert_eq!(reply["uncertain"], false);
+            assert!(viewer.client().controller.unresolved()?.is_empty());
+        }
+    }
+    Ok(())
 }

@@ -384,8 +384,8 @@ async fn read_typed(client: &Client, output: &Path, port: u16) -> Option<(Readin
 /// the key it keeps it under and the display's size in points: what taking
 /// control there names.
 pub(crate) struct Screen {
-    pub png: Vec<u8>,
-    pub shared: Option<(String, (f64, f64))>,
+    pub(crate) png: Vec<u8>,
+    pub(crate) shared: Option<(String, (f64, f64))>,
 }
 
 /// The helper's newest screen: the viewer's shared frame when it runs, else

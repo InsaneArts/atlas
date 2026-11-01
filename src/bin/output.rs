@@ -10,6 +10,35 @@ use atlas::{
 use serde_json::{Value, json};
 use std::io::Write;
 
+/// Report startup only after the viewer has recorded its redacted readiness facts.
+pub(super) fn serving_menu_bar(shown: &Value) {
+    if atlas::ui::human() {
+        println!("The menu bar is running. Quit it from its menu, or press Ctrl-C here.");
+    } else {
+        println!("{shown}");
+    }
+}
+
+/// Report a detached menu bar using only public process facts.
+pub(super) fn started_menu_bar(already: bool, record: &Value) {
+    if atlas::ui::human() {
+        let what = if already {
+            "is already running"
+        } else {
+            "is running"
+        };
+        println!(
+            "{} The menu bar {what}. Click Atlas at the top of the screen; quit it from its menu.",
+            atlas::ui::style::ok()
+        );
+    } else {
+        println!(
+            "{}",
+            json!({"ok": true, "running": true, "alreadyRunning": already, "pid": record["pid"]})
+        );
+    }
+}
+
 /// Write a result: JSON for programs, its view for a person. A failure for
 /// programs says what to do next when `advised`. A reader that went away
 /// (`| head`) ends the output quietly.

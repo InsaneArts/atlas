@@ -7,7 +7,7 @@ use console::measure_text_width;
 const MAX_OUTPUT_BYTES: usize = 1024 * 1024;
 
 /// A header row over one row per entry.
-pub fn render(headers: &[&str], rows: &[Vec<String>]) -> String {
+pub(crate) fn render(headers: &[&str], rows: &[Vec<String>]) -> String {
     let header: Vec<String> = headers.iter().map(style::dim).collect();
     let mut widths: Vec<usize> = header.iter().map(|h| measure_text_width(h)).collect();
 

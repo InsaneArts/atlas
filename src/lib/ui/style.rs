@@ -28,12 +28,12 @@ pub fn unknown() -> String {
     style("–").dim().to_string()
 }
 
-pub fn warn() -> String {
+pub(crate) fn warn() -> String {
     style("!").yellow().bold().to_string()
 }
 
 /// The mark for a yes/no/unknown fact.
-pub fn mark(fact: Option<bool>) -> String {
+pub(crate) fn mark(fact: Option<bool>) -> String {
     match fact {
         Some(true) => ok(),
         Some(false) => fail(),
@@ -50,6 +50,6 @@ pub fn dim(text: impl Display) -> String {
     style(text).dim().to_string()
 }
 
-pub fn bold(text: impl Display) -> String {
+pub(crate) fn bold(text: impl Display) -> String {
     style(text).bold().to_string()
 }

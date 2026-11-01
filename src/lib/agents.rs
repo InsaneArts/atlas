@@ -24,7 +24,8 @@ mod project;
 pub use cursor::hook;
 use process::{exec, exec_in, run};
 pub use process::{stop_running, stopping};
-pub use project::{PROJECT_SECTION, forget, project, taught};
+use project::taught;
+pub use project::{forget, project};
 
 /// The marketplace and plugin name in the marketplace-based agents.
 const NAME: &str = "atlas";
@@ -43,48 +44,45 @@ fn problem(message: impl Into<String>) -> Error {
     Error::new(Code::Agents, message)
 }
 
-/// The agents Atlas can connect, and their command-line tools.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Agent {
-    Claude,
-    Codex,
-    Opencode,
-    Pi,
-    Cursor,
+/// Host identity, catalog membership and settings discovery are one declaration.
+macro_rules! agents {
+    ($($agent:ident => ($name:literal, $display:literal, $home:expr, $restart:expr)),+ $(,)?) => {
+        /// The agents Atlas can connect, and their command-line tools.
+        #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+        pub enum Agent { $($agent),+ }
+
+        impl Agent {
+            pub(crate) const ALL: [Agent; [$($name),+].len()] = [$(Agent::$agent),+];
+
+            pub(crate) fn metadata(self) -> Metadata {
+                match self { $(Self::$agent => Metadata {
+                    name: $name, display: $display, home: $home, restart: $restart,
+                }),+ }
+            }
+        }
+    };
+}
+
+agents! {
+    Claude => ("claude", "Claude Code", || configured_home("CLAUDE_CONFIG_DIR", ".claude"), None),
+    Codex => ("codex", "Codex", || configured_home("CODEX_HOME", ".codex"), None),
+    Opencode => ("opencode", "opencode", opencode::home, Some("Restart opencode for this change to take effect.")),
+    Pi => ("pi", "Pi", pi::home, None),
+    Cursor => ("cursor", "Cursor", || cursor::home().ok(), Some("Reload the Cursor window or start a new Cursor Agent session for this change to take effect.")),
 }
 
 impl Agent {
-    pub const ALL: [Agent; 5] = [
-        Agent::Claude,
-        Agent::Codex,
-        Agent::Opencode,
-        Agent::Pi,
-        Agent::Cursor,
-    ];
-
-    pub fn name(self) -> &'static str {
-        match self {
-            Agent::Claude => "claude",
-            Agent::Codex => "codex",
-            Agent::Pi => "pi",
-            Agent::Opencode => "opencode",
-            Agent::Cursor => "cursor",
-        }
+    pub(crate) fn name(self) -> &'static str {
+        self.metadata().name
     }
 
     /// The name a person knows it by.
-    pub fn display_name(self) -> &'static str {
-        match self {
-            Agent::Claude => "Claude Code",
-            Agent::Codex => "Codex",
-            Agent::Pi => "Pi",
-            Agent::Opencode => "opencode",
-            Agent::Cursor => "Cursor",
-        }
+    pub(crate) fn display_name(self) -> &'static str {
+        self.metadata().display
     }
 
     /// The agent `name` (as in `status`), if it is one.
-    pub fn named(name: &str) -> Option<Self> {
+    pub(crate) fn named(name: &str) -> Option<Self> {
         Self::ALL.into_iter().find(|agent| agent.name() == name)
     }
 
@@ -163,8 +161,9 @@ impl Agent {
     /// Whether this agent's copy of the plugin named atlas (agents copy a
     /// plugin when installing it) is Atlas's.
     fn keeps_atlas(self) -> bool {
-        if matches!(self, Agent::Pi | Agent::Opencode | Agent::Cursor) {
-            return false;
+        match self {
+            Self::Pi | Self::Opencode | Self::Cursor => return false,
+            Self::Claude | Self::Codex => {}
         }
         let Some(home) = self.home() else {
             return false;
@@ -180,18 +179,7 @@ impl Agent {
     /// The folder this agent keeps its settings in, as its tool finds it
     /// with Atlas's environment.
     fn home(self) -> Option<PathBuf> {
-        let (variable, folder) = match self {
-            Agent::Claude => ("CLAUDE_CONFIG_DIR", ".claude"),
-            Agent::Codex => ("CODEX_HOME", ".codex"),
-            Agent::Pi => return pi::home(),
-            Agent::Opencode => return opencode::home(),
-            Agent::Cursor => return cursor::home().ok(),
-        };
-
-        std::env::var_os(variable)
-            .filter(|value| !value.is_empty())
-            .map(PathBuf::from)
-            .or_else(|| std::env::var_os("HOME").map(|home| PathBuf::from(home).join(folder)))
+        (self.metadata().home)()
     }
 
     /// The argv that disconnect it.
@@ -223,8 +211,9 @@ impl Agent {
 
     /// Whether the tool is here: its version, or why it could not be asked.
     fn presence(self) -> Presence {
-        if self == Agent::Cursor {
-            return cursor::presence();
+        match self {
+            Self::Cursor => return cursor::presence(),
+            Self::Claude | Self::Codex | Self::Pi | Self::Opencode => {}
         }
         match exec(self, &["--version"], ASK) {
             Ok(output) if output.status.success() => {
@@ -239,10 +228,11 @@ impl Agent {
     /// Cursor removal operates on owned files even when its executable is
     /// absent, broken or hangs. Never probe the host before that cleanup.
     fn presence_for_change(self, remove: bool) -> Presence {
-        if self == Agent::Cursor && remove {
-            Presence::Installed("Cursor registration".into())
-        } else {
-            self.presence()
+        match (self, remove) {
+            (Self::Cursor, true) => Presence::Installed("Cursor registration".into()),
+            (Self::Claude | Self::Codex | Self::Pi | Self::Opencode, _) | (Self::Cursor, false) => {
+                self.presence()
+            }
         }
     }
 
@@ -373,6 +363,20 @@ impl Agent {
             (_, place) => Source::Elsewhere(place.unwrap_or("somewhere else").to_owned()),
         })
     }
+}
+
+pub(crate) struct Metadata {
+    name: &'static str,
+    display: &'static str,
+    home: fn() -> Option<PathBuf>,
+    pub(crate) restart: Option<&'static str>,
+}
+
+fn configured_home(variable: &str, folder: &str) -> Option<PathBuf> {
+    std::env::var_os(variable)
+        .filter(|value| !value.is_empty())
+        .map(PathBuf::from)
+        .or_else(|| std::env::var_os("HOME").map(|home| PathBuf::from(home).join(folder)))
 }
 
 /// Where an agent's marketplace named atlas comes from.
@@ -516,7 +520,7 @@ enum Presence {
 
 /// The plugin marketplace shipped with this CLI: inside Atlas.app, or
 /// in a development checkout its `agents/` folder.
-pub fn marketplace() -> Result<PathBuf> {
+pub(crate) fn marketplace() -> Result<PathBuf> {
     if let Ok(app) = crate::update::installed_app() {
         let bundled = app.join("Contents/Resources/agents");
         if bundled.is_dir() {
@@ -559,8 +563,9 @@ pub fn status() -> Value {
 /// One agent's row for `status`: whether its tool is here, and whether
 /// Atlas is connected to it.
 fn probe(agent: Agent) -> Value {
-    if agent == Agent::Cursor {
-        return cursor::status();
+    match agent {
+        Agent::Cursor => return cursor::status(),
+        Agent::Claude | Agent::Codex | Agent::Pi | Agent::Opencode => {}
     }
     match agent.presence() {
         Presence::Installed(version) => match agent.connected() {
@@ -661,20 +666,17 @@ pub fn change_these(chosen: &[Agent], covering: Covering, change: Change) -> Res
             }
         }
 
-        let outcome = if agent == Agent::Cursor {
-            cursor::change(marketplace.as_deref())
-        } else if agent == Agent::Pi {
-            pi::change(marketplace.as_deref())
-        } else if agent == Agent::Opencode {
-            opencode::change(marketplace.as_deref())
-        } else {
-            // Where its marketplace named atlas comes from now decides what may
-            // change: never one that is someone else's.
-            let source = agent.source();
-
-            match &marketplace {
-                Some(path) => connect_agent(agent, path, &source),
-                None => disconnect_agent(agent, source),
+        let outcome = match agent {
+            Agent::Cursor => cursor::change(marketplace.as_deref()),
+            Agent::Pi => pi::change(marketplace.as_deref()),
+            Agent::Opencode => opencode::change(marketplace.as_deref()),
+            Agent::Claude | Agent::Codex => {
+                // A marketplace owned by someone else is never changed.
+                let source = agent.source();
+                match &marketplace {
+                    Some(path) => connect_agent(agent, path, &source),
+                    None => disconnect_agent(agent, source),
+                }
             }
         };
 
@@ -688,9 +690,7 @@ pub fn change_these(chosen: &[Agent], covering: Covering, change: Change) -> Res
             Err(error) => json!({"agent": agent.name(), "ok": false, "error": error.error}),
         };
 
-        if matches!(agent, Agent::Opencode | Agent::Cursor)
-            && matches!(outcome, Ok(Removal::Changed))
-        {
+        if agent.metadata().restart.is_some() && matches!(outcome, Ok(Removal::Changed)) {
             result["restart"] = json!(true);
         }
 
@@ -789,23 +789,21 @@ fn removed(
 pub fn refresh() -> Value {
     let refreshed: Vec<Value> = Agent::ALL
         .into_iter()
-        .filter(|agent| {
-            if *agent == Agent::Cursor {
-                cursor::recorded()
-            } else {
+        .filter(|agent| match agent {
+            Agent::Cursor => cursor::recorded(),
+            Agent::Claude | Agent::Codex | Agent::Pi | Agent::Opencode => {
                 agent.connected() == Ok(Some(true))
             }
         })
         .map(|agent| {
-            let failed = if agent == Agent::Cursor {
-                marketplace()
+            let failed = match agent {
+                Agent::Cursor => marketplace()
                     .and_then(|source| cursor::change(Some(&source)))
-                    .err()
-            } else {
-                agent
+                    .err(),
+                Agent::Claude | Agent::Codex | Agent::Pi | Agent::Opencode => agent
                     .update()
                     .iter()
-                    .find_map(|argv| run(agent, argv).err())
+                    .find_map(|argv| run(agent, argv).err()),
             };
             json!({"agent": agent.name(), "ok": failed.is_none(), "error": failed.map(|e| e.error)})
         })

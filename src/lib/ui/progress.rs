@@ -7,24 +7,24 @@ use indicatif::{ProgressBar, ProgressStyle};
 use std::{io::IsTerminal, time::Duration};
 
 /// A line for the person, on standard error; nothing for programs.
-pub fn say(text: &str) {
+pub(crate) fn say(text: &str) {
     if human() {
         eprintln!("{text}");
     }
 }
 
 /// A heading that starts a part of a longer flow.
-pub fn heading(text: &str) {
+pub(crate) fn heading(text: &str) {
     say(&format!("\n{}", style::bold(text)));
 }
 
 /// A finished step: `✓ label  detail`.
-pub fn done(label: &str, detail: &str) {
+pub(crate) fn done(label: &str, detail: &str) {
     say(&step(&style::ok(), label, detail));
 }
 
 /// A step left out, and why.
-pub fn skipped(label: &str, detail: &str) {
+pub(crate) fn skipped(label: &str, detail: &str) {
     say(&step(&style::unknown(), label, detail));
 }
 
@@ -74,15 +74,6 @@ impl Spinner {
     pub fn set(&self, message: impl Into<String>) {
         if let Some(bar) = &self.bar {
             bar.set_message(message.into());
-        }
-    }
-
-    /// Run `work` with the spinner out of the way, as when another program
-    /// (sudo) asks the person something on the same terminal.
-    pub fn suspend<R>(&self, work: impl FnOnce() -> R) -> R {
-        match &self.bar {
-            Some(bar) => bar.suspend(work),
-            None => work(),
         }
     }
 }

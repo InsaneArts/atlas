@@ -16,10 +16,10 @@ pub struct Error {
     pub uncertain: bool,
     /// Who holds control, on busy.
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub holder: Option<Holder>,
+    pub(crate) holder: Option<Holder>,
     /// More for a program to act on, such as candidates or a scan's diagnostics.
     #[serde(flatten)]
-    pub details: serde_json::Map<String, serde_json::Value>,
+    pub(crate) details: serde_json::Map<String, serde_json::Value>,
     #[serde(skip)]
     pub(crate) source: Option<Box<dyn StdError + Send + Sync>>,
 }
@@ -72,7 +72,7 @@ impl Error {
     /// The same failure from something that only read: nothing in the
     /// helper changed, whatever it says.
     #[must_use]
-    pub fn certain(self) -> Self {
+    pub(crate) fn certain(self) -> Self {
         Self {
             uncertain: false,
             ..self
@@ -80,7 +80,7 @@ impl Error {
     }
 
     /// An agent refused because the person stopped agents.
-    pub fn stopped() -> Self {
+    pub(crate) fn stopped() -> Self {
         Self::new(Code::Stopped, STOPPED)
     }
 
@@ -124,7 +124,7 @@ impl Error {
     /// A file Atlas keeps could not be written at `path`. The kernel answers
     /// EPERM, not EACCES, when policy forbids the write: usually an agent's
     /// sandbox, sometimes a locked file. Atlas itself may be fine, so say so.
-    pub fn writing(path: &std::path::Path, error: std::io::Error) -> Self {
+    pub(crate) fn writing(path: &std::path::Path, error: std::io::Error) -> Self {
         if error.raw_os_error() == Some(libc::EPERM) {
             return Self::new(
                 Code::Blocked,
@@ -143,213 +143,97 @@ impl Error {
 }
 
 /// Why an agent is refused while the person has stopped agents.
-pub const STOPPED: &str =
+pub(crate) const STOPPED: &str =
     "The person stopped agents in the helper. Ask them before doing anything more there.";
 
 /// What an agent hears when the person has control of the helper.
-pub const PERSON_HAS_CONTROL: &str =
+pub(crate) const PERSON_HAS_CONTROL: &str =
     "The person has control of the helper. Wait until they give it back, then try again.";
 
-/// Every failure code Atlas reports. Agents act on these (see the
-/// plugin's troubleshooting.md, which a test keeps in step), and each is
-/// written as its word, the same on the wire, in the activity log and in
-/// every reply.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
-pub enum Code {
-    Agents,
-    Apps,
-    BadRequest,
-    Blocked,
-    Busy,
-    Cancelled,
-    Capture,
-    Cleanup,
-    Collect,
-    Config,
-    ConfigInvalid,
-    Daemon,
-    Elements,
-    Environment,
-    FocusChanged,
-    Identity,
-    Init,
-    Input,
-    Install,
-    Interrupted,
-    InvalidJson,
-    Io,
-    Job,
-    LeaseLost,
-    LoggedOut,
-    Logout,
-    LogoutHeld,
-    Menubar,
-    Native,
-    NoEnvironment,
-    NoWindow,
-    NotReady,
-    OnConsole,
-    Onboarding,
-    Permission,
-    Platform,
-    PortInUse,
-    Protocol,
-    Restart,
-    SessionChanged,
-    Setup,
-    SpawnFailed,
-    StaleFrame,
-    Startup,
-    State,
-    Stopped,
-    Switch,
-    Terminal,
-    Transport,
-    Uncertain,
-    Uninstall,
-    Update,
-    Usage,
-    WaitFailed,
-    Windows,
-}
+/// Keep the code identity, stable word and ordered catalog in one declaration.
+macro_rules! codes {
+    ($($code:ident => $word:literal),+ $(,)?) => {
+        /// Every failure code Atlas reports, written identically on every boundary.
+        #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+        pub enum Code { $($code),+ }
 
-impl Code {
-    /// Every code, in the order troubleshooting.md lists them.
-    pub const ALL: [Self; 55] = [
-        Self::Agents,
-        Self::Apps,
-        Self::BadRequest,
-        Self::Blocked,
-        Self::Busy,
-        Self::Cancelled,
-        Self::Capture,
-        Self::Cleanup,
-        Self::Collect,
-        Self::Config,
-        Self::ConfigInvalid,
-        Self::Daemon,
-        Self::Elements,
-        Self::Environment,
-        Self::FocusChanged,
-        Self::Identity,
-        Self::Init,
-        Self::Input,
-        Self::Install,
-        Self::Interrupted,
-        Self::InvalidJson,
-        Self::Io,
-        Self::Job,
-        Self::LeaseLost,
-        Self::LoggedOut,
-        Self::Logout,
-        Self::LogoutHeld,
-        Self::Menubar,
-        Self::Native,
-        Self::NoEnvironment,
-        Self::NoWindow,
-        Self::NotReady,
-        Self::OnConsole,
-        Self::Onboarding,
-        Self::Permission,
-        Self::Platform,
-        Self::PortInUse,
-        Self::Protocol,
-        Self::Restart,
-        Self::SessionChanged,
-        Self::Setup,
-        Self::SpawnFailed,
-        Self::StaleFrame,
-        Self::Startup,
-        Self::State,
-        Self::Stopped,
-        Self::Switch,
-        Self::Terminal,
-        Self::Transport,
-        Self::Uncertain,
-        Self::Uninstall,
-        Self::Update,
-        Self::Usage,
-        Self::WaitFailed,
-        Self::Windows,
-    ];
+        impl Code {
+            /// Every code, in the order troubleshooting.md lists them.
+            pub const ALL: [Self; [$($word),+].len()] = [$(Self::$code),+];
 
-    /// The word for it, as every reply gives it.
-    pub const fn as_str(self) -> &'static str {
-        match self {
-            Self::Agents => "agents",
-            Self::Apps => "apps",
-            Self::BadRequest => "bad-request",
-            Self::Blocked => "blocked",
-            Self::Busy => "busy",
-            Self::Cancelled => "cancelled",
-            Self::Capture => "capture",
-            Self::Cleanup => "cleanup",
-            Self::Collect => "collect",
-            Self::Config => "config",
-            Self::ConfigInvalid => "config-invalid",
-            Self::Daemon => "daemon",
-            Self::Elements => "elements",
-            Self::Environment => "environment",
-            Self::FocusChanged => "focus-changed",
-            Self::Identity => "identity",
-            Self::Init => "init",
-            Self::Input => "input",
-            Self::Install => "install",
-            Self::Interrupted => "interrupted",
-            Self::InvalidJson => "invalid-json",
-            Self::Io => "io",
-            Self::Job => "job",
-            Self::LeaseLost => "lease-lost",
-            Self::LoggedOut => "logged-out",
-            Self::Logout => "logout",
-            Self::LogoutHeld => "logout-held",
-            Self::Menubar => "menubar",
-            Self::Native => "native",
-            Self::NoEnvironment => "no-environment",
-            Self::NoWindow => "no-window",
-            Self::NotReady => "not-ready",
-            Self::OnConsole => "on-console",
-            Self::Onboarding => "onboarding",
-            Self::Permission => "permission",
-            Self::Platform => "platform",
-            Self::PortInUse => "port-in-use",
-            Self::Protocol => "protocol",
-            Self::Restart => "restart",
-            Self::SessionChanged => "session-changed",
-            Self::Setup => "setup",
-            Self::SpawnFailed => "spawn-failed",
-            Self::StaleFrame => "stale-frame",
-            Self::Startup => "startup",
-            Self::State => "state",
-            Self::Stopped => "stopped",
-            Self::Switch => "switch",
-            Self::Terminal => "terminal",
-            Self::Transport => "transport",
-            Self::Uncertain => "uncertain",
-            Self::Uninstall => "uninstall",
-            Self::Update => "update",
-            Self::Usage => "usage",
-            Self::WaitFailed => "wait-failed",
-            Self::Windows => "windows",
+            /// The word for it, as every reply gives it.
+            pub const fn as_str(self) -> &'static str {
+                match self { $(Self::$code => $word),+ }
+            }
+
+            /// The code another Atlas process reported, if it is one of ours.
+            pub fn parse(name: &str) -> Option<Self> {
+                match name { $($word => Some(Self::$code),)+ _ => None }
+            }
         }
-    }
 
-    /// The code another Atlas process reported, if it is one of ours.
-    pub fn parse(name: &str) -> Option<Self> {
-        Self::ALL.into_iter().find(|code| code.as_str() == name)
-    }
+        #[cfg(test)]
+        pub(crate) const CODES: [&str; Code::ALL.len()] = [$($word),+];
+    };
 }
 
-/// Every code's word, in the order [`Code::ALL`] gives them.
-pub const CODES: [&str; 55] = {
-    let mut words = [""; 55];
-    let mut index = 0;
-    while index < 55 {
-        words[index] = Code::ALL[index].as_str();
-        index += 1;
-    }
-    words
-};
+codes! {
+    Agents => "agents",
+    Apps => "apps",
+    BadRequest => "bad-request",
+    Blocked => "blocked",
+    Busy => "busy",
+    Cancelled => "cancelled",
+    Capture => "capture",
+    Cleanup => "cleanup",
+    Collect => "collect",
+    Config => "config",
+    ConfigInvalid => "config-invalid",
+    Daemon => "daemon",
+    Elements => "elements",
+    Environment => "environment",
+    FocusChanged => "focus-changed",
+    Identity => "identity",
+    Init => "init",
+    Input => "input",
+    Install => "install",
+    Interrupted => "interrupted",
+    InvalidJson => "invalid-json",
+    Io => "io",
+    Job => "job",
+    LeaseLost => "lease-lost",
+    LoggedOut => "logged-out",
+    Logout => "logout",
+    LogoutHeld => "logout-held",
+    Menubar => "menubar",
+    Native => "native",
+    NoEnvironment => "no-environment",
+    NoWindow => "no-window",
+    NotReady => "not-ready",
+    OnConsole => "on-console",
+    Onboarding => "onboarding",
+    Permission => "permission",
+    Platform => "platform",
+    PortInUse => "port-in-use",
+    Protocol => "protocol",
+    Restart => "restart",
+    SessionChanged => "session-changed",
+    Setup => "setup",
+    SpawnFailed => "spawn-failed",
+    StaleFrame => "stale-frame",
+    Startup => "startup",
+    State => "state",
+    Stopped => "stopped",
+    Switch => "switch",
+    Terminal => "terminal",
+    Transport => "transport",
+    Uncertain => "uncertain",
+    Uninstall => "uninstall",
+    Update => "update",
+    Usage => "usage",
+    WaitFailed => "wait-failed",
+    Windows => "windows",
+}
 
 impl Serialize for Code {
     fn serialize<S: serde::Serializer>(

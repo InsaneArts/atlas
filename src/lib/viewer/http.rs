@@ -265,7 +265,11 @@ enum Change {
     Cleanup,
     /// The person's stop for agents, or their resume.
     Hold,
-    Control(Control),
+    Input,
+    Acquire,
+    Renew,
+    Release,
+    Revoke,
 }
 
 impl Route {
@@ -295,11 +299,11 @@ impl Route {
             "recover" => Self::Change(Change::Recover),
             "cleanup" => Self::Change(Change::Cleanup),
             "control/hold" => Self::Change(Change::Hold),
-            "input" => Self::Change(Change::Control(Control::Input)),
-            "control/acquire" => Self::Change(Change::Control(Control::Acquire)),
-            "control/renew" => Self::Change(Change::Control(Control::Renew)),
-            "control/release" => Self::Change(Change::Control(Control::Release)),
-            "control/revoke" => Self::Change(Change::Control(Control::Revoke)),
+            "input" => Self::Change(Change::Input),
+            "control/acquire" => Self::Change(Change::Acquire),
+            "control/renew" => Self::Change(Change::Renew),
+            "control/release" => Self::Change(Change::Release),
+            "control/revoke" => Self::Change(Change::Revoke),
             _ => return None,
         })
     }
@@ -307,10 +311,15 @@ impl Route {
     /// Whether it ends control or stops agents, which have slots of their
     /// own.
     fn urgent(self) -> bool {
-        matches!(
-            self,
-            Self::Change(Change::Hold | Change::Control(Control::Release | Control::Revoke))
-        )
+        match self {
+            Self::Change(Change::Hold | Change::Release | Change::Revoke) => true,
+            Self::Service
+            | Self::Read(_)
+            | Self::OpenViewer
+            | Self::Change(
+                Change::Recover | Change::Cleanup | Change::Input | Change::Acquire | Change::Renew,
+            ) => false,
+        }
     }
 }
 
@@ -365,51 +374,13 @@ pub(super) async fn respond(viewer: Arc<Viewer>, request: Request) -> Response {
         }
     };
 
-    if request.headers().contains_key("transfer-encoding")
-        || header(request.headers(), "content-type").and_then(|kind| kind.split(';').next())
-            != Some("application/json")
-    {
-        return json_response(
-            400,
-            json!({"ok": false, "error": "Send JSON with Content-Length"}),
-        );
-    }
-
-    let length = header(request.headers(), "content-length")
-        .and_then(|given| given.parse::<usize>().ok())
-        .filter(|length| (1..=MAX_BODY).contains(length));
-    let Some(length) = length else {
-        return json_response(
-            400,
-            json!({"ok": false, "error": format!("Request body must contain 1–{MAX_BODY} bytes")}),
-        );
+    let (raw_body, body) = match read_body(request).await {
+        Ok(body) => body,
+        Err(response) => return response,
     };
-
-    let body = match tokio::time::timeout(
-        Duration::from_secs(5),
-        to_bytes(request.into_body(), MAX_BODY),
-    )
-    .await
-    {
-        Ok(Ok(bytes)) if bytes.len() == length => bytes,
-        _ => {
-            return json_response(
-                400,
-                json!({"ok": false, "error": "Incomplete or oversized body"}),
-            );
-        }
-    };
-
-    let raw_body = body;
-    let body: Value = match serde_json::from_slice(&raw_body) {
-        Ok(value @ Value::Object(_)) => value,
-        _ => {
-            return json_response(
-                400,
-                json!({"ok": false, "error": "Request must be a JSON object"}),
-            );
-        }
-    };
+    let owner = body["lease"].as_str();
+    let lease = owner.unwrap_or_default();
+    let frame = body["frame"].as_str().unwrap_or_default();
 
     let Some(change) = change else {
         return match viewer.send(Line::Viewer) {
@@ -426,7 +397,7 @@ pub(super) async fn respond(viewer: Arc<Viewer>, request: Request) -> Response {
 
     let outcome = match change {
         Change::Recover => viewer.recover().await,
-        Change::Cleanup => viewer.clean_up(&body).await,
+        Change::Cleanup => viewer.clean_up(body["session"].as_str()).await,
         // Control a viewer holds is left alone either way.
         Change::Hold => {
             #[derive(serde::Deserialize)]
@@ -439,15 +410,90 @@ pub(super) async fn respond(viewer: Arc<Viewer>, request: Request) -> Response {
                 Err(_) => Err(Error::new(Code::Input, "Hold requires a boolean on")),
             }
         }
-        Change::Control(control) => viewer.control(control, &body).await,
+        Change::Input => {
+            viewer
+                .control(Control::Input {
+                    owner: lease,
+                    frame,
+                    actions: &body["actions"],
+                })
+                .await
+        }
+        Change::Acquire => viewer.control(Control::Acquire { frame }).await,
+        Change::Renew => {
+            viewer
+                .control(Control::Renew {
+                    owner: lease,
+                    frame,
+                })
+                .await
+        }
+        Change::Release => viewer.control(Control::Release { owner: lease }).await,
+        Change::Revoke => viewer.control(Control::Revoke).await,
     };
 
+    mutation_reply(&viewer, owner, outcome).await
+}
+
+/// Read one bounded JSON object, retaining its bytes for field duplicate checks.
+async fn read_body(request: Request) -> std::result::Result<(Bytes, Value), Response> {
+    if request.headers().contains_key("transfer-encoding")
+        || header(request.headers(), "content-type").and_then(|kind| kind.split(';').next())
+            != Some("application/json")
+    {
+        return Err(json_response(
+            400,
+            json!({"ok": false, "error": "Send JSON with Content-Length"}),
+        ));
+    }
+
+    let length = header(request.headers(), "content-length")
+        .and_then(|given| given.parse::<usize>().ok())
+        .filter(|length| (1..=MAX_BODY).contains(length));
+    let Some(length) = length else {
+        return Err(json_response(
+            400,
+            json!({"ok": false, "error": format!("Request body must contain 1–{MAX_BODY} bytes")}),
+        ));
+    };
+
+    let body = match tokio::time::timeout(
+        Duration::from_secs(5),
+        to_bytes(request.into_body(), MAX_BODY),
+    )
+    .await
+    {
+        Ok(Ok(bytes)) if bytes.len() == length => bytes,
+        _ => {
+            return Err(json_response(
+                400,
+                json!({"ok": false, "error": "Incomplete or oversized body"}),
+            ));
+        }
+    };
+
+    let raw_body = body;
+    let body = match serde_json::from_slice(&raw_body) {
+        Ok(value @ Value::Object(_)) => value,
+        _ => {
+            return Err(json_response(
+                400,
+                json!({"ok": false, "error": "Request must be a JSON object"}),
+            ));
+        }
+    };
+
+    Ok((raw_body, body))
+}
+
+/// Map a mutation's outcome and finish only the lease that request named.
+async fn mutation_reply(viewer: &Viewer, owner: Option<&str>, outcome: Result<Value>) -> Response {
     match outcome {
         Ok(result) => {
             // Only the lease this request named ends; a request without one
             // never ends someone else's.
             if result["ok"] != true
-                && let Some(owner) = body["lease"].as_str()
+                && let Some(owner) = owner
             {
                 let _ = viewer.release(Some(owner)).await;
             }
@@ -458,7 +504,7 @@ pub(super) async fn respond(viewer: Arc<Viewer>, request: Request) -> Response {
             if !matches!(
                 error.code,
                 Code::Busy | Code::LeaseLost | Code::InvalidJson | Code::Input
-            ) && let Some(owner) = body["lease"].as_str()
+            ) && let Some(owner) = owner
             {
                 let _ = viewer.release(Some(owner)).await;
             }

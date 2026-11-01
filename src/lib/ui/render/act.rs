@@ -274,10 +274,89 @@ pub(super) fn environment(value: &Value) -> Rendered {
     };
 
     let id = value["planId"].as_str().unwrap_or("ID");
-    let next = |what: &str, command: String| {
-        format!("  {} {what}: {}", style::dim("→"), style::cmd(command))
-    };
+    if let Some(stopped) = environment_interrupted(value, id) {
+        return stopped;
+    }
 
+    if value["error"].is_string() {
+        return failed(value).unwrap_or_default();
+    }
+
+    let word = |operation: &str| match operation {
+        "create" => "add",
+        "update" => "update",
+        "permissions" => "fix permissions",
+        "unchanged" => "already there",
+        _ => "conflict",
+    };
+    let line = |what: &str, target: &str| format!("  {:<16} ~/{}", what, text::printable(target));
+    let listed = |file: &Value| {
+        line(
+            word(file["operation"].as_str().unwrap_or("")),
+            file["target"].as_str().unwrap_or("?"),
+        )
+    };
+    let count = |n: usize| text::count(n, "file");
+    if value["rolledBack"] == true || value["preview"] == true {
+        return Rendered::out(environment_rollback(value, id).join("\n"));
+    }
+    let mut lines = Vec::new();
+    if value["applied"] == true {
+        lines.push(format!("{} Copied into the helper", style::ok()));
+        lines.extend(files.iter().map(listed));
+        lines.push(environment_next(
+            "To undo",
+            format!("atlas environment rollback {id} --apply"),
+        ));
+    } else {
+        let conflicts: Vec<String> = files
+            .iter()
+            .filter(|file| file["operation"] == "conflict")
+            .map(|file| line("in the way", file["target"].as_str().unwrap_or("?")))
+            .collect();
+        if !conflicts.is_empty() {
+            let mut err = vec![card(
+                &format!(
+                    "Nothing was copied: {} in the helper already {} or changed there since Atlas copied {}.",
+                    count(conflicts.len()),
+                    if conflicts.len() == 1 {
+                        "exists"
+                    } else {
+                        "exist"
+                    },
+                    if conflicts.len() == 1 { "it" } else { "them" }
+                ),
+                None,
+                false,
+            )];
+            err.extend(conflicts);
+
+            return Rendered::err(err.join("\n"));
+        }
+
+        if files.iter().all(|file| file["operation"] == "unchanged") {
+            lines.push(format!(
+                "{} The helper already has these files",
+                style::ok()
+            ));
+        } else {
+            lines.push(format!(
+                "Would copy into the helper ({}):",
+                count(files.len())
+            ));
+            lines.extend(files.iter().map(listed));
+            lines.push(environment_next(
+                "To copy",
+                format!("atlas environment apply {id}"),
+            ));
+        }
+    }
+
+    Rendered::out(lines.join("\n"))
+}
+
+/// A continuation report owns the same precedence over ordinary failure output.
+fn environment_interrupted(value: &Value, id: &str) -> Option<Rendered> {
     // Stopped part way, whatever the reason: say how to finish.
     // A refused or previewed undo is an error like any other, not a stopped copy.
     let undo = value["operation"] == "rollback" || value["operation"] == "rollbackPreview";
@@ -311,31 +390,18 @@ pub(super) fn environment(value: &Value) -> Rendered {
             )
         };
 
-        return Rendered::err(format!(
+        return Some(Rendered::err(format!(
             "{}\n{}",
             card(&format!("{what}{reason}"), None, false),
-            next("To finish", command)
-        ));
+            environment_next("To finish", command)
+        )));
     }
 
-    if value["error"].is_string() {
-        return failed(value).unwrap_or_default();
-    }
+    None
+}
 
-    let word = |operation: &str| match operation {
-        "create" => "add",
-        "update" => "update",
-        "permissions" => "fix permissions",
-        "unchanged" => "already there",
-        _ => "conflict",
-    };
-    let line = |what: &str, target: &str| format!("  {:<16} ~/{}", what, text::printable(target));
-    let listed = |file: &Value| {
-        line(
-            word(file["operation"].as_str().unwrap_or("")),
-            file["target"].as_str().unwrap_or("?"),
-        )
-    };
+/// Undo and undo-preview share target formatting and keep different follow-up words.
+fn environment_rollback(value: &Value, id: &str) -> Vec<String> {
     let targets = |key: &str| -> Vec<String> {
         value[key]
             .as_array()
@@ -385,59 +451,16 @@ pub(super) fn environment(value: &Value) -> Rendered {
             lines.extend(kept);
         }
 
-        lines.push(next(
+        lines.push(environment_next(
             "To undo",
             format!("atlas environment rollback {id} --apply"),
         ));
-    } else if value["applied"] == true {
-        lines.push(format!("{} Copied into the helper", style::ok()));
-        lines.extend(files.iter().map(listed));
-        lines.push(next(
-            "To undo",
-            format!("atlas environment rollback {id} --apply"),
-        ));
-    } else {
-        let conflicts: Vec<String> = files
-            .iter()
-            .filter(|file| file["operation"] == "conflict")
-            .map(|file| line("in the way", file["target"].as_str().unwrap_or("?")))
-            .collect();
-        if !conflicts.is_empty() {
-            let mut err = vec![card(
-                &format!(
-                    "Nothing was copied: {} in the helper already {} or changed there since Atlas copied {}.",
-                    count(conflicts.len()),
-                    if conflicts.len() == 1 {
-                        "exists"
-                    } else {
-                        "exist"
-                    },
-                    if conflicts.len() == 1 { "it" } else { "them" }
-                ),
-                None,
-                false,
-            )];
-            err.extend(conflicts);
-
-            return Rendered::err(err.join("\n"));
-        }
-
-        if files.iter().all(|file| file["operation"] == "unchanged") {
-            lines.push(format!(
-                "{} The helper already has these files",
-                style::ok()
-            ));
-        } else {
-            lines.push(format!(
-                "Would copy into the helper ({}):",
-                count(files.len())
-            ));
-            lines.extend(files.iter().map(listed));
-            lines.push(next("To copy", format!("atlas environment apply {id}")));
-        }
     }
+    lines
+}
 
-    Rendered::out(lines.join("\n"))
+fn environment_next(what: &str, command: String) -> String {
+    format!("  {} {what}: {}", style::dim("→"), style::cmd(command))
 }
 
 /// An app closed in the helper, and whether its copy went with it.

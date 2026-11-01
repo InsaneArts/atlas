@@ -11,14 +11,25 @@ use crate::{
 use serde_json::{Value, json};
 use std::sync::Arc;
 
-/// What a control request asks: to send input, or to take, renew or end
-/// control, or the menu bar's emergency stop.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(super) enum Control {
-    Input,
-    Acquire,
-    Renew,
-    Release,
+/// A control operation with only the fields it consumes. Tokens keep their
+/// empty-string fallback so lease and frame checks retain their precedence.
+#[derive(Clone, Copy)]
+pub(super) enum Control<'a> {
+    Input {
+        owner: &'a str,
+        frame: &'a str,
+        actions: &'a Value,
+    },
+    Acquire {
+        frame: &'a str,
+    },
+    Renew {
+        owner: &'a str,
+        frame: &'a str,
+    },
+    Release {
+        owner: &'a str,
+    },
     Revoke,
 }
 
@@ -156,20 +167,17 @@ impl Viewer {
     /// The person's cleanup of the session `body` names, after they
     /// confirmed it: every proof an agent's cleanup needs, but not held
     /// back by the session looking alive.
-    pub(super) async fn clean_up(self: &Arc<Self>, body: &Value) -> Result<Value> {
+    pub(super) async fn clean_up(self: &Arc<Self>, session: Option<&str>) -> Result<Value> {
         self.follow_settings().await;
         if self.lease.lock().await.active() {
             return Err(Error::new(Code::Busy, "Release control before cleaning up"));
         }
-        let session = cleanup_session(body["session"].as_str())?;
+        let session = cleanup_session(session)?;
         crate::cleanup::for_person(&self.client(), &session, crate::cleanup::Mode::Apply).await
     }
 
     /// Take, renew or end control, or send input, as `asked`.
-    pub(super) async fn control(&self, asked: Control, body: &Value) -> Result<Value> {
-        let owner = body["lease"].as_str().unwrap_or_default();
-        let frame = body["frame"].as_str().unwrap_or_default();
-
+    pub(super) async fn control(&self, asked: Control<'_>) -> Result<Value> {
         match asked {
             // The menu bar's emergency stop: end whichever lease is held, with
             // the same cleanup as any release. Nothing is resumed.
@@ -178,11 +186,11 @@ impl Viewer {
                 self.release(None).await?;
                 Ok(json!({"ok": true, "released": held}))
             }
-            Control::Release => {
+            Control::Release { owner } => {
                 self.release(Some(owner)).await?;
                 Ok(json!({"ok": true}))
             }
-            Control::Acquire => {
+            Control::Acquire { frame } => {
                 let frame = self.observed(frame).await?;
                 let client = self.client();
                 let current = client.identity().await?;
@@ -203,7 +211,7 @@ impl Viewer {
                 let token = self.take_control(&client, &frame.epoch).await?;
                 Ok(json!({"ok": true, "lease": token, "ttlSeconds": LEASE_SECONDS}))
             }
-            Control::Renew | Control::Input => {
+            Control::Renew { owner, frame } | Control::Input { owner, frame, .. } => {
                 self.lease.lock().await.require(owner)?;
                 let frame = self.observed(frame).await?;
                 if self.lease_epoch.lock().await.as_ref() != Some(&frame.epoch) {
@@ -214,7 +222,7 @@ impl Viewer {
                 }
 
                 // Renewing and input go to the helper control was taken on.
-                if asked == Control::Renew {
+                let Control::Input { actions, .. } = asked else {
                     let client = {
                         let mut lease = self.lease.lock().await;
                         lease.renew(owner)?;
@@ -223,7 +231,7 @@ impl Viewer {
 
                     client.native_control("renew", owner).await?;
                     return Ok(json!({"ok": true}));
-                }
+                };
 
                 let _recording = self
                     .input_recording
@@ -233,7 +241,7 @@ impl Viewer {
                 let client = self.holder();
                 let result = client
                     .input(
-                        &body["actions"],
+                        actions,
                         Some((&frame.epoch, frame.at)),
                         Some((&self.lease, owner)),
                     )

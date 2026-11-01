@@ -38,7 +38,7 @@ impl Viewer {
             return;
         }
 
-        if same_helper(&config, &current.config) {
+        if config.same_helper(&current.config) {
             self.follow_output(&current, config, text).await;
             return;
         }
@@ -121,17 +121,6 @@ impl Viewer {
             *kept = Some((moved, record));
         }
     }
-}
-
-/// Whether two settings name the same helper: everything but where output
-/// goes.
-fn same_helper(one: &Config, other: &Config) -> bool {
-    let moved = Config {
-        output_dir: other.output_dir.clone(),
-        ..one.clone()
-    };
-
-    moved == *other
 }
 
 /// Remove the record at `path` when it names this process.

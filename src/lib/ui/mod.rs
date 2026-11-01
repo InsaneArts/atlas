@@ -6,7 +6,7 @@ pub mod progress;
 pub mod prompt;
 pub mod render;
 pub mod style;
-pub mod table;
+pub(crate) mod table;
 pub mod text;
 
 use std::{io::IsTerminal, sync::OnceLock};
@@ -46,7 +46,7 @@ pub fn set(format: Format) {
 }
 
 /// The format for this run; JSON until chosen, so library use stays quiet.
-pub fn format() -> Format {
+pub(crate) fn format() -> Format {
     FORMAT.get().copied().unwrap_or(Format::Json)
 }
 
@@ -62,7 +62,7 @@ pub fn interactive() -> bool {
 }
 
 /// What to try next once Atlas is set up, one command per line.
-pub fn suggestions() -> Vec<String> {
+pub(crate) fn suggestions() -> Vec<String> {
     let commands = [
         ("atlas screenshot", "see the helper's screen"),
         ("atlas menubar", "watch it, or take control"),

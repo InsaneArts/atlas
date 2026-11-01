@@ -11,14 +11,14 @@ use std::{
     path::{Path, PathBuf},
 };
 
-pub const DEFAULT_PATH: &str = "atlas.local.toml";
+pub(crate) const DEFAULT_PATH: &str = "atlas.local.toml";
 
 /// The configuration's place in a home, as `atlas init` keeps it.
-pub const SETTINGS: &str = ".config/atlas.toml";
+pub(crate) const SETTINGS: &str = ".config/atlas.toml";
 
 /// Where `atlas init` keeps the configuration: `~/.config/atlas.toml`.
 /// Screenshots, logs and records stay in `~/Library/Application Support/Atlas`.
-pub fn installed_path() -> Result<PathBuf> {
+pub(crate) fn installed_path() -> Result<PathBuf> {
     Ok(home()?.join(SETTINGS))
 }
 
@@ -66,7 +66,7 @@ fn default_output() -> PathBuf {
 
 /// Parse user-authored TOML. Unknown keys are rejected by the target type and
 /// errors name the file and the offending line.
-pub fn parse_toml<T: DeserializeOwned>(bytes: &[u8], origin: &Path) -> Result<T> {
+pub(crate) fn parse_toml<T: DeserializeOwned>(bytes: &[u8], origin: &Path) -> Result<T> {
     let text = std::str::from_utf8(bytes).map_err(|_| {
         Error::new(
             Code::Config,
@@ -83,6 +83,25 @@ pub fn parse_toml<T: DeserializeOwned>(bytes: &[u8], origin: &Path) -> Result<T>
 }
 
 impl Config {
+    /// Only output placement can change without ending control in the current helper.
+    /// Destructuring makes every added setting choose its reload behavior here.
+    pub(crate) fn same_helper(&self, other: &Self) -> bool {
+        let Self {
+            helper_uid,
+            socket_path,
+            identity_probe,
+            input_socket,
+            output_dir: _,
+        } = self;
+        (*helper_uid, socket_path, identity_probe, input_socket)
+            == (
+                other.helper_uid,
+                &other.socket_path,
+                &other.identity_probe,
+                &other.input_socket,
+            )
+    }
+
     pub fn load(path: &Path) -> Result<Self> {
         let path = fs::canonicalize(path).map_err(|error| {
             // Only a path with nothing there is "not set up"; a dangling link
@@ -151,7 +170,7 @@ impl Config {
 
     /// Parse configuration text as if it were the file at `path`: relative
     /// paths resolve against its directory and `~/` against the home.
-    pub fn parse(bytes: &[u8], path: &Path) -> Result<Self> {
+    pub(crate) fn parse(bytes: &[u8], path: &Path) -> Result<Self> {
         let mut config: Self = parse_toml(bytes, path)?;
         crate::session::validate_uid(config.helper_uid)?;
 
@@ -223,7 +242,7 @@ fn missing(path: &Path) -> Error {
 /// The account's home as macOS knows it, so that two shells of one account
 /// share one set of locks and records whatever `$HOME` says in either;
 /// `$HOME` only when the account cannot be looked up.
-pub fn home() -> Result<PathBuf> {
+pub(crate) fn home() -> Result<PathBuf> {
     let account = nix::unistd::User::from_uid(nix::unistd::getuid())
         .ok()
         .flatten()
@@ -309,7 +328,7 @@ pub(crate) fn save_private(path: &Path, bytes: &[u8]) -> Result<()> {
 }
 
 /// Resolve the directory holding `path`, keeping its final entry as named.
-pub fn resolve_parent(path: &Path) -> Result<PathBuf> {
+pub(crate) fn resolve_parent(path: &Path) -> Result<PathBuf> {
     let parent = path
         .parent()
         .ok_or_else(|| Error::new(Code::Config, "Cannot resolve path"))?;
@@ -322,7 +341,7 @@ pub fn resolve_parent(path: &Path) -> Result<PathBuf> {
 
 /// Resolve `path`, and its existing ancestors when it does not exist yet, so
 /// aliases of an absent socket share a lock.
-pub fn resolve_path(path: &Path) -> Result<PathBuf> {
+pub(crate) fn resolve_path(path: &Path) -> Result<PathBuf> {
     if path.exists() {
         return fs::canonicalize(path).map_err(context("Resolve path", path));
     }
@@ -333,6 +352,39 @@ pub fn resolve_path(path: &Path) -> Result<PathBuf> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn only_output_placement_preserves_the_helper_on_reload() -> Result<()> {
+        let directory = tempfile::tempdir()?;
+        let original = crate::test_support::client_in(directory.path()).config;
+        let moved = Config {
+            output_dir: directory.path().join("elsewhere"),
+            ..original.clone()
+        };
+        assert!(original.same_helper(&moved));
+        assert_ne!(original, moved);
+        for changed in [
+            Config {
+                helper_uid: original.helper_uid + 1,
+                ..original.clone()
+            },
+            Config {
+                socket_path: directory.path().join("another-daemon"),
+                ..original.clone()
+            },
+            Config {
+                identity_probe: directory.path().join("another-probe"),
+                ..original.clone()
+            },
+            Config {
+                input_socket: directory.path().join("another-input"),
+                ..original.clone()
+            },
+        ] {
+            assert!(!original.same_helper(&changed), "{changed:?}");
+        }
+        Ok(())
+    }
 
     #[test]
     fn a_settings_open_failure_names_only_the_step_and_cause() {

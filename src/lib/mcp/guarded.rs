@@ -169,7 +169,8 @@ impl Registry {
         }
         let token = params["arguments"].get(ARGUMENT);
         let guarded = root.views.load(Ordering::SeqCst) && !root.read_only;
-        let mutation = !LOOKING.contains(&name);
+        let tool = Tool::parse(name);
+        let mutation = tool.is_none_or(|tool| tool.policy().1 == Access::Change);
         let bootstrap = name == "show_screen" && params["arguments"]["_atlasOpen"] == true;
         if guarded && (token.is_some() || bootstrap || mutation) {
             let Some((child, reservation, minted)) = self.reserve(root, token, bootstrap, mutation)
@@ -196,7 +197,10 @@ impl Registry {
                     _reservation: Some(reservation),
                 };
             }
-            let result = child.call(params).await;
+            let Some(tool) = tool else {
+                return Reply::new(failure(id, -32602, "Unknown tool"));
+            };
+            let result = child.call(tool, &params["arguments"]).await;
             if mutation
                 && (result["structuredContent"]["error"]["uncertain"] == true
                     || result["structuredContent"]["error"]["code"] == "menubar")
@@ -219,7 +223,10 @@ impl Registry {
         if token.is_some() || mutation {
             return Reply::new(failure(id, -32602, "This view has no control authority"));
         }
-        let mut result = root.call(params).await;
+        let Some(tool) = tool else {
+            return Reply::new(failure(id, -32602, "Unknown tool"));
+        };
+        let mut result = root.call(tool, &params["arguments"]).await;
         result["structuredContent"]["canControl"] = json!(false);
         result["structuredContent"]["canResume"] = json!(false);
         result["structuredContent"]["control"] = json!(false);

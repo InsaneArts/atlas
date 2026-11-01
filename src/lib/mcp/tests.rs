@@ -1394,3 +1394,29 @@ fn app_reply_cost_preserves_the_window_projection() {
         crate::test_support::reply_cost(&reply, &fixture);
     }
 }
+
+/// The tools only a client that draws views is offered: they are the
+/// person's, and only such a client keeps a view's tools from the model.
+pub(super) const VIEW_ONLY: [&str; 11] = [
+    "resume_agent",
+    "take_control",
+    "keep_control",
+    "give_back",
+    "send_input",
+    "activity",
+    "helper_apps",
+    "screenshots",
+    "screenshot",
+    "switch_helper",
+    "log_out_helper",
+];
+/// The tools that only look, all a read-only server offers.
+pub(super) const LOOKING: [&str; 7] = [
+    "atlas_status",
+    "show_screen",
+    "screen_frame",
+    "activity",
+    "helper_apps",
+    "screenshots",
+    "screenshot",
+];

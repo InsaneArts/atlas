@@ -125,9 +125,9 @@ fn exchange_within(
 /// The menu bar viewer's newest frame, with the key control requests name
 /// it by and the display's size in points, which input is given in.
 pub(crate) struct SharedFrame {
-    pub png: Vec<u8>,
-    pub key: String,
-    pub display: (f64, f64),
+    pub(crate) png: Vec<u8>,
+    pub(crate) key: String,
+    pub(crate) display: (f64, f64),
 }
 
 /// The local viewer's newest frame at `url`, read within `deadline` and at

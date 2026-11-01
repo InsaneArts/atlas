@@ -171,26 +171,8 @@ fn step(step: &Value) -> String {
             style::dim(format!("not kept here, so kept in the helper: {source}"))
         ));
     }
-    let escaped: Vec<String> = step["left"]
-        .as_array()
-        .into_iter()
-        .flatten()
-        .map(|process| {
-            format!(
-                "{} ({})",
-                text::printable(process["name"].as_str().unwrap_or("a process")),
-                process["pid"]
-            )
-        })
-        .collect();
-    if !escaped.is_empty() {
-        line.push_str(&format!(
-            "\n     {}",
-            style::dim(format!(
-                "still running, never signalled: {}",
-                escaped.join(", ")
-            ))
-        ));
+    if let Some(left) = super::remaining_processes(&step["left"]) {
+        line.push_str(&format!("\n     {}", style::dim(left)));
     }
     line
 }

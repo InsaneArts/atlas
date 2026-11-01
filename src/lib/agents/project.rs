@@ -6,7 +6,7 @@ use std::path::{Path, PathBuf};
 
 /// The section `atlas agents project` keeps in a project's AGENTS.md: when
 /// to test in the helper, and how. The README shows the same text.
-pub const PROJECT_SECTION: &str = include_str!("../agent_project.md");
+const PROJECT_SECTION: &str = include_str!("../agent_project.md");
 const SECTION_START: &str = "<!-- atlas:start -->";
 const SECTION_END: &str = "<!-- atlas:end -->";
 
@@ -145,7 +145,7 @@ fn forget_in(dir: &Path, record: &Path) -> Result<Value> {
 
 /// The projects Atlas taught, each with whether its AGENTS.md still has
 /// the section.
-pub fn taught() -> Vec<Value> {
+pub(super) fn taught() -> Vec<Value> {
     let Ok(record) = taught_record() else {
         return Vec::new();
     };

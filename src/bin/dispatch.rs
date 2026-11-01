@@ -5,7 +5,7 @@ use super::{
         JobCommand, OnOff, OnboardingCommand, WindowState,
     },
     doctor, help,
-    output::print,
+    output::{self, print},
     policy::Policy,
     update,
 };
@@ -242,6 +242,10 @@ fn note_outcome(
     let _ = task::settle_rolled_back_facts(client, &facts);
 }
 
+/// size-exception: this is the exhaustive command router. Its arms adapt CLI
+/// arguments to complete domain operations; separate routers could omit a command.
+/// Command-policy cases and guide/example parsing cover this boundary.
+///
 /// [`execute`]'s work once the command is labelled: `client` gives its
 /// client, and `host` is its host session, if any.
 async fn carry_out(
@@ -389,7 +393,7 @@ async fn carry_out(
         Command::Doctor {
             login_timing: true, ..
         } => atlas::login_log::timing(),
-        Command::Doctor { verbose, .. } => Ok(doctor(&client()?, verbose).await),
+        Command::Doctor { verbose, .. } => Ok(doctor::report(&client()?, verbose).await),
         Command::VerifyNative { fixture } => atlas::capability::verify(&client()?, &fixture).await,
         Command::Environment {
             command: Some(command),
@@ -792,11 +796,12 @@ async fn menu_bar(
             if serve {
                 let _ = nix::unistd::setsid();
             }
-            viewer::serve(client, port, program).await
+            viewer::serve(client, port, program, output::serving_menu_bar).await
         }
         None => {
             let output = client.output_dir()?.to_path_buf();
-            menubar::start(config, port, &output).await?;
+            let (already, record) = menubar::launch(config, port, &output).await?;
+            output::started_menu_bar(already, &record);
             Ok(Value::Null)
         }
     }

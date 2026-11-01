@@ -8,7 +8,7 @@ use unicode_width::UnicodeWidthStr;
 /// its escape: control characters, bidirectional controls and line or
 /// paragraph separators. Window titles and element names come from apps in
 /// the helper and must not colour the terminal or move its cursor.
-pub fn printable(text: &str) -> Cow<'_, str> {
+pub(crate) fn printable(text: &str) -> Cow<'_, str> {
     if !text.chars().any(misleading) {
         return Cow::Borrowed(text);
     }
@@ -41,7 +41,7 @@ fn misleading(character: char) -> bool {
 }
 
 /// `text` cut to `width` terminal cells, ending in `…` where it was cut.
-pub fn clip(text: &str, width: usize) -> String {
+pub(crate) fn clip(text: &str, width: usize) -> String {
     if text.width() <= width {
         return text.to_owned();
     }
@@ -61,7 +61,7 @@ pub fn clip(text: &str, width: usize) -> String {
 }
 
 /// A path with the home directory written as `~`.
-pub fn tilde(path: impl AsRef<Path>) -> String {
+pub(crate) fn tilde(path: impl AsRef<Path>) -> String {
     let path = path.as_ref();
     match std::env::var_os("HOME").map(std::path::PathBuf::from) {
         Some(home) if !home.as_os_str().is_empty() => match path.strip_prefix(&home) {
@@ -75,7 +75,7 @@ pub fn tilde(path: impl AsRef<Path>) -> String {
 
 /// The first non-empty line of a program's output, at most `limit`
 /// characters, for a report; None when it printed nothing.
-pub fn first_line(output: &[u8], limit: usize) -> Option<String> {
+pub(crate) fn first_line(output: &[u8], limit: usize) -> Option<String> {
     String::from_utf8_lossy(output)
         .lines()
         .find(|line| !line.trim().is_empty())
@@ -83,7 +83,7 @@ pub fn first_line(output: &[u8], limit: usize) -> Option<String> {
 }
 
 /// `1 window`, `3 windows`.
-pub fn count(n: usize, noun: &str) -> String {
+pub(crate) fn count(n: usize, noun: &str) -> String {
     if n == 1 {
         format!("1 {noun}")
     } else {
@@ -92,7 +92,7 @@ pub fn count(n: usize, noun: &str) -> String {
 }
 
 /// `a`, `a and b`, `a, b and c`.
-pub fn listed(parts: &[String]) -> String {
+pub(crate) fn listed(parts: &[String]) -> String {
     match parts {
         [] => String::new(),
         [only] => only.clone(),
@@ -101,7 +101,7 @@ pub fn listed(parts: &[String]) -> String {
 }
 
 /// Width × height, without fractional zeros: `2560 × 1440`.
-pub fn dimensions(width: f64, height: f64) -> String {
+pub(crate) fn dimensions(width: f64, height: f64) -> String {
     format!("{} × {}", number(width), number(height))
 }
 
@@ -115,7 +115,7 @@ pub fn number(value: f64) -> String {
 }
 
 /// Milliseconds as `12 ms`, `1.2 s` or `2m 05s`.
-pub fn duration(ms: f64) -> String {
+pub(crate) fn duration(ms: f64) -> String {
     if ms < 1000.0 {
         format!("{} ms", ms.round() as u64)
     } else if ms < 59_950.0 {
