@@ -3,6 +3,8 @@
 //! the same requirement setup enforces, optionally notarizes and staples it,
 //! and writes a zip with its SHA-256 sum. The website repository's
 //! scripts/publish-release.sh puts both on atlas.insanearts.io.
+mod quality;
+
 use atlas::{
     menubar::{APP_EXECUTABLE, LOGIN_JOB},
     setup::IDENTIFIER,
@@ -51,6 +53,7 @@ fn main() -> ExitCode {
 fn run(args: Vec<String>) -> Result<()> {
     match args.split_first() {
         Some((command, rest)) if command == "dist" => dist(&options(rest, &root())?),
+        Some((command, rest)) if command == "quality" => quality::run(rest, &root()),
         _ => Err(USAGE.to_owned()),
     }
 }
