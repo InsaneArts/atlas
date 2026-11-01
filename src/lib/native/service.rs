@@ -464,11 +464,14 @@ impl Request {
         match raw.op.as_str() {
             "hello" => Err(refusal.into()),
             "acquire" | "reset" => {
-                let mut error = Error::from(refusal);
-                // The old missing member was read as null before decoding.
-                if error.error == "missing field `epoch`" {
-                    error.error = "invalid type: null, expected struct InputEpoch".into();
-                }
+                // Preserve sorted-key precedence and Value's epoch errors.
+                // If the old decoder accepts it, keep the typed refusal,
+                // including duplicates that Value would otherwise discard.
+                let error = Error::from(
+                    InputEpoch::deserialize(raw.fields.get("epoch").unwrap_or(&Value::Null))
+                        .err()
+                        .unwrap_or(refusal),
+                );
                 if raw.op == "acquire" {
                     Ok(Self::RefusedAcquire(Arc::new(error)))
                 } else {
@@ -1433,6 +1436,57 @@ mod tests {
                 .unwrap()
             );
         }
+    }
+
+    #[test]
+    fn epoch_refusals_keep_their_existing_words_and_order() {
+        let fixtures = [
+            (
+                "[501,1,2,800,600,1,0]",
+                "invalid length 7, expected fewer elements in array",
+            ),
+            (
+                r#"{"z":0,"a":0}"#,
+                "unknown field `a`, expected one of `uid`, `securitySessionId`, `displayId`, `width`, `height`, `processId`",
+            ),
+            (
+                r#"{"uid":null,"displayId":"wrong"}"#,
+                "invalid type: string \"wrong\", expected u64",
+            ),
+            (r#"{"z":0,"uid":null}"#, "invalid type: null, expected u32"),
+            ("null", "invalid type: null, expected struct InputEpoch"),
+            (
+                "[]",
+                "invalid length 0, expected struct InputEpoch with 6 elements",
+            ),
+            ("{}", "missing field `uid`"),
+        ];
+        let mut actual = Vec::new();
+        let mut expected = Vec::new();
+        for op in ["acquire", "reset"] {
+            for (epoch, message) in fixtures {
+                let value = serde_json::from_str::<Value>(epoch).unwrap();
+                let legacy = crate::session::InputEpoch::deserialize(&value).unwrap_err();
+                assert_eq!(legacy.to_string(), message);
+                let body = format!(r#"{{"op":"{op}","epoch":{epoch}}}"#);
+                let error = match Request::decode(body.as_bytes()) {
+                    Err(error) => json!(error),
+                    Ok(Request::RefusedAcquire(error)) => json!(&*error),
+                    request => panic!("expected an epoch refusal for {body}: {request:?}"),
+                };
+                actual.push((body.clone(), error));
+                expected.push((
+                    body,
+                    json!({
+                        "code": "invalid-json",
+                        "error": message,
+                        "ok": false,
+                        "uncertain": false,
+                    }),
+                ));
+            }
+        }
+        assert_eq!(actual, expected);
     }
 
     #[tokio::test]
