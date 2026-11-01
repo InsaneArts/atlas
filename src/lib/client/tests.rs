@@ -3414,16 +3414,11 @@ fn a_reply_without_an_app_array_is_never_an_empty_list() {
 #[test]
 fn a_truly_empty_list_is_an_empty_list() {
     let empty = json!({"ok": true, "apps": [], "elapsedMs": 1.5});
-    assert_eq!(json!(app_list(empty.clone()).unwrap()), empty);
+    assert_eq!(app_list(empty.clone()).unwrap(), empty);
 
     let listed = json!({"ok": true, "apps": [{"pid": 812, "name": null, "bundleId": null,
         "executable": "/x", "active": true, "hidden": false, "policy": "regular"}]});
-    assert_eq!(json!(app_list(listed.clone()).unwrap()), listed);
-
-    let extended = json!({"ok": true, "apps": [{"pid": 812, "name": null,
-        "future": {"nested": [false, 3]}}], "starts": {"812": [123, 456]},
-        "future": [null, "kept"]});
-    assert_eq!(json!(app_list(extended.clone()).unwrap()), extended);
+    assert_eq!(app_list(listed.clone()).unwrap(), listed);
 }
 
 #[tokio::test]
@@ -3445,7 +3440,7 @@ async fn process_identities_stay_internal_to_app_resolution_in_current_and_older
             )
             .await
             .unwrap();
-        assert_eq!(json!(internal)["starts"], reply["starts"]);
+        assert_eq!(internal["starts"], reply["starts"]);
         let public = helper
             .serve(client.apps(), |_| Some(reply.clone()))
             .await

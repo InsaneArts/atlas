@@ -5,29 +5,14 @@ use crate::{
     error::{Code, Error, Result},
     transport::refusal,
 };
-use serde::{Deserialize, Serialize};
-use serde_json::{Map, Value, json};
-
-#[derive(Debug, Deserialize, Serialize)]
-pub(crate) struct AppList {
-    pub apps: Vec<App>,
-    #[serde(flatten)]
-    pub fields: Map<String, Value>,
-}
-
-#[derive(Debug, Deserialize, Serialize)]
-pub(crate) struct App {
-    pub pid: i32,
-    #[serde(flatten)]
-    pub fields: Value,
-}
+use serde_json::{Value, json};
 
 /// `reply` as an app list: accepted, with `apps` an array of objects, each
 /// with a process ID from 1 to 2³¹−1, `name`, `bundleId` and `executable`
 /// strings or null, `active` and `hidden` booleans and `policy` a string
 /// when present. A refusal keeps its code; anything else is a protocol
 /// failure, never an empty list.
-pub(crate) fn app_list(reply: Value) -> Result<AppList> {
+pub(crate) fn app_list(reply: Value) -> Result<Value> {
     if reply["ok"] == false {
         return Err(refusal(&reply));
     }
@@ -36,17 +21,13 @@ pub(crate) fn app_list(reply: Value) -> Result<AppList> {
             .as_array()
             .is_some_and(|apps| apps.iter().all(listed_app));
     if valid {
-        serde_json::from_value(reply).map_err(|_| malformed())
+        Ok(reply)
     } else {
-        Err(malformed())
+        Err(Error::new(
+            Code::Protocol,
+            "The helper's list of running apps was malformed, so Atlas cannot tell what is running",
+        ))
     }
-}
-
-fn malformed() -> Error {
-    Error::new(
-        Code::Protocol,
-        "The helper's list of running apps was malformed, so Atlas cannot tell what is running",
-    )
 }
 
 /// Whether `app` is one entry of an app list, as [`app_list`] says.
@@ -81,14 +62,18 @@ impl Client {
             self.listed_apps(json!({"op": "apps"})).await
         };
         let mut reply = read.await.map_err(Error::certain)?;
-        reply.fields.remove("starts");
-        Ok(json!(reply))
+        // app_list validated the reply's object fields before returning it.
+        reply
+            .as_object_mut()
+            .expect("validated app list")
+            .remove("starts");
+        Ok(reply)
     }
 
     /// [`Client::apps`] in the helper session `verified` names, as a pinned
     /// [`Run`](super::Run) runs: a daemon that can be told the session
     /// refuses the listing in any other, and an older one is verified again.
-    pub(crate) async fn apps_in(&self, verified: &Verified) -> Result<AppList> {
+    pub(crate) async fn apps_in(&self, verified: &Verified) -> Result<Value> {
         let Some(pin) = verified.pin() else {
             self.identity().await?;
             return self
@@ -104,7 +89,7 @@ impl Client {
 
     /// The app list `request` asks the helper daemon for, once the helper
     /// is verified.
-    async fn listed_apps(&self, request: Value) -> Result<AppList> {
+    async fn listed_apps(&self, request: Value) -> Result<Value> {
         app_list(self.transport.call(&request).await?)
     }
 }
