@@ -2,7 +2,7 @@
 //! step of a change whose control the caller holds, or a fixed read-only
 //! inspection, each stopped after its timeout. [`Run`] says which, and
 //! [`Client::run`] runs it.
-use super::{Client, Verified, validate_completion};
+use super::{Client, Mutation, Verified, validate_completion};
 use crate::{
     control::Ownership,
     error::{Code, Error, Result},
@@ -153,8 +153,8 @@ impl Client {
         match run.mode {
             // Control taken for a held run stays held until the command
             // ends; one beside others lets go of it once its request is sent.
-            Mode::Held | Mode::Owned => self.mutate(request, None, None, None).await,
-            Mode::Beside => self.mutate(request, None, None, taken).await,
+            Mode::Held | Mode::Owned => self.mutate(Mutation::Run, request, None, None, None).await,
+            Mode::Beside => self.mutate(Mutation::Run, request, None, None, taken).await,
             Mode::Pending => self.run_unrecorded(&request, run.timeout).await,
             Mode::Inspect => self
                 .run_unrecorded(&request, run.timeout)

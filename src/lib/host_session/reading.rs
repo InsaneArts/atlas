@@ -1,10 +1,16 @@
 use crate::{
     activity_log,
-    client::Client,
-    host_session::{Key, liveness::Snapshot, record::Seen, store::Store},
-    session_view::{Scene, Who},
+    control::Controller,
+    host_session::{
+        Key,
+        liveness::{Lifetime, Snapshot},
+        names::{name_of, names_with_left},
+        record::Seen,
+        store::Store,
+    },
+    session_view::{self, Scene, Who},
 };
-use std::sync::Arc;
+use std::{collections::BTreeMap, sync::Arc};
 
 /// What a status says that the sessions' states depend on.
 #[derive(Clone, Copy, Debug)]
@@ -57,49 +63,45 @@ pub(crate) fn unrecorded<'a>(
 
 /// Whether a live holder, waiting or running note names a session with no
 /// record yet among `seen`: a session on its first command.
-pub(crate) fn first_command_running(client: &Client, seen: &[Seen]) -> bool {
-    SessionReading::collect(client).is_some_and(|reading| {
-        !unrecorded(
-            reading.holder.as_ref(),
-            &reading.waiting,
-            &reading.running,
-            seen,
-        )
-        .is_empty()
-    })
+pub(crate) fn first_command_running(
+    output: &std::path::Path,
+    controller: &Controller,
+    seen: &[Seen],
+) -> bool {
+    let reading = SessionReading::collect(output, controller, Snapshot::polled);
+    !unrecorded(
+        reading.holder.as_ref(),
+        &reading.waiting,
+        &reading.running,
+        seen,
+    )
+    .is_empty()
 }
 
 impl SessionReading {
-    pub(crate) fn collect(client: &Client) -> Option<Self> {
-        Self::collect_with(client, Snapshot::polled)
-    }
-
-    pub(crate) fn collect_with(
-        client: &Client,
+    pub(crate) fn collect(
+        output: &std::path::Path,
+        controller: &Controller,
         sample: impl FnOnce(&std::path::Path, Vec<crate::process::Instance>) -> Snapshot,
-    ) -> Option<Self> {
-        let output = client.output_dir().ok()?;
+    ) -> Self {
         let seen = Store::at(output).recent();
         let rows = activity_log::recent(output, SESSION_ROWS);
-        let causes = client
-            .controller
+        let causes = controller
             .pending_causes_within(std::time::Duration::from_millis(50))
             .unwrap_or_default();
-        let holder = client.controller.holder_note();
-        let waiting = client.controller.waiting_candidates();
-        let running = client.controller.running_candidates();
-        Some(
-            Self {
-                seen,
-                rows,
-                causes,
-                holder,
-                waiting,
-                running,
-                processes: Snapshot::default(),
-            }
-            .sampled(output, sample),
-        )
+        let holder = controller.holder_note();
+        let waiting = controller.waiting_candidates();
+        let running = controller.running_candidates();
+        Self {
+            seen,
+            rows,
+            causes,
+            holder,
+            waiting,
+            running,
+            processes: Snapshot::default(),
+        }
+        .sampled(output, sample)
     }
 
     pub(crate) fn sample(
@@ -166,5 +168,100 @@ impl SessionReading {
 
     pub(crate) fn work(&self, key: &Key, facts: SessionFacts) -> bool {
         self.scene(facts).work(&Who::Host(key.clone()))
+    }
+}
+
+/// A frozen session selection shared by display and service replacement.
+pub(crate) struct Listed<'a> {
+    pub(crate) key: String,
+    pub(crate) name: String,
+    pub(crate) ended: Option<u64>,
+    pub(crate) source: Source<'a>,
+    pub(crate) last_seen: u64,
+    pub(crate) shown: session_view::Shown,
+    pub(crate) running_command: bool,
+}
+
+pub(crate) enum Source<'a> {
+    Recorded(&'a Seen, usize, Lifetime),
+    First(&'a crate::control::Note),
+    Terminal { started: u64, now: u64 },
+}
+
+impl SessionReading {
+    pub(crate) fn live(&self, facts: SessionFacts) -> Vec<Listed<'_>> {
+        let seen = &self.seen;
+        let causes = &self.causes;
+        let holder = &self.holder;
+        let waiting = &self.waiting;
+        let running = &self.running;
+        let scene = self.scene(facts);
+        let now_ms = u64::try_from(facts.now / 1_000_000).unwrap_or(u64::MAX);
+        let mut unknown: BTreeMap<&Key, usize> = BTreeMap::new();
+        for cause in causes.iter().filter(|cause| !cause.running) {
+            if let Some(session) = &cause.session {
+                *unknown.entry(session).or_default() += 1;
+            }
+        }
+        // A session whose record has not been written is named by its command's
+        // note meanwhile, by the same rule as a record.
+        let first = unrecorded(holder.as_ref(), waiting, running, seen);
+        let named = names_with_left(
+            seen.iter().map(|seen| &seen.record),
+            [],
+            first.iter().copied(),
+        );
+
+        let mut listed: Vec<Listed> = seen
+            .iter()
+            .filter_map(|seen| {
+                let record = &seen.record;
+                let uncertain = unknown.get(&record.key).copied().unwrap_or(0);
+                let (shown, lifetime) = scene.project(record);
+                shown.relevant().then(|| Listed {
+                    key: record.key.to_string(),
+                    name: name_of(&named, &record.key, Some(record.host)),
+                    ended: lifetime.ended,
+                    source: Source::Recorded(seen, uncertain, lifetime),
+                    last_seen: record.last_seen,
+                    running_command: causes
+                        .iter()
+                        .any(|cause| cause.command && cause.session.as_ref() == Some(&record.key)),
+                    shown,
+                })
+            })
+            .collect();
+        for note in first {
+            let Some(key) = &note.session else { continue };
+            listed.push(Listed {
+                key: key.to_string(),
+                name: name_of(&named, key, note.host),
+                ended: None,
+                source: Source::First(note),
+                last_seen: note.since,
+                shown: scene.shown(&Who::Host(key.clone()), false),
+                running_command: causes
+                    .iter()
+                    .any(|cause| cause.command && cause.session.as_ref() == Some(key)),
+            });
+        }
+        if let Some((started, last_seen)) = scene.terminal() {
+            listed.push(Listed {
+                key: String::new(),
+                name: session_view::TERMINAL.to_owned(),
+                ended: None,
+                source: Source::Terminal {
+                    started,
+                    now: now_ms,
+                },
+                last_seen,
+                shown: scene.shown(&Who::Terminal, false),
+                running_command: causes
+                    .iter()
+                    .any(|cause| cause.command && cause.session.is_none()),
+            });
+        }
+        listed.sort_by_key(|listed| (listed.shown.state, std::cmp::Reverse(listed.last_seen)));
+        listed
     }
 }

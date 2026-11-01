@@ -20,34 +20,6 @@ pub(super) type ByGeneration<V> = BTreeMap<String, V>;
 /// The most a record may hold before it is treated as missing.
 const LIMIT: u64 = 64 * 1024;
 
-/// A record kept beside the marker, one entry per pending generation.
-pub(super) trait Entries {
-    /// Keep only the entries whose generations are still `pending`.
-    fn retain_pending(&mut self, pending: &[String]);
-
-    fn is_empty(&self) -> bool;
-}
-
-impl<V> Entries for ByGeneration<V> {
-    fn retain_pending(&mut self, pending: &[String]) {
-        self.retain(|kept, _| pending.contains(kept));
-    }
-
-    fn is_empty(&self) -> bool {
-        BTreeMap::is_empty(self)
-    }
-}
-
-impl Entries for Vec<String> {
-    fn retain_pending(&mut self, pending: &[String]) {
-        self.retain(|kept| pending.contains(kept));
-    }
-
-    fn is_empty(&self) -> bool {
-        <[String]>::is_empty(self)
-    }
-}
-
 /// The record at `path`; empty when it is missing, unreadable, malformed,
 /// too large or not this account's.
 pub(super) fn read<T: DeserializeOwned + Default>(path: &Path) -> T {
@@ -65,7 +37,7 @@ pub(super) fn note<V: Serialize + DeserializeOwned + Clone>(
     pending: &[String],
 ) -> Result<()> {
     let mut labels: ByGeneration<V> = read(path);
-    labels.retain_pending(pending);
+    labels.retain(|kept, _| pending.contains(kept));
     labels.insert(generation.to_owned(), value.clone());
     write(path, &labels)
 }
@@ -73,32 +45,35 @@ pub(super) fn note<V: Serialize + DeserializeOwned + Clone>(
 /// Forget every label at `path` whose generation is no longer `pending`,
 /// removing the file once none is left. A missing file stays missing.
 pub(super) fn keep<V: Serialize + DeserializeOwned>(path: &Path, pending: &[String]) -> Result<()> {
-    keep_with(path, pending, read::<ByGeneration<V>>, write)
+    keep_with(
+        path,
+        |path| {
+            let mut labels: ByGeneration<V> = read(path);
+            labels.retain(|kept, _| pending.contains(kept));
+            (!labels.is_empty()).then_some(labels)
+        },
+        write,
+    )
 }
 
-/// Keep only the entries of the record at `path`, read with `read` and
-/// written with `write`, whose generations are still `pending`, removing it
-/// once none is left. A missing record stays missing.
-pub(super) fn keep_with<T: Entries>(
+/// Keep the nonempty record `read` retains, or remove it. Check existence
+/// before reading so an absent record never creates a new file.
+pub(super) fn keep_with<T>(
     path: &Path,
-    pending: &[String],
-    read: impl FnOnce(&Path) -> T,
+    read: impl FnOnce(&Path) -> Option<T>,
     write: impl FnOnce(&Path, &T) -> Result<()>,
 ) -> Result<()> {
     if fs::symlink_metadata(path).is_err() {
         return Ok(());
     }
 
-    let mut entries = read(path);
-    entries.retain_pending(pending);
-    if entries.is_empty() {
-        return match fs::remove_file(path) {
+    match read(path) {
+        Some(entries) => write(path, &entries),
+        None => match fs::remove_file(path) {
             Err(error) if error.kind() != std::io::ErrorKind::NotFound => Err(error.into()),
             _ => Ok(()),
-        };
+        },
     }
-
-    write(path, &entries)
 }
 
 fn write<V: Serialize>(path: &Path, labels: &ByGeneration<V>) -> Result<()> {

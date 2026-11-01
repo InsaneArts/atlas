@@ -11,7 +11,7 @@ mod mutate;
 mod record;
 mod run;
 mod service;
-pub(crate) mod service_change;
+mod service_change;
 mod session;
 mod stop;
 #[cfg(test)]
@@ -22,11 +22,12 @@ pub(crate) use apps::{AppList, AppRow};
 #[cfg(test)]
 pub(crate) use capture::prune_captures;
 pub use capture::{Frame, SCREENSHOT_SIDE, Size, png_dimensions};
-pub use input::Check;
+pub(crate) use mutate::Mutation;
 pub use mutate::validate_completion;
 pub(crate) use record::PersonInput;
 pub(crate) use run::Run;
 pub use run::{RUN_TIMEOUT, RUN_TIMEOUT_MAX};
+pub(crate) use windows::WINDOW_LOOKUP;
 
 pub use crate::time::timestamp;
 use crate::{
@@ -57,14 +58,14 @@ type BuildCache = Arc<std::sync::Mutex<Option<((u64, u64, u64, i64, i64), String
 /// refuses a read meant for another session. Only [`Client::verify`] makes
 /// one, so a read given it was checked in that session.
 #[derive(Debug, Clone)]
-pub struct Verified {
+pub(crate) struct Verified {
     session: Session,
     observation: Observation,
 }
 
 impl Verified {
     /// The session as it was verified.
-    pub fn session(&self) -> &Session {
+    pub(crate) fn session(&self) -> &Session {
         &self.session
     }
 
@@ -89,7 +90,7 @@ pub enum Actor {
 }
 
 impl Actor {
-    pub fn as_str(self) -> &'static str {
+    pub(crate) fn as_str(self) -> &'static str {
         match self {
             Actor::Agent => "agent",
             Actor::Viewer => "viewer",
@@ -151,7 +152,8 @@ impl Client {
     }
 
     /// This client, recording what its command does in each activity row.
-    pub fn doing(mut self, doing: Doing) -> Self {
+    #[cfg(test)]
+    pub(crate) fn doing(mut self, doing: Doing) -> Self {
         self.doing = Some(doing);
         self
     }
@@ -246,15 +248,15 @@ impl Client {
         Ok(serde_json::from_slice(&output)?)
     }
 
-    pub async fn identity(&self) -> Result<Session> {
-        Observation::decode(&self.status().await).require_hidden(self.config.helper_uid)
+    pub(crate) async fn identity(&self) -> Result<Session> {
+        self.verify().await.map(|verified| verified.session)
     }
 
     /// The helper session as the daemon reports it now, and whether that
     /// daemon refuses a read meant for another session: what reads in this
     /// session are checked by. It verifies the helper as
     /// [`Client::identity`] does.
-    pub async fn verify(&self) -> Result<Verified> {
+    pub(crate) async fn verify(&self) -> Result<Verified> {
         let status = self.status().await;
         let observation = Observation::decode(&status);
         let session = observation.require_hidden(self.config.helper_uid)?;
@@ -272,16 +274,11 @@ impl Client {
         capability: &str,
         older: &'static str,
     ) -> Result<Verified> {
-        let status = self.status().await;
-        let observation = Observation::decode(&status);
-        let session = observation.require_hidden(self.config.helper_uid)?;
-        if !observation.has_capability(capability) {
+        let verified = self.verify().await?;
+        if !verified.observation.has_capability(capability) {
             return Err(Error::new(Code::Daemon, older));
         }
-        Ok(Verified {
-            session,
-            observation,
-        })
+        Ok(verified)
     }
 
     /// Whether this shell may keep Atlas's own files: the controller lock

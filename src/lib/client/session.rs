@@ -1,6 +1,6 @@
 //! Restarting the helper and logging it out, each under a claim of its own
 //! that stays until the outcome is known.
-use super::{Client, service::require_accessibility};
+use super::{Client, Mutation, service::require_accessibility};
 use crate::{
     control::Ownership,
     error::{Code, Error, Result},
@@ -56,8 +56,9 @@ impl Client {
         // Recovery goes through the input service; with none running and no
         // Accessibility to start one, it cannot finish, so nothing is marked.
         let current = self.status().await;
-        if !Observation::decode(&current).native.ok {
-            require_accessibility(&current)?;
+        let observation = Observation::decode(&current);
+        if !observation.native.ok {
+            require_accessibility(&observation)?;
         }
 
         // Held through verification, so the restart reads as in progress.
@@ -91,8 +92,9 @@ impl Client {
         let initial = self.status().await;
         // A service whose file was replaced (an app update) cannot become
         // ready under the restarted helper; it is replaced there instead.
-        let stale = !Observation::decode(&initial).input_build_current();
-        let (input_pid, _) = self.ensure_input(&initial).await?;
+        let observation = Observation::decode(&initial);
+        let stale = !observation.input_build_current();
+        let (input_pid, _) = self.ensure_input(&observation).await?;
         let session = self.identity().await?;
         if session.epoch.input_pid != input_pid {
             return Err(Error::new(
@@ -112,7 +114,13 @@ impl Client {
         }
 
         let reply = self
-            .mutate(json!({"op": "restart"}), None, None, None)
+            .mutate(
+                Mutation::Restart,
+                json!({"op": "restart"}),
+                None,
+                None,
+                None,
+            )
             .await?;
         if reply["ok"] != true {
             return Ok(reply);
@@ -144,7 +152,7 @@ impl Client {
                 // Its cleanup was confirmed above, so nothing is held: a stale
                 // service that is not ready under the new helper is replaced.
                 if stale
-                    && observation.native.pid == Some(input_pid.into())
+                    && observation.native.pid == Some(input_pid)
                     && observation.native.ready == Some(false)
                 {
                     self.upgrade_input_for(&status, true)
@@ -209,7 +217,13 @@ impl Client {
         };
 
         match self
-            .mutate(json!({"op": "logout", "force": force}), None, None, None)
+            .mutate(
+                Mutation::Logout,
+                json!({"op": "logout", "force": force}),
+                None,
+                None,
+                None,
+            )
             .await
         {
             Ok(reply) if reply["ok"] == true => {}

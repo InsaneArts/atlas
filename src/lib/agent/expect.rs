@@ -7,7 +7,7 @@ use super::{
 };
 use crate::{
     actions::{self, Action, Expect, Target as ActionTarget},
-    client::{Check, Client, Verified},
+    client::{Client, Verified},
     error::{Code, Error, Result},
     last_capture::{Observation, recorded_epoch},
     screen::windows::{DOCK_LAYER, HitWindow, Window},
@@ -35,7 +35,7 @@ pub async fn act(client: &Client, expected: Option<&Expected>, actions: &Value) 
     let expected = match (&remembered, expected) {
         (None, None) => {
             let ownership = client.controller.acquire_beside_commands()?;
-            return client.input_decoded(&ownership, actions, None, None).await;
+            return client.input_owned(&ownership, actions, None, None).await;
         }
         (Some((window, _)), _) => {
             inferred = Expected {
@@ -76,11 +76,11 @@ pub async fn act(client: &Client, expected: Option<&Expected>, actions: &Value) 
         return Err(Error::new(Code::Windows, "Window changed; look again"));
     }
     client
-        .input_decoded(
+        .input_owned(
             &ownership,
             actions,
             Some((&verified.session().epoch, std::time::Instant::now())),
-            Some(Check::Required(expect)),
+            Some(expect),
         )
         .await
 }
@@ -445,7 +445,7 @@ mod tests {
                             let ownership = client.controller.acquire_beside_commands()?;
                             let verified = client.verify().await?;
                             let expect = expected.resolve(&client, &verified).await?;
-                            client.input_owned(&ownership, &actions, &verified.session().epoch, Some(Check::Required(expect))).await
+                            client.input_owned(&ownership, actions::Batch::decode(&actions), Some((&verified.session().epoch, std::time::Instant::now())), Some(expect)).await
                         } else {
                             client.input(&actions, None, None).await
                         }

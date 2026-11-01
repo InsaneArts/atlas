@@ -13,10 +13,9 @@ use crate::{
 };
 use fs2::FileExt;
 use rand::Rng;
-use std::{
-    sync::Arc,
-    time::{Duration, Instant},
-};
+#[cfg(test)]
+use std::sync::Arc;
+use std::time::{Duration, Instant};
 
 /// How long to sleep before trying the lock again: about a tenth of a
 /// second, spread by 25 ms either way so waiters do not try in step, and
@@ -33,7 +32,8 @@ pub(super) fn poll_with(remaining: Duration, jitter_ms: u64) -> Duration {
 
 /// Where a wait for another controller has got to.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum WaitEvent {
+#[cfg(test)]
+pub(crate) enum WaitEvent {
     /// The first try found the lock held, and the controller waits.
     Began,
     /// The wait is over: control was taken, or the answer is a refusal.
@@ -42,12 +42,15 @@ pub enum WaitEvent {
 
 /// What [`Controller::acquire`] tells about its wait; it runs on the
 /// waiting thread.
-pub type WaitHook = Arc<dyn Fn(WaitEvent) + Send + Sync>;
+#[cfg(test)]
+pub(crate) type WaitHook = Arc<dyn Fn(WaitEvent) + Send + Sync>;
 
 /// A wait under way: its hook hears [`WaitEvent::Began`] when it is made
 /// and [`WaitEvent::Ended`] when it is dropped.
+#[cfg(test)]
 struct WaitNotice<'a>(Option<&'a WaitHook>);
 
+#[cfg(test)]
 impl<'a> WaitNotice<'a> {
     fn begin(hook: Option<&'a WaitHook>) -> Self {
         if let Some(hook) = hook {
@@ -57,6 +60,7 @@ impl<'a> WaitNotice<'a> {
     }
 }
 
+#[cfg(test)]
 impl Drop for WaitNotice<'_> {
     fn drop(&mut self) {
         if let Some(hook) = self.0 {
@@ -66,7 +70,7 @@ impl Drop for WaitNotice<'_> {
 }
 
 impl Controller {
-    /// Lock `lock`, trying again for what is left of [`Controller::wait`]
+    /// Lock `lock`, trying again for the remaining wait allowance
     /// while another controller holds it. A controller given a wait lets
     /// those already waiting go first.
     pub(super) fn take(&self, lock: &LockFile) -> Result<()> {
@@ -91,6 +95,7 @@ impl Controller {
         started: Instant,
         join: impl FnOnce() -> turns::Turn,
     ) -> Result<()> {
+        #[cfg(test)]
         let _notice = WaitNotice::begin(self.on_wait.as_ref());
         let turn = join();
         loop {

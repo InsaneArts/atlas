@@ -76,7 +76,7 @@ pub fn logged_in(uid: u32) -> Option<bool> {
 /// Whether `uid` is fully logged out: neither its loginwindow nor its Dock
 /// runs. A Dock alone is not enough, since launchd restarts it in a login
 /// that lives on. `None` when the process list could not be read.
-pub fn logged_out(uid: u32) -> Option<bool> {
+pub(crate) fn logged_out(uid: u32) -> Option<bool> {
     Some(logged_out_in(&processes()?, uid))
 }
 
@@ -86,7 +86,7 @@ pub(super) fn logged_out_in(listed: &[Process], uid: u32) -> bool {
 
 /// Whether `uid`'s desktop login runs: its loginwindow and its Dock both.
 /// `None` when the process list could not be read.
-pub fn desktop_runs(uid: u32) -> Option<bool> {
+pub(crate) fn desktop_runs(uid: u32) -> Option<bool> {
     let listed = processes()?;
     Some(runs_as(&listed, uid, "/loginwindow") && runs_as(&listed, uid, "/Dock"))
 }
@@ -110,7 +110,7 @@ pub(super) fn updating(listed: &[Process]) -> bool {
 /// Assistant gone, and the Dock and the Finder running (loginwindow starts
 /// the Dock only once Setup Assistant is done). `None` when processes could
 /// not be listed.
-pub fn desktop_up(uid: u32) -> Option<bool> {
+pub(crate) fn desktop_up(uid: u32) -> Option<bool> {
     Some(desktop_up_in(&processes()?, uid))
 }
 
@@ -123,20 +123,20 @@ pub(super) fn desktop_up_in(listed: &[Process], uid: u32) -> bool {
 
 /// Whether Setup Assistant runs for `uid` now; `None` when processes could
 /// not be listed.
-pub fn setup_assistant(uid: u32) -> Option<bool> {
+pub(crate) fn setup_assistant(uid: u32) -> Option<bool> {
     Some(runs_as(&processes()?, uid, "/Setup Assistant"))
 }
 
 /// A desktop login: its loginwindow, which starts when the person logs in
 /// and lasts until they log out (unlike the Dock, which may restart).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct Login {
-    pub pid: u32,
-    pub age: std::time::Duration,
+pub(crate) struct Login {
+    pub(crate) pid: u32,
+    pub(crate) age: std::time::Duration,
 }
 
 /// The desktop login of `uid`, if it has one.
-pub fn login(uid: u32) -> Option<Login> {
+pub(crate) fn login(uid: u32) -> Option<Login> {
     processes()?
         .into_iter()
         .find(|process| process.uid == uid && process.command.ends_with("/loginwindow"))
@@ -149,27 +149,27 @@ pub fn login(uid: u32) -> Option<Login> {
 /// One desktop login as the process list shows it: its loginwindow, the
 /// user ID that runs it, and how long it has run.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct Window {
-    pub uid: u32,
-    pub pid: u32,
-    pub age: Duration,
+pub(crate) struct Window {
+    pub(crate) uid: u32,
+    pub(crate) pid: u32,
+    pub(crate) age: Duration,
 }
 
 /// What directory services say of one user ID.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
-pub struct Record {
+pub(crate) struct Record {
     /// Found by `getpwuid`, which asks every directory macOS uses.
-    pub passwd: bool,
+    pub(crate) passwd: bool,
     /// Found by a search of every directory (`dscl /Search`), network and
     /// mobile accounts included. Searched only when `getpwuid` found none.
-    pub directory: bool,
+    pub(crate) directory: bool,
     /// How long ago the account was made, when that is known.
-    pub age: Option<Duration>,
+    pub(crate) age: Option<Duration>,
 }
 
 impl Record {
     /// Whether any directory has an account with this user ID.
-    pub fn exists(&self) -> bool {
+    pub(crate) fn exists(&self) -> bool {
         self.passwd || self.directory
     }
 }
@@ -201,7 +201,7 @@ pub(crate) const REUSED_SLACK: Duration = Duration::from_secs(10);
 /// Each login in `windows` with whose it is, given what directory services
 /// say of each user ID (`accounts`), this account (`me`), the helper (or
 /// the account about to be made it), and who owns the screen (`console`).
-pub fn classify(
+pub(crate) fn classify(
     windows: &[Window],
     accounts: impl Fn(u32) -> Record,
     me: u32,
@@ -241,7 +241,7 @@ pub fn classify(
 /// Why a new login could hang now.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 #[serde(tag = "kind", rename_all = "camelCase")]
-pub enum Blocker {
+pub(crate) enum Blocker {
     /// A deleted account is still logged in.
     Orphan { uid: u32 },
     /// A deleted account is still logged in under the helper's user ID.
@@ -255,7 +255,7 @@ pub enum Blocker {
 
 impl Blocker {
     /// What it is, in the words that follow "Atlas can't switch yet:".
-    pub fn words(&self) -> &'static str {
+    pub(crate) fn words(&self) -> &'static str {
         match self {
             Self::Orphan { .. } | Self::HelperLeftover { .. } => {
                 "a deleted account is still logged in."
@@ -266,18 +266,13 @@ impl Blocker {
     }
 
     /// The user ID whose login it is, if it is one login's.
-    pub fn uid(&self) -> Option<u32> {
+    pub(crate) fn uid(&self) -> Option<u32> {
         match self {
             Self::Orphan { uid } | Self::HelperLeftover { uid } | Self::StuckLogin { uid } => {
                 Some(*uid)
             }
             Self::AccountUpdating => None,
         }
-    }
-
-    /// Whether Atlas can close it: a deleted account's login.
-    pub fn closable(&self) -> bool {
-        matches!(self, Self::Orphan { .. } | Self::HelperLeftover { .. })
     }
 }
 
@@ -327,7 +322,7 @@ pub(super) fn loginwindows_in(listed: &[Process]) -> Vec<Window> {
 
 /// The user ID that owns the screen now (0 at the login window), or
 /// `None` when it cannot be read.
-pub fn console_owner() -> Option<u32> {
+pub(crate) fn console_owner() -> Option<u32> {
     use std::os::unix::fs::MetadataExt;
 
     std::fs::metadata("/dev/console")
@@ -339,7 +334,7 @@ pub fn console_owner() -> Option<u32> {
 /// made when `aged` (only the helper's age is ever compared). A lookup that
 /// fails counts as an account found: an unknown is never taken for a
 /// deleted account.
-pub fn record(uid: u32, aged: bool) -> Record {
+pub(crate) fn record(uid: u32, aged: bool) -> Record {
     record_with(uid, aged, crate::setup::account_with_uid(uid), searched)
 }
 
@@ -410,14 +405,14 @@ pub fn sessions(helper: Option<u32>) -> Option<Sessions> {
 /// login hang now.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Sessions {
-    pub logins: Vec<(Window, Kind)>,
-    pub blockers: Vec<Blocker>,
+    pub(crate) logins: Vec<(Window, Kind)>,
+    pub(crate) blockers: Vec<Blocker>,
 }
 
 impl Sessions {
     /// The logins Atlas may close: deleted accounts' logins, as
     /// `{"uid", "kind"}`.
-    pub fn leftovers(&self) -> Vec<Value> {
+    pub(crate) fn leftovers(&self) -> Vec<Value> {
         self.logins
             .iter()
             .filter(|(_, kind)| matches!(kind, Kind::Orphan | Kind::HelperLeftover))
@@ -437,7 +432,7 @@ impl Sessions {
 
 /// What would make a new login hang now; `None` when the process list could
 /// not be read.
-pub fn blockers_now(helper: Option<u32>) -> Option<Vec<Blocker>> {
+pub(crate) fn blockers_now(helper: Option<u32>) -> Option<Vec<Blocker>> {
     sessions(helper).map(|sessions| sessions.blockers)
 }
 
@@ -449,7 +444,7 @@ pub(super) const STALE_AFTER: Duration = Duration::from_secs(180);
 /// over three minutes and its Dock runs. Called for a helper whose Atlas is
 /// silent, it tells a login left behind from one still starting. `None`
 /// when processes could not be listed.
-pub fn stale(uid: u32) -> Option<bool> {
+pub(crate) fn stale(uid: u32) -> Option<bool> {
     let listed = processes()?;
     Some(stale_in(&listed, uid))
 }
@@ -465,7 +460,7 @@ pub(super) fn stale_in(listed: &[Process], uid: u32) -> bool {
 /// any of them, seen twice half a second apart, so a login on its way out
 /// is not taken for one that ended (a Dock alone can restart in a login
 /// that lives on). A process list that cannot be read is not gone.
-pub fn confirm_gone(uids: &[u32]) -> bool {
+pub(crate) fn confirm_gone(uids: &[u32]) -> bool {
     gone_twice(uids, processes, || {
         std::thread::sleep(Duration::from_millis(500));
     })

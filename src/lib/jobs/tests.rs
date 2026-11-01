@@ -360,11 +360,20 @@ async fn a_stopped_helper_refuses_job_starts_and_stops_but_lists_them() {
     let heard = stand_in(&client.config.socket_path, |_| {
         Some(json!({"ok": true, "op": "job", "action": "show", "jobs": [job_view(ID, "running")]}))
     });
-    for request in [
-        json!({"op": "job", "action": "start", "argv": ["/bin/sleep", "9"]}),
-        json!({"op": "job", "action": "stop", "id": ID}),
+    for (mutation, request) in [
+        (
+            crate::client::Mutation::JobStart,
+            json!({"op": "job", "action": "start", "argv": ["/bin/sleep", "9"]}),
+        ),
+        (
+            crate::client::Mutation::JobStop,
+            json!({"op": "job", "action": "stop", "id": ID}),
+        ),
     ] {
-        let error = client.change(request).await.unwrap_err();
+        let error = client
+            .mutate(mutation, request, None, None, None)
+            .await
+            .unwrap_err();
         assert_eq!(error.code, "stopped");
         assert!(!error.uncertain);
     }

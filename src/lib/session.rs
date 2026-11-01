@@ -4,12 +4,13 @@
 mod logins;
 #[cfg(test)]
 use logins::*;
-pub use logins::{
-    Blocker, Kind, Login, Record, Sessions, Window, absence, blockers_now, classify, confirm_gone,
-    console_owner, desktop_runs, desktop_up, logged_in, logged_out, login, record, sessions,
-    setup_assistant, stale,
+pub(crate) use logins::{
+    Blocker, REUSED_SLACK, account_created, blockers_now, confirm_gone, console_owner,
+    desktop_runs, desktop_up, logged_out, login, setup_assistant, stale,
 };
-pub(crate) use logins::{REUSED_SLACK, account_created};
+pub use logins::{Kind, Sessions, absence, logged_in, sessions};
+#[cfg(test)]
+pub(crate) use logins::{Record, Window, classify};
 
 use crate::error::{Code, Error, Result};
 use serde::{Deserialize, Serialize};
@@ -24,27 +25,27 @@ pub struct Display {
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct Epoch {
-    pub uid: u32,
-    pub capture_pid: u32,
-    pub display: Display,
-    pub security_session_id: u64,
-    pub display_id: u64,
+    pub(crate) uid: u32,
+    pub(crate) capture_pid: u32,
+    pub(crate) display: Display,
+    pub(crate) security_session_id: u64,
+    pub(crate) display_id: u64,
     pub input_pid: u32,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct InputEpoch {
-    pub uid: u32,
-    pub security_session_id: u64,
-    pub display_id: u64,
-    pub width: f64,
-    pub height: f64,
-    pub process_id: u32,
+    pub(crate) uid: u32,
+    pub(crate) security_session_id: u64,
+    pub(crate) display_id: u64,
+    pub(crate) width: f64,
+    pub(crate) height: f64,
+    pub(crate) process_id: u32,
 }
 
 impl Epoch {
-    pub fn input_epoch(&self) -> InputEpoch {
+    pub(crate) fn input_epoch(&self) -> InputEpoch {
         InputEpoch {
             uid: self.uid,
             security_session_id: self.security_session_id,
@@ -221,9 +222,9 @@ pub(crate) struct NativeObservation {
     pub(crate) ok: bool,
     queried: bool,
     protocol_version: Option<u64>,
-    pub(crate) pid: Option<u64>,
+    pub(crate) pid: Option<u32>,
     pub(crate) ready: Option<bool>,
-    accessibility: PermissionObservation,
+    pub(crate) accessibility: PermissionObservation,
     epoch: Option<InputEpoch>,
     pinned: PinObservation,
     pub(crate) control_active: Option<bool>,
@@ -235,21 +236,20 @@ pub(crate) struct NativeObservation {
 }
 
 impl NativeObservation {
-    fn decode(value: &Value) -> Self {
-        let reported_pid = value["pid"].as_u64();
-        let pid = reported_pid
+    pub(crate) fn decode(value: &Value) -> Self {
+        let pid = value["pid"]
+            .as_u64()
             .and_then(|v| u32::try_from(v).ok())
-            .filter(|v| *v > 0)
-            .unwrap_or(0);
+            .filter(|v| *v > 0);
         Self {
             ok: value["ok"] == true,
             queried: !value.is_null(),
             protocol_version: value["protocolVersion"].as_u64(),
-            pid: reported_pid,
+            pid,
             ready: value["ready"].as_bool(),
             accessibility: PermissionObservation::decode(&value["accessibility"], !value.is_null()),
             epoch: ProofObservation::decode(&value["session"])
-                .input_epoch(pid)
+                .input_epoch(pid.unwrap_or(0))
                 .ok(),
             pinned: PinObservation::decode(&value["enforcedEpoch"]),
             control_active: value["controlActive"].as_bool(),
@@ -259,13 +259,6 @@ impl NativeObservation {
             replaced: value["replaced"] == true,
             capabilities: capability_names(value),
         }
-    }
-
-    fn process_id(&self) -> u32 {
-        self.pid
-            .and_then(|pid| u32::try_from(pid).ok())
-            .filter(|pid| *pid > 0)
-            .unwrap_or(0)
     }
 
     fn healthy(&self) -> bool {
@@ -280,7 +273,7 @@ impl NativeObservation {
             .any(|capability| capability == name)
     }
 
-    fn pinned_to_session(&self, session: &Session) -> bool {
+    pub(crate) fn pinned_to_session(&self, session: &Session) -> bool {
         let epoch = &session.epoch;
         self.healthy()
             && self.pinned.uid == Some(epoch.uid.into())
@@ -288,7 +281,7 @@ impl NativeObservation {
             && self.pinned.process_id == Some(epoch.input_pid.into())
     }
 
-    fn repinnable(&self, session: &Session) -> bool {
+    pub(crate) fn repinnable(&self, session: &Session) -> bool {
         self.pinned_to_session(session)
             && self.pinned.width == Some(session.epoch.display.width)
             && self.pinned.height == Some(session.epoch.display.height)
@@ -313,7 +306,7 @@ pub(crate) struct Observation {
     pub(crate) accessibility: PermissionObservation,
     daemon_capabilities: Vec<String>,
     pub(crate) native: NativeObservation,
-    installed_build: Option<String>,
+    pub(crate) installed_build: Option<String>,
 }
 
 impl Observation {
@@ -481,7 +474,7 @@ impl Observation {
             return Err(invalid());
         }
 
-        let input_pid = self.native.process_id();
+        let input_pid = self.native.pid.unwrap_or(0);
         let epoch = Epoch {
             uid,
             capture_pid: pid,
@@ -507,7 +500,7 @@ pub struct Session {
     pub input: bool,
 }
 
-pub fn validate_uid(uid: u32) -> Result<()> {
+pub(crate) fn validate_uid(uid: u32) -> Result<()> {
     validate_target_uid(uid, nix::unistd::getuid().as_raw())
 }
 
@@ -524,20 +517,6 @@ pub(crate) fn validate_target_uid(uid: u32, controller_uid: u32) -> Result<()> {
 
 pub fn require_hidden(value: &Value, uid: u32) -> Result<Session> {
     Observation::decode(value).require_hidden(uid)
-}
-
-/// Whether the input service in `value` is healthy and the one `session`
-/// names, in the same login, whatever display it is pinned to.
-pub fn pinned_to_session(value: &Value, session: &Session) -> bool {
-    NativeObservation::decode(&value["inputService"]).pinned_to_session(session)
-}
-
-/// Whether the input service in `value` is healthy and in the same helper
-/// session as `session`, pinned to an earlier number of the same-size
-/// display (switching accounts can renumber it). The next action re-pins it
-/// to the current display, so it counts as ready.
-pub fn repinnable(value: &Value, session: &Session) -> bool {
-    NativeObservation::decode(&value["inputService"]).repinnable(session)
 }
 
 /// The concrete recovery action and the words accompanying other advice.
@@ -594,28 +573,28 @@ pub fn input_build_current(status: &Value) -> bool {
 }
 
 /// The input-service capability to shut down when its controller asks.
-pub const SHUTDOWN: &str = "shutdown";
+pub(crate) const SHUTDOWN: &str = "shutdown";
 
 /// The input-service capability to keep the person's Stop of agents.
-pub const HOLD: &str = "hold";
+pub(crate) const HOLD: &str = "hold";
 
 /// The input-service capability that checks an agent's target app.
-pub const FOCUS_APP: &str = "focus-app";
+pub(crate) const FOCUS_APP: &str = "focus-app";
 
 /// The input-service capability whose point check counts the Dock as
 /// covering where it takes clicks. A service without it lets a click on a
 /// Dock icon through.
-pub const FOCUS_DOCK: &str = "focus-dock";
+pub(crate) const FOCUS_DOCK: &str = "focus-dock";
 
 /// The input-service capability that checks the window an agent names. A
 /// service without it would refuse the expectation, never ignore it.
-pub const FOCUS_WINDOW: &str = "focus-window";
+pub(crate) const FOCUS_WINDOW: &str = "focus-window";
 
 /// The input-service capability that checks the field an agent names.
-pub const FOCUS_FIELD: &str = "focus-field";
+pub(crate) const FOCUS_FIELD: &str = "focus-field";
 
 /// Whether an input service's hello lists `name` among its capabilities.
-pub fn has_capability(native: &Value, name: &str) -> bool {
+pub(crate) fn has_capability(native: &Value, name: &str) -> bool {
     NativeObservation::decode(native).has_capability(name)
 }
 
@@ -837,15 +816,15 @@ pub enum Absence {
 
 /// The doctor's step when input is down or pinned to a display that is
 /// gone, which Recover also takes.
-pub const START_INPUT: &str = "Run atlas start-input.";
+pub(crate) const START_INPUT: &str = "Run atlas start-input.";
 
 /// The doctor's step for a logged-out helper.
-pub const LOGGED_OUT: &str = "The helper is logged out (after a restart or a log-out). Log in \
+pub(crate) const LOGGED_OUT: &str = "The helper is logged out (after a restart or a log-out). Log in \
      to it once, then switch back: atlas switch locks the screen for that.";
 
 impl Absence {
     /// Its name in a report, as the overview reads it.
-    pub fn as_str(&self) -> &'static str {
+    pub(crate) fn as_str(&self) -> &'static str {
         match self {
             Self::Missing => "missing",
             Self::LoggedOut(_) => "loggedOut",
@@ -1196,7 +1175,7 @@ mod tests {
 
     #[test]
     fn input_pinned_to_an_earlier_same_size_display_counts_as_ready() {
-        use super::{Display, Epoch, Session, repinnable};
+        use super::{Display, Epoch, NativeObservation, Session};
 
         let session = Session {
             epoch: Epoch {
@@ -1220,15 +1199,18 @@ mod tests {
             "accessibility": true, "enforcedEpoch": {"uid": 503, "securitySessionId": 100135,
             "displayId": 9, "processId": 11318, "width": width, "height": 982.0}}})
         };
-        assert!(repinnable(&status(1512.0), &session));
+        assert!(NativeObservation::decode(&status(1512.0)["inputService"]).repinnable(&session));
         assert!(
-            !repinnable(&status(1440.0), &session),
+            !NativeObservation::decode(&status(1440.0)["inputService"]).repinnable(&session),
             "a new size needs a new look"
         );
 
         let mut other = status(1512.0);
         other["inputService"]["enforcedEpoch"]["securitySessionId"] = json!(1);
-        assert!(!repinnable(&other, &session), "never across sessions");
+        assert!(
+            !NativeObservation::decode(&other["inputService"]).repinnable(&session),
+            "never across sessions"
+        );
     }
 
     #[test]
@@ -1501,8 +1483,11 @@ mod tests {
                 Blocker::HelperLeftover { uid: 503 }
             ]
         );
-        assert!(found.iter().all(Blocker::closable));
-        assert!(!Blocker::AccountUpdating.closable());
+        assert_eq!(
+            found.iter().map(Blocker::uid).collect::<Vec<_>>(),
+            [Some(502), Some(503)]
+        );
+        assert_eq!(Blocker::AccountUpdating.uid(), None);
         assert_eq!(
             Blocker::StuckLogin { uid: 1 }.words(),
             "another account is still logging in."

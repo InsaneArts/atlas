@@ -27,7 +27,8 @@ pub(crate) use executor::{ExecutorClaims, record_executor};
 pub use lease::{ActionPermit, Lease, SharedLease};
 pub use notes::Note;
 pub(crate) use wait::poll;
-pub use wait::{WaitEvent, WaitHook};
+#[cfg(test)]
+pub(crate) use wait::{WaitEvent, WaitHook};
 
 use busy::busy_command;
 use by_generation::ByGeneration;
@@ -46,7 +47,6 @@ use std::{
     fs,
     os::unix::fs::MetadataExt,
     path::{Path, PathBuf},
-    sync::Arc,
     time::{Duration, Instant},
 };
 
@@ -62,7 +62,7 @@ pub const CONTROL_WAIT_MAX: Duration = Duration::from_secs(600);
 
 /// The most commands agents started with `run` that may run at once, so
 /// the helper keeps connections free for reads and other actions.
-pub const RUNNING_COMMANDS_MAX: usize = 8;
+pub(crate) const RUNNING_COMMANDS_MAX: usize = 8;
 
 /// What an acquisition may go on beside.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -108,7 +108,7 @@ impl std::ops::Deref for Pending {
 
 impl Pending {
     /// The generation this mutation is recorded under.
-    pub fn generation(&self) -> &str {
+    pub(crate) fn generation(&self) -> &str {
         &self.generation
     }
 
@@ -198,6 +198,7 @@ pub struct Controller {
     /// Whether a Stop ends the wait and refuses control taken after one.
     heeds_stop: bool,
     /// Told when [`Controller::acquire`] starts waiting and when it stops.
+    #[cfg(test)]
     on_wait: Option<WaitHook>,
     /// The stop a signal asks: it refuses control from then on, and waits
     /// for the changes this controller has under way.
@@ -221,7 +222,7 @@ pub struct Controller {
 }
 
 impl Controller {
-    pub fn new(uid: u32) -> Result<Self> {
+    pub(crate) fn new(uid: u32) -> Result<Self> {
         Ok(Self::at(uid, &home()?.join("Library/Caches/Atlas")))
     }
 
@@ -240,6 +241,7 @@ impl Controller {
             wait: Duration::ZERO,
             until: None,
             heeds_stop: false,
+            #[cfg(test)]
             on_wait: None,
             interrupt: Interrupt::process().clone(),
             label: None,
@@ -264,14 +266,8 @@ impl Controller {
         self
     }
 
-    /// How long, in all, [`Controller::acquire`] may wait for another
-    /// controller.
-    pub fn wait(&self) -> Duration {
-        self.wait
-    }
-
-    /// What is left of [`Controller::wait`].
-    pub fn remaining(&self) -> Duration {
+    /// What remains of this command's shared control-wait allowance.
+    pub(crate) fn remaining(&self) -> Duration {
         self.remaining_at(Instant::now())
     }
 
@@ -295,9 +291,10 @@ impl Controller {
     /// refused at once, waits for nothing and tells nothing. A process that
     /// exits while waiting (`std::process::exit`, a signal) never tells
     /// [`WaitEvent::Ended`].
+    #[cfg(test)]
     #[must_use]
-    pub fn on_wait(mut self, hook: impl Fn(WaitEvent) + Send + Sync + 'static) -> Self {
-        self.on_wait = Some(Arc::new(hook));
+    pub(crate) fn on_wait(mut self, hook: impl Fn(WaitEvent) + Send + Sync + 'static) -> Self {
+        self.on_wait = Some(std::sync::Arc::new(hook));
         self
     }
 
@@ -325,7 +322,7 @@ impl Controller {
 
     /// Whether this process may keep its locks and claims here at all. An
     /// agent's sandbox may forbid writing, and the error then says so.
-    pub fn writable(&self) -> Result<()> {
+    pub(crate) fn writable(&self) -> Result<()> {
         if fs::symlink_metadata(&self.directory).is_ok() {
             real_directory(&self.directory)?;
         }
@@ -468,7 +465,7 @@ impl Controller {
 
     /// The notes of the commands waiting for control now, oldest first:
     /// for apps to show who waits, never to decide who goes next.
-    pub fn waiting_notes(&self) -> Vec<Note> {
+    pub(crate) fn waiting_notes(&self) -> Vec<Note> {
         let mut notes = turns::waiting(&self.waiting);
         notes.sort_by_key(|note| note.since);
         notes
@@ -484,7 +481,7 @@ impl Controller {
     /// oldest first: such a command holds no control while it runs, so
     /// only its note names a session on its first command. For apps to
     /// show who acts, never to decide who may.
-    pub fn running_notes(&self) -> Vec<Note> {
+    pub(crate) fn running_notes(&self) -> Vec<Note> {
         let marked = self.commands();
         let mut notes: Vec<Note> = by_generation::read::<ByGeneration<Note>>(&self.running)
             .into_iter()
@@ -500,7 +497,7 @@ impl Controller {
     /// command leaves no record, and only its note names that session, as
     /// its record would have. For naming whose an unknown outcome is, never
     /// to decide anything.
-    pub fn pending_notes(&self) -> Vec<Note> {
+    pub(crate) fn pending_notes(&self) -> Vec<Note> {
         let Ok(pending) = self.pending() else {
             return Vec::new();
         };
@@ -519,7 +516,7 @@ impl Controller {
     }
 
     /// Whether the person stopped agents, as noted on their side.
-    pub fn stop_noted(&self) -> bool {
+    pub(crate) fn stop_noted(&self) -> bool {
         self.stopped.exists()
     }
 
@@ -545,7 +542,7 @@ impl Controller {
     /// while it is held, others hear that the person has control. A command
     /// an agent started keeps running beside it, as it does beside other
     /// agents' actions.
-    pub fn acquire_for_person(&self) -> Result<Ownership> {
+    pub(crate) fn acquire_for_person(&self) -> Result<Ownership> {
         let mut ownership = self.acquire_beside_commands()?;
         fs::write(&self.person, b"").map_err(|error| Error::writing(&self.directory, error))?;
         ownership.person = Some(self.person.clone());

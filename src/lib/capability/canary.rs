@@ -210,7 +210,12 @@ impl Canary<'_> {
 
     async fn keys(&self, actions: Value) -> Result<()> {
         self.client
-            .input_owned(self.ownership, &actions, &self.epoch, None)
+            .input_owned(
+                self.ownership,
+                crate::actions::Batch::decode(&actions),
+                Some((&self.epoch, std::time::Instant::now())),
+                None,
+            )
             .await
             .map(|_| ())
     }

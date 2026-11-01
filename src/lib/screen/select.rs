@@ -109,7 +109,7 @@ impl ElementFilter {
         self.compare(element, &|_| false)
     }
 
-    pub fn matches(&self, element: &Element) -> bool {
+    pub(crate) fn matches(&self, element: &Element) -> bool {
         self.match_of(element).is_some()
     }
 

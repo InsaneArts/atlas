@@ -100,7 +100,7 @@ impl Controller {
     /// Every pending generation, whether a live process is still carrying
     /// it out, and the host session that claimed it when one is recorded;
     /// from one locked read of the marker, or none when there is no marker.
-    pub fn pending_causes(&self) -> Result<Vec<Cause>> {
+    pub(crate) fn pending_causes(&self) -> Result<Vec<Cause>> {
         if !self
             .marker
             .try_exists()
@@ -476,11 +476,11 @@ pub(super) fn replace_private(path: &Path, bytes: &[u8]) -> Result<()> {
 #[derive(Clone, Debug)]
 pub(crate) struct Snapshot {
     /// Generations no mutation in progress will settle.
-    pub unresolved: Vec<String>,
+    pub(crate) unresolved: Vec<String>,
     /// How many are pending in all.
-    pub total: usize,
+    pub(crate) total: usize,
     /// How many are commands agents started with `run`, still running.
-    pub commands: usize,
+    pub(crate) commands: usize,
 }
 
 /// Pending generations in a marker; an unreadable one stays pending as unknown.

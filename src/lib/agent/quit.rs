@@ -61,10 +61,10 @@ exit 0"#;
 /// What quitting apps did.
 pub(crate) struct Quit {
     /// The processes that were signalled.
-    pub signalled: Vec<u64>,
+    pub(crate) signalled: Vec<u64>,
     /// The first valid app list in which none of them was left, which
     /// copies are judged against.
-    pub after: AppList,
+    pub(crate) after: AppList,
 }
 
 /// How waiting for apps to quit ended.

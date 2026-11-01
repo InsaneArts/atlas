@@ -4,7 +4,7 @@
 use super::expect::Expected;
 use crate::{
     actions::Button,
-    client::{Check, Client},
+    client::Client,
     error::{Code, Error, Holder, Result},
     interrupt::Interrupt,
 };
@@ -128,14 +128,19 @@ pub async fn type_text(client: &Client, text: &str, expected: Option<&Expected>)
     let _typing = interrupt.step();
     let verified = client.verify().await?;
     let check = match expected {
-        Some(expected) => Some(Check::Required(expected.resolve(client, &verified).await?)),
+        Some(expected) => Some(expected.resolve(client, &verified).await?),
         None => None,
     };
     let epoch = verified.session().epoch.clone();
 
     let send = async |actions: &Value| {
         client
-            .input_owned(&ownership, actions, &epoch, check.clone())
+            .input_owned(
+                &ownership,
+                crate::actions::Batch::decode(actions),
+                Some((&epoch, Instant::now())),
+                check.clone(),
+            )
             .await
     };
     Ok(type_recorded(client, &batches, interrupt, send).await)

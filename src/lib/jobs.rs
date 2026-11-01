@@ -110,7 +110,9 @@ async fn started(
     if let Some(pin) = pin {
         request["session"] = json!(pin);
     }
-    let reply = client.change(request).await?;
+    let reply = client
+        .mutate(crate::client::Mutation::JobStart, request, None, None, None)
+        .await?;
     if reply["ok"] != true {
         return Err(refused(&reply));
     }
@@ -352,7 +354,9 @@ pub(crate) async fn stop_held(
         "expect": expected,
         "graceMs": crate::time::ms(grace),
     });
-    let reply = client.change(request).await?;
+    let reply = client
+        .mutate(crate::client::Mutation::JobStop, request, None, None, None)
+        .await?;
     if reply["ok"] != true {
         return Err(refused(&reply));
     }

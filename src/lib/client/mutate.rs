@@ -3,7 +3,6 @@
 //! short by a stop. A reply's completion is checked against its request.
 use super::{Actor, Client, record::recorded_code, run::RUN_MARGIN};
 use crate::{
-    activity_log::Op,
     control::{Lease, Ownership, Pending, SharedLease},
     daemon::protocol::{JobReply, JobState, JobView, StopCameTo, Stopped},
     error::{Code, Error, Result},
@@ -15,52 +14,85 @@ use std::time::{Duration, Instant};
 use tokio::sync::MutexGuard;
 
 pub fn validate_completion(request: &Value, reply: &Value) -> Result<()> {
-    if reply["ok"] != true {
-        return Ok(());
-    }
-
-    let valid = match Op::of(request) {
-        // A checked batch is confirmed only with its expectation echoed: a
-        // service that ignored it posted the input unchecked.
-        Some(Op::Input) => {
-            reply["performed"].as_u64() == request["actions"].as_array().map(|v| v.len() as u64)
-                && (request["expect"].is_null() || reply["expect"] == request["expect"])
-        }
-        Some(Op::Job) => match (request["action"].as_str(), JobReply::deserialize(reply)) {
-            (Some("start"), Ok(JobReply::Start { job })) => job_started(request, &job),
-            (Some("start"), _) => false,
-            (Some("stop"), Ok(JobReply::Stop(Stopped { job, came_to }))) => {
-                let confirmed = match came_to {
-                    StopCameTo::Signalled(signal) => signal == "SIGTERM",
-                    StopCameTo::AlreadyEnded(ended) => ended,
-                    StopCameTo::AlreadyStopping(stopping) => stopping,
-                };
-                request["id"] == job.id.as_str() && confirmed
-            }
-            (Some("stop"), _) => false,
-            _ => true,
+    use crate::activity_log::Op;
+    let mutation = match Op::of(request) {
+        Some(Op::Input) => Mutation::Input(request["actions"].as_array().map(|v| v.len() as u64)),
+        Some(Op::Run) => Mutation::Run,
+        Some(Op::Job) => match request["action"].as_str() {
+            Some("start") => Mutation::JobStart,
+            Some("stop") => Mutation::JobStop,
+            _ => return Ok(()),
         },
-        Some(Op::Run) => {
-            reply["timedOut"].is_boolean()
-                && reply.get("exitCode").is_some()
-                && (reply["exitCode"].is_i64()
-                    || (reply["exitCode"].is_null()
-                        && (reply["timedOut"] == true
-                            || reply["signal"]
-                                .as_str()
-                                .is_some_and(|s| s.starts_with("SIG") && s.len() <= 32))))
+        Some(Op::Restart) => Mutation::Restart,
+        Some(Op::Logout) => Mutation::Logout,
+        Some(Op::Apps | Op::Collect | Op::Read | Op::Screenshot | Op::Other(_)) | None => {
+            return Ok(());
         }
-        _ => true,
     };
+    mutation.validate(request, reply)
+}
 
-    if valid {
-        Ok(())
-    } else {
-        Err(Error::new(
-            Code::Protocol,
-            "Helper did not confirm operation completion",
-        )
-        .uncertain())
+/// Completion and ownership are chosen by the producer, independently of the
+/// tolerant activity-log vocabulary and the original wire projection.
+#[derive(Clone, Copy, Debug)]
+pub(crate) enum Mutation {
+    Input(Option<u64>),
+    Run,
+    JobStart,
+    JobStop,
+    Restart,
+    Logout,
+}
+
+impl Mutation {
+    fn validate(self, request: &Value, reply: &Value) -> Result<()> {
+        if reply["ok"] != true {
+            return Ok(());
+        }
+
+        let valid = match self {
+            // A checked batch is confirmed only with its expectation echoed: a
+            // service that ignored it posted the input unchecked.
+            Self::Input(count) => {
+                reply["performed"].as_u64() == count
+                    && (request["expect"].is_null() || reply["expect"] == request["expect"])
+            }
+            Self::JobStart => {
+                matches!(JobReply::deserialize(reply), Ok(JobReply::Start { job }) if job_started(request, &job))
+            }
+            Self::JobStop => match JobReply::deserialize(reply) {
+                Ok(JobReply::Stop(Stopped { job, came_to })) => {
+                    let confirmed = match came_to {
+                        StopCameTo::Signalled(signal) => signal == "SIGTERM",
+                        StopCameTo::AlreadyEnded(ended) => ended,
+                        StopCameTo::AlreadyStopping(stopping) => stopping,
+                    };
+                    request["id"] == job.id.as_str() && confirmed
+                }
+                _ => false,
+            },
+            Self::Run => {
+                reply["timedOut"].is_boolean()
+                    && reply.get("exitCode").is_some()
+                    && (reply["exitCode"].is_i64()
+                        || (reply["exitCode"].is_null()
+                            && (reply["timedOut"] == true
+                                || reply["signal"]
+                                    .as_str()
+                                    .is_some_and(|s| s.starts_with("SIG") && s.len() <= 32))))
+            }
+            Self::Restart | Self::Logout => true,
+        };
+
+        if valid {
+            Ok(())
+        } else {
+            Err(Error::new(
+                Code::Protocol,
+                "Helper did not confirm operation completion",
+            )
+            .uncertain())
+        }
     }
 }
 
@@ -76,10 +108,10 @@ fn job_started(request: &Value, job: &JobView) -> bool {
             .is_some_and(|[seconds, micros]| seconds > 0 && micros < 1_000_000)
         && !job.boot.is_empty()
         && request["uid"] == job.uid
-        && matches!(
-            job.state,
-            JobState::Running | JobState::Stopping | JobState::Ended
-        )
+        && match job.state {
+            JobState::Running | JobState::Stopping | JobState::Ended => true,
+            JobState::Starting | JobState::Launched => false,
+        }
 }
 
 /// The person's lease, locked for only the final authorization and the
@@ -115,8 +147,9 @@ impl Client {
     /// one, and settled only once its reply proves what it did. With
     /// `lease` the person's input is authorized under it, and with
     /// `observed_at` the frame it acts on must still be fresh.
-    pub(super) async fn mutate(
+    pub(crate) async fn mutate(
         &self,
+        mutation: Mutation,
         request: Value,
         lease: Option<(&SharedLease, &str)>,
         observed_at: Option<Instant>,
@@ -124,20 +157,27 @@ impl Client {
         // claim is then marked as a running command.
         release: Option<Ownership>,
     ) -> Result<Value> {
-        let op = Op::of(&request);
         debug_assert!(
-            release.is_none() || op == Some(Op::Run),
+            release.is_none() || matches!(mutation, Mutation::Run),
             "only a command started with run lets go of control while it runs"
         );
         let started = Instant::now();
         self.controller.interrupt().check()?;
         let command = release.is_some();
-        self.refuse_when_stopped(&request, op.as_ref())?;
+        let agent = self.actor == Actor::Agent && self.doing.is_some();
+        let (agent_command, stop_before) = match mutation {
+            Mutation::Run => (agent, agent),
+            Mutation::JobStart | Mutation::JobStop => (false, agent),
+            Mutation::Input(_) | Mutation::Restart | Mutation::Logout => (false, false),
+        };
+        if stop_before && self.stop_marked() {
+            return Err(Error::stopped());
+        }
 
         // Connect without holding the lease. Release can cancel slow preflight.
-        let connection = self.connect(&request, op.as_ref()).await?;
+        let connection = self.connect(&request, mutation).await?;
         let authorization = authorize(lease, observed_at).await?;
-        let mut claim = self.claim(op.as_ref(), lease.is_some(), command)?;
+        let mut claim = self.claim(mutation, lease.is_some(), command)?;
         let sent = self.send(connection, &request, claim.as_ref()).await?;
 
         drop(authorization);
@@ -146,52 +186,34 @@ impl Client {
         // recovery out until it ends, and other agents may act beside it.
         drop(release);
 
-        let reply = if self.agents_command(op.as_ref()) {
+        let reply = if agent_command {
             self.run_to_its_end(sent, &request, command, &mut claim, started)
                 .await?
         } else {
             self.answer(sent).await?
         };
-        validate_completion(&request, &reply)?;
+        mutation.validate(&request, &reply)?;
 
         self.settle(&request, reply, command, claim, started).await
     }
 
-    /// Whether `op` is an agent's own command, which a stop of agents
-    /// refuses before it starts and cuts while it runs.
-    fn agents_command(&self, op: Option<&Op>) -> bool {
-        op == Some(&Op::Run) && self.actor == Actor::Agent && self.doing.is_some()
-    }
-
-    /// Refuse an agent's command that changes the helper, before it starts,
-    /// once the person has stopped agents; reads and Atlas's own steps (no
-    /// `doing`) go on.
-    fn refuse_when_stopped(&self, request: &Value, op: Option<&Op>) -> Result<()> {
-        let job_change = op == Some(&Op::Job)
-            && matches!(request["action"].as_str(), Some("start" | "stop"))
-            && self.actor == Actor::Agent
-            && self.doing.is_some();
-        if (self.agents_command(op) || job_change) && self.stop_marked() {
-            return Err(Error::stopped());
-        }
-
-        Ok(())
-    }
-
     /// A connection to where `request` goes: the input service for input,
     /// and the helper daemon for everything else.
-    async fn connect(&self, request: &Value, op: Option<&Op>) -> Result<transport::Pending> {
-        let mut transport = if op == Some(&Op::Input) {
-            self.input_transport()
-        } else {
-            self.transport.clone()
+    async fn connect(&self, request: &Value, mutation: Mutation) -> Result<transport::Pending> {
+        let mut transport = match mutation {
+            Mutation::Input(_) => self.input_transport(),
+            Mutation::Run
+            | Mutation::JobStart
+            | Mutation::JobStop
+            | Mutation::Restart
+            | Mutation::Logout => self.transport.clone(),
         };
 
         // A long command's reply comes after it ends, and after the helper
         // has stopped whatever it left running.
         if let Some(run) = request["timeoutMs"]
             .as_u64()
-            .filter(|_| op == Some(&Op::Run))
+            .filter(|_| matches!(mutation, Mutation::Run))
         {
             transport.timeout = transport
                 .timeout
@@ -204,14 +226,16 @@ impl Client {
         ))
     }
 
-    /// The claim `op` is carried out under, marked as a running command for
+    /// The claim the mutation is carried out under, marked as a running command for
     /// a `command` that lets go of control. Restart, log-out and standalone
     /// input (input without a lease) run under the claim their caller holds
     /// through verification or cleanup, so they take none here.
-    fn claim(&self, op: Option<&Op>, leased: bool, command: bool) -> Result<Option<Pending>> {
-        let callers = op == Some(&Op::Restart)
-            || op == Some(&Op::Logout)
-            || (op == Some(&Op::Input) && !leased);
+    fn claim(&self, mutation: Mutation, leased: bool, command: bool) -> Result<Option<Pending>> {
+        let callers = match mutation {
+            Mutation::Restart | Mutation::Logout => true,
+            Mutation::Input(_) => !leased,
+            Mutation::Run | Mutation::JobStart | Mutation::JobStop => false,
+        };
         if callers {
             return Ok(None);
         }
@@ -257,7 +281,7 @@ impl Client {
 
     /// The reply to a sent request, unless a signal's stop cuts it short
     /// once its grace is over.
-    async fn answer(&self, sent: transport::Pending) -> Result<Value> {
+    pub(super) async fn answer(&self, sent: transport::Pending) -> Result<Value> {
         let interrupt = self.controller.interrupt();
         tokio::select! {
             biased;
@@ -349,12 +373,5 @@ impl Client {
         }
 
         Ok(reply)
-    }
-
-    /// Send `request`, a change to the helper, as a recorded mutation under
-    /// control the caller holds: it stays pending until its reply proves
-    /// what it did.
-    pub(crate) async fn change(&self, request: Value) -> Result<Value> {
-        self.mutate(request, None, None, None).await
     }
 }

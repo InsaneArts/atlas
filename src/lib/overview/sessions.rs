@@ -2,20 +2,14 @@
 //! what the records, the controller's notes and the recent activity say,
 //! each named and shown in the state it is in.
 use super::pending;
-use crate::host_session::reading::{SessionFacts, SessionReading, unrecorded};
+use crate::host_session::reading::{Listed, SessionFacts, SessionReading, Source};
 use crate::{
     client::Client,
     control::Controller,
-    host_session::{
-        Key,
-        liveness::Lifetime,
-        names::{name_of, names_with_left},
-        record::Seen,
-    },
-    session_view::{self, Who},
+    host_session::{Key, liveness::Lifetime, record::Seen},
+    session_view,
 };
 use serde_json::{Value, json};
-use std::collections::BTreeMap;
 
 /// The most host sessions a status lists.
 const SESSIONS: usize = 8;
@@ -47,9 +41,14 @@ pub(crate) async fn add_sessions_for(
     let has_own = own.is_some();
     let own = own.cloned();
     let (listed, own_entry) = tokio::task::spawn_blocking(move || {
-        let Some(reading) = SessionReading::collect(&client) else {
+        let Ok(output) = client.output_dir() else {
             return (HostSessions::default(), None);
         };
+        let reading = SessionReading::collect(
+            output,
+            &client.controller,
+            crate::host_session::liveness::Snapshot::polled,
+        );
         let own_entry = own.and_then(|key| {
             reading
                 .live(facts)
@@ -124,22 +123,16 @@ pub(crate) struct HostSessions {
     pub(crate) holder: Option<String>,
 }
 
-/// One session [`add_host_sessions`] may list: what it is, when it was
-/// last seen, and how it is shown.
-pub(crate) struct Listed {
-    pub(crate) key: String,
-    pub(crate) name: String,
-    pub(crate) ended: Option<u64>,
-    entry: Value,
-    pub(crate) last_seen: u64,
-    pub(crate) shown: session_view::Shown,
-    pub(crate) running_command: bool,
-}
-
-impl Listed {
+impl Listed<'_> {
     /// Its entry with how it is shown.
     fn into_entry(self) -> Value {
-        let mut entry = self.entry;
+        let mut entry = match self.source {
+            Source::Recorded(seen, uncertain, lifetime) => {
+                host_session(seen, &self.name, uncertain, lifetime)
+            }
+            Source::First(note) => first_command(note, &self.name),
+            Source::Terminal { started, now } => terminal(started, self.last_seen, now),
+        };
         if let (Some(entry), Value::Object(shown)) = (entry.as_object_mut(), json!(self.shown)) {
             entry.extend(shown);
         }
@@ -147,7 +140,7 @@ impl Listed {
     }
 }
 
-fn summarize(listed: Vec<Listed>) -> HostSessions {
+fn summarize(listed: Vec<Listed<'_>>) -> HostSessions {
     let shown = session_view::sessions_shown(listed.iter().map(|listed| &listed.shown));
     let holder = listed
         .iter()
@@ -181,96 +174,16 @@ impl SessionReading {
     }
 }
 
-impl SessionReading {
-    pub(crate) fn live(&self, facts: SessionFacts) -> Vec<Listed> {
-        let seen = &self.seen;
-        let causes = &self.causes;
-        let holder = &self.holder;
-        let waiting = &self.waiting;
-        let running = &self.running;
-        let scene = self.scene(facts);
-        let now_ms = u64::try_from(facts.now / 1_000_000).unwrap_or(u64::MAX);
-        let mut unknown: BTreeMap<&Key, usize> = BTreeMap::new();
-        for cause in causes.iter().filter(|cause| !cause.running) {
-            if let Some(session) = &cause.session {
-                *unknown.entry(session).or_default() += 1;
-            }
-        }
-        // A session whose record has not been written is named by its command's
-        // note meanwhile, by the same rule as a record.
-        let first = unrecorded(holder.as_ref(), waiting, running, seen);
-        let named = names_with_left(
-            seen.iter().map(|seen| &seen.record),
-            [],
-            first.iter().copied(),
-        );
-
-        let mut listed: Vec<Listed> = seen
-            .iter()
-            .filter_map(|seen| {
-                let record = &seen.record;
-                let uncertain = unknown.get(&record.key).copied().unwrap_or(0);
-                let (shown, lifetime) = scene.project(record);
-                shown.relevant().then(|| Listed {
-                    key: record.key.to_string(),
-                    name: name_of(&named, &record.key, Some(record.host)),
-                    ended: lifetime.ended,
-                    entry: host_session(seen, &named, uncertain, lifetime),
-                    last_seen: record.last_seen,
-                    running_command: causes
-                        .iter()
-                        .any(|cause| cause.command && cause.session.as_ref() == Some(&record.key)),
-                    shown,
-                })
-            })
-            .collect();
-        for note in first {
-            let Some(key) = &note.session else { continue };
-            listed.push(Listed {
-                key: key.to_string(),
-                name: name_of(&named, key, note.host),
-                ended: None,
-                entry: first_command(key, note, &named),
-                last_seen: note.since,
-                shown: scene.shown(&Who::Host(key.clone()), false),
-                running_command: causes
-                    .iter()
-                    .any(|cause| cause.command && cause.session.as_ref() == Some(key)),
-            });
-        }
-        if let Some((started, last_seen)) = scene.terminal() {
-            listed.push(Listed {
-                key: String::new(),
-                name: session_view::TERMINAL.to_owned(),
-                ended: None,
-                entry: terminal(started, last_seen, now_ms),
-                last_seen,
-                shown: scene.shown(&Who::Terminal, false),
-                running_command: causes
-                    .iter()
-                    .any(|cause| cause.command && cause.session.is_none()),
-            });
-        }
-        listed.sort_by_key(|listed| (listed.shown.state, std::cmp::Reverse(listed.last_seen)));
-        listed
-    }
-}
-
 /// A record's frozen lifetime and activity metadata, before its shown
 /// work and recovery state are added.
-fn host_session(
-    seen: &Seen,
-    names: &BTreeMap<Key, String>,
-    uncertain: usize,
-    lifetime: Lifetime,
-) -> Value {
+fn host_session(seen: &Seen, name: &str, uncertain: usize, lifetime: Lifetime) -> Value {
     let record = &seen.record;
 
     json!({
         "key": record.key,
         "host": record.host,
         "hostLabel": record.host.label(),
-        "name": name_of(names, &record.key, Some(record.host)),
+        "name": name,
         "folder": record.folder,
         "hostSession": record.host_session,
         "started": record.started,
@@ -286,12 +199,12 @@ fn host_session(
 /// runs as a command started with `run`, and so has no record yet, from
 /// its note: named by its host and folder, and
 /// started when its command did, as its record will say.
-fn first_command(key: &Key, note: &crate::control::Note, names: &BTreeMap<Key, String>) -> Value {
+fn first_command(note: &crate::control::Note, name: &str) -> Value {
     json!({
-        "key": key,
+        "key": note.session,
         "host": note.host,
         "hostLabel": note.host.map(crate::host_session::Host::label),
-        "name": name_of(names, key, note.host),
+        "name": name,
         "folder": note.folder,
         "started": note.process.started_ms(),
         "lastSeen": note.since,

@@ -236,7 +236,7 @@ fn not_ready(why: &str) -> Error {
 /// is never kept in the helper; even then a deleted account's login under
 /// the helper's user ID, or anything about the person's own login, stops
 /// it.
-pub fn ready_to_switch(target: &Target, blockers: Option<&[Blocker]>) -> Result<()> {
+pub(crate) fn ready_to_switch(target: &Target, blockers: Option<&[Blocker]>) -> Result<()> {
     let Some(blockers) = blockers else {
         return Err(not_ready("macOS didn't list its logins. Try again."));
     };

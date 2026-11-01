@@ -19,12 +19,12 @@ use std::{
 };
 
 pub struct Frame {
-    pub png: Arc<[u8]>,
-    pub width: u32,
-    pub height: u32,
-    pub display: Display,
-    pub epoch: Epoch,
-    pub at: Instant,
+    pub(crate) png: Arc<[u8]>,
+    pub(crate) width: u32,
+    pub(crate) height: u32,
+    pub(crate) display: Display,
+    pub(crate) epoch: Epoch,
+    pub(crate) at: Instant,
 }
 
 /// What a cropped screenshot's reply says it shows.
@@ -230,7 +230,7 @@ pub fn png_dimensions(png: &[u8]) -> Result<(u32, u32)> {
 }
 
 impl Client {
-    pub async fn frame(&self, maximum: Option<u32>) -> Result<Frame> {
+    pub(crate) async fn frame(&self, maximum: Option<u32>) -> Result<Frame> {
         let size = maximum.map_or(Size::Full, Size::Longest);
 
         self.framed(size, None, None).await.map(|(frame, _)| frame)

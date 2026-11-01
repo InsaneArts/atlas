@@ -4,7 +4,7 @@
 use super::Client;
 use crate::{
     error::{Code, Error, Result},
-    session::{SHUTDOWN, has_capability, input_current, require_hidden},
+    session::{Observation, PermissionObservation, SHUTDOWN, input_current, require_hidden},
     transport::run_output,
 };
 use serde_json::{Value, json};
@@ -24,9 +24,9 @@ pub(super) fn process_exists(pid: u32) -> bool {
 
 /// Refuse input work while the helper's Atlas lacks Accessibility; an
 /// unknown answer is not a refusal.
-pub(super) fn require_accessibility(status: &Value) -> Result<()> {
-    if status["permissions"]["accessibility"] == false
-        || status["inputService"]["accessibility"] == false
+pub(super) fn require_accessibility(observation: &Observation) -> Result<()> {
+    if observation.accessibility == PermissionObservation::Denied
+        || observation.native.accessibility == PermissionObservation::Denied
     {
         return Err(Error::new(
             Code::Permission,
@@ -43,33 +43,30 @@ impl Client {
     pub async fn start_input(&self) -> Result<Value> {
         let _ownership = self.controller.acquire(false)?;
         self.identity().await?;
-        self.launch_input().await
-    }
-
-    /// start-input: replace a stale service, otherwise make one ready.
-    async fn launch_input(&self) -> Result<Value> {
         let status = self.status().await;
-        require_hidden(&status, self.config.helper_uid)?;
+        let observation = Observation::decode(&status);
+        observation.require_hidden(self.config.helper_uid)?;
 
-        let native = &status["inputService"];
-        let current = crate::session::input_build_current(&status);
-        if native["ok"] == true && !current {
-            return self.upgrade_input(&status).await;
+        if observation.native.ok && !observation.input_build_current() {
+            return self.upgrade_input_for(&status, false).await;
         }
 
-        let (pid, outcome) = self.ensure_input(&status).await?;
+        let (pid, outcome) = self.ensure_input(&observation).await?;
         Ok(json!({ "ok": true, outcome: true, "pid": pid }))
     }
 
     /// Make a ready input service exist without replacing a running one:
     /// reuse it, reset it, or start the installed build.
-    pub(super) async fn ensure_input(&self, status: &Value) -> Result<(u32, &'static str)> {
-        let session = require_hidden(status, self.config.helper_uid)?;
+    pub(super) async fn ensure_input(
+        &self,
+        observation: &Observation,
+    ) -> Result<(u32, &'static str)> {
+        let session = observation.require_hidden(self.config.helper_uid)?;
         if session.input {
             return Ok((session.epoch.input_pid, "alreadyRunning"));
         }
 
-        if status["inputService"]["ok"] == true {
+        if observation.native.ok {
             let reset = self.native_request(json!({
                 "op": "reset",
                 "epoch": session.epoch.input_epoch(),
@@ -88,7 +85,7 @@ impl Client {
 
         // Without Accessibility a new service can never become ready, and a
         // start that cannot be confirmed would stay pending; refuse plainly.
-        require_accessibility(status)?;
+        require_accessibility(observation)?;
         let pid = self.pending_until_known(self.spawn_input()).await?;
 
         Ok((pid, "started"))
@@ -97,22 +94,19 @@ impl Client {
     /// Replace a running service whose build differs from the installed
     /// executable through its authenticated shutdown. The replacement stays
     /// a pending mutation until it is ready, current and holds nothing.
-    pub(super) async fn upgrade_input(&self, status: &Value) -> Result<Value> {
-        self.upgrade_input_for(status, false).await
-    }
-
     pub(super) async fn upgrade_input_for(&self, status: &Value, recovery: bool) -> Result<Value> {
         self.require_service_idle_for(recovery).await?;
-        let native = &status["inputService"];
+        let observation = Observation::decode(status);
+        let native = &observation.native;
 
-        if !status["installedBuild"].is_string() {
+        if observation.installed_build.is_none() {
             return Err(Error::new(
                 Code::Startup,
                 "The installed executable cannot be read; refusing to replace the running service",
             ));
         }
 
-        if !has_capability(native, SHUTDOWN) {
+        if !native.has_capability(SHUTDOWN) {
             return Err(Error::new(
                 Code::Startup,
                 "The running input service predates authenticated shutdown and cannot be \
@@ -121,20 +115,16 @@ impl Client {
             ));
         }
 
-        if native["controlActive"] != false {
+        if native.control_active != Some(false) {
             return Err(Error::new(
                 Code::Busy,
                 "The input service has an active controller; release it before upgrading",
             ));
         }
 
-        let previous = native["pid"]
-            .as_u64()
-            .and_then(|pid| u32::try_from(pid).ok())
-            .filter(|pid| *pid > 1)
-            .ok_or_else(|| {
-                Error::new(Code::Startup, "The running input service has no valid PID")
-            })?;
+        let previous = native.pid.filter(|pid| *pid > 1).ok_or_else(|| {
+            Error::new(Code::Startup, "The running input service has no valid PID")
+        })?;
         let generation = self.controller.quarantine()?;
 
         if let Err(error) = self.stop_input(previous).await {

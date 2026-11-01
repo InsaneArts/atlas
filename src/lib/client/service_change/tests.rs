@@ -335,7 +335,15 @@ async fn recovery_can_take_control_after_the_callers_screenshot_with_an_unknown_
             },
         )
         .unwrap();
-        let listed = crate::host_session::reading::SessionReading::collect(&client)
+        let listed = client
+            .output_dir()
+            .map(|output| {
+                crate::host_session::reading::SessionReading::collect(
+                    output,
+                    &client.controller,
+                    crate::host_session::liveness::Snapshot::polled,
+                )
+            })
             .unwrap()
             .entries(crate::host_session::reading::SessionFacts::local(
                 &client.controller,
@@ -603,10 +611,13 @@ async fn an_ordinary_input_upgrade_still_refuses_recent_work_with_the_callers_un
     );
     let _ownership = client.controller.acquire(true).unwrap();
 
-    let error = tokio::time::timeout(Duration::from_secs(1), client.upgrade_input(&json!({})))
-        .await
-        .unwrap()
-        .unwrap_err();
+    let error = tokio::time::timeout(
+        Duration::from_secs(1),
+        client.upgrade_input_for(&json!({}), false),
+    )
+    .await
+    .unwrap()
+    .unwrap_err();
     assert_eq!(error.code, Code::Busy);
     assert_eq!(error.error, "worker is active in the helper.");
     assert!(!error.uncertain);
@@ -744,7 +755,15 @@ async fn a_named_updater_defers_for_terminal_work_before_its_own_screenshot() {
         )
         .unwrap();
     }
-    let listed = crate::host_session::reading::SessionReading::collect(&client)
+    let listed = client
+        .output_dir()
+        .map(|output| {
+            crate::host_session::reading::SessionReading::collect(
+                output,
+                &client.controller,
+                crate::host_session::liveness::Snapshot::polled,
+            )
+        })
         .unwrap()
         .entries(crate::host_session::reading::SessionFacts::local(
             &client.controller,
@@ -1323,7 +1342,11 @@ async fn input_replacement_and_setup_repairs_refuse_recent_work_before_dispatch(
     let config = directory.path().join("missing.toml");
     let checked = async {
         assert_eq!(
-            client.upgrade_input(&json!({})).await.unwrap_err().error,
+            client
+                .upgrade_input_for(&json!({}), false)
+                .await
+                .unwrap_err()
+                .error,
             "worker is active in the helper."
         );
         assert_eq!(

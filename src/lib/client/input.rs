@@ -2,14 +2,14 @@
 //! the verified session and sent under a grant of input, checked against
 //! the app it is for when asked, and the native requests behind it that
 //! take, release and reset that grant.
-use super::{Actor, Client, service::require_accessibility};
+use super::{Actor, Client, Mutation, service::require_accessibility};
 use crate::{
     actions::{self, Expect},
     control::{Beside, Ownership, SharedLease},
     error::{Code, Error, Holder, Result},
     session::{
-        Epoch, FOCUS_APP, FOCUS_DOCK, FOCUS_FIELD, FOCUS_WINDOW, Session, has_capability,
-        require_hidden,
+        Epoch, FOCUS_APP, FOCUS_DOCK, FOCUS_FIELD, FOCUS_WINDOW, NativeObservation, Observation,
+        Session,
     },
     transport::Transport,
 };
@@ -20,14 +20,6 @@ use std::time::{Duration, Instant};
 /// while holding it: the grant's own life, and a second to spare.
 const GRANT_OUTLIVES: Duration = crate::native::GRANT_TTL.saturating_add(Duration::from_secs(1));
 
-/// How an agent's batch is checked against the app it is for.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub enum Check {
-    /// Sent only with the check: an input service that cannot check is
-    /// refused before anything is sent.
-    Required(Expect),
-}
-
 /// What the helper is asked to expect of an agent's batch, given what its
 /// input service `native` says it can check. An input service that answered
 /// without the whole check, the Dock's part included and the window's and
@@ -35,14 +27,14 @@ pub enum Check {
 /// required: it would post the input unchecked, or let a click on a Dock
 /// icon through, and input cannot be taken back once it is sent. One that
 /// did not answer is refused later, as unavailable.
-pub(super) fn expectation(native: &Value, check: Option<Check>) -> Result<Option<Expect>> {
-    let answered = native["ok"] == true;
+pub(super) fn expectation(
+    native: &NativeObservation,
+    check: Option<Expect>,
+) -> Result<Option<Expect>> {
     match check {
         None => Ok(None),
-        Some(Check::Required(expect)) if !answered || checks_all(native, &expect) => {
-            Ok(Some(expect))
-        }
-        Some(Check::Required(_)) => Err(Error::new(
+        Some(expect) if !native.ok || checks_all(native, &expect) => Ok(Some(expect)),
+        Some(_) => Err(Error::new(
             Code::Startup,
             "The helper's input service is from an older Atlas: run atlas start-input, then try again",
         )),
@@ -51,11 +43,11 @@ pub(super) fn expectation(native: &Value, check: Option<Check>) -> Result<Option
 
 /// Whether input service `native` checks all of `expect`: the app, with
 /// the Dock, and the window and field when it names them.
-fn checks_all(native: &Value, expect: &Expect) -> bool {
-    has_capability(native, FOCUS_APP)
-        && has_capability(native, FOCUS_DOCK)
-        && (expect.window().is_none() || has_capability(native, FOCUS_WINDOW))
-        && (expect.field().is_none() || has_capability(native, FOCUS_FIELD))
+fn checks_all(native: &NativeObservation, expect: &Expect) -> bool {
+    native.has_capability(FOCUS_APP)
+        && native.has_capability(FOCUS_DOCK)
+        && (expect.window().is_none() || native.has_capability(FOCUS_WINDOW))
+        && (expect.field().is_none() || native.has_capability(FOCUS_FIELD))
 }
 
 impl Client {
@@ -122,7 +114,15 @@ impl Client {
     }
 
     pub(super) async fn native_request(&self, request: Value) -> Result<Value> {
-        let result = self.native_call(&request).await?;
+        let interrupt = self.controller.interrupt();
+        let connection = self.input_transport().connect().await?;
+        let sent = {
+            // A signal never drops a half-sent request. Missing replies retain
+            // the caller's pending claim through the shared answer path.
+            let _sending = interrupt.sending();
+            connection.dispatch(&request).await?
+        };
+        let result = self.answer(sent).await?;
         if result["ok"] != true {
             let error = Error::new(
                 match result["code"].as_str() {
@@ -158,26 +158,7 @@ impl Client {
         Ok(result)
     }
 
-    /// Send `request` to the input service and read its answer. It is
-    /// never dropped half sent; an answer still missing when a signal's stop
-    /// cuts the step under way leaves its outcome unknown, so the claim the
-    /// caller holds for it stays pending.
-    async fn native_call(&self, request: &Value) -> Result<Value> {
-        let interrupt = self.controller.interrupt();
-        let connection = self.input_transport().connect().await?;
-        let sent = {
-            let _sending = interrupt.sending();
-            connection.dispatch(request).await?
-        };
-
-        tokio::select! {
-            biased;
-            reply = sent.finish() => reply,
-            signal = interrupt.cut() => Err(interrupt.cut_short(signal)),
-        }
-    }
-
-    pub async fn input(
+    pub(crate) async fn input(
         &self,
         actions: &Value,
         expected: Option<(&Epoch, Instant)>,
@@ -193,32 +174,14 @@ impl Client {
             .await
     }
 
-    /// Send one validated batch under controller ownership the caller already
-    /// holds, refusing unless the helper still has exactly `epoch`. With a
-    /// `check`, the helper sends each action only while it would reach that
-    /// app.
+    /// Keep decoding failures behind controller and session guards while carrying
+    /// the decoded batch through the input decision. Ownership outlives cleanup.
     pub(crate) async fn input_owned(
-        &self,
-        _ownership: &Ownership,
-        actions: &Value,
-        epoch: &Epoch,
-        check: Option<Check>,
-    ) -> Result<Value> {
-        self.input_inner(
-            actions::Batch::decode(actions),
-            Some((epoch, Instant::now())),
-            None,
-            check,
-        )
-        .await
-    }
-
-    pub(crate) async fn input_decoded(
         &self,
         _ownership: &Ownership,
         actions: Result<actions::Batch<'_>>,
         expected: Option<(&Epoch, Instant)>,
-        check: Option<Check>,
+        check: Option<Expect>,
     ) -> Result<Value> {
         self.input_inner(actions, expected, None, check).await
     }
@@ -230,6 +193,7 @@ impl Client {
     /// caller looks at the screen again before acting on it.
     pub(super) async fn repin(&self, session: Session) -> Result<Session> {
         let status = self.status().await;
+        let observation = Observation::decode(&status);
         let unavailable = || {
             let cause = status["inputService"]["error"]
                 .as_str()
@@ -239,15 +203,13 @@ impl Client {
                 format!("The native input service is unavailable{cause}; run atlas start-input"),
             )
         };
-        require_accessibility(&status)?;
-        if !crate::session::pinned_to_session(&status, &session) {
+        require_accessibility(&observation)?;
+        if !observation.native.pinned_to_session(&session) {
             return Err(unavailable());
         }
 
         let epoch = &session.epoch;
-        let pinned = &status["inputService"]["enforcedEpoch"];
-        let same_size = pinned["width"].as_f64() == Some(epoch.display.width)
-            && pinned["height"].as_f64() == Some(epoch.display.height);
+        let same_size = observation.native.repinnable(&session);
 
         self.pending_until_known(
             self.native_request(json!({"op": "reset", "epoch": epoch.input_epoch()})),
@@ -273,7 +235,7 @@ impl Client {
         actions: Result<actions::Batch<'_>>,
         expected: Option<(&Epoch, Instant)>,
         lease: Option<(&SharedLease, &str)>,
-        check: Option<Check>,
+        check: Option<Expect>,
     ) -> Result<Value> {
         // An agent's input holds control taken beside commands; the person's
         // holds the lease, which no command can start under.
@@ -310,10 +272,11 @@ impl Client {
         actions: Result<actions::Batch<'_>>,
         expected: Option<(&Epoch, Instant)>,
         lease: Option<(&SharedLease, &str)>,
-        check: Option<Check>,
+        check: Option<Expect>,
     ) -> Result<Value> {
-        let session = require_hidden(status, self.config.helper_uid)?;
-        let expect = expectation(&status["inputService"], check)?;
+        let observation = Observation::decode(status);
+        let session = observation.require_hidden(self.config.helper_uid)?;
+        let expect = expectation(&observation.native, check)?;
 
         if expected.is_some_and(|(epoch, _)| *epoch != session.epoch) {
             return Err(Error::new(
@@ -376,6 +339,7 @@ impl Client {
             .is_none()
             .then(|| self.controller.quarantine())
             .transpose()?;
+        let mutation = Mutation::Input(Some(actions.actions().len() as u64));
         let mut request = json!({
             "op": "input",
             "actions": actions.into_wire(),
@@ -388,7 +352,7 @@ impl Client {
             request["expect"] = json!(expect);
         }
         let result = self
-            .mutate(request, lease, expected.map(|(_, at)| at), None)
+            .mutate(mutation, request, lease, expected.map(|(_, at)| at), None)
             .await;
 
         if lease.is_none() {

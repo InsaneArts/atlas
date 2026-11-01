@@ -3,6 +3,7 @@
 //! that process can still act after its caller is gone, and never for a
 //! process that reused its PID.
 use super::Pending;
+pub(super) use crate::process::{boot as executor_boot, start as executor_start};
 use crate::{
     context::context,
     error::{Code, Error, Result},
@@ -143,23 +144,11 @@ pub(super) struct Executor {
     pub(super) start: Start,
 }
 
-/// The immutable identity of this boot, unaffected by wall-clock changes.
-pub(super) fn executor_boot() -> Result<String> {
-    crate::process::boot()
-}
-
 #[cfg(test)]
 pub(super) fn executor_boot_with(
     read: impl FnOnce(&std::ffi::CStr) -> Result<String>,
 ) -> Result<String> {
     read(c"kern.bootsessionuuid")
-}
-
-/// The exact start time of the executor, whichever account it runs as:
-/// `proc_pidinfo` refuses another user's process, the root executor
-/// included, and the kernel's process sysctl does not.
-pub(super) fn executor_start(pid: i32) -> Result<Start> {
-    crate::process::start(pid)
 }
 
 /// A different boot or process instance cannot be the dispatched executor.

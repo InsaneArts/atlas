@@ -2,11 +2,15 @@
 use super::{Client, Verified};
 use crate::{
     error::{Code, Error, Result},
-    screen::windows::{Shown, from_reply},
+    last_capture,
+    screen::windows::{Bounds, Shown, from_reply, hit_windows, same_routing},
     transport::refusal,
 };
 use serde_json::{Value, json};
 use std::time::Duration;
+
+/// Bound an ordinary window observation, including both sides of a remembered look.
+pub(crate) const WINDOW_LOOKUP: Duration = Duration::from_secs(5);
 
 fn window_list(reply: Value) -> Result<Shown> {
     if reply["ok"] == false {
@@ -46,6 +50,47 @@ impl Client {
             window_list(transport.call(&request).await?)
         };
         read.await.map_err(Error::certain)
+    }
+}
+
+impl Client {
+    pub(crate) async fn look<T>(
+        &self,
+        verified: &Verified,
+        look: impl std::future::Future<Output = Result<T>>,
+    ) -> Result<T> {
+        if self.host_session.is_none() {
+            return look.await;
+        }
+        let before = self.windows_in(Some(verified), true, WINDOW_LOOKUP).await?;
+        let result = look.await?;
+        let after = self
+            .windows_in(Some(verified), false, WINDOW_LOOKUP)
+            .await?;
+        let unchanged = same_routing(&before.windows, &after.windows).then_some(&before);
+        self.remember_look(verified, unchanged)?;
+        Ok(result)
+    }
+
+    pub(crate) fn remember_look(
+        &self,
+        verified: &Verified,
+        snapshot: Option<&Shown>,
+    ) -> Result<()> {
+        let Some(session) = &self.host_session else {
+            return Ok(());
+        };
+        let epoch = &verified.session().epoch;
+        let display = &epoch.display;
+        let windows = snapshot.map(|snapshot| {
+            hit_windows(
+                &snapshot.windows,
+                &Bounds::display(display.width, display.height),
+                &snapshot.dock,
+                snapshot.starts.as_ref(),
+            )
+        });
+        last_capture::remember_windows(self.output_dir()?, session.key(), windows.as_deref(), epoch)
     }
 }
 

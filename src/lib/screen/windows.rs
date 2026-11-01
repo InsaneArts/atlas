@@ -18,23 +18,23 @@ pub(crate) const DOCK_LAYER: i64 = 20;
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
-pub struct Window {
-    pub number: i64,
-    pub pid: i64,
-    pub owner: Option<String>,
-    pub title: Option<String>,
-    pub layer: i64,
-    pub alpha: f64,
-    pub bounds: Bounds,
+pub(crate) struct Window {
+    pub(crate) number: i64,
+    pub(crate) pid: i64,
+    pub(crate) owner: Option<String>,
+    pub(crate) title: Option<String>,
+    pub(crate) layer: i64,
+    pub(crate) alpha: f64,
+    pub(crate) bounds: Bounds,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub(crate) struct HitWindow {
-    pub number: i64,
-    pub pid: i64,
-    pub start: Option<crate::process::Start>,
-    pub layer: i64,
-    pub bounds: Bounds,
+    pub(crate) number: i64,
+    pub(crate) pid: i64,
+    pub(crate) start: Option<crate::process::Start>,
+    pub(crate) layer: i64,
+    pub(crate) bounds: Bounds,
 }
 
 /// Visible hit regions, front to back, without window or application names.
@@ -89,7 +89,7 @@ impl Window {
 
     /// Whether this is the menu bar, the Window Server's window that shows
     /// the frontmost app's titles.
-    pub fn is_menu_bar(&self) -> bool {
+    pub(crate) fn is_menu_bar(&self) -> bool {
         self.layer == MENU_BAR_LAYER && self.owner.as_deref() == Some("Window Server")
     }
 
@@ -97,13 +97,13 @@ impl Window {
     /// spanning the whole `display`, which pass pointer events through to
     /// what is under them, except where the Dock shows its tiles (see
     /// [`Screen`]).
-    pub fn passes_through(&self, display: &Bounds) -> bool {
+    pub(crate) fn passes_through(&self, display: &Bounds) -> bool {
         self.bounds.covers(display)
             && matches!(self.owner.as_deref(), Some("Dock" | "Notification Center"))
     }
 
     /// Whether this is a window of the Dock's.
-    pub fn is_dock(&self) -> bool {
+    pub(crate) fn is_dock(&self) -> bool {
         self.owner.as_deref() == Some("Dock")
     }
 
@@ -111,13 +111,13 @@ impl Window {
     /// one, or a floating panel or alert below the Dock's layer. An open
     /// menu is not one: `windows` and `wait` never mistake it for the window
     /// it opens.
-    pub fn is_apps(&self) -> bool {
+    pub(crate) fn is_apps(&self) -> bool {
         self.layer == 0 || ((1..DOCK_LAYER).contains(&self.layer) && self.alpha > 0.0)
     }
 
     /// [`Window::is_apps`], or a menu the app has open: what an element
     /// command may act on.
-    pub fn is_apps_or_menu(&self) -> bool {
+    pub(crate) fn is_apps_or_menu(&self) -> bool {
         self.is_apps() || (self.layer == MENU_LAYER && self.alpha > 0.0)
     }
 }
@@ -231,7 +231,7 @@ const SHELF: f64 = 12.0;
 /// under it; anything else the Dock shows counts as covering all of it.
 #[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
-pub enum Dock {
+pub(crate) enum Dock {
     /// The frames of its lists of icons, as Accessibility reports them, and
     /// nothing else; none when no Dock is on screen.
     Icons(Vec<Bounds>),
@@ -254,7 +254,7 @@ impl Dock {
     }
 
     /// The parts of the Dock's window, at `bounds`, that take clicks.
-    pub fn areas(&self, bounds: &Bounds) -> Vec<Bounds> {
+    pub(crate) fn areas(&self, bounds: &Bounds) -> Vec<Bounds> {
         match self {
             Self::Icons(lists) => lists.iter().map(|list| list.padded(SHELF)).collect(),
             Self::Other | Self::Unread => vec![bounds.clone()],
@@ -293,12 +293,12 @@ impl Screen {
 /// clicks.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub(crate) struct Shown {
-    pub windows: Vec<Window>,
+    pub(crate) windows: Vec<Window>,
     /// Process identities from this snapshot; absent when the reader could not provide them.
-    pub starts: Option<std::collections::BTreeMap<i64, crate::process::Start>>,
+    pub(crate) starts: Option<std::collections::BTreeMap<i64, crate::process::Start>>,
     /// Unread when it was not asked for.
     #[serde(default)]
-    pub dock: Dock,
+    pub(crate) dock: Dock,
 }
 
 /// What the helper daemon reported; None when it did not answer whole.

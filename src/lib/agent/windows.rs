@@ -2,17 +2,13 @@
 //! through its daemon, listed, and waited for until one appears or
 //! none is left.
 use crate::{
-    client::{Client, Verified},
+    client::{Client, Verified, WINDOW_LOOKUP as PROBE_LIMIT},
     error::{Code, Error, Result},
-    last_capture,
     name::same_text,
-    screen::windows::{Bounds, Shown, Window, hit_windows, same_routing},
+    screen::windows::{Shown, Window},
 };
 use serde_json::{Value, json};
 use std::time::{Duration, Instant};
-
-/// How long a read-only look at the helper (its window list) may take.
-const PROBE_LIMIT: Duration = Duration::from_secs(5);
 
 /// Which helper windows a command is about.
 #[derive(Debug, Default, Clone)]
@@ -26,7 +22,7 @@ pub struct WindowFilter {
 }
 
 impl WindowFilter {
-    pub fn matches(&self, window: &Window) -> bool {
+    pub(crate) fn matches(&self, window: &Window) -> bool {
         // An app's floating panels and alerts count as its windows, so a
         // system alert in front of everything is listed too.
         (self.all || window.is_apps())
@@ -169,60 +165,20 @@ async fn no_window(client: &Client, filter: &WindowFilter) -> String {
         return fallback;
     };
 
-    let Ok(apps) = client.apps().await else {
+    let Ok(apps) = client.running_apps().await else {
         return fallback;
     };
 
-    let running = apps["apps"]
-        .as_array()
-        .into_iter()
-        .flatten()
-        .find(|running| {
-            running["name"]
-                .as_str()
-                .is_some_and(|name| same_text(name, app))
-        });
+    let running = apps
+        .rows()
+        .iter()
+        .find(|running| running.name().is_some_and(|name| same_text(name, app)));
     match running {
         None => format!("{app} is not running"),
-        Some(running) if running["policy"] == "accessory" => format!(
+        Some(running) if running.policy() == Some("accessory") => format!(
             "{app} is running but shows no window: a menu bar app opens its windows from its \
              menu bar item"
         ),
         Some(_) => format!("{app} is running but shows no window"),
-    }
-}
-
-impl Client {
-    pub(crate) async fn look<T>(
-        &self,
-        verified: &Verified,
-        look: impl std::future::Future<Output = Result<T>>,
-    ) -> Result<T> {
-        if self.host_session.is_none() {
-            return look.await;
-        }
-        let before = window_snapshot(self, verified, DockRead::Read).await?;
-        let result = look.await?;
-        let after = window_snapshot(self, verified, DockRead::Skip).await?;
-        let unchanged = same_routing(&before.windows, &after.windows).then_some(&before);
-        self.remember_look(verified, unchanged)?;
-        Ok(result)
-    }
-
-    fn remember_look(&self, verified: &Verified, snapshot: Option<&Shown>) -> Result<()> {
-        let Some(session) = &self.host_session else {
-            return Ok(());
-        };
-        let epoch = &verified.session().epoch;
-        let display = &epoch.display;
-        let windows = snapshot.map(|snapshot| {
-            hit_windows(
-                &snapshot.windows,
-                &Bounds::display(display.width, display.height),
-                &snapshot.dock,
-                snapshot.starts.as_ref(),
-            )
-        });
-        last_capture::remember_windows(self.output_dir()?, session.key(), windows.as_deref(), epoch)
     }
 }

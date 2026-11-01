@@ -62,7 +62,7 @@ impl Lease {
     /// Retire the owner's token once it ran out, beginning its release, and
     /// let go of the controller lock once nothing keeps it: no token, no
     /// input in flight and no release under way.
-    pub fn expire(&mut self) {
+    pub(crate) fn expire(&mut self) {
         self.expire_at(Instant::now());
     }
 
@@ -133,7 +133,7 @@ impl Lease {
     }
 
     /// [`Lease::require`] `token`, then give it its full time to live again.
-    pub fn renew(&mut self, token: &str) -> Result<()> {
+    pub(crate) fn renew(&mut self, token: &str) -> Result<()> {
         self.renew_at(token, Instant::now(), Instant::now)
     }
 
@@ -226,7 +226,7 @@ impl Lease {
     }
 
     /// Whether the controller lock is still kept for this lease.
-    pub fn active(&mut self) -> bool {
+    pub(crate) fn active(&mut self) -> bool {
         self.active_at(Instant::now())
     }
 
@@ -236,7 +236,7 @@ impl Lease {
     }
 
     /// Whether a token ran out and its release has not begun yet.
-    pub fn expired(&self) -> bool {
+    pub(crate) fn expired(&self) -> bool {
         self.retired.is_some()
     }
 

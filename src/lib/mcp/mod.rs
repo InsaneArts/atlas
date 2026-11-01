@@ -479,7 +479,13 @@ impl Server {
         let client = self.client.clone();
         let (recent, unrecorded) = tokio::task::spawn_blocking(move || {
             let recent = Store::at(&output).recent();
-            let unrecorded = crate::host_session::reading::first_command_running(&client, &recent);
+            let unrecorded = client.output_dir().ok().is_some_and(|output| {
+                crate::host_session::reading::first_command_running(
+                    output,
+                    &client.controller,
+                    &recent,
+                )
+            });
             (recent, unrecorded)
         })
         .await

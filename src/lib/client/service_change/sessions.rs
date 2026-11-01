@@ -1,4 +1,4 @@
-use super::Client;
+use super::{Client, MARKER_CHECK};
 use crate::{
     activity_log,
     host_session::{
@@ -13,9 +13,6 @@ use crate::{
 /// How recently another session used Atlas to defer service replacement.
 const SERVICE_IDLE: std::time::Duration = std::time::Duration::from_secs(2 * 60);
 
-/// How long the local service-change read waits for a marker writer.
-const MARKER_CHECK: std::time::Duration = std::time::Duration::from_millis(250);
-
 /// Who would be interrupted by a service replacement, from checked session
 /// records and the full recent activity window. The caller's own session
 /// is left out for recent activity. Its waiting and running commands still defer
@@ -26,8 +23,6 @@ pub(crate) fn service_blocker(client: &Client, recovery: bool, now: u128) -> Opt
     service_blocker_with(client, recovery, now, Snapshot::polled)
 }
 
-// size-exception: replacement is one ordered proof of idle. Keep pending,
-// command lifetime and recent activity refusals together so unknown stays busy.
 pub(crate) fn service_blocker_with(
     client: &Client,
     recovery: bool,
@@ -104,6 +99,19 @@ pub(crate) fn service_blocker_with(
         processes: Snapshot::default(),
     }
     .sampled_for_service_change(output, sample);
+    blocker(&reading, facts, own, recovering_own, &activity)
+}
+
+/// Select from the single frozen read; unknown process samples stay busy even
+/// when the display would omit them as irrelevant.
+fn blocker(
+    reading: &SessionReading,
+    facts: SessionFacts,
+    own: Option<&str>,
+    recovering_own: bool,
+    activity: &[activity_log::Row],
+) -> Option<String> {
+    let now_ms = u64::try_from(facts.now / 1_000_000).unwrap_or(u64::MAX);
     if reading
         .holder
         .iter()

@@ -69,24 +69,17 @@ pub(super) fn app_pids(windows: &[Window], name: &str) -> Vec<i64> {
                     .is_some_and(|owner| same_text(owner, name))
         })
         .collect();
-
-    let tiers: [&dyn Fn(&Window) -> bool; 3] = [
-        &|window| window.layer == 0,
-        &|window| window.layer != MENU_LAYER,
-        &|_| true,
-    ];
-
-    let mut pids: Vec<i64> = tiers
-        .iter()
-        .map(|tier| {
-            candidates
-                .iter()
-                .filter(|window| tier(window))
-                .map(|window| window.pid)
-                .collect::<Vec<_>>()
-        })
-        .find(|pids| !pids.is_empty())
-        .unwrap_or_default();
+    let tier = |window: &Window| match window.layer {
+        0 => 0,
+        MENU_LAYER => 2,
+        _ => 1,
+    };
+    let best = candidates.iter().map(|window| tier(window)).min();
+    let mut pids: Vec<i64> = candidates
+        .into_iter()
+        .filter(|window| Some(tier(window)) == best)
+        .map(|window| window.pid)
+        .collect();
     pids.sort_unstable();
     pids.dedup();
 
@@ -106,20 +99,6 @@ pub(super) fn one_pid(name: &str, pids: &[i64]) -> Result<i64> {
             format!("Several {name} processes have windows ({pids:?}); pass --pid"),
         )),
     }
-}
-
-/// The process a command is about: the one with the app's windows, or,
-/// when none of its windows is open, the active app of that name (its
-/// menu bar is still on screen). Several apps of the name with windows
-/// stay ambiguous. It is found in the helper `verified` describes, which
-/// the caller verified just before, so it is not verified again for each
-/// list it reads.
-pub(super) async fn target_pid(
-    client: &Client,
-    verified: &Verified,
-    target: &Target,
-) -> Result<i64> {
-    Ok(target_expect(client, verified, target).await?.pid())
 }
 
 /// Resolve input and named clicks through the same helper snapshot.
@@ -168,17 +147,14 @@ pub(super) async fn target_among(
         }
         Target::Name(name) => name,
     };
-    let named: Vec<&AppRow> = rows.iter().filter(|app| app_named(app, name)).collect();
-    if let Some(pid) = named
-        .iter()
-        .find(|app| app.active())
-        .map(|app| app.pid() as i64)
-    {
-        return snapshot_expect(pid, starts);
+    let mut named = rows.iter().filter(|app| app_named(app, name)).peekable();
+    let absent = named.peek().is_none();
+    if let Some(app) = named.find(|app| app.active()) {
+        return snapshot_expect(app.pid() as i64, starts);
     }
     Err(Error::new(
         Code::Elements,
-        if named.is_empty() {
+        if absent {
             format!("{name} is not running: run atlas open --app {name}")
         } else {
             format!(

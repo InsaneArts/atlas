@@ -8,48 +8,48 @@ use std::{collections::BTreeSet, time::Duration};
 #[serde(rename_all = "camelCase")]
 pub struct Element {
     /// Position in depth-first order, stable within one snapshot.
-    pub index: usize,
-    pub depth: usize,
+    pub(crate) index: usize,
+    pub(crate) depth: usize,
     /// Frame of the top-level window (or open menu) this element belongs to.
     /// Like the attributes below, it is left out when the scan did not read it.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub window: Option<Frame>,
+    pub(crate) window: Option<Frame>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub role: Option<String>,
+    pub(crate) role: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub subrole: Option<String>,
+    pub(crate) subrole: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub title: Option<String>,
+    pub(crate) title: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub description: Option<String>,
+    pub(crate) description: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub value: Option<String>,
+    pub(crate) value: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub identifier: Option<String>,
+    pub(crate) identifier: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub enabled: Option<bool>,
+    pub(crate) enabled: Option<bool>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub focused: Option<bool>,
+    pub(crate) focused: Option<bool>,
     /// Whether a row or cell is selected; not read for other elements.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub selected: Option<bool>,
+    pub(crate) selected: Option<bool>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub frame: Option<Frame>,
+    pub(crate) frame: Option<Frame>,
     /// Selector attributes (role, title, description, value, identifier)
     /// that could not be read, so this element might match a selector unseen.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub unreadable: Vec<String>,
+    pub(crate) unreadable: Vec<String>,
     /// Text attributes reported only in part (their first 200 UTF-16 units,
     /// cut between characters); the element holds more than is shown.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub truncated: Vec<String>,
+    pub(crate) truncated: Vec<String>,
     /// In a menu the app has open (its menu bar, a status item or a
     /// context menu), where a click goes while the menu is open.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
-    pub menu: bool,
+    pub(crate) menu: bool,
     /// A menu item's check mark (such as "✓"), when it shows one.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub mark: Option<String>,
+    pub(crate) mark: Option<String>,
 }
 
 /// One traversal's result.
@@ -68,9 +68,9 @@ pub struct Snapshot {
 /// Bounds on one traversal.
 #[derive(Debug, Clone, Copy)]
 pub struct Limits {
-    pub depth: usize,
-    pub count: usize,
-    pub time: Duration,
+    pub(crate) depth: usize,
+    pub(crate) count: usize,
+    pub(crate) time: Duration,
 }
 
 /// Why a scan is incomplete.

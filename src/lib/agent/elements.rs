@@ -4,12 +4,12 @@
 //! same way.
 use super::{
     input::click,
-    target::{Target, target_expect, target_pid},
+    target::{Target, target_expect},
     windows::pointer_view,
 };
 use crate::{
     actions::{Button, Expect},
-    client::{Check, Client, Run, Verified},
+    client::{Client, Run, Verified},
     daemon::protocol::{Crop, Region},
     error::{Code, Error, Result},
     native::ax,
@@ -158,7 +158,7 @@ pub async fn elements(
     full: bool,
 ) -> Result<Value> {
     let verified = client.verify().await?;
-    let pid = target_pid(client, &verified, target).await?;
+    let pid = target_expect(client, &verified, target).await?.pid();
     let scanned = client
         .look(&verified, app_elements(client, &verified, pid))
         .await?;
@@ -187,7 +187,7 @@ pub async fn screenshot(
         }
         (Some(target), None) => {
             let verified = client.verify().await?;
-            let pid = target_pid(client, &verified, target).await?;
+            let pid = target_expect(client, &verified, target).await?.pid();
             (Some(Crop::App { pid }), Some(verified))
         }
         (None, region) => (region.map(Crop::Region), None),
@@ -586,7 +586,12 @@ pub async fn click_element(
 
     let actions = click(x, y, which, count, modifiers);
     let mut result = client
-        .input_owned(&ownership, &actions, &epoch, Some(check))
+        .input_owned(
+            &ownership,
+            crate::actions::Batch::decode(&actions),
+            Some((&epoch, std::time::Instant::now())),
+            Some(check),
+        )
         .await?;
     result["element"] = clicked(element, (x, y));
 
@@ -599,7 +604,7 @@ pub(super) fn element_check(
     windows: &[Window],
     expect: Expect,
     (x, y): (f64, f64),
-) -> Result<Check> {
+) -> Result<Expect> {
     let pid = expect.pid();
     let expect = if element.role.as_deref() == Some("AXMenuBarItem") {
         menu_bar_window(windows, x, y)
@@ -618,7 +623,7 @@ pub(super) fn element_check(
             })?;
         let menu = element.menu
             || windows.iter().any(|window| {
-                window.number == number && window.layer == crate::native::windows::MENU_LAYER
+                window.number == number && window.layer == crate::screen::windows::MENU_LAYER
             });
         if menu {
             expect
@@ -627,7 +632,7 @@ pub(super) fn element_check(
         }
     };
 
-    Ok(Check::Required(expect))
+    Ok(expect)
 }
 
 /// Where a click on an element lands: the middle of its frame, or for a

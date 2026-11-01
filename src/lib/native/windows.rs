@@ -1,4 +1,6 @@
-pub(crate) use crate::screen::windows::{Bounds, Dock, MENU_LAYER, Window};
+#[cfg(test)]
+pub(crate) use crate::screen::windows::MENU_LAYER;
+pub(crate) use crate::screen::windows::{Bounds, Dock, Window};
 use crate::{
     error::{Code, Error, Result},
     native::cf,

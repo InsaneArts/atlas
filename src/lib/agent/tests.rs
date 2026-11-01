@@ -3107,7 +3107,7 @@ fn a_covered_named_element_requires_its_exact_window_at_the_native_boundary() {
         (20.0, 40.0),
     )
     .unwrap();
-    let crate::client::Check::Required(expect) = check;
+    let expect = check;
     assert_eq!(expect.pid(), 812);
     assert_eq!(expect.window(), Some(42));
 }
@@ -3132,9 +3132,7 @@ fn menu_titles_and_open_items_require_the_app_without_raising_a_menu_window() {
     let bar = window(2, 1, "Window Server", MENU_BAR_LAYER);
     title.window = Some(frame(10.0, 20.0, 300.0, 200.0));
     let check = element_check(&title, &[bar], Expect::new(812).unwrap(), (20.0, 21.0)).unwrap();
-    assert!(
-        matches!(check, crate::client::Check::Required(expect) if expect.window().is_none() && expect.pid() == 812)
-    );
+    assert!(check.window().is_none() && check.pid() == 812);
     let mut item = shown(0, "AXMenuItem", Some("Save"), None);
     item.menu = true;
     item.window = title.window;
@@ -3145,7 +3143,7 @@ fn menu_titles_and_open_items_require_the_app_without_raising_a_menu_window() {
         (20.0, 21.0),
     )
     .unwrap();
-    assert!(matches!(check, crate::client::Check::Required(expect) if expect.window().is_none()));
+    assert!(check.window().is_none());
 }
 
 #[tokio::test]
@@ -3217,9 +3215,7 @@ fn a_named_sheet_button_keeps_the_exact_sheet_or_parent_number_from_the_scan() {
         button.window = Some(owning);
         let check =
             element_check(&button, &listed, Expect::new(812).unwrap(), (130.0, 132.0)).unwrap();
-        assert!(
-            matches!(check, crate::client::Check::Required(expect) if expect.pid() == 812 && expect.window() == Some(number))
-        );
+        assert!(check.pid() == 812 && check.window() == Some(number));
     }
 }
 
