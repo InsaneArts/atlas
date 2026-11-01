@@ -137,10 +137,10 @@ impl Config {
 
         let mut bytes = Vec::new();
         fs::File::open(path)
-            .map_err(context("Open settings", path))?
+            .map_err(|error| Error::new(Code::Io, format!("Open settings: {error}")))?
             .take(LIMIT + 1)
             .read_to_end(&mut bytes)
-            .map_err(context("Read settings", path))?;
+            .map_err(|error| Error::new(Code::Io, format!("Read settings: {error}")))?;
 
         if bytes.len() as u64 > LIMIT {
             return Err(Error::new(Code::Config, "Configuration exceeds 16 KiB"));
@@ -335,24 +335,31 @@ mod tests {
     use super::*;
 
     #[test]
-    fn a_failed_replacement_write_names_the_step_and_destination() {
+    fn a_settings_open_failure_names_only_the_step_and_cause() {
         let directory = tempfile::tempdir().unwrap();
-        let path = directory.path().join("record");
-        fs::write(&path, b"previous").unwrap();
-        let error = write_beside(
-            &path,
-            0o600,
-            |_| Err(std::io::Error::from_raw_os_error(libc::EACCES).into()),
-            |_| panic!("a failed write must never be placed"),
-        )
-        .unwrap_err();
+        let path = directory.path().join("missing.toml");
+        let cause = fs::File::open(&path).unwrap_err();
+        let error = Config::read(&path).unwrap_err();
         assert_eq!(error.code, Code::Io);
         assert!(!error.uncertain);
-        assert!(error.error.starts_with("Write replacement for"), "{error}");
-        assert!(error.error.contains(&path.display().to_string()), "{error}");
-        assert!(error.error.contains("os error 13"), "{error}");
-        assert_eq!(fs::read(&path).unwrap(), b"previous");
-        assert_eq!(fs::read_dir(directory.path()).unwrap().count(), 1);
+        assert_eq!(error.error, format!("Open settings: {cause}"));
+    }
+
+    #[test]
+    fn a_settings_read_failure_names_the_path_once_and_keeps_the_cause() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = fs::canonicalize(directory.path()).unwrap();
+        let cause = fs::read(&path).unwrap_err();
+        let error = Config::load(&path).unwrap_err();
+        assert_eq!(error.code, Code::ConfigInvalid);
+        assert!(!error.uncertain);
+        assert_eq!(
+            error.error,
+            format!(
+                "Atlas could not read its settings in {}: Read settings: {cause}",
+                crate::ui::text::tilde(&path)
+            )
+        );
     }
 
     /// A probe that is a link keeps its own path, so install replaces the
@@ -391,13 +398,18 @@ mod tests {
             0o600
         );
 
-        let failed = write_beside(
+        let error = write_beside(
             &path,
             0o600,
-            |_| Err(Error::new(Code::Io, "no")),
+            |_| Err(std::io::Error::from_raw_os_error(libc::EACCES).into()),
             |_| unreachable!("nothing is placed after a failed write"),
-        );
-        assert!(failed.is_err());
+        )
+        .unwrap_err();
+        assert_eq!(error.code, Code::Io);
+        assert!(!error.uncertain);
+        assert!(error.error.starts_with("Write replacement for"), "{error}");
+        assert!(error.error.contains(&path.display().to_string()), "{error}");
+        assert!(error.error.contains("os error 13"), "{error}");
         assert_eq!(fs::read(&path).unwrap(), b"second");
         let entries = fs::read_dir(path.parent().unwrap()).unwrap().count();
         assert_eq!(entries, 1, "no temporary file is left behind");
