@@ -1081,58 +1081,18 @@ mod tests {
         ) {
             return;
         }
-        use std::{process::Stdio, time::Duration};
         for mode in ["approval", "command"] {
             let dir = tempfile::tempdir().unwrap();
-            let mut caller = crate::test_support::rerun(
-                "onboarding::as_root::tests::a_privileged_executor_test_caller",
-            )
-            .arg("--nocapture")
-            .env("ATLAS_EXECUTOR_TEST_DIRECTORY", dir.path())
-            .env("ATLAS_EXECUTOR_TEST_MODE", mode)
-            .stdout(Stdio::null())
-            .stderr(Stdio::null())
-            .spawn()
-            .unwrap();
+            let mut fixture = executor_fixture(dir.path(), mode);
+            fixture.ready().unwrap();
+            fixture.interrupt().unwrap();
             let controller = crate::control::Controller::at(7001, &dir.path().join("state"));
-            for _ in 0..500 {
-                if dir.path().join("paused").exists() {
-                    break;
-                }
-                if caller.try_wait().unwrap().is_some() {
-                    break;
-                }
-                std::thread::sleep(Duration::from_millis(10));
-            }
-            let paused = dir.path().join("paused").exists();
-            let _ = caller.kill();
-            let _ = caller.wait();
             let before = controller.pending().unwrap();
             let recovery_blocked = controller.acquire(true).is_err();
             controller.clear().unwrap();
             let after = controller.pending().unwrap();
             let normal_blocked = controller.acquire(false).is_err();
-            // Always release the orphaned stand-in, including during a
-            // deliberate rollback check, before making assertions.
-            fs::write(dir.path().join("continue"), b"").unwrap();
-            let pid = fs::read_to_string(dir.path().join("executor"))
-                .ok()
-                .and_then(|pid| pid.trim().parse::<i32>().ok());
-            let mut exited = false;
-            for _ in 0..500 {
-                if pid.is_none_or(|pid| {
-                    nix::sys::signal::kill(nix::unistd::Pid::from_raw(pid), None)
-                        == Err(nix::errno::Errno::ESRCH)
-                }) {
-                    exited = true;
-                    break;
-                }
-                std::thread::sleep(Duration::from_millis(10));
-            }
-            assert!(
-                paused && exited,
-                "the stand-in must pause and then exit: {mode}"
-            );
+            fixture.finish().unwrap();
             assert!(!before.is_empty());
             assert!(
                 recovery_blocked && normal_blocked,
@@ -1150,6 +1110,21 @@ mod tests {
         }
     }
 
+    fn executor_fixture(dir: &Path, mode: &str) -> crate::test_support::Fixture {
+        crate::test_support::Fixture::spawn(
+            dir,
+            crate::test_support::rerun(
+                "onboarding::as_root::tests::a_privileged_executor_test_caller",
+            )
+            .arg("--nocapture")
+            .env("ATLAS_EXECUTOR_TEST_DIRECTORY", dir)
+            .env("ATLAS_EXECUTOR_TEST_MODE", mode)
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null()),
+        )
+        .unwrap()
+    }
+
     /// A separate caller process for the executor lifetime test. Without
     /// its explicit temporary directory this is an inert test case.
     #[test]
@@ -1160,44 +1135,66 @@ mod tests {
         };
         let dir = std::path::PathBuf::from(dir);
         let controller = crate::control::Controller::at(7001, &dir.join("state"));
-        let script = [EXECUTOR, "print -r -- $$ > \"$4\"; /usr/bin/touch \"$2\"; while [[ ! -e $1 ]]; do /bin/sleep 0.01; done; /usr/bin/touch \"$3\""].concat();
-        let args = [
-            dir.join("continue"),
-            dir.join("paused"),
-            dir.join("acted"),
-            dir.join("executor"),
-        ];
-        let _ = super::super::owned(
+        // After the handshake, libtest output must survive a timed-out reply pipe.
+        let script = [EXECUTOR, "exec \"$1\" --exact \"$2\" --nocapture >&2\n"].concat();
+        let mode = std::env::var("ATLAS_EXECUTOR_TEST_MODE").unwrap();
+        let mut command = Command::new("/bin/zsh");
+        command
+            .args(["-f", "-c", &script, "zsh"])
+            .arg(std::env::current_exe().unwrap())
+            .arg("onboarding::as_root::tests::a_privileged_executor_test_worker")
+            .env("ATLAS_EXECUTOR_TEST_DIRECTORY", &dir);
+        let outcome = super::super::owned(
             &[controller],
             || -> Result<(), Unclosed> {
-                if std::env::var("ATLAS_EXECUTOR_TEST_MODE").unwrap() == "command" {
-                    let _ = tracked_output(
-                        Command::new("/bin/zsh")
-                            .args(["-f", "-c", &script, "zsh"])
-                            .args(&args),
-                    );
+                if mode == "command" {
+                    let _ = tracked_output(&mut command);
                 } else {
                     let (ours, theirs) = UnixStream::pair().unwrap();
                     let input: OwnedFd = theirs.try_clone().unwrap().into();
                     let output: OwnedFd = theirs.into();
-                    let mut child = Command::new("/bin/zsh")
-                        .args(["-f", "-c", &script, "zsh"])
-                        .args(&args)
+                    let mut child = command
                         .stdin(Stdio::from(input))
                         .stdout(Stdio::from(output))
                         .spawn()
                         .unwrap();
-                    let _ = finish_executor(
-                        ours,
-                        None,
-                        Instant::now() + std::time::Duration::from_secs(30),
-                    );
-                    let _ = child.wait();
+                    let deadline = if mode == "timeout" {
+                        Instant::now()
+                    } else {
+                        Instant::now() + std::time::Duration::from_secs(30)
+                    };
+                    let (text, ended) = finish_executor(ours, None, deadline);
+                    let outcome = match text {
+                        Ok(text) => closed_all(&text, &[Target::Orphan(7001)], ended),
+                        Err(refusal) => Err(Unclosed {
+                            refusal,
+                            acted: true,
+                            ended,
+                        }),
+                    };
+                    // finish_executor reaps the child through its reported identity.
+                    assert!(ended, "the executor's kernel exit must be observed");
+                    assert_eq!(child.wait().unwrap_err().raw_os_error(), Some(libc::ECHILD));
+                    return outcome.map(|_| ());
                 }
                 Ok(())
             },
             || true,
         );
+        if mode == "timeout" {
+            assert!(outcome.is_err());
+        }
+    }
+
+    #[test]
+    fn a_privileged_executor_test_worker() {
+        let Some(dir) = std::env::var_os("ATLAS_EXECUTOR_TEST_DIRECTORY") else {
+            return;
+        };
+        let dir = std::path::PathBuf::from(dir);
+        println!("@atlas acting");
+        crate::test_support::executor_ready(&dir, || {}).unwrap();
+        fs::write(dir.join("acted"), b"").unwrap();
     }
 
     #[test]
@@ -1207,75 +1204,27 @@ mod tests {
         ) {
             return;
         }
-        use std::{os::fd::OwnedFd, process::Stdio, sync::mpsc, time::Duration};
         let dir = tempfile::tempdir().unwrap();
-        let gate = dir.path().join("continue");
-        let paused = dir.path().join("paused");
-        let acted = dir.path().join("acted");
-        let (ours, theirs) = UnixStream::pair().unwrap();
-        let input: OwnedFd = theirs.try_clone().unwrap().into();
-        let output: OwnedFd = theirs.into();
-        let script = [EXECUTOR, "print -r -- '@atlas acting'; /usr/bin/touch \"$2\"; while [[ ! -e $1 ]]; do /bin/sleep 0.01; done; /usr/bin/touch \"$3\""].concat();
-        let mut child = Command::new("/bin/zsh")
-            .args(["-f", "-c", &script, "zsh"])
-            .args([&gate, &paused, &acted])
-            .stdin(Stdio::from(input))
-            .stdout(Stdio::from(output))
-            .spawn()
-            .unwrap();
-        let state = dir.path().join("state");
-        let worker_state = state.clone();
-        let (sent, received) = mpsc::channel();
-        let worker = std::thread::spawn(move || {
-            let controller = crate::control::Controller::at(7001, &worker_state);
-            let outcome = super::super::owned(
-                std::slice::from_ref(&controller),
-                || {
-                    let (text, ended) = finish_executor(ours, None, Instant::now());
-                    match text {
-                        Ok(text) => closed_all(&text, &[Target::Orphan(7001)], ended),
-                        Err(refusal) => Err(Unclosed {
-                            refusal,
-                            acted: true,
-                            ended,
-                        }),
-                    }
-                },
-                || true,
-            );
-            sent.send(outcome.is_err()).unwrap();
-        });
-        for _ in 0..200 {
-            if paused.exists()
-                && crate::control::Controller::at(7001, &state)
-                    .pending()
-                    .is_ok_and(|pending| !pending.is_empty())
-            {
-                break;
-            }
-            std::thread::sleep(Duration::from_millis(10));
-        }
-        let controller = crate::control::Controller::at(7001, &state);
+        let mut fixture = executor_fixture(dir.path(), "timeout");
+        fixture.ready().unwrap();
+        let controller = crate::control::Controller::at(7001, &dir.path().join("state"));
         let pending = controller.pending().unwrap();
         let busy = controller.acquire(true).is_err();
         controller.clear().unwrap();
         let after_clear = controller.pending().unwrap();
-        let acted_early = acted.exists();
-        let early = received.try_recv();
-        // Release and reap the child before asserting, including when a
-        // deliberately reverted guard allowed an early return.
-        fs::write(&gate, b"").unwrap();
-        worker.join().unwrap();
-        let _ = child.wait();
+        let acted_early = dir.path().join("acted").exists();
+        let early = fixture.caller.try_wait().unwrap();
+        fixture.finish().unwrap();
+        fixture.wait().unwrap();
         assert_eq!(pending.len(), 1);
         assert!(busy, "recovery cannot race the paused executor");
         assert_eq!(after_clear, pending, "recovery cannot erase its claim");
         assert!(!acted_early);
         assert!(
-            early.is_err(),
+            early.is_none(),
             "the executor still could act when control was released"
         );
-        assert!(acted.exists());
+        assert!(dir.path().join("acted").exists());
         assert!(controller.pending().unwrap().is_empty());
         assert!(controller.acquire(true).is_ok());
     }

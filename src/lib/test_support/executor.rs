@@ -15,7 +15,7 @@ use std::{
         unix::net::{UnixListener, UnixStream},
     },
     path::Path,
-    process::{Child, Command, Stdio},
+    process::{Child, Command, ExitStatus, Stdio},
     time::{Duration, Instant},
 };
 
@@ -173,42 +173,105 @@ impl Executor {
     }
 }
 
-struct Fixture {
-    caller: Child,
+pub(crate) struct Fixture {
+    pub(crate) caller: Child,
+    requester: Option<Child>,
+    listener: Option<UnixListener>,
     channel: Option<UnixStream>,
     executor: Option<Executor>,
 }
 
+fn wait_child(child: &mut Child) -> io::Result<ExitStatus> {
+    if let Some(status) = child.try_wait()? {
+        return Ok(status);
+    }
+    let exit = match watch(
+        child.id() as usize,
+        EventFilter::EVFILT_PROC,
+        FilterFlag::NOTE_EXIT,
+    ) {
+        Ok(exit) => exit,
+        // The child can exit between try_wait and registering the watch.
+        Err(error) => return child.try_wait()?.ok_or(error),
+    };
+    observed(&exit, LIMIT)?;
+    child.wait()
+}
+
 impl Fixture {
     fn start(directory: &Path, test: &str, mode: &str) -> io::Result<Self> {
+        Self::spawn(
+            directory,
+            rerun(test)
+                .arg("--nocapture")
+                .env("ATLAS_MUTATION_TEST_DIRECTORY", directory)
+                .env("ATLAS_MUTATION_TEST_MODE", mode)
+                .stdout(Stdio::null())
+                .stderr(fs::File::create(directory.join("caller.stderr"))?),
+        )
+    }
+
+    pub(crate) fn spawn(directory: &Path, command: &mut Command) -> io::Result<Self> {
         let listener = UnixListener::bind(directory.join("executor.sock"))?;
+        let caller = command.spawn()?;
+        Ok(Self {
+            caller,
+            requester: None,
+            listener: Some(listener),
+            channel: None,
+            executor: None,
+        })
+    }
+
+    pub(crate) fn request(&mut self, command: &mut Command) -> io::Result<()> {
+        self.requester = Some(
+            command
+                .stdin(Stdio::from(self.caller.stdout.take().unwrap()))
+                .stdout(Stdio::from(self.caller.stdin.take().unwrap()))
+                .spawn()?,
+        );
+        Ok(())
+    }
+
+    pub(crate) fn interrupt(&mut self) -> io::Result<()> {
+        let caller = self.requester.as_mut().unwrap_or(&mut self.caller);
+        caller.kill()?;
+        caller.wait()?;
+        Ok(())
+    }
+
+    pub(crate) fn wait(&mut self) -> io::Result<()> {
+        if !wait_child(&mut self.caller)?.success() {
+            return Err(io::Error::other("executor fixture worker failed"));
+        }
+        if let Some(requester) = &mut self.requester
+            && !wait_child(requester)?.success()
+        {
+            return Err(io::Error::other("executor fixture requester failed"));
+        }
+        Ok(())
+    }
+
+    fn connect(&mut self) -> io::Result<()> {
+        let listener = self.listener.take().unwrap();
         let incoming = watch(
             listener.as_raw_fd() as usize,
             EventFilter::EVFILT_READ,
             FilterFlag::empty(),
         )?;
-        let caller = rerun(test)
-            .arg("--nocapture")
-            .env("ATLAS_MUTATION_TEST_DIRECTORY", directory)
-            .env("ATLAS_MUTATION_TEST_MODE", mode)
-            .stdout(Stdio::null())
-            .stderr(fs::File::create(directory.join("caller.stderr"))?)
-            .spawn()?;
-        let mut fixture = Self {
-            caller,
-            channel: None,
-            executor: None,
-        };
         observed(&incoming, LIMIT)?;
         let (channel, _) = listener.accept()?;
         channel.set_read_timeout(Some(LIMIT))?;
         channel.set_write_timeout(Some(LIMIT))?;
-        fixture.channel = Some(channel);
-        fixture.executor = Some(Executor::at(fixture.channel.as_ref().unwrap())?);
-        Ok(fixture)
+        self.channel = Some(channel);
+        self.executor = Some(Executor::at(self.channel.as_ref().unwrap())?);
+        Ok(())
     }
 
-    fn ready(&mut self) -> io::Result<()> {
+    pub(crate) fn ready(&mut self) -> io::Result<()> {
+        if self.channel.is_none() {
+            self.connect()?;
+        }
         let channel = self.channel.as_mut().unwrap();
         let identity = line(channel)?;
         let reported: Instance = serde_json::from_str(&identity)?;
@@ -219,11 +282,17 @@ impl Fixture {
         expect(channel, &format!("ready {}", identity.trim_end()))
     }
 
-    fn finish(&mut self) -> io::Result<()> {
+    pub(crate) fn finish(&mut self) -> io::Result<()> {
         let channel = self.channel.as_mut().unwrap();
         writeln!(channel, "continue")?;
         expect(channel, "exited")?;
-        self.executor.as_mut().unwrap().finish(LIMIT)
+        let executor = self.executor.as_mut().unwrap();
+        executor.wait()?;
+        // Acceptance workers are our children; their requester cannot reap them.
+        if executor.identity.pid == self.caller.id() as i32 {
+            wait_child(&mut self.caller)?;
+        }
+        executor.finish(LIMIT)
     }
 }
 
@@ -234,10 +303,16 @@ impl Drop for Fixture {
             let _ = channel.shutdown(Shutdown::Both);
         }
         let stopped = self.executor.as_mut().map(Executor::stop).transpose();
+        let requester_reaped = if let Some(requester) = &mut self.requester {
+            let _ = requester.kill();
+            requester.wait().map(|_| ())
+        } else {
+            Ok(())
+        };
         // The caller is our child even when readiness or an assertion failed.
         let _ = self.caller.kill();
         let reaped = self.caller.wait();
-        if let Err(error) = stopped.and(reaped.map(|_| ())) {
+        if let Err(error) = stopped.and(requester_reaped).and(reaped.map(|_| ())) {
             if std::thread::panicking() {
                 eprintln!("executor fixture cleanup failed: {error}");
             } else {
@@ -333,6 +408,7 @@ mod tests {
     fn a_lost_readiness_channel_fails_and_reaps_its_fixture() {
         let directory = tempfile::tempdir().unwrap();
         let mut fixture = Fixture::start(directory.path(), WORKER, "").unwrap();
+        fixture.connect().unwrap();
         let identity = fixture.executor.as_ref().unwrap().identity;
         fixture
             .channel
@@ -374,6 +450,88 @@ mod tests {
     }
 
     #[test]
+    fn a_lost_exit_message_cannot_confirm_settlement() {
+        let directory = tempfile::tempdir().unwrap();
+        fs::write(directory.path().join("opener"), b"temporary opener").unwrap();
+        let mut fixture = Fixture::start(directory.path(), WORKER, "").unwrap();
+        fixture.ready().unwrap();
+        let identity = fixture.executor.as_ref().unwrap().identity;
+        fixture
+            .channel
+            .as_ref()
+            .unwrap()
+            .shutdown(Shutdown::Both)
+            .unwrap();
+        assert!(fixture.finish().is_err());
+        drop(fixture);
+        assert_eq!(crate::process::info(identity.pid).unwrap(), None);
+    }
+
+    #[test]
+    fn a_failed_fixture_reaps_both_its_worker_and_its_requester() {
+        let directory = tempfile::tempdir().unwrap();
+        fs::write(directory.path().join("opener"), b"temporary opener").unwrap();
+        let mut fixture = Fixture::spawn(
+            directory.path(),
+            rerun(WORKER)
+                .env("ATLAS_MUTATION_TEST_DIRECTORY", directory.path())
+                .stdin(Stdio::piped())
+                .stdout(Stdio::piped())
+                .stderr(Stdio::null()),
+        )
+        .unwrap();
+        fixture.request(&mut Command::new("/bin/cat")).unwrap();
+        fixture.ready().unwrap();
+        let worker = fixture.executor.as_ref().unwrap().identity;
+        let requester = fixture.requester.as_ref().unwrap().id() as i32;
+        drop(fixture);
+        assert_eq!(crate::process::info(worker.pid).unwrap(), None);
+        assert_eq!(crate::process::info(requester).unwrap(), None);
+    }
+
+    #[test]
+    fn a_fixture_reaps_its_direct_worker_before_confirming_completion() {
+        use std::os::fd::OwnedFd;
+
+        let (channel, worker) = UnixStream::pair().unwrap();
+        channel.set_read_timeout(Some(LIMIT)).unwrap();
+        channel.set_write_timeout(Some(LIMIT)).unwrap();
+        let input: OwnedFd = worker.try_clone().unwrap().into();
+        let output: OwnedFd = worker.into();
+        let caller = Command::new("/bin/sh")
+            .args([
+                "-c",
+                "IFS= read -r message && [ \"$message\" = continue ] && printf 'exited\\n'",
+            ])
+            .stdin(Stdio::from(input))
+            .stdout(Stdio::from(output))
+            .spawn()
+            .unwrap();
+        let pid = caller.id() as i32;
+        let identity = Instance::new(pid, crate::process::start(pid).unwrap());
+        let mut fixture = Fixture {
+            caller,
+            requester: None,
+            listener: None,
+            channel: Some(channel),
+            executor: Some(Executor {
+                identity,
+                exit: Some(
+                    watch(
+                        pid as usize,
+                        EventFilter::EVFILT_PROC,
+                        FilterFlag::NOTE_EXIT,
+                    )
+                    .unwrap(),
+                ),
+            }),
+        };
+        fixture.finish().unwrap();
+        fixture.wait().unwrap();
+        assert_eq!(crate::process::info(pid).unwrap(), None);
+    }
+
+    #[test]
     fn an_exit_watch_requires_the_owned_process_to_end_and_be_reaped() {
         let caller = Command::new("/bin/cat")
             .stdin(Stdio::piped())
@@ -382,6 +540,8 @@ mod tests {
             .unwrap();
         let mut fixture = Fixture {
             caller,
+            requester: None,
+            listener: None,
             channel: None,
             executor: None,
         };
