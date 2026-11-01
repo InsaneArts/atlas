@@ -288,6 +288,7 @@ pub(crate) struct Observation {
     code: Option<String>,
     error: Option<String>,
     uid: Option<u64>,
+    home: Option<std::path::PathBuf>,
     on_console: Option<bool>,
     aqua: bool,
     capture_pid: Option<u32>,
@@ -307,6 +308,7 @@ impl Observation {
             code: value["code"].as_str().map(str::to_owned),
             error: value["error"].as_str().map(str::to_owned),
             uid: value["user"]["uid"].as_u64(),
+            home: value["user"]["home"].as_str().map(Into::into),
             on_console: value["session"]["onConsole"].as_bool(),
             aqua: value["session"]["managerName"] == "Aqua",
             capture_pid: value["daemon"]["pid"]
@@ -326,6 +328,18 @@ impl Observation {
         self.daemon_capabilities
             .iter()
             .any(|capability| capability == name)
+    }
+
+    pub(crate) fn helper_home(&self) -> Result<&std::path::Path> {
+        self.home
+            .as_deref()
+            .filter(|home| home.is_absolute())
+            .ok_or_else(|| {
+                Error::new(
+                    Code::Identity,
+                    "The helper home is unknown; run atlas doctor",
+                )
+            })
     }
 
     pub(crate) fn input_settled(&self, uid: u32, pid: u32) -> bool {
@@ -1325,6 +1339,28 @@ mod tests {
     use crate::error::Code;
     use serde_json::json;
     use std::time::Duration;
+
+    #[test]
+    fn discovery_requires_an_absolute_helper_home() {
+        for value in [
+            json!({}),
+            json!(null),
+            json!(false),
+            json!(12),
+            json!(""),
+            json!("relative"),
+        ] {
+            let observation = Observation::decode(&json!({"user": {"home": value}}));
+            let error = observation.helper_home().unwrap_err();
+            assert_eq!(error.code, "identity");
+            assert_eq!(error.error, "The helper home is unknown; run atlas doctor");
+        }
+        let observation = Observation::decode(&json!({"user": {"home": "/Users/helper"}}));
+        assert_eq!(
+            observation.helper_home().unwrap(),
+            std::path::Path::new("/Users/helper")
+        );
+    }
 
     #[test]
     fn an_unqueried_permission_remains_distinct_from_denial() {

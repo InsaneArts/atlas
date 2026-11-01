@@ -4,14 +4,13 @@ use super::{SHARED_BIN, helper_search_path, variable_name as variable};
 use crate::{
     client::{Client, RUN_TIMEOUT, Run},
     error::{Code, Error, Result},
-    session::require_hidden,
+    session::Observation,
     transport::{OutputError, run_output},
 };
 use serde::Serialize;
 use serde_json::{Value, json};
 use std::{
     fs,
-    ops::Range,
     path::{Component, Path, PathBuf},
 };
 
@@ -93,10 +92,7 @@ impl Probe {
             .map(str::to_owned)
             .collect::<Vec<_>>();
         if lines.len() != args.len() {
-            return Err(Error::new(
-                Code::Environment,
-                "Incomplete discovery probe response",
-            ));
+            return Err(incomplete());
         }
 
         Ok(lines)
@@ -205,14 +201,14 @@ fn component(name: &str) -> bool {
         )
 }
 
-#[derive(Default, Serialize)]
+#[derive(Debug, Default, Serialize)]
 #[serde(rename_all = "camelCase")]
-struct Access {
+pub(crate) struct Access {
     file: bool,
-    directory: bool,
-    readable: bool,
+    pub(crate) directory: bool,
+    pub(crate) readable: bool,
     writable: bool,
-    executable: bool,
+    pub(crate) executable: bool,
 }
 
 impl Access {
@@ -249,30 +245,115 @@ fn access(path: &Path) -> Access {
     }
 }
 
-/// Inspect selected names and paths without installing, launching or signing in.
-pub async fn discover(
-    client: &Client,
-    tools: &[String],
-    apps: &[String],
-    environment: &[String],
-    references: &[PathBuf],
-) -> Result<Value> {
-    selection(tools, apps, environment, references)?;
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(crate) enum Kind {
+    Tool,
+    Application,
+}
 
-    let status = client.status().await;
-    let session = require_hidden(&status, client.config.helper_uid)?;
-    let home_unknown = || {
-        Error::new(
-            Code::Identity,
-            "The helper home is unknown; run atlas doctor",
-        )
-    };
-    let helper_home = PathBuf::from(status["user"]["home"].as_str().ok_or_else(home_unknown)?);
-    if !helper_home.is_absolute() {
-        return Err(home_unknown());
+#[derive(Debug, Serialize)]
+pub(crate) struct PathObservation {
+    pub(crate) path: PathBuf,
+    pub(crate) access: Access,
+}
+
+pub(crate) struct Candidate {
+    pub(crate) kind: Kind,
+    pub(crate) name: String,
+    host: Option<PathBuf>,
+    pub(crate) helper_candidates: Vec<PathObservation>,
+}
+
+impl Candidate {
+    fn new(kind: Kind, name: &str, host: Option<PathBuf>, paths: Vec<PathBuf>) -> Self {
+        Self {
+            kind,
+            name: name.to_owned(),
+            host,
+            helper_candidates: paths
+                .into_iter()
+                .map(|path| PathObservation {
+                    path,
+                    access: Access::default(),
+                })
+                .collect(),
+        }
     }
 
-    let home = crate::config::home()?;
+    pub(crate) fn available(&self) -> bool {
+        self.helper_candidates.iter().any(|candidate| {
+            let access = &candidate.access;
+            match self.kind {
+                Kind::Tool => access.file && access.executable,
+                Kind::Application => access.directory && access.readable && access.executable,
+            }
+        })
+    }
+
+    fn report(&self) -> Value {
+        let mut report = match self.kind {
+            Kind::Tool => json!({
+                "kind": "tool", "name": self.name, "host": self.host, "executed": false,
+            }),
+            Kind::Application => json!({
+                "kind": "application", "name": self.name, "host": self.host,
+                "launched": false, "accountData": "separate", "signIn": "not checked",
+            }),
+        };
+        report["available"] = json!(self.available());
+        report["helperCandidates"] = json!(self.helper_candidates);
+        report
+    }
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct Variable {
+    name: String,
+    host_defined: bool,
+    helper_inherited_defined: bool,
+}
+
+#[derive(Serialize)]
+struct Reference {
+    path: PathBuf,
+    host: Access,
+    helper: Access,
+}
+
+pub(crate) struct Discovery {
+    pub(crate) selections: Vec<Candidate>,
+    pub(crate) helper_home: PathBuf,
+    helper_uid: u32,
+    environment: Vec<Variable>,
+    references: Vec<Reference>,
+}
+
+impl Discovery {
+    fn report(&self) -> Value {
+        let selections: Vec<_> = self.selections.iter().map(Candidate::report).collect();
+        json!({
+            "ok": true,
+            "readOnly": true,
+            "helperUID": self.helper_uid,
+            "selections": selections,
+            "environment": self.environment,
+            "references": self.references,
+            "scope": "Selected executable/app presence and access only. Shell startup files were \
+                      not loaded; inherited variables may differ from Terminal. Dependencies, app \
+                      data and sign-ins require separate live verification. No selected program \
+                      was executed and no file contents or variable values were read into the \
+                      report.",
+        })
+    }
+}
+
+fn candidates(
+    tools: &[String],
+    apps: &[String],
+    home: &Path,
+    helper_home: &Path,
+) -> Vec<Candidate> {
     let mut host_bins = std::env::var_os("PATH")
         .map(|value| {
             std::env::split_paths(&value)
@@ -283,101 +364,131 @@ pub async fn discover(
         .unwrap_or_default();
     host_bins.extend([home.join(".local/bin"), home.join(".cargo/bin")]);
     host_bins.extend(SHARED_BIN.iter().map(PathBuf::from));
-    let helper_bins = helper_search_path(&helper_home);
-
-    // Every helper-side path is probed in one run; each report remembers
-    // which of them are its candidates.
-    let mut paths = Vec::<PathBuf>::new();
-    let mut reports: Vec<(Value, Range<usize>)> = Vec::new();
+    let helper_bins = helper_search_path(helper_home);
+    let mut candidates = Vec::new();
 
     for name in tools {
         let host = host_bins.iter().map(|dir| dir.join(name)).find(|path| {
             let metadata = access(path);
             metadata.file && metadata.executable
         });
-        let start = paths.len();
-
-        paths.extend(helper_bins.iter().map(|dir| dir.join(name)));
-        reports.push((
-            json!({"kind": "tool", "name": name, "host": host, "executed": false}),
-            start..paths.len(),
+        candidates.push(Candidate::new(
+            Kind::Tool,
+            name,
+            host,
+            helper_bins.iter().map(|dir| dir.join(name)).collect(),
         ));
     }
-
     for name in apps {
-        let bundle = if name.ends_with(".app") {
-            name.clone()
-        } else {
-            format!("{name}.app")
-        };
+        candidates.push(application(name, home, helper_home));
+    }
+    candidates
+}
 
-        // Where apps live: the usual folders, and macOS's own in
-        // CoreServices (Finder among them).
-        let host = [
-            PathBuf::from("/Applications"),
-            PathBuf::from("/System/Applications"),
-            PathBuf::from(CORE_SERVICES),
-            home.join("Applications"),
-        ]
-        .iter()
-        .map(|dir| dir.join(&bundle))
-        .find(|path| path.is_dir());
-        let start = paths.len();
+fn application(name: &str, home: &Path, helper_home: &Path) -> Candidate {
+    let bundle = if name.ends_with(".app") {
+        name.to_owned()
+    } else {
+        format!("{name}.app")
+    };
 
-        paths.extend([
+    // Where apps live: the usual folders, and macOS's own in
+    // CoreServices (Finder among them).
+    let host = [
+        PathBuf::from("/Applications"),
+        PathBuf::from("/System/Applications"),
+        PathBuf::from(CORE_SERVICES),
+        home.join("Applications"),
+    ]
+    .iter()
+    .map(|dir| dir.join(&bundle))
+    .find(|path| path.is_dir());
+    Candidate::new(
+        Kind::Application,
+        name,
+        host,
+        vec![
             PathBuf::from("/Applications").join(&bundle),
             PathBuf::from("/System/Applications").join(&bundle),
             PathBuf::from(CORE_SERVICES).join(&bundle),
             helper_home.join("Applications").join(&bundle),
-        ]);
-        reports.push((
-            json!({
-                "kind": "application",
-                "name": name,
-                "host": host,
-                "launched": false,
-                "accountData": "separate",
-                "signIn": "not checked",
-            }),
-            start..paths.len(),
-        ));
-    }
+        ],
+    )
+}
 
-    let reference_start = paths.len();
-    paths.extend_from_slice(references);
+fn incomplete() -> Error {
+    Error::new(Code::Environment, "Incomplete discovery probe response")
+}
 
-    let args = paths
+/// Associate the already validated batch in its original candidate/reference order.
+fn associate(
+    candidates: &mut [Candidate],
+    references: &[PathBuf],
+    observed: Vec<Access>,
+) -> Result<Vec<PathObservation>> {
+    let expected = candidates
         .iter()
+        .map(|candidate| candidate.helper_candidates.len())
+        .sum::<usize>()
+        + references.len();
+    if observed.len() != expected {
+        return Err(incomplete());
+    }
+    let mut observed = observed.into_iter();
+    for candidate in candidates {
+        for path in &mut candidate.helper_candidates {
+            path.access = observed.next().ok_or_else(incomplete)?;
+        }
+    }
+    let references = references
+        .iter()
+        .map(|path| {
+            Ok(PathObservation {
+                path: path.clone(),
+                access: observed.next().ok_or_else(incomplete)?,
+            })
+        })
+        .collect::<Result<Vec<_>>>()?;
+    if observed.next().is_some() {
+        return Err(incomplete());
+    }
+    Ok(references)
+}
+
+pub(crate) async fn inspect(
+    client: &Client,
+    tools: &[String],
+    apps: &[String],
+    environment: &[String],
+    references: &[PathBuf],
+) -> Result<Discovery> {
+    selection(tools, apps, environment, references)?;
+
+    let status = Observation::decode(&client.status().await);
+    let session = status.require_hidden(client.config.helper_uid)?;
+    let mut discovery = Discovery {
+        selections: Vec::new(),
+        helper_home: status.helper_home()?.to_owned(),
+        helper_uid: session.epoch.uid,
+        environment: Vec::new(),
+        references: Vec::new(),
+    };
+    let home = crate::config::home()?;
+    discovery.selections = candidates(tools, apps, &home, &discovery.helper_home);
+    let args = discovery
+        .selections
+        .iter()
+        .flat_map(|candidate| candidate.helper_candidates.iter().map(|path| &path.path))
+        .chain(references)
         .map(|p| p.to_str().map(str::to_owned).ok_or_else(invalid))
         .collect::<Result<Vec<_>>>()?;
-
     let observed = Probe::Paths
         .run(client, &args)
         .await?
         .iter()
         .map(|s| Access::from_flags(s))
         .collect::<Result<Vec<_>>>()?;
-
-    let selections: Vec<Value> = reports
-        .into_iter()
-        .map(|(mut report, range)| {
-            let usable = |access: &Access| {
-                if report["kind"] == "tool" {
-                    access.file && access.executable
-                } else {
-                    access.directory && access.readable && access.executable
-                }
-            };
-            report["available"] = json!(range.clone().any(|i| usable(&observed[i])));
-            report["helperCandidates"] = json!(
-                range
-                    .map(|i| json!({"path": paths[i], "access": observed[i]}))
-                    .collect::<Vec<_>>()
-            );
-
-            report
-        })
-        .collect();
+    let references = associate(&mut discovery.selections, references, observed)?;
 
     let defined = Probe::Variables.run(client, environment).await?;
     if defined.iter().any(|s| s != "defined" && s != "undefined") {
@@ -391,39 +502,41 @@ pub async fn discover(
         ));
     }
 
-    let variables: Vec<Value> = environment
+    // Probe::run has checked exact cardinality before any association.
+    let mut defined = defined.into_iter();
+    discovery.environment = environment
         .iter()
-        .zip(defined)
-        .map(|(name, value)| {
-            json!({
-                "name": name,
-                "hostDefined": std::env::var_os(name).is_some(),
-                "helperInheritedDefined": value == "defined",
+        .map(|name| {
+            let value = defined.next().ok_or_else(incomplete)?;
+            Ok(Variable {
+                name: name.clone(),
+                host_defined: std::env::var_os(name).is_some(),
+                helper_inherited_defined: value == "defined",
             })
         })
-        .collect();
-
-    let references: Vec<Value> = references
-        .iter()
-        .enumerate()
-        .map(|(i, path)| {
-            json!({"path": path, "host": access(path), "helper": observed[reference_start + i]})
+        .collect::<Result<Vec<_>>>()?;
+    discovery.references = references
+        .into_iter()
+        .map(|observed| Reference {
+            host: access(&observed.path),
+            path: observed.path,
+            helper: observed.access,
         })
         .collect();
+    Ok(discovery)
+}
 
-    Ok(json!({
-        "ok": true,
-        "readOnly": true,
-        "helperUID": session.epoch.uid,
-        "selections": selections,
-        "environment": variables,
-        "references": references,
-        "scope": "Selected executable/app presence and access only. Shell startup files were \
-                  not loaded; inherited variables may differ from Terminal. Dependencies, app \
-                  data and sign-ins require separate live verification. No selected program \
-                  was executed and no file contents or variable values were read into the \
-                  report.",
-    }))
+/// Inspect selected names and paths without installing, launching or signing in.
+pub async fn discover(
+    client: &Client,
+    tools: &[String],
+    apps: &[String],
+    environment: &[String],
+    references: &[PathBuf],
+) -> Result<Value> {
+    Ok(inspect(client, tools, apps, environment, references)
+        .await?
+        .report())
 }
 
 #[cfg(test)]
@@ -459,6 +572,245 @@ mod tests {
             &[PathBuf::from("/Users/Shared")],
         )
         .await
+    }
+
+    #[tokio::test]
+    async fn a_short_or_long_probe_result_is_refused_before_association() {
+        for (probe, line) in [(Probe::Paths, "-frx\n"), (Probe::Variables, "defined\n")] {
+            for count in [1, 3] {
+                let directory = tempfile::tempdir().unwrap();
+                let (client, helper) = Helper::client(directory.path(), UID);
+                let args = ["first".into(), "second".into()];
+                let error = helper
+                    .serve(probe.run(&client, &args), |_| {
+                        Some(completed(&line.repeat(count)))
+                    })
+                    .await
+                    .unwrap_err();
+                assert_eq!(error.code, "environment");
+                assert_eq!(error.error, "Incomplete discovery probe response");
+                assert!(!error.uncertain);
+                assert!(client.controller.pending().unwrap().is_empty());
+            }
+        }
+    }
+
+    fn mixed_candidates() -> Vec<Candidate> {
+        vec![
+            Candidate::new(
+                Kind::Tool,
+                "first",
+                Some("/host/first".into()),
+                vec!["/helper/first-a".into(), "/helper/first-b".into()],
+            ),
+            Candidate::new(Kind::Tool, "second", None, vec!["/helper/second".into()]),
+            Candidate::new(
+                Kind::Application,
+                "third",
+                None,
+                vec![
+                    "/helper/third-a".into(),
+                    "/helper/third-b".into(),
+                    "/helper/third-c".into(),
+                ],
+            ),
+        ]
+    }
+
+    fn mixed_observations() -> Vec<Access> {
+        ["-f", "-fx", "-drx", "-frx", "-drx", "-r", "-rw", "-dwx"]
+            .into_iter()
+            .map(|flags| Access::from_flags(flags).unwrap())
+            .collect()
+    }
+
+    #[test]
+    fn each_candidate_retains_its_own_access_observations() {
+        let mut candidates = mixed_candidates();
+        associate(
+            &mut candidates,
+            &["/reference/first".into(), "/reference/second".into()],
+            mixed_observations(),
+        )
+        .unwrap();
+        let reports: Vec<_> = candidates.iter().map(Candidate::report).collect();
+        assert_eq!(
+            json!(reports),
+            json!([
+                {"kind": "tool", "name": "first", "host": "/host/first", "executed": false,
+                 "available": true, "helperCandidates": [
+                    {"path": "/helper/first-a", "access": {
+                        "file": true, "directory": false, "readable": false, "writable": false, "executable": false}},
+                    {"path": "/helper/first-b", "access": {
+                        "file": true, "directory": false, "readable": false, "writable": false, "executable": true}}
+                 ]},
+                {"kind": "tool", "name": "second", "host": null, "executed": false,
+                 "available": false, "helperCandidates": [
+                    {"path": "/helper/second", "access": {
+                        "file": false, "directory": true, "readable": true, "writable": false, "executable": true}}
+                 ]},
+                {"kind": "application", "name": "third", "host": null, "launched": false,
+                 "accountData": "separate", "signIn": "not checked", "available": true, "helperCandidates": [
+                    {"path": "/helper/third-a", "access": {
+                        "file": true, "directory": false, "readable": true, "writable": false, "executable": true}},
+                    {"path": "/helper/third-b", "access": {
+                        "file": false, "directory": true, "readable": true, "writable": false, "executable": true}},
+                    {"path": "/helper/third-c", "access": {
+                        "file": false, "directory": false, "readable": true, "writable": false, "executable": false}}
+                 ]}
+            ])
+        );
+    }
+
+    #[test]
+    fn references_retain_their_position_after_mixed_candidates() {
+        let references = associate(
+            &mut mixed_candidates(),
+            &["/reference/first".into(), "/reference/second".into()],
+            mixed_observations(),
+        )
+        .unwrap();
+        assert_eq!(
+            json!(references),
+            json!([
+                {"path": "/reference/first", "access": {
+                    "file": false, "directory": false, "readable": true, "writable": true, "executable": false}},
+                {"path": "/reference/second", "access": {
+                    "file": false, "directory": true, "readable": false, "writable": true, "executable": true}}
+            ])
+        );
+    }
+
+    #[test]
+    fn association_refuses_short_and_long_batches_without_changing_candidates() {
+        for count in [5, 7] {
+            let mut candidates = mixed_candidates();
+            let before: Vec<_> = candidates.iter().map(Candidate::report).collect();
+            let observed = (0..count)
+                .map(|_| Access::from_flags("-frx").unwrap())
+                .collect();
+            let error = associate(&mut candidates, &[], observed).unwrap_err();
+            assert_eq!(error.error, "Incomplete discovery probe response");
+            let after: Vec<_> = candidates.iter().map(Candidate::report).collect();
+            assert_eq!(before, after);
+        }
+    }
+
+    #[tokio::test]
+    async fn empty_probe_arguments_make_no_request() {
+        let directory = tempfile::tempdir().unwrap();
+        let client = crate::test_support::client(directory.path());
+        for probe in [Probe::Paths, Probe::Variables] {
+            assert!(probe.run(&client, &[]).await.unwrap().is_empty());
+        }
+    }
+
+    #[tokio::test]
+    async fn discovery_preserves_complete_reports_with_empty_selection_groups() {
+        for groups in [
+            (true, true, true, true),
+            (false, false, true, false),
+            (false, false, false, true),
+        ] {
+            let directory = tempfile::tempdir().unwrap();
+            let (client, helper) = Helper::client(directory.path(), UID);
+            let tools = if groups.0 {
+                vec!["atlas-discovery-absent-tool-fixture".into()]
+            } else {
+                vec![]
+            };
+            let apps = if groups.1 {
+                vec!["Atlas Discovery Absent App Fixture.app".into()]
+            } else {
+                vec![]
+            };
+            let environment = if groups.2 {
+                vec!["HOME".into(), "ATLAS_DISCOVERY_UNDEFINED_FIXTURE".into()]
+            } else {
+                vec![]
+            };
+            let path = directory.path().join("missing-reference");
+            let references = if groups.3 { vec![path.clone()] } else { vec![] };
+            let mut calls = Vec::new();
+            let report = helper
+                .serve(
+                    discover(&client, &tools, &apps, &environment, &references),
+                    |request| {
+                        calls.push(request.clone());
+                        let output = if request["argv"][2] == PATH_PROBE {
+                            "-\n".repeat(arguments(request).len())
+                        } else {
+                            "defined\nundefined\n".into()
+                        };
+                        Some(completed(&output))
+                    },
+                )
+                .await
+                .unwrap();
+            let absent = json!({"file": false, "directory": false, "readable": false, "writable": false, "executable": false});
+            let mut selections = Vec::new();
+            let mut expected_paths = Vec::new();
+            if let Some(name) = tools.first() {
+                let paths: Vec<_> = [
+                    "/Users/helper/.local/bin",
+                    "/Users/helper/.cargo/bin",
+                    "/opt/homebrew/bin",
+                    "/usr/local/bin",
+                    "/usr/bin",
+                    "/bin",
+                    "/usr/sbin",
+                    "/sbin",
+                ]
+                .into_iter()
+                .map(|dir| Path::new(dir).join(name))
+                .collect();
+                expected_paths.extend(paths.clone());
+                selections.push(json!({"kind": "tool", "name": name, "host": null, "executed": false, "available": false,
+                    "helperCandidates": paths.iter().map(|path| json!({"path": path, "access": absent})).collect::<Vec<_>>()}));
+            }
+            if let Some(name) = apps.first() {
+                let paths: Vec<_> = [
+                    "/Applications",
+                    "/System/Applications",
+                    "/System/Library/CoreServices",
+                    "/Users/helper/Applications",
+                ]
+                .into_iter()
+                .map(|dir| Path::new(dir).join(name))
+                .collect();
+                expected_paths.extend(paths.clone());
+                selections.push(json!({"kind": "application", "name": name, "host": null, "launched": false,
+                    "accountData": "separate", "signIn": "not checked", "available": false,
+                    "helperCandidates": paths.iter().map(|path| json!({"path": path, "access": absent})).collect::<Vec<_>>()}));
+            }
+            expected_paths.extend_from_slice(&references);
+            let variables: Vec<_> = environment.iter().map(|name| json!({"name": name,
+                "hostDefined": std::env::var_os(name).is_some(), "helperInheritedDefined": name == "HOME"})).collect();
+            let references: Vec<_> = references
+                .iter()
+                .map(|path| json!({"path": path, "host": absent, "helper": absent}))
+                .collect();
+            assert_eq!(
+                report,
+                json!({
+                    "ok": true, "readOnly": true, "helperUID": UID, "selections": selections,
+                    "environment": variables, "references": references,
+                    "scope": "Selected executable/app presence and access only. Shell startup files were not loaded; inherited variables may differ from Terminal. Dependencies, app data and sign-ins require separate live verification. No selected program was executed and no file contents or variable values were read into the report."
+                })
+            );
+            let mut calls = calls.iter();
+            if !expected_paths.is_empty() {
+                let request = calls.next().unwrap();
+                assert_eq!(request["argv"][2], PATH_PROBE);
+                assert_eq!(json!(arguments(request)), json!(expected_paths));
+            }
+            if !environment.is_empty() {
+                let request = calls.next().unwrap();
+                assert_eq!(request["argv"][2], ENV_PROBE);
+                assert_eq!(json!(arguments(request)), json!(environment));
+            }
+            assert!(calls.next().is_none());
+        }
     }
 
     #[tokio::test]
