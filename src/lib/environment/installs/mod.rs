@@ -32,7 +32,7 @@ use super::{
     *,
 };
 use crate::{
-    files::{Lock, lock_within},
+    files::{Lock, LockFile, lock_within},
     fs_move::{FileName, Moved, move_between},
 };
 pub(super) use print::{BundlePrint, Limits};
@@ -146,7 +146,7 @@ enum Found {
 /// to read it. None when reading a store that was never made.
 struct Store {
     path: PathBuf,
-    _lock: Option<fs::File>,
+    _lock: Option<LockFile>,
     /// Whether this request has written a record yet, so a failure after
     /// it is said as one to finish, never as a refusal.
     changed: Cell<bool>,
@@ -167,9 +167,9 @@ impl Store {
         validate_private(&folder, true)?;
 
         let held = lock;
-        let lock = open_regular(&path.join("lock"), write)?;
+        let lock = open_regular(&path.join("lock"), write)?.map(LockFile);
         if let Some(lock) = &lock {
-            validate_private(lock, false)?;
+            validate_private(&lock.0, false)?;
             lock_within(lock, held, LOCK_PATIENCE)
                 .map_err(|_| problem("Another install in the helper is running"))?;
         }

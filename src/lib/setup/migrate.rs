@@ -376,19 +376,17 @@ impl Migration {
     }
 
     fn argv(&self, through: Endpoint, request: &Request) -> Result<Vec<String>> {
-        if self.account.get().is_none() {
+        let account = if let Some(account) = self.account.get() {
+            account
+        } else {
             let identity = setup_identity(self.log.plan.uid, Some(&self.log.plan.config_path))?;
             let account = account_with_uid(self.log.plan.uid)?.ok_or_else(choose_helper)?;
             if account.home != self.log.plan.home {
                 return Err(choose_helper());
             }
-            let _ = self.account.set(identity);
-        }
-        helper_argv_with(
-            self.client(through),
-            request,
-            self.account.get().unwrap().clone(),
-        )
+            self.account.get_or_init(|| identity)
+        };
+        helper_argv_with(self.client(through), request, account.clone())
     }
 
     fn client(&self, endpoint: Endpoint) -> &Client {

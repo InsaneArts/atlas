@@ -160,14 +160,6 @@ pub(super) fn doctor(value: &Value, verbose: bool) -> String {
     }
 
     let native = &value["capabilities"]["nativeDialogs"];
-    if native["state"] == "failed" {
-        lines.push(format!(
-            "{} {}",
-            style::warn(),
-            crate::capability::NATIVE_DIALOGS_FAILED
-        ));
-    }
-
     if verbose {
         lines.push(String::new());
         lines.extend(details(value, native));

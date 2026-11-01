@@ -4,11 +4,16 @@
 use crate::error::{Code, Error, Result};
 use base64::{Engine, engine::general_purpose::STANDARD};
 use serde_json::{Value, json};
-use std::{path::PathBuf, time::Duration};
+use std::{
+    future::Future,
+    io,
+    path::{Path, PathBuf},
+    time::Duration,
+};
 use tokio::{
     io::{AsyncReadExt, AsyncWriteExt},
     net::UnixStream,
-    time::{Instant, timeout_at},
+    time::{Instant, sleep, timeout_at},
 };
 
 /// Longest request line, without its newline: what the helper daemon reads.
@@ -18,6 +23,7 @@ const MAX_REQUEST: usize = crate::daemon::protocol::MAX_REQUEST;
 const DISPATCH: Duration = Duration::from_millis(500);
 /// How long a failed send looks for a refusal the peer already sent.
 const WAITING: Duration = Duration::from_millis(100);
+const IDENTITY_RETRY: Duration = Duration::from_millis(10);
 /// Longest reply, every line together.
 const MAX_REPLY: usize = 64 * 1024 * 1024;
 /// Most event lines before the final reply.
@@ -42,25 +48,80 @@ impl Transport {
     pub async fn connect(&self) -> Result<Pending> {
         let started = Instant::now();
         let deadline = started + self.timeout;
-        let stream = timeout_at(deadline, UnixStream::connect(&self.path))
-            .await
-            .map_err(|_| Error::new(Code::Transport, "Connection timed out"))?
-            .map_err(refused)?;
-        if stream.peer_cred()?.uid() != self.peer_uid {
-            return Err(Error::new(
-                Code::Identity,
-                format!(
-                    "{} is not served by the configured helper account",
-                    self.path.display()
-                ),
-            ));
-        }
+        let stream = self
+            .connect_verified(
+                deadline,
+                || UnixStream::connect(&self.path),
+                |stream| stream.peer_cred().map(|cred| cred.uid()),
+            )
+            .await?;
 
         Ok(Pending {
             stream,
             deadline,
             started,
         })
+    }
+
+    async fn connect_verified<S, F: Future<Output = io::Result<S>>>(
+        &self,
+        deadline: Instant,
+        mut connect: impl FnMut() -> F,
+        mut peer_uid: impl FnMut(&S) -> io::Result<u32>,
+    ) -> Result<S> {
+        loop {
+            let timed_out = || {
+                Error::new(
+                    Code::Transport,
+                    format!("Timed out connecting to socket {}", self.path.display()),
+                )
+            };
+            if Instant::now() >= deadline {
+                return Err(timed_out());
+            }
+            let stream = timeout_at(deadline, connect())
+                .await
+                .map_err(|cause| timed_out().with_source(cause))?
+                .map_err(|cause| refused(&self.path, cause))?;
+            if Instant::now() >= deadline {
+                return Err(timed_out());
+            }
+            let uid = match peer_uid(&stream) {
+                Ok(uid) => uid,
+                Err(cause) => {
+                    drop(stream);
+                    // Darwin's peer PID lookup can lose a peer that closed after
+                    // connect. Nothing was sent; only a fresh, verified peer is usable.
+                    let retry = cause.raw_os_error() == Some(libc::ENOTCONN);
+                    let expired = retry
+                        && (timeout_at(deadline, sleep(IDENTITY_RETRY)).await.is_err()
+                            || Instant::now() >= deadline);
+                    if retry && !expired {
+                        continue;
+                    }
+                    let step = if expired {
+                        "Timed out reading the peer account for socket"
+                    } else {
+                        "Could not read the peer account for socket"
+                    };
+                    return Err(Error::new(
+                        if expired { Code::Transport } else { Code::Io },
+                        format!("{step} {}: {cause}", self.path.display()),
+                    )
+                    .with_source(cause));
+                }
+            };
+            if uid != self.peer_uid {
+                return Err(Error::new(
+                    Code::Identity,
+                    format!(
+                        "Could not verify the peer account for socket {}: it is not served by the configured helper account",
+                        self.path.display()
+                    ),
+                ));
+            }
+            return Ok(stream);
+        }
     }
 
     pub async fn call(&self, request: &Value) -> Result<Value> {
@@ -76,17 +137,22 @@ impl Transport {
 /// A failed connection, said plainly. The kernel refuses with EPERM only
 /// when policy forbids the connection, which is what an agent's sandbox
 /// does to local sockets: the helper may be fine.
-fn refused(error: std::io::Error) -> Error {
+fn refused(path: &Path, error: io::Error) -> Error {
     if error.raw_os_error() == Some(libc::EPERM) {
         return Error::new(
             Code::Blocked,
-            "This shell may not connect to the helper (operation not permitted). An agent's \
+            format!("This shell may not connect to helper socket {} (operation not permitted). An agent's \
              sandbox blocks local sockets: run atlas outside the sandbox. The helper itself \
-             may be fine.",
-        );
+             may be fine.", path.display()),
+        )
+        .with_source(error);
     }
 
-    Error::from(error)
+    Error::new(
+        Code::Io,
+        format!("Could not connect to socket {}: {error}", path.display()),
+    )
+    .with_source(error)
 }
 
 impl Pending {
@@ -386,9 +452,208 @@ pub fn with_output(mut reply: Value) -> Value {
 #[cfg(test)]
 mod tests {
     use super::{OUTPUT_LIMIT, OutputError, Transport, accepted, refused, run_output, with_output};
-    use crate::error::Code;
+    use crate::error::{Code, Error};
     use base64::{Engine, engine::general_purpose::STANDARD};
     use serde_json::json;
+    use std::{cell::Cell, error::Error as _, io, sync::Arc, time::Duration};
+    use tokio::time::{Instant, timeout};
+
+    fn endpoint() -> Transport {
+        Transport {
+            path: "/tmp/atlas-test.sock".into(),
+            timeout: Duration::from_millis(25),
+            peer_uid: 502,
+        }
+    }
+
+    fn io_cause(error: &Error) -> &io::Error {
+        error.source().unwrap().downcast_ref().unwrap()
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn a_transient_identity_failure_tries_a_fresh_connection_before_returning_it() {
+        let transport = endpoint();
+        let started = Instant::now();
+        let attempts = Cell::new(0);
+        let mut previous = std::sync::Weak::new();
+        let verified = timeout(
+            Duration::from_secs(1),
+            transport.connect_verified(
+                started + transport.timeout,
+                || {
+                    assert!(previous.upgrade().is_none(), "the failed peer was dropped");
+                    attempts.set(attempts.get() + 1);
+                    let connection = Arc::new(attempts.get());
+                    previous = Arc::downgrade(&connection);
+                    std::future::ready(Ok(connection))
+                },
+                |connection| match **connection {
+                    1 => Err(io::Error::from_raw_os_error(libc::ENOTCONN)),
+                    _ => Ok(transport.peer_uid),
+                },
+            ),
+        )
+        .await
+        .unwrap()
+        .unwrap();
+
+        assert_eq!(*verified, 2);
+        assert_eq!(attempts.get(), 2);
+        assert_eq!(started.elapsed(), super::IDENTITY_RETRY);
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn a_wrong_peer_account_is_refused_without_a_retry() {
+        let transport = endpoint();
+        let started = Instant::now();
+        let attempts = Cell::new(0);
+        let error = timeout(
+            Duration::from_secs(1),
+            transport.connect_verified(
+                started + transport.timeout,
+                || {
+                    attempts.set(attempts.get() + 1);
+                    std::future::ready(Ok(()))
+                },
+                |_| Ok(transport.peer_uid + 1),
+            ),
+        )
+        .await
+        .unwrap()
+        .unwrap_err();
+
+        assert_eq!(attempts.get(), 1);
+        assert_eq!(started.elapsed(), Duration::ZERO);
+        assert_eq!(error.code, Code::Identity);
+        assert!(!error.uncertain);
+        assert!(error.error.contains("verify the peer account"));
+        assert!(error.error.contains(transport.path.to_str().unwrap()));
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn other_identity_failures_keep_their_context_and_cause_without_retrying() {
+        let transport = endpoint();
+        for errno in [libc::EACCES, libc::EPERM, libc::EINVAL] {
+            let attempts = Cell::new(0);
+            let error = timeout(
+                Duration::from_secs(1),
+                transport.connect_verified(
+                    Instant::now() + transport.timeout,
+                    || {
+                        attempts.set(attempts.get() + 1);
+                        std::future::ready(Ok(()))
+                    },
+                    |_| Err(io::Error::from_raw_os_error(errno)),
+                ),
+            )
+            .await
+            .unwrap()
+            .unwrap_err();
+
+            assert_eq!(attempts.get(), 1);
+            assert_eq!(error.code, Code::Io);
+            assert!(!error.uncertain);
+            assert!(error.error.contains("read the peer account"));
+            assert!(error.error.contains(transport.path.to_str().unwrap()));
+            assert_eq!(io_cause(&error).raw_os_error(), Some(errno));
+            let wire = serde_json::to_value(&error).unwrap();
+            assert_eq!(wire.as_object().unwrap().len(), 4);
+            assert!(wire.get("source").is_none());
+        }
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn connection_failures_are_never_retried_as_identity_failures() {
+        let transport = endpoint();
+        for errno in [libc::ENOTCONN, libc::EACCES, libc::ECONNREFUSED] {
+            let attempts = Cell::new(0);
+            let error = timeout(
+                Duration::from_secs(1),
+                transport.connect_verified(
+                    Instant::now() + transport.timeout,
+                    || {
+                        attempts.set(attempts.get() + 1);
+                        std::future::ready(Err::<(), _>(io::Error::from_raw_os_error(errno)))
+                    },
+                    |_| panic!("a failed connection has no peer to verify"),
+                ),
+            )
+            .await
+            .unwrap()
+            .unwrap_err();
+
+            assert_eq!(attempts.get(), 1);
+            assert_eq!(error.code, Code::Io);
+            assert!(!error.uncertain);
+            assert!(error.error.contains("connect to socket"));
+            assert!(error.error.contains(transport.path.to_str().unwrap()));
+            assert_eq!(io_cause(&error).raw_os_error(), Some(errno));
+        }
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn repeated_identity_failures_stop_at_the_original_deadline_with_the_cause() {
+        let transport = endpoint();
+        let started = Instant::now();
+        let attempts = Cell::new(0);
+        let error = timeout(
+            Duration::from_secs(1),
+            transport.connect_verified(
+                started + transport.timeout,
+                || {
+                    attempts.set(attempts.get() + 1);
+                    std::future::ready(Ok(()))
+                },
+                |_| Err(io::Error::from_raw_os_error(libc::ENOTCONN)),
+            ),
+        )
+        .await
+        .unwrap()
+        .unwrap_err();
+
+        assert_eq!(attempts.get(), 3);
+        assert_eq!(started.elapsed(), transport.timeout);
+        assert_eq!(error.code, Code::Transport);
+        assert!(!error.uncertain);
+        assert!(error.error.contains("Timed out reading the peer account"));
+        assert!(error.error.contains(transport.path.to_str().unwrap()));
+        assert_eq!(io_cause(&error).raw_os_error(), Some(libc::ENOTCONN));
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn a_stalled_fresh_connection_uses_only_the_remaining_deadline() {
+        let transport = endpoint();
+        let started = Instant::now();
+        let attempts = Cell::new(0);
+        let error = timeout(
+            Duration::from_secs(1),
+            transport.connect_verified(
+                started + transport.timeout,
+                || {
+                    attempts.set(attempts.get() + 1);
+                    let attempt = attempts.get();
+                    async move {
+                        if attempt > 1 {
+                            std::future::pending::<()>().await;
+                        }
+                        Ok(())
+                    }
+                },
+                |_| Err(io::Error::from_raw_os_error(libc::ENOTCONN)),
+            ),
+        )
+        .await
+        .unwrap()
+        .unwrap_err();
+
+        assert_eq!(attempts.get(), 2);
+        assert_eq!(started.elapsed(), transport.timeout);
+        assert_eq!(error.code, Code::Transport);
+        assert!(!error.uncertain);
+        assert!(error.error.contains("Timed out connecting to socket"));
+        assert!(error.error.contains(transport.path.to_str().unwrap()));
+        assert!(error.source().unwrap().is::<tokio::time::error::Elapsed>());
+    }
 
     /// A listener on a socket in a new folder (kept while the folder is), and
     /// a transport to it.
@@ -614,11 +879,20 @@ mod tests {
     /// permission on its folder stays what it is.
     #[test]
     fn a_forbidden_connection_is_blocked() {
-        let error = |code| refused(std::io::Error::from_raw_os_error(code)).code;
-        assert_eq!(error(libc::EPERM), "blocked");
-        assert_eq!(error(libc::EACCES), "io");
-        assert_eq!(error(libc::ENOENT), "io");
-        assert_eq!(error(libc::ECONNREFUSED), "io");
+        let transport = endpoint();
+        for (errno, code) in [
+            (libc::EPERM, Code::Blocked),
+            (libc::EACCES, Code::Io),
+            (libc::ENOENT, Code::Io),
+            (libc::ECONNREFUSED, Code::Io),
+        ] {
+            let error = refused(&transport.path, io::Error::from_raw_os_error(errno));
+            assert_eq!(error.code, code);
+            assert!(!error.uncertain);
+            assert!(error.error.contains("connect"));
+            assert!(error.error.contains(transport.path.to_str().unwrap()));
+            assert_eq!(io_cause(&error).raw_os_error(), Some(errno));
+        }
     }
 
     #[test]

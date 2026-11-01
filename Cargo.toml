@@ -27,7 +27,7 @@ hyper-util = { version = "0.1", features = ["tokio"] }
 indicatif = "0.18"
 libc = "0.2"
 nix = { version = "0.31", features = ["dir", "fs", "process", "signal", "term", "user"] }
-rand = "0.9"
+rand = { version = "0.9", default-features = false, features = ["thread_rng"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 sha2 = "0.10"
@@ -48,9 +48,9 @@ strip = true
 [target.'cfg(target_os = "macos")'.dependencies]
 objc2 = "0.6.5"
 objc2-app-kit = { version = "0.3.2", default-features = false, features = ["std", "NSImage", "NSRunningApplication", "NSWorkspace", "libc"] }
-objc2-foundation = { version = "0.3.2", features = ["NSArray", "NSData", "NSString", "NSURL"] }
+objc2-foundation = { version = "0.3.2", default-features = false, features = ["std", "NSEnumerator", "NSString", "NSUserDefaults"] }
 objc2-application-services = { version = "0.3.2", default-features = false, features = ["std", "HIServices", "AXError", "AXUIElement", "AXValue", "libc"] }
-objc2-core-foundation = { version = "0.3.2", default-features = false, features = ["std", "CFArray", "CFBase", "CFCGTypes", "CFData", "CFDictionary", "CFError", "CFNumber", "CFRunLoop", "CFString", "CFURL"] }
+objc2-core-foundation = { version = "0.3.2", default-features = false, features = ["std", "CFArray", "CFBase", "CFCGTypes", "CFData", "CFDictionary", "CFError", "CFNotificationCenter", "CFNumber", "CFRunLoop", "CFString", "CFURL"] }
 objc2-core-graphics = { version = "0.3.2", default-features = false, features = ["std", "CGBase", "CGBitmapContext", "CGColorSpace", "CGContext", "CGDirectDisplay", "CGEvent", "CGEventSource", "CGEventTypes", "CGImage", "CGRemoteOperation", "CGSession", "CGWindow"] }
 objc2-image-io = { version = "0.3.2", default-features = false, features = ["std", "CGImageDestination", "CGImageSource", "objc2-core-graphics"] }
 objc2-security = { version = "0.3.2", default-features = false, features = ["std", "AuthSession", "Authorization"] }
@@ -66,6 +66,14 @@ default-members = [".", "xtask"]
 [workspace.lints.rust]
 unsafe_code = "deny"
 unreachable_pub = "warn"
+unused_must_use = "deny"
 
 [workspace.lints.clippy]
+await_holding_lock = "deny"
+await_holding_refcell_ref = "deny"
+dbg_macro = "deny"
+let_underscore_future = "deny"
+rc_mutex = "deny"
+rest_pat_in_fully_bound_structs = "deny"
 undocumented_unsafe_blocks = "deny"
+wildcard_dependencies = "deny"

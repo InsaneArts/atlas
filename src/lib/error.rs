@@ -18,6 +18,8 @@ pub struct Error {
     /// More for a program to act on, such as candidates or a scan's diagnostics.
     #[serde(flatten)]
     pub details: serde_json::Map<String, serde_json::Value>,
+    #[serde(skip)]
+    pub(crate) source: Option<Box<dyn StdError + Send + Sync>>,
 }
 
 /// Who holds control when Atlas answers busy.
@@ -50,7 +52,13 @@ impl Error {
             uncertain: false,
             holder: None,
             details: serde_json::Map::new(),
+            source: None,
         }
+    }
+
+    pub(crate) fn with_source(mut self, source: impl StdError + Send + Sync + 'static) -> Self {
+        self.source = Some(Box::new(source));
+        self
     }
 
     #[must_use]
@@ -370,7 +378,11 @@ impl fmt::Display for Error {
     }
 }
 
-impl StdError for Error {}
+impl StdError for Error {
+    fn source(&self) -> Option<&(dyn StdError + 'static)> {
+        self.source.as_deref().map(|source| source as _)
+    }
+}
 
 impl From<std::io::Error> for Error {
     fn from(value: std::io::Error) -> Self {

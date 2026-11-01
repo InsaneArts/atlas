@@ -87,7 +87,65 @@ pub struct Window {
     pub bounds: Bounds,
 }
 
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub(crate) struct HitWindow {
+    pub number: i64,
+    pub pid: i64,
+    pub start: Option<crate::process::Start>,
+    pub layer: i64,
+    pub bounds: Bounds,
+}
+
+/// Visible hit regions, front to back, without window or application names.
+pub(crate) fn hit_windows(
+    windows: &[Window],
+    display: &Bounds,
+    dock: &Dock,
+    starts: Option<&std::collections::BTreeMap<i64, crate::process::Start>>,
+) -> Vec<HitWindow> {
+    windows
+        .iter()
+        .filter(|window| window.alpha > 0.0)
+        .flat_map(|window| {
+            let bounds = if window.layer > 0 && window.passes_through(display) {
+                if window.is_dock() {
+                    dock.areas(&window.bounds)
+                } else {
+                    Vec::new()
+                }
+            } else {
+                vec![window.bounds.clone()]
+            };
+            bounds.into_iter().map(|bounds| HitWindow {
+                number: window.number,
+                pid: window.pid,
+                start: starts.and_then(|starts| starts.get(&window.pid)).copied(),
+                layer: window.layer,
+                bounds,
+            })
+        })
+        .collect()
+}
+
+/// Whether two ordered window lists route points to the same visible windows.
+pub(crate) fn same_routing(before: &[Window], after: &[Window]) -> bool {
+    fn routes(windows: &[Window]) -> impl Iterator<Item = (i64, i64, i64, &Bounds)> {
+        windows
+            .iter()
+            .filter(|window| window.alpha > 0.0 && !window.is_capture_indicator())
+            .map(|window| (window.number, window.pid, window.layer, &window.bounds))
+    }
+    routes(before).eq(routes(after))
+}
+
 impl Window {
+    /// Whether this is the indicator the Window Server raises above the menu
+    /// bar when a capture starts: it comes and goes by itself and moves no
+    /// click to another window.
+    fn is_capture_indicator(&self) -> bool {
+        self.layer > MENU_BAR_LAYER && self.owner.as_deref() == Some("Window Server")
+    }
+
     /// Whether this is the menu bar, the Window Server's window that shows
     /// the frontmost app's titles.
     pub fn is_menu_bar(&self) -> bool {
@@ -289,15 +347,15 @@ impl Screen {
     }
 }
 
-/// What a `windows-info` probe run in the helper reports: the on-screen
+/// What the helper daemon reports: the on-screen
 /// windows, front to back, and, when asked for, where the Dock takes
 /// clicks.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Shown {
     pub windows: Vec<Window>,
-    /// Process identities from this snapshot; absent only for older probes.
+    /// Process identities from this snapshot; absent when the reader could not provide them.
     pub starts: Option<std::collections::BTreeMap<i64, crate::process::Start>>,
-    /// Unread when the probe does not say: it was not asked, or is older.
+    /// Unread when it was not asked for.
     #[serde(default)]
     pub dock: Dock,
 }
@@ -324,13 +382,10 @@ fn read_window(entry: &cf::Record) -> Option<Window> {
     })
 }
 
-/// What a `windows-info` probe run in the helper reported, from the helper
-/// daemon's reply for that run; None when it did not answer whole.
-pub fn from_probe(reply: &serde_json::Value) -> Option<Shown> {
-    let output = crate::transport::run_output(reply, 1 << 20).ok()?;
-    let value: serde_json::Value = serde_json::from_slice(&output).ok()?;
+/// What the helper daemon reported; None when it did not answer whole.
+pub fn from_reply(value: &serde_json::Value) -> Option<Shown> {
     (value["ok"] == true)
-        .then(|| Shown::deserialize(&value).ok())
+        .then(|| Shown::deserialize(value).ok())
         .flatten()
 }
 
@@ -423,6 +478,61 @@ pub fn frontmost_pid(windows: &[Window]) -> Option<i64> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn routing_compares_visibility_but_ignores_names_and_visible_alpha_changes() {
+        let before = vec![placed(42, 0, None, 1.0), placed(43, 0, None, 1.0)];
+        for change in 0..8 {
+            let mut after = before.clone();
+            match change {
+                0 => after[0].alpha = 0.0,
+                1 => after[0].alpha = 0.5,
+                2 => after[0].title = Some("Renamed".into()),
+                3 => after.reverse(),
+                4 => after[0].bounds.x += 1.0,
+                5 => after[0].pid += 1,
+                6 => after[0].layer += 1,
+                _ => {
+                    after.pop();
+                }
+            }
+            assert_eq!(same_routing(&before, &after), matches!(change, 1 | 2));
+            assert_eq!(same_routing(&after, &before), matches!(change, 1 | 2));
+        }
+    }
+
+    #[test]
+    fn routing_compares_visible_occluders_and_ignores_invisible_windows() {
+        let before = vec![placed(42, 0, None, 1.0), placed(43, 3, None, 1.0)];
+        for (layer, alpha) in [
+            (DOCK_LAYER, 1.0),
+            (MENU_BAR_LAYER, 1.0),
+            (MENU_LAYER, 1.0),
+            (25, 1.0),
+            (-1, 1.0),
+            (0, 0.0),
+            (3, 0.0),
+        ] {
+            let mut after = before.clone();
+            after.insert(0, placed(99, layer, None, alpha));
+            assert_eq!(same_routing(&before, &after), alpha == 0.0);
+            assert_eq!(same_routing(&after, &before), alpha == 0.0);
+            after.swap(0, 1);
+            assert_eq!(same_routing(&before, &after), alpha == 0.0);
+        }
+    }
+
+    #[test]
+    fn the_capture_indicator_a_screenshot_raises_leaves_routing_the_same() {
+        let before = vec![placed(42, 0, None, 1.0)];
+        let mut after = before.clone();
+        let mut indicator = placed(99, 2147483630, Some("StatusIndicator"), 1.0);
+        indicator.owner = Some("Window Server".into());
+        after.insert(0, indicator);
+
+        assert!(same_routing(&before, &after));
+        assert!(same_routing(&after, &before));
+    }
 
     /// A window of process 8 at `layer` with `title`, at one place.
     fn placed(number: i64, layer: i64, title: Option<&str>, alpha: f64) -> Window {
@@ -726,28 +836,22 @@ mod tests {
     }
 
     #[test]
-    fn a_probe_says_where_the_dock_takes_clicks_or_leaves_it_unread() {
+    fn a_reply_says_where_the_dock_takes_clicks_or_leaves_it_unread() {
         use serde_json::json;
 
-        let reply = |output: serde_json::Value| crate::test_support::completed(&output.to_string());
         let icons = json!({"icons": [{"x": 200.0, "y": 740.0, "width": 600.0, "height": 60.0}]});
         for (said, dock) in [
             (icons, Dock::Icons(vec![dock_icons()])),
             (json!("other"), Dock::Other),
             (json!("unread"), Dock::Unread),
         ] {
-            let shown =
-                from_probe(&reply(json!({"ok": true, "windows": [], "dock": said}))).unwrap();
+            let shown = from_reply(&json!({"ok": true, "windows": [], "dock": said})).unwrap();
             assert_eq!(shown.dock, dock);
             assert_eq!(serde_json::to_value(&dock).unwrap(), said);
         }
 
-        let unasked = from_probe(&reply(json!({"ok": true, "windows": []}))).unwrap();
-        assert_eq!(
-            unasked.dock,
-            Dock::Unread,
-            "not asked for, or an older probe"
-        );
+        let unasked = from_reply(&json!({"ok": true, "windows": []})).unwrap();
+        assert_eq!(unasked.dock, Dock::Unread, "not asked for");
     }
 
     #[test]
@@ -783,10 +887,17 @@ mod tests {
         // Each fixture window is its own process.
         for windows in &fixtures {
             for screen in &screens {
+                let hits = hit_windows(windows, &display(), screen.dock(), None);
                 for x in (0..1000).step_by(25) {
                     for y in (0..800).step_by(25) {
                         let (x, y) = (f64::from(x), f64::from(y));
                         let top = top_at(windows, x, y, screen).map(|window| window.number);
+                        assert_eq!(
+                            hits.iter()
+                                .find(|window| window.bounds.contains(x, y))
+                                .map(|window| window.number),
+                            top
+                        );
                         for ordinary in windows.iter().filter(|window| window.layer == 0) {
                             let clear = unobstructed(windows, ordinary.number, x, y, screen);
                             let at = format!(

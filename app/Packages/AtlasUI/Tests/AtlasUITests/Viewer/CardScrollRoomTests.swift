@@ -43,4 +43,28 @@ struct CardScrollRoomTests {
     // list changes around it.
     #expect(CardScrollRoom.anchor(scrolledTo: "30", isAtTop: false) == "30")
   }
+
+  @Test("a reveal completes at a rounded edge and when an oversized row reaches its head")
+  func aRevealCompletesAtItsReachableDestination() {
+    let clearance = MiniClearance(edges: .bottom, length: 149)
+    let viewport: CGFloat = 400
+    let reach = CardScrollRoom.revealReach(clearance)
+    let row = CGRect(x: 0, y: reach.top, width: 100, height: viewport - reach.top - reach.bottom)
+    for shift in [-Stroke.hairline, Stroke.hairline] {
+      #expect(
+        CardScrollRoom.revealAnchor(row: row.offsetBy(dx: 0, dy: shift), viewport: viewport, clearance: clearance)
+          == nil
+      )
+    }
+    let oversized = CGRect(x: 0, y: 0, width: row.width, height: viewport)
+    #expect(CardScrollRoom.revealAnchor(row: oversized, viewport: viewport, clearance: clearance) == nil)
+    #expect(
+      CardScrollRoom.revealAnchor(
+        row: oversized.offsetBy(dx: 0, dy: Spacing.l),
+        viewport: viewport,
+        clearance: clearance
+      )
+        == UnitPoint(x: 0.5, y: 0)
+    )
+  }
 }

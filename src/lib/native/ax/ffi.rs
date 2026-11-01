@@ -89,7 +89,7 @@ pub(super) fn actions(
 }
 
 /// Request an action already checked for support.
-pub(super) fn act(element: &AXUIElement, name: &CFString) -> AXError {
+pub(crate) fn act(element: &AXUIElement, name: &CFString) -> AXError {
     // SAFETY: live element and action name; no reference escapes the call.
     unsafe { element.perform_action(name) }
 }

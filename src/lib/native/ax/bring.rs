@@ -257,14 +257,17 @@ impl<A: Backend> Reader<A> {
     /// Include attached sheets even when the app omits them from AXWindows.
     /// Keep their parent relationship, and reject conflicting relationships.
     fn window_refs(&mut self, app: &A::Element, pid: i64) -> Result<Vec<WindowRef<A::Element>>> {
-        let mut refs: Vec<_> = self
-            .list(app, "AXWindows", WINDOWS)?
-            .into_iter()
-            .map(|element| WindowRef {
+        let mut refs = Vec::new();
+        for element in self.list(app, "AXWindows", WINDOWS)? {
+            self.owned(&element, pid)?;
+            if self.text(&element, "AXRole")?.as_deref() == Some("AXHelpTag") {
+                continue;
+            }
+            refs.push(WindowRef {
                 element,
                 parent: None,
-            })
-            .collect();
+            });
+        }
         let mut index = 0;
         while index < refs.len() {
             let element = refs[index].element.clone();

@@ -35,6 +35,7 @@ impl ExecutorClaims {
             .map(|claim| {
                 claim
                     .lock
+                    .0
                     .try_clone()
                     .map(|file| (claim.live.clone(), file))
                     .map_err(context("Clone executor claim", &claim.live))

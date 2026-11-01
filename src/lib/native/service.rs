@@ -16,7 +16,7 @@ use serde::Deserialize;
 use serde_json::{Value, json};
 use std::{
     collections::BTreeSet,
-    path::PathBuf,
+    path::{Path, PathBuf},
     sync::{
         Arc, Mutex as StdMutex, RwLock,
         atomic::{AtomicBool, Ordering},
@@ -399,36 +399,9 @@ impl Service {
         // A stop is the person's: it works whatever the session or
         // permission, and resuming only lets agents ask again.
         if operation == Operation::Hold {
-            let on = request["on"] == true;
-            let kept = if on {
-                use std::os::unix::fs::OpenOptionsExt;
-                std::fs::OpenOptions::new()
-                    .create(true)
-                    .write(true)
-                    .truncate(false)
-                    .mode(0o644)
-                    .custom_flags(libc::O_NOFOLLOW)
-                    .open(&self.stop_marker)
-                    .map(drop)
-            } else {
-                match std::fs::remove_file(&self.stop_marker) {
-                    Err(error) if error.kind() != std::io::ErrorKind::NotFound => Err(error),
-                    _ => Ok(()),
-                }
-            };
-
-            // A resume whose marker stays would come back at the next
-            // restart: agents stay stopped until it can be removed.
-            if !on && kept.is_err() {
-                return Err(Error::new(
-                    Code::Native,
-                    "Agents could not be resumed: the helper could not clear the stop",
-                ));
-            }
-
-            self.gate.hold(on)?;
+            let reply = hold(&self.gate, &self.stop_marker, request)?;
             self.cleanup().await?;
-            return Ok(json!({ "ok": true, "held": on, "kept": kept.is_ok() }));
+            return Ok(reply);
         }
 
         if operation == Operation::Release {
@@ -545,22 +518,24 @@ impl Service {
                     .as_ref()
                     .map(super::ax::target_application)
                     .transpose()?;
+                engine.dock_pressed = false;
                 let result = run(&mut *engine, &gate, actions, expected.as_ref()).await;
                 engine.target = None;
-                Ok::<_, Error>(result)
+                Ok::<_, Error>(result.map(|field| (field, engine.dock_pressed)))
             })
             .await?;
         let result = outcome.await.map_err(|_| worker_failed())?;
-        let field = match result? {
+        let (field, dock_pressed) = match result? {
             Ok(field) => field,
             Err(reply) => return Ok(reply),
         };
 
-        // The app the input landed in, for an agent's activity log (only
-        // when asked, so a person's own control pays nothing): the owner of
-        // the frontmost ordinary window and its bundle identifier, read once
-        // the engine is free.
-        let landed = if request["app"] == true {
+        // The recipient for the agent's activity log, only when asked:
+        // Dock after AXPress, otherwise the owner of the frontmost ordinary
+        // window and its bundle identifier, read once the engine is free.
+        let landed = if request["app"] == true && dock_pressed {
+            Some(("Dock".to_owned(), Some("com.apple.dock".to_owned())))
+        } else if request["app"] == true {
             tokio::task::spawn_blocking(|| {
                 frontmost_app().map(|(app, pid)| (app, super::apps::bundle_id(pid)))
             })
@@ -593,6 +568,40 @@ impl Service {
     }
 }
 
+fn hold(gate: &Gate, stop_marker: &Path, request: &Value) -> Result<Value> {
+    let on = request["on"]
+        .as_bool()
+        .ok_or_else(|| Error::new(Code::Input, "Hold requires a boolean on"))?;
+    let kept = if on {
+        use std::os::unix::fs::OpenOptionsExt;
+        std::fs::OpenOptions::new()
+            .create(true)
+            .write(true)
+            .truncate(false)
+            .mode(0o644)
+            .custom_flags(libc::O_NOFOLLOW)
+            .open(stop_marker)
+            .map(drop)
+    } else {
+        match std::fs::remove_file(stop_marker) {
+            Err(error) if error.kind() != std::io::ErrorKind::NotFound => Err(error),
+            _ => Ok(()),
+        }
+    };
+
+    // A resume whose marker stays would come back at the next
+    // restart: agents stay stopped until it can be removed.
+    if !on && kept.is_err() {
+        return Err(Error::new(
+            Code::Native,
+            "Agents could not be resumed: the helper could not clear the stop",
+        ));
+    }
+
+    gate.hold(on)?;
+    Ok(json!({ "ok": true, "held": on, "kept": kept.is_ok() }))
+}
+
 fn agent_target(gate: &Gate, expect: Option<&Expect>) -> Result<()> {
     if expect.is_some() && gate.holder()? == Some(Holder::Person) {
         return Err(Error::new(
@@ -615,9 +624,9 @@ trait Perform {
         budget: Duration,
         prepare: bool,
     ) -> Result<Option<&'static str>>;
-    /// Carry out one action, posting its events.
+    /// Carry out one action through posted events or a Dock AXPress.
     async fn perform(&mut self, action: Action) -> Result<()>;
-    /// Events posted so far.
+    /// Events posted or AX presses acknowledged so far.
     fn posted(&self) -> u64;
     fn held_input(&self) -> bool;
     /// Let go of every key and button still held.
@@ -1021,12 +1030,44 @@ async fn reply(stream: &mut UnixStream, result: Result<Value>) -> Result<()> {
 mod tests {
     use super::{
         Action, CAPABILITIES, Duration, Error, Expect, Gate, MAX_REQUEST, Need, Perform, Result,
-        admitted, read_request, run,
+        admitted, hold, read_request, run,
     };
     use crate::error::Code;
     use serde_json::{Value, json};
     use std::sync::{Arc, Weak};
     use tokio::{io::AsyncWriteExt, net::UnixStream, sync::Mutex};
+
+    #[test]
+    fn hold_requires_a_boolean_before_changing_the_stop() {
+        let dir = tempfile::tempdir().unwrap();
+        let marker = dir.path().join("stopped");
+        let gate = Gate::default();
+
+        let reply = hold(&gate, &marker, &json!({"on": true})).unwrap();
+        assert_eq!(reply["held"], true);
+        assert!(gate.held().unwrap());
+        assert!(marker.exists());
+        std::fs::write(&marker, b"stop").unwrap();
+
+        for request in [
+            json!({}),
+            json!({"on": null}),
+            json!({"on": "false"}),
+            json!({"on": 0}),
+            json!({"on": []}),
+            json!({"on": {}}),
+        ] {
+            let error = hold(&gate, &marker, &request).unwrap_err();
+            assert_eq!(error.code, Code::Input, "{request}");
+            assert!(gate.held().unwrap(), "{request}");
+            assert_eq!(std::fs::read(&marker).unwrap(), b"stop", "{request}");
+        }
+
+        let reply = hold(&gate, &marker, &json!({"on": false})).unwrap();
+        assert_eq!(reply["held"], false);
+        assert!(!gate.held().unwrap());
+        assert!(!marker.exists());
+    }
 
     /// What a stand-in engine does at one action.
     #[derive(Clone, Copy, PartialEq)]
@@ -1036,6 +1077,8 @@ mod tests {
         Unreadable,
         /// Post one event, then fail.
         Break,
+        UnacknowledgedPress,
+        DockRefusal,
     }
 
     /// An engine that logs each check and post, and does at each action
@@ -1137,6 +1180,18 @@ mod tests {
             self.assert_locked();
             let index = self.logged("post");
             self.log.push(format!("post {index}"));
+            if self.script.get(index) == Some(&Step::UnacknowledgedPress) {
+                return Err(
+                    Error::new(Code::Uncertain, "The Dock did not acknowledge the press")
+                        .uncertain(),
+                );
+            }
+            if self.script.get(index) == Some(&Step::DockRefusal) {
+                return Err(Error::new(
+                    Code::Input,
+                    "No pressable Dock item at that point; no click was sent",
+                ));
+            }
             self.posted += 1;
             if self.opens_sheet {
                 self.sheet = true;
@@ -1306,6 +1361,34 @@ mod tests {
         assert_eq!(reply["performed"], 0);
         assert_eq!(reply["partial"], true);
         assert_eq!(reply["uncertain"], true);
+    }
+
+    #[tokio::test]
+    async fn a_refused_or_unacknowledged_dock_click_reports_no_posted_events() {
+        for (step, uncertain, code) in [
+            (Step::DockRefusal, false, "input"),
+            (Step::UnacknowledgedPress, true, "uncertain"),
+        ] {
+            let stand = Stand::locked(&[step]);
+            let gate = Gate::default();
+            let action =
+                serde_json::from_value(json!({"type": "click", "x": 1138, "y": 940})).unwrap();
+            let mut engine = stand.lock().await;
+            let reply = tokio::time::timeout(
+                Duration::from_secs(1),
+                run(&mut *engine, &gate, vec![action], None),
+            )
+            .await
+            .unwrap()
+            .unwrap_err();
+            assert_eq!(reply["ok"], false);
+            assert_eq!(reply["code"], code);
+            assert_eq!(reply["performed"], 0);
+            assert_eq!(reply["partial"], false);
+            assert_eq!(reply["uncertain"], uncertain);
+            assert_eq!(engine.posted, 0);
+            assert_eq!(engine.releases, 1);
+        }
     }
 
     /// Run `actions` on a stand-in that posts each, expecting `expect`.

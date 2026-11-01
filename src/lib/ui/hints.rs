@@ -33,6 +33,8 @@ pub const COMMAND_RUNNING: &str =
 /// What an agent does about busy once Atlas has waited for the holder.
 pub const WAITED: &str = "Atlas already waited for it. Do something else, then try again, or pass a longer --wait if your tool's timeout allows.";
 
+pub(crate) const DISABLED_CONTROL: &str = "Choose an enabled control. If this is Save/Open, cancel with Escape and use atlas run to create files or atlas open to open them; do not retry an inert confirmation.";
+
 /// What an agent does about a failure: the uncertain step when it may or
 /// may not have happened, else the code's. Waiting for the person (agents
 /// stopped, the person cancelled it, holds control or is at the helper's

@@ -154,7 +154,7 @@ pub async fn launch(config: &Path, port: u16, output: &Path) -> Result<(bool, se
 }
 
 /// Hold the menu bar's start lock, waiting up to 30 seconds for another start.
-async fn starting(path: &Path) -> Result<fs::File> {
+async fn starting(path: &Path) -> Result<crate::files::LockFile> {
     use fs2::FileExt;
     use std::os::unix::fs::OpenOptionsExt;
 
@@ -167,7 +167,7 @@ async fn starting(path: &Path) -> Result<fs::File> {
 
     for _ in 0..300 {
         if lock.try_lock_exclusive().is_ok() {
-            return Ok(lock);
+            return Ok(crate::files::LockFile(lock));
         }
         tokio::time::sleep(Duration::from_millis(100)).await;
     }

@@ -62,6 +62,7 @@ impl Client {
             self.listed_apps(json!({"op": "apps"})).await
         };
         let mut reply = read.await.map_err(Error::certain)?;
+        // app_list validated the reply's object fields before returning it.
         reply
             .as_object_mut()
             .expect("validated app list")

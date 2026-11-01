@@ -5,7 +5,7 @@ use std::{fs, io::Read, path::Path};
 /// The executable a shared probe path stands for: the file itself, or the
 /// Atlas.app executable it links to when the link belongs to this
 /// account. Any other link is not followed.
-pub fn probe_executable(path: &Path) -> Option<std::path::PathBuf> {
+pub(crate) fn probe_executable(path: &Path) -> Option<std::path::PathBuf> {
     use std::os::unix::fs::MetadataExt;
 
     let metadata = fs::symlink_metadata(path).ok()?;

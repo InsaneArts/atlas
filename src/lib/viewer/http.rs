@@ -427,7 +427,10 @@ pub(super) async fn respond(viewer: Arc<Viewer>, request: Request) -> Response {
         Change::Recover => viewer.recover().await,
         Change::Cleanup => viewer.clean_up(&body).await,
         // Control a viewer holds is left alone either way.
-        Change::Hold => viewer.client().hold(body["on"] == true).await,
+        Change::Hold => match body["on"].as_bool() {
+            Some(on) => viewer.client().hold(on).await,
+            None => Err(Error::new(Code::Input, "Hold requires a boolean on")),
+        },
         Change::Control(control) => viewer.control(control, &body).await,
     };
 

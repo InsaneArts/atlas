@@ -3,10 +3,11 @@
 use crate::{
     context::context,
     error::{Code, Error, Result},
+    files::LockFile,
 };
 use fs2::FileExt;
 use std::{
-    fs::{self, File, OpenOptions},
+    fs::{self, OpenOptions},
     os::unix::fs::{FileTypeExt, MetadataExt, OpenOptionsExt, PermissionsExt},
     path::{Path, PathBuf},
     time::Duration,
@@ -22,7 +23,7 @@ use tokio::{
 pub(crate) struct Endpoint {
     socket: PathBuf,
     inode: u64,
-    _lock: File,
+    _lock: LockFile,
 }
 
 impl Drop for Endpoint {
@@ -145,7 +146,8 @@ pub(crate) async fn bind(
         .open(parent.join("service.lock"))
         .map_err(context("Open service lock in", parent))?;
 
-    FileExt::try_lock_exclusive(&lock).map_err(|_| {
+    let lock = LockFile(lock);
+    FileExt::try_lock_exclusive(&lock.0).map_err(|_| {
         Error::new(
             Code::Busy,
             format!("Another {role} already owns this directory"),

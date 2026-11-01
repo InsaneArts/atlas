@@ -1,6 +1,6 @@
 //! Which process a command about an app is for: a process ID, or a name
 //! found among the helper's windows and running apps.
-use super::windows::verified_window_snapshot;
+use super::windows::{DockRead, window_snapshot};
 use crate::{
     actions::Expect,
     client::{Client, Verified},
@@ -131,7 +131,7 @@ pub(super) async fn target_expect(
 ) -> Result<Expect> {
     let listed = match target {
         Target::Pid(_) => None,
-        Target::Name(_) => Some(verified_window_snapshot(client, verified).await?),
+        Target::Name(_) => Some(window_snapshot(client, verified, DockRead::Skip).await?),
     };
     target_among(client, verified, target, listed.as_ref()).await
 }
@@ -163,6 +163,7 @@ pub(super) async fn target_among(
                 "The helper's process identities were malformed",
             )
         })?;
+    // apps_in returns only replies whose apps field passed array validation.
     let rows = apps["apps"].as_array().expect("validated app list");
     let name = match target {
         Target::Pid(pid) => {

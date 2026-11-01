@@ -83,6 +83,10 @@ fn options(args: &[String], root: &Path) -> Result<Options> {
 }
 
 /// The repository root (this crate lives in `xtask/`).
+#[allow(
+    clippy::expect_used,
+    reason = "Cargo fixes this crate inside the repository"
+)]
 fn root() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR"))
         .parent()

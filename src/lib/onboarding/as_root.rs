@@ -789,6 +789,7 @@ pub(crate) fn tracked_output(command: &mut Command) -> Result<std::process::Outp
 }
 
 /// Start the fixed executor and durably identify it before permitting work.
+#[allow(clippy::expect_used, reason = "spawn creates both requested pipes")]
 pub(super) fn start_executor(
     command: &mut Command,
 ) -> Result<(std::process::Child, nix::unistd::Pid), Refusal> {
