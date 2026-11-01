@@ -1095,7 +1095,7 @@ async fn stopping_supervision_joins_the_in_flight_worker() {
 #[tokio::test]
 async fn failed_observation_preserves_records_and_child_identity() {
     use std::os::unix::fs::PermissionsExt;
-    for failure in ["unavailable", "poisoned", "unwritable"] {
+    for failure in ["unavailable", "poisoned"] {
         let table = Table::with(vec![leader()]);
         let (folder, mut jobs) = jobs_with(&record(), &table);
         let launcher = folder.path().join("launcher");
@@ -1115,7 +1115,6 @@ async fn failed_observation_preserves_records_and_child_identity() {
         let id = prepared.record.id.clone();
         let path = folder.path().join(format!("jobs/{id}.json"));
         let before = std::fs::read(&path).unwrap();
-        let records = folder.path().join("jobs");
         match failure {
             "poisoned" => assert!(
                 std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
@@ -1124,13 +1123,9 @@ async fn failed_observation_preserves_records_and_child_identity() {
                 }))
                 .is_err()
             ),
-            "unwritable" => {
-                std::fs::set_permissions(&records, std::fs::Permissions::from_mode(0o500)).unwrap()
-            }
             _ => jobs.fail_supervision(),
         }
         let reply = jobs.launch(prepared, &start).await;
-        std::fs::set_permissions(&records, std::fs::Permissions::from_mode(0o700)).unwrap();
         assert_eq!(reply["uncertain"], true, "{reply}");
         assert_eq!(reply["job"]["id"], id.as_str());
         assert_eq!(std::fs::read(path).unwrap(), before);
@@ -1156,6 +1151,47 @@ async fn failed_observation_preserves_records_and_child_identity() {
         );
         child.kill().await.unwrap();
     }
+}
+
+#[tokio::test]
+async fn an_unwritable_launch_record_does_not_disable_supervision() {
+    use std::os::unix::fs::PermissionsExt;
+    let table = Table::with(vec![leader()]);
+    let (folder, mut jobs) = jobs_with(&record(), &table);
+    let launcher = folder.path().join("launcher");
+    std::fs::write(&launcher, "#!/bin/sh\nread -r -t 20 go\n").unwrap();
+    std::fs::set_permissions(&launcher, std::fs::Permissions::from_mode(0o700)).unwrap();
+    jobs.launcher = launcher;
+    let jobs = Arc::new(jobs);
+    let start = JobStart {
+        argv: vec!["/usr/bin/true".into()],
+        lifetime: Duration::from_secs(60),
+        name: None,
+        task: None,
+        session: None,
+    };
+    let prepared = jobs.prepare(&start).unwrap();
+    let id = prepared.record.id.clone();
+    let path = folder.path().join(format!("jobs/{id}.json"));
+    let log = folder.path().join(format!("jobs/{id}.log"));
+    // Refuse the record write while still allowing record and log cleanup.
+    std::fs::create_dir(path.with_extension("json.partial")).unwrap();
+    let reply = jobs.launch(prepared, &start).await;
+    assert_eq!(
+        reply,
+        json!({
+            "ok": false,
+            "code": "spawn-failed",
+            "error": "The job's process could not be observed or recorded",
+            "uncertain": false,
+        })
+    );
+    assert!(!path.exists());
+    assert!(!log.exists());
+    assert!(jobs.state().unwrap().children.is_empty());
+    assert_eq!(jobs.census().unwrap().running, 1);
+    assert_eq!(jobs.show(Some(&record().id))["ok"], true);
+    assert!(table.signals().is_empty());
 }
 
 #[tokio::test]

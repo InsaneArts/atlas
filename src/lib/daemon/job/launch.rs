@@ -183,6 +183,14 @@ impl Jobs {
 
         let record = match self.record_launched(&record, &child).await {
             Ok(record) => record,
+            Err(error) if error.code == Code::SpawnFailed => {
+                let _ = child.start_kill();
+                let _ = tokio::time::timeout(REAP, child.wait()).await;
+                if let Err(error) = self.forget(&record.id).await {
+                    return unconfirmed(&record, &error.error);
+                }
+                return failure(error.code, error.error);
+            }
             Err(error) => {
                 self.retain_unobserved_child(record.id.clone(), child);
                 return unconfirmed(&record, &error.error);
