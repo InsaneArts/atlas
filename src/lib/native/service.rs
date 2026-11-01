@@ -355,32 +355,96 @@ fn connection_outcome(
     }
 }
 
-/// The operations the input service answers, by their `op` string.
-#[derive(Clone, Copy, PartialEq, Eq)]
-enum Operation {
+#[derive(Debug, Deserialize)]
+#[serde(tag = "op", rename_all = "lowercase")]
+enum Request {
     Hello,
-    Shutdown,
-    Hold,
-    Release,
-    Reset,
-    Renew,
+    Shutdown {
+        pid: u64,
+    },
+    Hold {
+        on: bool,
+    },
+    Release {
+        #[serde(default, deserialize_with = "Request::owner")]
+        owner: String,
+    },
+    Renew {
+        #[serde(default, deserialize_with = "Request::owner")]
+        owner: String,
+    },
+    // Only acquire, reset, input and unknown operations retain raw fields.
+    #[serde(skip)]
+    TemporaryRaw {
+        operation: RawOperation,
+        request: Value,
+    },
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+enum RawOperation {
     Acquire,
+    Reset,
     Input,
+    #[serde(other)]
     Unknown,
 }
 
-impl Operation {
-    fn of(request: &Value) -> Self {
-        match request["op"].as_str().unwrap_or_default() {
-            "hello" => Self::Hello,
-            "shutdown" => Self::Shutdown,
-            "hold" => Self::Hold,
-            "release" => Self::Release,
-            "reset" => Self::Reset,
-            "renew" => Self::Renew,
-            "acquire" => Self::Acquire,
-            "input" => Self::Input,
-            _ => Self::Unknown,
+impl Request {
+    fn owner<'de, D: serde::Deserializer<'de>>(
+        deserializer: D,
+    ) -> std::result::Result<String, D::Error> {
+        // Missing or non-string owners still take the operation's existing
+        // gate refusal, after ordinary checks for renew.
+        Ok(Value::deserialize(deserializer)?
+            .as_str()
+            .unwrap_or_default()
+            .to_owned())
+    }
+
+    fn decode(bytes: &[u8]) -> Result<Self> {
+        let refusal = match serde_json::from_slice(bytes) {
+            Ok(request) => return Ok(request),
+            Err(error) if !error.is_data() => return Err(error.into()),
+            Err(error) => error,
+        };
+
+        #[derive(Deserialize)]
+        struct Raw {
+            op: String,
+            #[serde(flatten)]
+            fields: serde_json::Map<String, Value>,
+        }
+
+        // The temporary routes and operation-specific refusals still need
+        // their original admission rules. Read the original tag again so a
+        // duplicate op cannot enter the raw adapter through last-wins Value.
+        let mut raw: Raw = serde_json::from_slice(bytes).map_err(|error| {
+            if error.is_data() {
+                Error::new(Code::Input, "Native operation requires a string op")
+            } else {
+                error.into()
+            }
+        })?;
+        match raw.op.as_str() {
+            "hello" => Err(refusal.into()),
+            "shutdown" => Err(Error::new(
+                Code::Identity,
+                "Shutdown names a different input service process",
+            )),
+            "hold" => Err(Error::new(Code::Input, "Hold requires a boolean on")),
+            "release" | "renew" => {
+                Err(Error::new(Code::Input, "Native owner must not be repeated"))
+            }
+            _ => {
+                let operation = RawOperation::deserialize(Value::String(raw.op.clone()))?;
+                raw.fields.insert("op".into(), Value::String(raw.op));
+                Ok(Self::TemporaryRaw {
+                    operation,
+                    request: Value::Object(raw.fields),
+                })
+            }
         }
     }
 }
@@ -448,100 +512,103 @@ impl Service {
 
     async fn dispatch(
         &self,
-        request: &Value,
+        request: &Request,
         phase: &watch::Sender<ConnectionPhase>,
     ) -> Result<Value> {
+        let (operation, request) = match request {
+            Request::Hello => {
+                self.operations.reap().await?;
+                let held_input = self
+                    .engine
+                    .try_lock()
+                    .ok()
+                    .map(|engine| engine.held_input());
+
+                return Ok(json!({
+                    "ok": true,
+                    "protocolVersion": 1,
+                    "pid": std::process::id(),
+                    "version": env!("CARGO_PKG_VERSION"),
+                    "build": self.build,
+                    "replaced": self.replaced(),
+                    "capabilities": CAPABILITIES,
+                    "accessibility": Engine::trusted(),
+                    "ready": self.check().is_ok(),
+                    "enforcedEpoch": self.epoch()?,
+                    "session": session_info()?,
+                    "controlActive": self.gate.active()?,
+                    "held": self.gate.held()?,
+                    "heldInput": held_input,
+                    "streaming": true,
+                }));
+            }
+            Request::Shutdown { pid } => {
+                // Bound to this process: a replacement that has since bound the same
+                // socket never honours a request meant for its predecessor.
+                if *pid != u64::from(std::process::id()) {
+                    return Err(Error::new(
+                        Code::Identity,
+                        "Shutdown names a different input service process",
+                    ));
+                }
+
+                if self.gate.active()? {
+                    return Err(Error::new(
+                        Code::Busy,
+                        "The input service has an active controller",
+                    ));
+                }
+
+                self.operations.drain().await?;
+
+                // Release held input first; only an acknowledged release closes the
+                // gate for good. Holding the engine lock keeps acquire out meanwhile,
+                // and one that took the lock first is seen once it is held.
+                let mut engine = self.engine.lock().await;
+                if self.gate.active()? {
+                    return Err(Error::new(
+                        Code::Busy,
+                        "The input service has an active controller",
+                    ));
+                }
+
+                phase.send_replace(ConnectionPhase::Mutation("shutdown"));
+                if let Err(error) = engine.release() {
+                    return Err(Error::new(
+                        Code::Uncertain,
+                        format!("Held input could not be released: {}", error.error),
+                    )
+                    .uncertain());
+                }
+
+                self.gate.close()?;
+                return Ok(json!({ "ok": true, "stopping": true, "pid": std::process::id() }));
+            }
+            // A stop is the person's: it works whatever the session or
+            // permission, and resuming only lets agents ask again.
+            Request::Hold { on } => {
+                let reply = hold(&self.gate, &self.stop_marker, *on, phase)?;
+                self.cleanup().await?;
+                return Ok(reply);
+            }
+
+            Request::Release { owner } => {
+                self.gate.cancel(Some(owner))?;
+                phase.send_replace(ConnectionPhase::Mutation("release"));
+                self.cleanup().await?;
+                return Ok(json!({ "ok": true, "released": true }));
+            }
+            Request::Renew { owner } => {
+                self.check()?;
+                self.gate.renew(owner)?;
+                phase.send_replace(ConnectionPhase::Mutation("renew"));
+                return Ok(json!({ "ok": true }));
+            }
+            Request::TemporaryRaw { operation, request } => (*operation, request),
+        };
         let owner = request["owner"].as_str().unwrap_or_default();
-        let operation = Operation::of(request);
-        if operation == Operation::Hello {
-            self.operations.reap().await?;
-            let held_input = self
-                .engine
-                .try_lock()
-                .ok()
-                .map(|engine| engine.held_input());
 
-            return Ok(json!({
-                "ok": true,
-                "protocolVersion": 1,
-                "pid": std::process::id(),
-                "version": env!("CARGO_PKG_VERSION"),
-                "build": self.build,
-                "replaced": self.replaced(),
-                "capabilities": CAPABILITIES,
-                "accessibility": Engine::trusted(),
-                "ready": self.check().is_ok(),
-                "enforcedEpoch": self.epoch()?,
-                "session": session_info()?,
-                "controlActive": self.gate.active()?,
-                "held": self.gate.held()?,
-                "heldInput": held_input,
-                "streaming": true,
-            }));
-        }
-
-        if operation == Operation::Shutdown {
-            // Bound to this process: a replacement that has since bound the same
-            // socket never honours a request meant for its predecessor.
-            if request["pid"].as_u64() != Some(std::process::id().into()) {
-                return Err(Error::new(
-                    Code::Identity,
-                    "Shutdown names a different input service process",
-                ));
-            }
-
-            if self.gate.active()? {
-                return Err(Error::new(
-                    Code::Busy,
-                    "The input service has an active controller",
-                ));
-            }
-
-            self.operations.drain().await?;
-
-            // Release held input first; only an acknowledged release closes the
-            // gate for good. Holding the engine lock keeps acquire out meanwhile,
-            // and one that took the lock first is seen once it is held.
-            let mut engine = self.engine.lock().await;
-            if self.gate.active()? {
-                return Err(Error::new(
-                    Code::Busy,
-                    "The input service has an active controller",
-                ));
-            }
-
-            phase.send_replace(ConnectionPhase::Mutation("shutdown"));
-            if let Err(error) = engine.release() {
-                return Err(Error::new(
-                    Code::Uncertain,
-                    format!("Held input could not be released: {}", error.error),
-                )
-                .uncertain());
-            }
-
-            self.gate.close()?;
-            return Ok(json!({ "ok": true, "stopping": true, "pid": std::process::id() }));
-        }
-
-        // A stop is the person's: it works whatever the session or
-        // permission, and resuming only lets agents ask again.
-        if operation == Operation::Hold {
-            let on = request["on"]
-                .as_bool()
-                .ok_or_else(|| Error::new(Code::Input, "Hold requires a boolean on"))?;
-            let reply = hold(&self.gate, &self.stop_marker, on, phase)?;
-            self.cleanup().await?;
-            return Ok(reply);
-        }
-
-        if operation == Operation::Release {
-            self.gate.cancel(Some(owner))?;
-            phase.send_replace(ConnectionPhase::Mutation("release"));
-            self.cleanup().await?;
-            return Ok(json!({ "ok": true, "released": true }));
-        }
-
-        if operation == Operation::Reset {
+        if operation == RawOperation::Reset {
             let expected = InputEpoch::deserialize(&request["epoch"])?;
             let current = InputEpoch::from_proof(&session_info()?, std::process::id())?;
             if expected != current || !Engine::trusted() {
@@ -572,12 +639,6 @@ impl Service {
 
         self.check()?;
 
-        if operation == Operation::Renew {
-            self.gate.renew(owner)?;
-            phase.send_replace(ConnectionPhase::Mutation("renew"));
-            return Ok(json!({ "ok": true }));
-        }
-
         let expected = InputEpoch::deserialize(&request["epoch"])?;
         let epoch = self.epoch()?;
         if expected != epoch {
@@ -587,7 +648,7 @@ impl Service {
             ));
         }
 
-        if operation == Operation::Acquire {
+        if operation == RawOperation::Acquire {
             let mut engine = self.engine.lock().await;
             self.operations.check()?;
 
@@ -618,7 +679,7 @@ impl Service {
             return Ok(json!({ "ok": true }));
         }
 
-        if operation != Operation::Input {
+        if operation != RawOperation::Input {
             return Err(Error::new(Code::Input, "Unknown native operation"));
         }
 
@@ -1123,21 +1184,9 @@ fn admitted(stream: &UnixStream, controller_uid: u32) -> bool {
 }
 
 /// One JSON request of at most `MAX_REQUEST` bytes.
-async fn read_request<R: AsyncRead + Unpin>(stream: &mut R) -> Result<Value> {
+async fn read_request<R: AsyncRead + Unpin>(stream: &mut R) -> Result<Request> {
     let line = super::endpoint::read_line(stream, MAX_REQUEST).await?;
-    let request = serde_json::from_slice(&line)?;
-    if Operation::of(&request) == Operation::Hold {
-        // Value merges repeated keys; validate the original bytes before effects.
-        #[derive(serde::Deserialize)]
-        struct Hold {
-            #[serde(rename = "on")]
-            _on: bool,
-        }
-
-        serde_json::from_slice::<Hold>(&line)
-            .map_err(|_| Error::new(Code::Input, "Hold requires a boolean on"))?;
-    }
-    Ok(request)
+    Request::decode(&line)
 }
 
 async fn handle(
@@ -1152,18 +1201,21 @@ async fn handle(
         Err(error) => return reply(&mut stream, Err(error)).await,
     };
 
-    let operation = Operation::of(&request);
-    phase.send_replace(match operation {
-        Operation::Hello => ConnectionPhase::Read,
+    phase.send_replace(match request {
+        Request::Hello => ConnectionPhase::Read,
         _ => ConnectionPhase::Refusal,
     });
-    let result = if operation == Operation::Input {
+    let result = if let Request::TemporaryRaw {
+        operation: RawOperation::Input,
+        request: raw,
+    } = &request
+    {
         let mut dispatch = std::pin::pin!(service.dispatch(&request, &phase));
         let mut extra = [0; 1];
         tokio::select! {
             reply = &mut dispatch => reply,
             _ = stream.read(&mut extra) => {
-                if let Some(owner) = request["owner"].as_str()
+                if let Some(owner) = raw["owner"].as_str()
                     && service.gate.cancel(Some(owner)).is_ok()
                 {
                     phase.send_replace(ConnectionPhase::Mutation("input"));
@@ -1175,7 +1227,7 @@ async fn handle(
         service.dispatch(&request, &phase).await
     };
 
-    let stopping = operation == Operation::Shutdown && result.is_ok();
+    let stopping = matches!(request, Request::Shutdown { .. }) && result.is_ok();
     let written = reply(&mut stream, result).await;
 
     if stopping {
@@ -1199,13 +1251,409 @@ async fn reply(stream: &mut UnixStream, result: Result<Value>) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::{
-        Action, CAPABILITIES, Duration, Error, Expect, Gate, MAX_REQUEST, Need, Perform, Result,
-        admitted, hold, read_request, run,
+        Action, CAPABILITIES, Duration, Error, Expect, Gate, MAX_REQUEST, Need, Perform,
+        RawOperation, Request, Result, admitted, hold, read_request, run,
     };
     use crate::error::Code;
+    use serde::Deserialize;
     use serde_json::{Value, json};
     use std::sync::{Arc, Weak};
     use tokio::{io::AsyncWriteExt, net::UnixStream, sync::Mutex};
+
+    fn service(marker: &std::path::Path) -> super::Service {
+        let epoch = crate::session::InputEpoch {
+            uid: 0,
+            security_session_id: 0,
+            display_id: 0,
+            width: 1.0,
+            height: 1.0,
+            process_id: std::process::id(),
+        };
+        super::Service {
+            engine: Arc::new(Mutex::new(super::Engine::idle(epoch.clone()))),
+            operations: super::Operations::default(),
+            gate: Arc::new(Gate::default()),
+            epoch: super::RwLock::new(epoch),
+            build: None,
+            executable: None,
+            stopping: tokio::sync::Notify::new(),
+            stop_marker: marker.to_owned(),
+        }
+    }
+
+    // Field         | Presence/type             | Duplicates | Admission
+    // op            | required string           | refuse     | boundary
+    // shutdown pid  | required u64, bound PID    | refuse     | before controller checks
+    // hold on       | required boolean          | refuse     | before ordinary checks
+    // release owner | non-string becomes empty  | refuse     | existing gate refusal
+    // renew owner   | non-string becomes empty  | refuse     | ordinary checks, then gate
+    // extensions    | ignored                   | ignore     | no effects
+    // InputEpoch retains its existing strict member policy in the raw adapter.
+    #[tokio::test]
+    async fn a_duplicate_lifecycle_member_is_refused_before_state_changes() {
+        let directory = tempfile::tempdir().unwrap();
+        let marker = directory.path().join("stopped");
+        let service = service(&marker);
+        let (phase, observed) = super::watch::channel(super::ConnectionPhase::Refusal);
+        let grant = service
+            .gate
+            .acquire(&"a".repeat(48), super::Who::Person)
+            .unwrap();
+        let pid = std::process::id();
+        let mut cases = Vec::new();
+        for fields in [
+            "",
+            r#""op":null"#,
+            r#""op":false"#,
+            r#""op":0"#,
+            r#""op":[]"#,
+            r#""op":{}"#,
+            r#""op":"hold","op":"hello","on":true"#,
+            r#""op":"hello","op":"hold","on":true"#,
+            r#""op":"hello","op":"hello""#,
+            r#""op":null,"op":"hello""#,
+            r#""op":"hello","op":null"#,
+            r#""op":"hello","\u006fp":"hello""#,
+        ] {
+            cases.push((
+                format!("{{{fields}}}\n"),
+                Code::Input,
+                "Native operation requires a string op",
+            ));
+        }
+        for fields in [
+            "",
+            r#", "pid":null"#,
+            r#", "pid":false"#,
+            r#", "pid":"1""#,
+            r#", "pid":-1"#,
+            r#", "pid":1.0"#,
+            r#", "pid":[]"#,
+            r#", "pid":{}"#,
+        ] {
+            cases.push((
+                format!(r#"{{"op":"shutdown"{fields}}}"#),
+                Code::Identity,
+                "Shutdown names a different input service process",
+            ));
+        }
+        for fields in [
+            format!(r#""pid":{pid},"pid":0"#),
+            format!(r#""pid":0,"pid":{pid}"#),
+            format!(r#""pid":{pid},"pid":{pid}"#),
+            format!(r#""pid":{pid},"\u0070id":{pid}"#),
+        ] {
+            cases.push((
+                format!(r#"{{"op":"shutdown",{fields}}}"#),
+                Code::Identity,
+                "Shutdown names a different input service process",
+            ));
+        }
+        for operation in ["release", "renew"] {
+            for fields in [
+                r#""owner":"a","owner":"b""#,
+                r#""owner":"b","owner":"a""#,
+                r#""owner":"a","owner":"a""#,
+                r#""owner":null,"owner":"a""#,
+                r#""owner":"a","owner":null"#,
+                r#""owner":"a","\u006fwner":"a""#,
+            ] {
+                cases.push((
+                    format!(r#"{{"op":"{operation}",{fields}}}"#),
+                    Code::Input,
+                    "Native owner must not be repeated",
+                ));
+            }
+        }
+        for stopped in [false, true] {
+            service.gate.hold(stopped).unwrap();
+            if stopped {
+                std::fs::write(&marker, b"stop").unwrap();
+            }
+            for (body, code, message) in &cases {
+                let result = match deliver(format!("{body}\n").into_bytes(), 64).await {
+                    Ok(request) => service.dispatch(&request, &phase).await,
+                    Err(error) => Err(error),
+                };
+                let error = result.unwrap_err();
+                assert_eq!(error.code, *code, "{body}");
+                assert_eq!(error.error, *message, "{body}");
+                assert!(!error.uncertain, "{body}");
+                assert!(
+                    matches!(*observed.borrow(), super::ConnectionPhase::Refusal),
+                    "{body}"
+                );
+                assert!(grant.authorize().is_ok(), "{body}");
+                assert_eq!(service.gate.held().unwrap(), stopped, "{body}");
+                assert_eq!(service.engine.lock().await.posted, 0, "{body}");
+                if stopped {
+                    assert_eq!(std::fs::read(&marker).unwrap(), b"stop", "{body}");
+                } else {
+                    assert!(!marker.exists(), "{body}");
+                }
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn lifecycle_fields_keep_their_operation_specific_refusals() {
+        let directory = tempfile::tempdir().unwrap();
+        let service = service(&directory.path().join("stopped"));
+        let (phase, observed) = super::watch::channel(super::ConnectionPhase::Refusal);
+        let grant = service
+            .gate
+            .acquire(&"a".repeat(48), super::Who::Agent)
+            .unwrap();
+        for fields in [
+            "",
+            r#", "owner":null"#,
+            r#", "owner":true"#,
+            r#", "owner":1"#,
+            r#", "owner":[]"#,
+            r#", "owner":{}"#,
+            r#", "owner":"""#,
+            r#", "owner":"not-an-owner""#,
+        ] {
+            for op in ["release", "renew"] {
+                let request =
+                    Request::decode(format!(r#"{{"op":"{op}"{fields}}}"#).as_bytes()).unwrap();
+                let error = service.dispatch(&request, &phase).await.unwrap_err();
+                if op == "release" {
+                    assert_eq!(error.code, Code::LeaseLost);
+                    assert_eq!(error.error, "This token cannot release another controller");
+                } else {
+                    assert_eq!(json!(error), json!(service.check().unwrap_err()));
+                }
+                assert!(!error.uncertain);
+                assert!(grant.authorize().is_ok());
+                assert!(matches!(
+                    *observed.borrow(),
+                    super::ConnectionPhase::Refusal
+                ));
+            }
+        }
+        let request = Request::decode(br#"{"op":"shutdown","pid":0}"#).unwrap();
+        let error = service.dispatch(&request, &phase).await.unwrap_err();
+        assert_eq!(error.code, Code::Identity);
+        assert_eq!(
+            error.error,
+            "Shutdown names a different input service process"
+        );
+        let request = Request::Shutdown {
+            pid: std::process::id().into(),
+        };
+        let error = service.dispatch(&request, &phase).await.unwrap_err();
+        assert_eq!(error.code, Code::Busy);
+        assert!(grant.authorize().is_ok());
+    }
+
+    #[test]
+    fn lifecycle_payloads_ignore_only_unrelated_extension_members() {
+        assert!(matches!(
+            Request::decode(br#"{"op":"hello","on":null,"on":true,"pid":0,"pid":1}"#).unwrap(),
+            Request::Hello
+        ));
+        assert!(matches!(
+            Request::decode(br#"{"pid":42,"on":null,"on":false,"op":"shutdown"}"#).unwrap(),
+            Request::Shutdown { pid: 42 }
+        ));
+        assert!(matches!(
+            Request::decode(br#"{"on":true,"pid":null,"pid":false,"op":"hold"}"#).unwrap(),
+            Request::Hold { on: true }
+        ));
+        for op in ["release", "renew"] {
+            let body = format!(
+                r#"{{"owner":"unvalidated-token","on":null,"on":false,"op":"{op}","other":1,"other":2}}"#
+            );
+            let (Request::Release { owner } | Request::Renew { owner }) =
+                Request::decode(body.as_bytes()).unwrap()
+            else {
+                panic!("expected an owner");
+            };
+            assert_eq!(owner, "unvalidated-token", "the gate owns token identity");
+        }
+        for (op, operation) in [
+            ("acquire", RawOperation::Acquire),
+            ("reset", RawOperation::Reset),
+            ("input", RawOperation::Input),
+            ("unknown", RawOperation::Unknown),
+        ] {
+            let body = format!(
+                r#"{{"op":"{op}","on":null,"on":false,"epoch":{{"extra":1}},"owner":1,"owner":"last"}}"#
+            );
+            let Request::TemporaryRaw {
+                operation: actual,
+                request: raw,
+            } = Request::decode(body.as_bytes()).unwrap()
+            else {
+                panic!("expected a raw adapter");
+            };
+            assert_eq!(actual, operation);
+            assert_eq!(raw, serde_json::from_str::<Value>(&body).unwrap());
+            assert!(crate::session::InputEpoch::deserialize(&raw["epoch"]).is_err());
+        }
+    }
+
+    #[tokio::test]
+    async fn stop_and_release_remain_available_when_ordinary_permission_checks_fail() {
+        let directory = tempfile::tempdir().unwrap();
+        let marker = directory.path().join("stopped");
+        let service = service(&marker);
+        let (phase, observed) = super::watch::channel(super::ConnectionPhase::Refusal);
+        assert!(
+            service.check().is_err(),
+            "the synthetic session is never authorized"
+        );
+        let owner = "a".repeat(48);
+        let grant = service.gate.acquire(&owner, super::Who::Agent).unwrap();
+
+        let request = Request::decode(br#"{"op":"hold","on":true}"#).unwrap();
+        assert_eq!(
+            service.dispatch(&request, &phase).await.unwrap(),
+            json!({"ok": true, "held": true, "kept": true})
+        );
+        assert!(marker.exists());
+        assert!(service.gate.held().unwrap());
+        assert!(grant.authorize().is_err());
+        assert!(matches!(
+            *observed.borrow(),
+            super::ConnectionPhase::Mutation("hold")
+        ));
+
+        let request = Request::decode(br#"{"op":"hold","on":false}"#).unwrap();
+        service.dispatch(&request, &phase).await.unwrap();
+        let grant = service.gate.acquire(&owner, super::Who::Agent).unwrap();
+        let request =
+            Request::decode(format!(r#"{{"op":"release","owner":"{owner}"}}"#).as_bytes()).unwrap();
+        assert_eq!(
+            service.dispatch(&request, &phase).await.unwrap(),
+            json!({"ok": true, "released": true})
+        );
+        assert!(grant.authorize().is_err());
+        assert!(matches!(
+            *observed.borrow(),
+            super::ConnectionPhase::Mutation("release")
+        ));
+
+        let error = service
+            .dispatch(&Request::Renew { owner }, &phase)
+            .await
+            .unwrap_err();
+        assert_eq!(error.code, service.check().unwrap_err().code);
+        assert_ne!(
+            error.code,
+            Code::LeaseLost,
+            "renew still checks the session first"
+        );
+        assert_eq!(service.engine.lock().await.posted, 0);
+    }
+
+    #[tokio::test]
+    async fn shutdown_rechecks_ownership_after_draining() {
+        let directory = tempfile::tempdir().unwrap();
+        let service = service(&directory.path().join("stopped"));
+        let (phase, observed) = super::watch::channel(super::ConnectionPhase::Refusal);
+        let (resume, waiting) = tokio::sync::oneshot::channel::<()>();
+        let work = service
+            .operations
+            .start(async move { waiting.await.unwrap() })
+            .await
+            .unwrap();
+        let request = Request::decode(
+            format!(r#"{{"op":"shutdown","pid":{}}}"#, std::process::id()).as_bytes(),
+        )
+        .unwrap();
+        let dispatch = service.dispatch(&request, &phase);
+        tokio::pin!(dispatch);
+        std::future::poll_fn(|cx| {
+            assert!(std::future::Future::poll(dispatch.as_mut(), cx).is_pending());
+            std::task::Poll::Ready(())
+        })
+        .await;
+        let grant = service
+            .gate
+            .acquire(&"a".repeat(48), super::Who::Agent)
+            .unwrap();
+        resume.send(()).unwrap();
+        let error = dispatch.await.unwrap_err();
+        work.await.unwrap();
+        assert_eq!(error.code, Code::Busy);
+        assert_eq!(error.error, "The input service has an active controller");
+        assert!(!error.uncertain);
+        assert!(matches!(
+            *observed.borrow(),
+            super::ConnectionPhase::Refusal
+        ));
+        assert!(grant.authorize().is_ok());
+        assert_eq!(service.engine.lock().await.posted, 0);
+    }
+
+    #[tokio::test]
+    async fn release_cancels_ownership_before_waiting_for_the_engine() {
+        let directory = tempfile::tempdir().unwrap();
+        let service = service(&directory.path().join("stopped"));
+        let (phase, _) = super::watch::channel(super::ConnectionPhase::Refusal);
+        let owner = "a".repeat(48);
+        let grant = service.gate.acquire(&owner, super::Who::Agent).unwrap();
+        let engine = service.engine.lock().await;
+        let request = Request::Release { owner };
+        let dispatch = service.dispatch(&request, &phase);
+        tokio::pin!(dispatch);
+        std::future::poll_fn(|cx| {
+            assert!(std::future::Future::poll(dispatch.as_mut(), cx).is_pending());
+            std::task::Poll::Ready(())
+        })
+        .await;
+        assert!(grant.authorize().is_err());
+        assert!(service.engine.try_lock().is_err());
+        drop(engine);
+        assert_eq!(
+            dispatch.await.unwrap(),
+            json!({"ok": true, "released": true})
+        );
+        service
+            .gate
+            .acquire(&"b".repeat(48), super::Who::Agent)
+            .unwrap();
+    }
+
+    #[tokio::test]
+    async fn a_failed_marker_removal_keeps_agents_stopped() {
+        let directory = tempfile::tempdir().unwrap();
+        let service = service(directory.path());
+        let (phase, _) = super::watch::channel(super::ConnectionPhase::Refusal);
+        let request = Request::decode(br#"{"op":"hold","on":true}"#).unwrap();
+        assert_eq!(
+            service.dispatch(&request, &phase).await.unwrap(),
+            json!({"ok": true, "held": true, "kept": false})
+        );
+        let request = Request::decode(br#"{"op":"hold","on":false}"#).unwrap();
+        let error = service.dispatch(&request, &phase).await.unwrap_err();
+        assert_eq!(error.code, Code::Native);
+        assert_eq!(
+            error.error,
+            "Agents could not be resumed: the helper could not clear the stop"
+        );
+        assert!(!error.uncertain);
+        assert!(service.gate.held().unwrap());
+        assert!(directory.path().is_dir());
+        assert_eq!(service.engine.lock().await.posted, 0);
+    }
+
+    #[tokio::test]
+    async fn lifecycle_replies_keep_their_exact_line_framing() {
+        for (result, expected) in [
+            (Ok(json!({"ok":true,"held":true,"kept":true})), b"{\"held\":true,\"kept\":true,\"ok\":true}\n".as_slice()),
+            (Err(Request::decode(br#"{"op":"hold","on":null}"#).unwrap_err()), b"{\"code\":\"input\",\"error\":\"Hold requires a boolean on\",\"ok\":false,\"uncertain\":false}\n".as_slice()),
+        ] {
+            let (mut client, mut server) = UnixStream::pair().unwrap();
+            super::reply(&mut server, result).await.unwrap();
+            drop(server);
+            let mut bytes = Vec::new();
+            super::AsyncReadExt::read_to_end(&mut client, &mut bytes).await.unwrap();
+            assert_eq!(bytes, expected);
+        }
+    }
 
     #[tokio::test]
     async fn an_abandoned_read_does_not_degrade_the_service() {
@@ -1229,7 +1677,7 @@ mod tests {
                 let _slot = slot;
                 let result = match read_request(&mut server).await {
                     Ok(request) => {
-                        assert_eq!(request["op"], "hello");
+                        assert!(matches!(request, Request::Hello));
                         phase.send_replace(super::ConnectionPhase::Read);
                         Ok(json!({"ok": true}))
                     }
@@ -1309,11 +1757,14 @@ mod tests {
             let task = tasks.spawn(async move {
                 let _phase = phase;
                 let request = read_request(&mut server).await?;
-                let owner = request["owner"].as_str().unwrap();
-                let refusal = if request["op"] == "renew" {
-                    refused.renew(owner).unwrap_err()
-                } else {
-                    refused.cancel(Some(owner)).unwrap_err()
+                let refusal = match request {
+                    Request::Renew { owner } => refused.renew(&owner).unwrap_err(),
+                    Request::Release { owner } => refused.cancel(Some(&owner)).unwrap_err(),
+                    Request::TemporaryRaw {
+                        operation: RawOperation::Input,
+                        request,
+                    } => refused.cancel(request["owner"].as_str()).unwrap_err(),
+                    _ => panic!("expected an ownership request"),
                 };
                 assert_eq!(refusal.code, Code::LeaseLost);
                 assert!(!refusal.uncertain);
@@ -1383,7 +1834,13 @@ mod tests {
         let working = operations.clone();
         let task = tasks.spawn(async move {
             let request = read_request(&mut server).await?;
-            assert_eq!(request["op"], "input");
+            assert!(matches!(
+                request,
+                Request::TemporaryRaw {
+                    operation: RawOperation::Input,
+                    ..
+                }
+            ));
             phase.send_replace(super::ConnectionPhase::Mutation("input"));
             let work = working
                 .start(async move {
@@ -1631,7 +2088,8 @@ mod tests {
                 let body = format!("{{\"op\":\"hold\"{fields}}}\n");
                 phase.send_replace(super::ConnectionPhase::Refusal);
                 let result = match deliver(body.clone().into_bytes(), 64).await {
-                    Ok(request) => hold(&gate, &marker, request["on"].as_bool().unwrap(), &phase),
+                    Ok(Request::Hold { on }) => hold(&gate, &marker, on, &phase),
+                    Ok(_) => panic!("expected hold"),
                     Err(error) => Err(error),
                 };
                 let error = result.unwrap_err();
@@ -1653,8 +2111,10 @@ mod tests {
 
         for on in [true, false] {
             let body = format!("{{\"op\":\"hold\",\"on\":{on},\"other\":1,\"other\":2}}\n");
-            let request = deliver(body.into_bytes(), 64).await.unwrap();
-            let reply = hold(&gate, &marker, request["on"].as_bool().unwrap(), &phase).unwrap();
+            let Request::Hold { on } = deliver(body.into_bytes(), 64).await.unwrap() else {
+                panic!("expected hold");
+            };
+            let reply = hold(&gate, &marker, on, &phase).unwrap();
             assert_eq!(reply, json!({"ok": true, "held": on, "kept": true}));
             assert_eq!(gate.held().unwrap(), on);
             assert_eq!(marker.exists(), on);
@@ -2121,7 +2581,7 @@ mod tests {
     }
 
     /// Deliver `line` in `chunk`-byte writes and parse it as the service would.
-    async fn deliver(line: Vec<u8>, chunk: usize) -> crate::error::Result<serde_json::Value> {
+    async fn deliver(line: Vec<u8>, chunk: usize) -> Result<Request> {
         let (mut client, mut server) = tokio::io::duplex(chunk);
         let writer = tokio::spawn(async move {
             for part in line.chunks(chunk) {
@@ -2147,7 +2607,7 @@ mod tests {
     async fn the_line_limit_holds_however_the_request_is_fragmented() {
         for chunk in [1000, 4096, 65536] {
             let reply = deliver(padded(MAX_REQUEST), chunk).await.unwrap();
-            assert_eq!(reply["op"], "hello");
+            assert!(matches!(reply, Request::Hello));
             let error = deliver(padded(MAX_REQUEST + 1), chunk).await.unwrap_err();
             assert_eq!(error.code, "protocol");
         }
@@ -2161,8 +2621,11 @@ mod tests {
         )
         .await
         .unwrap();
-        assert_eq!(request, json!({"op":"hello","on":false}));
-        assert_eq!(deliver(b"[]\n".to_vec(), 64).await.unwrap(), json!([]));
+        assert!(matches!(request, Request::Hello));
+        assert_eq!(
+            deliver(b"[]\n".to_vec(), 64).await.unwrap_err().code,
+            Code::Input
+        );
     }
 
     #[tokio::test]

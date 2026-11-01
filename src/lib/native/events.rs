@@ -73,7 +73,24 @@ fn release_each(held: &mut u64, mut post: impl FnMut(u16, u64) -> Result<()>) ->
 
 /// The engine's private event source, the one field that is not `Send` by
 /// itself.
-struct Source(CFRetained<CGEventSource>);
+struct Source(
+    #[cfg(not(test))] CFRetained<CGEventSource>,
+    #[cfg(test)] Option<CFRetained<CGEventSource>>,
+);
+
+impl Source {
+    #[cfg(not(test))]
+    fn get(&self) -> &CGEventSource {
+        &self.0
+    }
+
+    #[cfg(test)]
+    fn get(&self) -> &CGEventSource {
+        self.0
+            .as_ref()
+            .expect("An idle test engine cannot post events")
+    }
+}
 
 #[allow(
     unsafe_code,
@@ -112,10 +129,37 @@ pub(super) struct Engine {
 }
 
 impl Engine {
+    #[cfg(test)]
+    pub(super) fn idle(epoch: InputEpoch) -> Self {
+        // An empty test engine can acknowledge release without posting events
+        // or reading a real session. Input execution still requires its guards.
+        Self {
+            epoch,
+            grant: None,
+            target: None,
+            journal: None,
+            journal_dirty: false,
+            posted: 0,
+            source: Source(None),
+            held: None,
+            dock_down: None,
+            dock_pressed: false,
+            held_keys: Vec::new(),
+            position: Point { x: 0.0, y: 0.0 },
+            click_count: 1,
+            mouse_number: 0,
+            drag_started: false,
+            flags: 0,
+            post_access: None,
+        }
+    }
+
     pub(super) fn new(uid: u32) -> Result<Self> {
         let source = CGEventSource::new(CGEventSourceStateID::Private)
-            .map(Source)
             .ok_or_else(|| Error::new(Code::Native, "Could not create the event source"))?;
+        #[cfg(test)]
+        let source = Some(source);
+        let source = Source(source);
         let mut engine = Self {
             epoch: InputEpoch::from_proof(&session_info()?, std::process::id())?,
             grant: None,
@@ -318,7 +362,7 @@ impl Engine {
         flags: u64,
     ) -> Result<()> {
         let event = created(CGEvent::new_mouse_event(
-            Some(&self.source.0),
+            Some(self.source.get()),
             kind,
             point,
             button.number(),
@@ -472,7 +516,7 @@ impl Engine {
     #[allow(unsafe_code, reason = "FFI: key text is passed as a UTF-16 pointer")]
     fn key_event(&mut self, code: u16, down: bool, flags: u64, text: Option<&[u16]>) -> Result<()> {
         let event = created(CGEvent::new_keyboard_event(
-            Some(&self.source.0),
+            Some(self.source.get()),
             code,
             down,
         ))?;
@@ -651,7 +695,7 @@ impl Engine {
                 // A wheel's positive turn scrolls up and left; the command's
                 // positive lines scroll down and right, as documented.
                 let event = created(CGEvent::new_scroll_wheel_event2(
-                    Some(&self.source.0),
+                    Some(self.source.get()),
                     CGScrollEventUnit::Line,
                     2,
                     -dy,
