@@ -77,14 +77,6 @@ pub(super) enum Command {
     #[command(hide = true)]
     PermissionsInfo,
     #[command(hide = true)]
-    WindowsInfo {
-        /// Also say where the Dock takes clicks, read through Accessibility.
-        #[arg(long)]
-        dock: bool,
-        #[arg(long)]
-        plain: bool,
-    },
-    #[command(hide = true)]
     ElementsInfo { pid: i32 },
     /// The helper daemon inside the helper login (started by its LaunchAgent).
     #[command(hide = true)]

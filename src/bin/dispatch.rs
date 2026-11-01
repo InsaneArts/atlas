@@ -76,27 +76,6 @@ fn task_of(makes: bool, host: Option<&HostSession>, name: Option<&OsStr>) -> Res
     }
 }
 
-/// The helper's on-screen windows and, with `dock`, where its Dock takes
-/// clicks, as one reading for the controller to judge points by. Only a
-/// check of a point asks for the Dock, which is read through Accessibility.
-#[cfg(target_os = "macos")]
-fn windows_info(dock: bool, plain: bool) -> Result<Value> {
-    use atlas::native::{ax, windows};
-
-    let (windows, starts) = if plain {
-        (windows::windows()?, None)
-    } else {
-        let (windows, starts) =
-            atlas::native::processes::snapshot(windows::windows, |window| window.pid)?;
-        (windows, Some(starts))
-    };
-    let mut info = json!({ "ok": true, "windows": windows, "starts": starts });
-    if dock {
-        info["dock"] = json!(ax::dock(&windows, ax::DOCK_TIMEOUT));
-    }
-    Ok(info)
-}
-
 #[cfg(target_os = "macos")]
 fn elements_info(pid: i32) -> Result<Value> {
     let limits = atlas::native::ax::Limits::default();
@@ -116,11 +95,6 @@ fn elements_info(_: i32) -> Result<Value> {
         Code::Platform,
         "Accessibility elements require macOS",
     ))
-}
-
-#[cfg(not(target_os = "macos"))]
-fn windows_info(_: bool, _: bool) -> Result<Value> {
-    Err(Error::new(Code::Platform, "Window listing requires macOS"))
 }
 
 #[cfg(target_os = "macos")]
@@ -294,7 +268,6 @@ async fn carry_out(
         }
         Command::SessionInfo => atlas::native::session_info(),
         Command::PermissionsInfo => Ok(atlas::daemon::facts::permissions_now()),
-        Command::WindowsInfo { dock, plain } => windows_info(dock, plain),
         Command::ElementsInfo { pid } => elements_info(pid),
         Command::HelperServe { .. } => {
             unreachable!("main serves the helper daemon on its own thread")
@@ -973,24 +946,6 @@ mod tests {
     use crate::cli::Cli;
     use clap::Parser;
 
-    #[test]
-    fn a_plain_window_probe_omits_process_identities_without_requesting_the_dock() {
-        assert!(matches!(
-            parse(&["windows-info", "--plain"]).unwrap().command,
-            Some(Command::WindowsInfo {
-                plain: true,
-                dock: false
-            })
-        ));
-        assert!(matches!(
-            parse(&["windows-info"]).unwrap().command,
-            Some(Command::WindowsInfo {
-                plain: false,
-                dock: false
-            })
-        ));
-    }
-
     fn parse(args: &[&str]) -> std::result::Result<Cli, clap::Error> {
         Cli::try_parse_from(std::iter::once("atlas").chain(args.iter().copied()))
     }
@@ -1649,7 +1604,6 @@ mod tests {
             &["monitor"],
             &["session-info"],
             &["permissions-info"],
-            &["windows-info"],
             &["elements-info", "1"],
             &["init"],
             &["uninstall"],

@@ -286,7 +286,7 @@ mod tests {
 
     #[tokio::test]
     async fn ineligible_actions_do_no_extra_reads() {
-        use crate::test_support::{Helper, UID, completed};
+        use crate::test_support::{Helper, UID};
 
         let directory = tempfile::tempdir().unwrap();
         let (client, helper) = Helper::client(directory.path(), UID);
@@ -330,8 +330,8 @@ mod tests {
                         Some(if request["op"] == "apps" {
                             json!({"ok":true,"apps":[{"pid":812,"name":"Editor"}],"starts":{"812":[123,456]}})
                         } else {
-                            assert_eq!(request["argv"][1], "windows-info");
-                            completed(&json!({"ok":true,"windows":[window(99,10.0)],"starts":{"812":[123,456]}}).to_string())
+                            assert_eq!(request["op"], "windows");
+                            json!({"ok":true,"windows":[window(99,10.0)],"starts":{"812":[123,456]}})
                         })
                     }).await.unwrap_err();
                     assert_eq!(error.code, Code::Startup);
@@ -348,7 +348,7 @@ mod tests {
 
     #[tokio::test]
     async fn point_actions_infer_only_the_observed_owner_in_the_observed_epoch() {
-        use crate::test_support::{Helper, UID, completed};
+        use crate::test_support::{Helper, UID};
         use tokio::{
             io::{AsyncBufReadExt, AsyncWriteExt, BufReader},
             net::UnixListener,
@@ -428,7 +428,7 @@ mod tests {
                     if request["op"] == "apps" {
                         return Some(json!({"ok":true,"apps":[{"pid":812,"name":"Editor"}]}));
                     }
-                    assert_eq!(request["argv"][1], "windows-info");
+                    assert_eq!(request["op"], "windows");
                     assert!(
                         client.controller.acquire(false).is_err(),
                         "validation holds ownership"
@@ -443,9 +443,7 @@ mod tests {
                         12 => Value::Null,
                         _ => json!({"812":[123,456]}),
                     };
-                    Some(completed(
-                        &json!({"ok":true,"windows":windows,"starts":starts}).to_string(),
-                    ))
+                    Some(json!({"ok":true,"windows":windows,"starts":starts}))
                 },
             );
             tokio::select! {

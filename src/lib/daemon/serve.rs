@@ -345,6 +345,7 @@ fn allowed(request: &Request, on_console: bool) -> Option<Value> {
     let acts = matches!(
         request,
         Request::Run { .. }
+            | Request::Windows { .. }
             | Request::Screenshot { .. }
             | Request::Logout { .. }
             | Request::Job(JobRequest::Start { .. })
@@ -364,6 +365,7 @@ fn allowed(request: &Request, on_console: bool) -> Option<Value> {
 fn pinned_elsewhere(request: &Request, session: fn() -> Result<Value>) -> Option<Value> {
     let pin = match request {
         Request::Apps { pin }
+        | Request::Windows { pin, .. }
         | Request::Run { pin, .. }
         | Request::Job(JobRequest::Start { pin, .. })
         | Request::Read(ReadRequest { pin, .. }) => (*pin)?,
@@ -684,6 +686,31 @@ async fn handle(stream: UnixStream, daemon: Arc<Daemon>, controller: bool) -> Re
             Ok(Err(error)) => json!(error),
             Err(_) => failure(Code::Apps, "Running applications could not be listed"),
         },
+        Ok(request @ Request::Windows { dock, .. }) => {
+            let daemon = daemon.clone();
+            tokio::task::spawn_blocking(move || {
+                let guard = || {
+                    allowed(&request, (daemon.on_console)())
+                        .or_else(|| pinned_elsewhere(&request, daemon.session))
+                };
+                if let Some(refusal) = guard() {
+                    return refusal;
+                }
+                let reply = match crate::native::processes::snapshot(daemon.windows, |w| w.pid) {
+                    Ok((windows, starts)) => {
+                        let mut reply = json!({"ok": true, "windows": windows, "starts": starts});
+                        if dock {
+                            reply["dock"] = json!((daemon.dock)(&windows));
+                        }
+                        reply
+                    }
+                    Err(error) => json!(error),
+                };
+                guard().unwrap_or(reply)
+            })
+            .await
+            .unwrap_or_else(|_| failure(Code::Windows, "The helper window list is unavailable"))
+        }
         Ok(Request::Screenshot {
             max_dimension,
             per_point,
@@ -951,6 +978,7 @@ mod tests {
 
         for request in [
             r#"{"op":"run","argv":["/bin/echo","hi"]}"#,
+            r#"{"op":"windows"}"#,
             r#"{"op":"screenshot"}"#,
             r#"{"op":"apps"}"#,
             r#"{"op":"restart"}"#,
@@ -973,6 +1001,7 @@ mod tests {
         let pinned = |session: &str| {
             [
                 format!(r#"{{"op":"apps","session":{session}}}"#),
+                format!(r#"{{"op":"windows","session":{session}}}"#),
                 format!(r#"{{"op":"run","argv":["/bin/echo","hi"],"session":{session}}}"#),
             ]
         };
@@ -996,6 +1025,50 @@ mod tests {
                 assert_eq!(reply[0]["code"], "session-changed", "{request}");
                 assert_eq!(reply[0]["uncertain"], false);
             }
+        }
+    }
+
+    #[test]
+    fn a_window_read_is_refused_while_the_helper_is_on_screen() {
+        let request = Request::Windows {
+            dock: true,
+            pin: None,
+        };
+        assert!(allowed(&request, false).is_none());
+        assert_eq!(allowed(&request, true).unwrap()["code"], "on-console");
+    }
+
+    #[test]
+    fn a_window_read_is_refused_in_another_session() {
+        for (security_session_id, display_id) in [(43, 7), (42, 8)] {
+            let request = Request::Windows {
+                dock: false,
+                pin: Some(protocol::SessionPin {
+                    security_session_id,
+                    display_id,
+                }),
+            };
+            let refusal = pinned_elsewhere(&request, session).unwrap();
+            assert_eq!(refusal["code"], "session-changed");
+            assert_eq!(refusal["uncertain"], false);
+        }
+    }
+
+    #[tokio::test]
+    async fn a_window_list_is_read_in_the_daemon_without_running_a_process() {
+        for dock in [false, true] {
+            let request = json!({"op": "windows", "dock": dock}).to_string();
+            let replies =
+                tokio::time::timeout(Duration::from_secs(5), exchange(daemon(false), &request))
+                    .await
+                    .unwrap();
+            assert_eq!(replies.len(), 1, "no process events");
+            let reply = &replies[0];
+            assert_eq!(reply["ok"], true, "{reply}");
+            assert_eq!(reply["windows"], json!(fake_windows().unwrap()));
+            assert!(reply["starts"].is_object());
+            assert_eq!(reply.get("dock").is_some(), dock);
+            assert!(reply.get("exitCode").is_none());
         }
     }
 
@@ -1036,6 +1109,7 @@ mod tests {
     async fn nothing_acts_while_the_helper_is_on_screen() {
         for request in [
             r#"{"op":"run","argv":["/bin/echo","hi"]}"#,
+            r#"{"op":"windows"}"#,
             r#"{"op":"screenshot"}"#,
             r#"{"op":"screenshot","pid":200}"#,
             r#"{"op":"screenshot","region":{"x":0,"y":0,"width":10,"height":10}}"#,

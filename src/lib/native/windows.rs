@@ -340,15 +340,15 @@ impl Screen {
     }
 }
 
-/// What a `windows-info` probe run in the helper reports: the on-screen
+/// What the helper daemon reports: the on-screen
 /// windows, front to back, and, when asked for, where the Dock takes
 /// clicks.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Shown {
     pub windows: Vec<Window>,
-    /// Process identities from this snapshot; absent only for older probes.
+    /// Process identities from this snapshot; absent when the reader could not provide them.
     pub starts: Option<std::collections::BTreeMap<i64, crate::process::Start>>,
-    /// Unread when the probe does not say: it was not asked, or is older.
+    /// Unread when it was not asked for.
     #[serde(default)]
     pub dock: Dock,
 }
@@ -375,13 +375,10 @@ fn read_window(entry: &cf::Record) -> Option<Window> {
     })
 }
 
-/// What a `windows-info` probe run in the helper reported, from the helper
-/// daemon's reply for that run; None when it did not answer whole.
-pub fn from_probe(reply: &serde_json::Value) -> Option<Shown> {
-    let output = crate::transport::run_output(reply, 1 << 20).ok()?;
-    let value: serde_json::Value = serde_json::from_slice(&output).ok()?;
+/// What the helper daemon reported; None when it did not answer whole.
+pub fn from_reply(value: &serde_json::Value) -> Option<Shown> {
     (value["ok"] == true)
-        .then(|| Shown::deserialize(&value).ok())
+        .then(|| Shown::deserialize(value).ok())
         .flatten()
 }
 
@@ -820,28 +817,22 @@ mod tests {
     }
 
     #[test]
-    fn a_probe_says_where_the_dock_takes_clicks_or_leaves_it_unread() {
+    fn a_reply_says_where_the_dock_takes_clicks_or_leaves_it_unread() {
         use serde_json::json;
 
-        let reply = |output: serde_json::Value| crate::test_support::completed(&output.to_string());
         let icons = json!({"icons": [{"x": 200.0, "y": 740.0, "width": 600.0, "height": 60.0}]});
         for (said, dock) in [
             (icons, Dock::Icons(vec![dock_icons()])),
             (json!("other"), Dock::Other),
             (json!("unread"), Dock::Unread),
         ] {
-            let shown =
-                from_probe(&reply(json!({"ok": true, "windows": [], "dock": said}))).unwrap();
+            let shown = from_reply(&json!({"ok": true, "windows": [], "dock": said})).unwrap();
             assert_eq!(shown.dock, dock);
             assert_eq!(serde_json::to_value(&dock).unwrap(), said);
         }
 
-        let unasked = from_probe(&reply(json!({"ok": true, "windows": []}))).unwrap();
-        assert_eq!(
-            unasked.dock,
-            Dock::Unread,
-            "not asked for, or an older probe"
-        );
+        let unasked = from_reply(&json!({"ok": true, "windows": []})).unwrap();
+        assert_eq!(unasked.dock, Dock::Unread, "not asked for");
     }
 
     #[test]

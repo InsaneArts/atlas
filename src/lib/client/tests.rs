@@ -186,7 +186,7 @@ async fn the_expectation_is_sent_only_when_asked() {
 async fn named_typing_pins_the_resolved_instance_across_every_native_batch() {
     use crate::{
         agent::{Expected, Target, type_text},
-        test_support::{Helper, UID, completed},
+        test_support::{Helper, UID},
     };
 
     let pid = i64::from(i32::MAX);
@@ -210,13 +210,13 @@ async fn named_typing_pins_the_resolved_instance_across_every_native_batch() {
                 if request["op"] == "apps" {
                     Some(json!({"ok":true,"starts":{pid.to_string():start},"apps":[{"pid":pid,"name":"Editor","active":true}]}))
                 } else {
-                    assert_eq!(request["argv"][1], "windows-info");
+                    assert_eq!(request["op"], "windows");
                     let mut snapshot = json!({"ok":true,"starts":{pid.to_string():start},"windows":[{
                     "number":42,"pid":pid,"owner":"Editor","title":null,"layer":0,"alpha":1.0,
                     "bounds":{"x":0,"y":0,"width":100,"height":100}
                 }]});
                     if windowless { snapshot["windows"] = json!([]); }
-                    Some(completed(&snapshot.to_string()))
+                    Some(snapshot)
                 }
             },
         ));
@@ -281,10 +281,12 @@ async fn named_clicks_carry_the_helper_identity_even_when_the_controller_cannot_
                 if request["op"] == "apps" {
                     return Some(json!({"ok":true,"apps":[{"pid":pid,"name":"Editor"}],"starts":{pid.to_string():start}}));
                 }
-                let output = match request["argv"][1].as_str() {
-                    Some("windows-info") => json!({"ok":true,"starts":{pid.to_string():if request["argv"][2] == "--dock" { [124,456] } else { start }},"windows":[{
+                if request["op"] == "windows" {
+                    return Some(json!({"ok":true,"starts":{pid.to_string():if request["dock"] == true { [124,456] } else { start }},"windows":[{
                         "number":42,"pid":pid,"owner":"Editor","title":null,"layer":0,"alpha":1.0,
-                        "bounds":{"x":10,"y":20,"width":80,"height":60}}]}),
+                        "bounds":{"x":10,"y":20,"width":80,"height":60}}]}));
+                }
+                let output = match request["argv"][1].as_str() {
                     Some("elements-info") => json!({"ok":true,"truncated":false,"elements":[{
                         "index":0,"depth":0,"role":"AXButton","title":"Save","enabled":true,
                         "frame":{"x":20,"y":30,"width":20,"height":20},

@@ -51,13 +51,10 @@ fn an_older_snapshot_leaves_the_instance_for_the_input_service_to_pin() {
 
 #[test]
 fn window_snapshot_identities_are_read_but_never_appear_in_the_public_window_rows() {
-    let reply = crate::test_support::completed(
-        &json!({
-            "ok":true,"starts":{"812":[123,456]},"windows":[window(42,812,"Editor",0)]
-        })
-        .to_string(),
-    );
-    let snapshot = crate::native::windows::from_probe(&reply).unwrap();
+    let reply = json!({
+        "ok":true,"starts":{"812":[123,456]},"windows":[window(42,812,"Editor",0)]
+    });
+    let snapshot = crate::native::windows::from_reply(&reply).unwrap();
     let expect = snapshot_expect(snapshot.windows[0].pid, snapshot.starts.as_ref()).unwrap();
     assert_eq!(
         serde_json::to_value(expect).unwrap(),
@@ -77,14 +74,54 @@ fn textedit_reads(request: &Value) -> Option<Value> {
     if request["op"] == "apps" {
         return Some(json!({"ok": true, "apps": [{"pid": 812, "name": "TextEdit"}]}));
     }
-    let output = match request["argv"][1].as_str() {
-        Some("windows-info") => json!({"ok": true, "windows": [{"number": 5, "pid": 812,
+    if request["op"] == "windows" {
+        return Some(json!({"ok": true, "windows": [{"number": 5, "pid": 812,
             "owner": "TextEdit", "title": null, "layer": 0, "alpha": 1.0,
-            "bounds": {"x": 0, "y": 0, "width": 100, "height": 100}}]}),
+            "bounds": {"x": 0, "y": 0, "width": 100, "height": 100}}]}));
+    }
+    let output = match request["argv"][1].as_str() {
         Some("elements-info") => json!({"ok": true, "elements": [], "truncated": false}),
         other => panic!("nothing else is read: {other:?}"),
     };
     Some(completed(&output.to_string()))
+}
+
+#[tokio::test]
+async fn atlas_windows_reads_once_and_remembers_that_reading() {
+    use crate::{
+        host_session::{Host, HostSession},
+        test_support::{Helper, UID},
+    };
+
+    for named in [false, true] {
+        let directory = tempfile::tempdir().unwrap();
+        let (mut client, helper) = Helper::client(directory.path(), UID);
+        if named {
+            client.host_session = Some(HostSession::new(Host::Named, "one").unwrap());
+        }
+        let mut reads = 0;
+        let reply = helper
+            .serve(list(&client, &WindowFilter::default()), |request| {
+                assert_eq!(request["op"], "windows", "no window probe runs");
+                assert!(request.get("argv").is_none());
+                assert!(request["session"].is_object());
+                assert_eq!(request["dock"], named);
+                reads += 1;
+                Some(
+                    json!({"ok": true, "windows": [window(42, 812, "Editor", 0)],
+                "starts": {"812": [123,456]}}),
+                )
+            })
+            .await
+            .unwrap();
+        assert_eq!(reads, 1);
+        assert_eq!(reply["windows"], json!([window(42, 812, "Editor", 0)]));
+        if named {
+            let memory = client.remembered_windows().unwrap();
+            assert_eq!(memory.windows.len(), 1);
+            assert_eq!(memory.windows[0].number, 42);
+        }
+    }
 }
 
 /// An app found by name or process ID is looked for in the helper the
@@ -224,18 +261,6 @@ async fn a_helper_that_changes_after_it_is_verified_is_refused() {
     }
 }
 
-/// Only a check of a point pays for reading the Dock: listing windows
-/// and waiting for them do not ask for it.
-#[test]
-fn only_a_point_check_asks_the_window_probe_for_the_dock() {
-    let directory = tempfile::tempdir().unwrap();
-    let client = crate::test_support::client(directory.path());
-    let skip = windows_probe(&client, DockRead::Skip);
-    let read = windows_probe(&client, DockRead::Read);
-    assert_eq!(skip[1..], ["windows-info"]);
-    assert_eq!(read[1..], ["windows-info", "--dock"]);
-}
-
 /// The process a name resolves to from the window list alone.
 fn app_pid(windows: &[Window], target: &Target) -> Result<i64> {
     match target {
@@ -330,15 +355,13 @@ fn window_and_app_naming_different_apps_is_a_usage_error() {
 /// window lists it gives.
 fn two_apps(lists: &std::cell::Cell<usize>) -> impl FnMut(&Value) -> Option<Value> + '_ {
     move |request| {
-        use crate::test_support::completed;
-
         if request["op"] == "apps" {
             return Some(
                 json!({"ok": true, "starts": {"812":[123,456],"900":[124,0]}, "apps": [
                 {"pid": 812, "name": "TextEdit"}, {"pid": 900, "name": "Calculator"}]}),
             );
         }
-        assert_eq!(request["argv"][1], "windows-info", "nothing else is read");
+        assert_eq!(request["op"], "windows", "nothing else is read");
         lists.set(lists.get() + 1);
         let window = |number, pid, owner| {
             json!({"number": number, "pid": pid,
@@ -347,7 +370,7 @@ fn two_apps(lists: &std::cell::Cell<usize>) -> impl FnMut(&Value) -> Option<Valu
         };
         let listed = json!({"ok": true, "starts": {"812":[123,456],"900":[124,0]}, "windows": [
             window(4120, 812, "TextEdit"), window(339, 900, "Calculator")]});
-        Some(completed(&listed.to_string()))
+        Some(listed)
     }
 }
 
@@ -1178,13 +1201,6 @@ fn a_look_stays_within_the_helpers_limit() {
     assert_eq!(
         probe_budget(Duration::from_secs(86_400)),
         crate::client::RUN_TIMEOUT_MAX
-    );
-
-    let longest = crate::client::RUN_TIMEOUT_MAX.as_millis();
-    let request = json!({"op": "run", "argv": ["x"], "timeoutMs": longest}).to_string();
-    assert!(
-        crate::daemon::protocol::parse(request.as_bytes()).is_ok(),
-        "the helper accepts the longest look"
     );
 }
 
@@ -3069,12 +3085,12 @@ fn a_named_sheet_button_keeps_the_exact_sheet_or_parent_number_from_the_scan() {
 }
 
 #[tokio::test]
-async fn looks_share_optional_routing_and_finish_with_a_plain_list() {
+async fn pictures_compare_two_readings_and_window_lists_remember_their_own_reading() {
     use crate::{
         client::Size,
         daemon::protocol::Crop,
         host_session::{Host, HostSession},
-        test_support::{Helper, UID, completed, exited},
+        test_support::{Helper, UID, completed},
     };
     use base64::{Engine, engine::general_purpose::STANDARD};
     use std::cell::RefCell;
@@ -3111,46 +3127,44 @@ async fn looks_share_optional_routing_and_finish_with_a_plain_list() {
                     if request["op"] == "apps" {
                         return Some(json!({"ok": true, "apps": [{"pid": 812, "name": "Editor"}], "starts": {"812": [123,456]}}));
                     }
-                    match request["argv"][1].as_str().unwrap() {
-                        "elements-info" => Some(completed(&json!({"ok": true, "elements": [], "truncated": false}).to_string())),
-                        "windows-info" => {
-                            let flag = request["argv"][2].as_str().unwrap_or("");
-                            reads.borrow_mut().push(flag.to_owned());
-                            if (flag == "--dock" && change == 6) || (flag == "--plain" && change == 3) {
-                                return Some(exited(1, "identity or list unavailable"));
-                            }
-                            let mut windows = vec![window(42, 812, "Editor", 0), window(43, 812, "Editor", 0)];
-                            if flag == "--plain" {
-                                match change {
-                                    1 => windows.reverse(),
-                                    2 => windows[0].bounds.x += 1.0,
-                                    4 => windows[0].title = Some("A new title".into()),
-                                    5 => windows[0].alpha = 0.0,
-                                    7 => windows[0].alpha = 0.5,
-                                    8 => windows.insert(0, window(99, 900, "SystemUIServer", 25)),
-                                    _ => {}
-                                }
-                            }
-                            Some(completed(&json!({"ok": true, "windows": windows,
-                                "starts": (flag != "--plain").then_some(json!({"812": [123,456]})),
-                                "dock": "unread"}).to_string()))
-                        }
-                        other => panic!("unexpected probe: {other}"),
+                    if request["op"] == "run" {
+                        assert_eq!(request["argv"][1], "elements-info");
+                        return Some(completed(&json!({"ok": true, "elements": [], "truncated": false}).to_string()));
                     }
+                    assert_eq!(request["op"], "windows");
+                    let dock = request["dock"].as_bool().unwrap();
+                    reads.borrow_mut().push(dock);
+                    if (dock && change == 6) || (!dock && change == 3 && named) {
+                        return Some(json!({"ok": false, "code": "windows", "error": "The window list is unavailable"}));
+                    }
+                    let mut windows = vec![window(42, 812, "Editor", 0), window(43, 812, "Editor", 0)];
+                    if !dock && named {
+                        match change {
+                            1 => windows.reverse(),
+                            2 => windows[0].bounds.x += 1.0,
+                            4 => windows[0].title = Some("A new title".into()),
+                            5 => windows[0].alpha = 0.0,
+                            7 => windows[0].alpha = 0.5,
+                            8 => windows.insert(0, window(99, 900, "SystemUIServer", 25)),
+                            _ => {}
+                        }
+                    }
+                    Some(json!({"ok": true, "windows": windows,
+                        "starts": {"812": [123,456]}, "dock": "unread"}))
                 }).await;
                 if named && command == 2 && change == 6 {
                     assert!(reply.is_err());
-                    assert_eq!(*reads.borrow(), vec!["--dock"]);
+                    assert_eq!(*reads.borrow(), vec![true]);
                     assert_eq!(helper.proofs(), 1);
                     assert!(client.remembered_windows().is_none());
                     continue;
                 }
                 let reply = reply.unwrap();
                 assert_eq!(reply["ok"], true, "command {command}, change {change}");
-                let expected = if named {
-                    vec!["--dock", "--plain"]
-                } else if command == 2 {
-                    vec![""]
+                let expected = if command == 2 {
+                    vec![named]
+                } else if named {
+                    vec![true, false]
                 } else {
                     vec![]
                 };
@@ -3164,7 +3178,10 @@ async fn looks_share_optional_routing_and_finish_with_a_plain_list() {
                 }
                 if named {
                     let memory = client.remembered_windows().unwrap();
-                    assert_eq!(memory.windows.is_empty(), !matches!(change, 0 | 4 | 7 | 8));
+                    assert_eq!(
+                        memory.windows.is_empty(),
+                        command != 2 && !matches!(change, 0 | 4 | 7 | 8)
+                    );
                 } else {
                     assert!(client.remembered_windows().is_none());
                 }

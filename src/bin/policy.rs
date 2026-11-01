@@ -131,7 +131,6 @@ fn attributed(command: &Command) -> bool {
             | Command::EnvironmentWorker { .. }
             | Command::SessionInfo
             | Command::PermissionsInfo
-            | Command::WindowsInfo { .. }
             | Command::ElementsInfo { .. }
             | Command::Init
             | Command::Uninstall { .. }
@@ -276,7 +275,6 @@ fn machine_only(command: &Command) -> bool {
         Command::EnvironmentWorker { .. }
             | Command::SessionInfo
             | Command::PermissionsInfo
-            | Command::WindowsInfo { .. }
             | Command::ElementsInfo { .. }
             | Command::HelperServe { .. }
             | Command::JobLaunch { .. }

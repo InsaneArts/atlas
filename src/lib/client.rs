@@ -16,6 +16,7 @@ mod session;
 mod stop;
 #[cfg(test)]
 mod tests;
+mod windows;
 
 #[cfg(test)]
 pub(crate) use capture::prune_captures;
