@@ -65,7 +65,7 @@ fn pid_of(job: &Value) -> i32 {
 fn ended(jobs: &Jobs, id: &JobId, within: Duration) -> Value {
     let until = Instant::now() + within;
     loop {
-        jobs.watch_once(None);
+        jobs.watch_once(None).unwrap();
         let shown = jobs.show(Some(id))["job"].clone();
         if shown["state"] == "ended" || Instant::now() >= until {
             return shown;
@@ -102,9 +102,9 @@ async fn a_started_job_keeps_running_after_its_request_ends() {
     assert_eq!(job["state"], "running");
     assert_eq!(job["name"], "sleep");
     std::thread::sleep(Duration::from_millis(300));
-    jobs.watch_once(None);
+    jobs.watch_once(None).unwrap();
     assert!(alive(pid_of(&job)));
-    assert_eq!(jobs.running(), 1);
+    assert_eq!(jobs.running().unwrap(), 1);
     end_group(pid_of(&job));
 }
 
@@ -138,7 +138,7 @@ async fn a_launch_that_cannot_exec_is_refused_and_leaves_nothing_running() {
 
     let shown = jobs.show(None);
     assert_eq!(shown["jobs"], serde_json::json!([]), "no record is left");
-    assert_eq!(jobs.running(), 0);
+    assert_eq!(jobs.running().unwrap(), 0);
 }
 
 #[tokio::test]
@@ -163,12 +163,12 @@ async fn stopping_ends_the_whole_group_and_reports_what_left_it() {
             .filter(|info| !info.zombie && info.name == "sleep" && info.pgid != pgid)
     };
     assert!(eventually(|| {
-        jobs.watch_once(None);
+        jobs.watch_once(None).unwrap();
         escaped().is_some()
     }));
     // Seen while its parent still runs in the job's group.
     for _ in 0..5 {
-        jobs.watch_once(None);
+        jobs.watch_once(None).unwrap();
         std::thread::sleep(Duration::from_millis(50));
     }
 
@@ -202,7 +202,7 @@ async fn a_job_that_ignores_term_is_killed_after_its_grace() {
     let reply = jobs.stop(&id, &expected_of(&job), Duration::from_secs(1));
     assert_eq!(reply["signalled"], "SIGTERM", "{reply}");
     std::thread::sleep(Duration::from_millis(500));
-    jobs.watch_once(None);
+    jobs.watch_once(None).unwrap();
     assert_eq!(jobs.show(Some(&id))["job"]["state"], "stopping");
 
     let shown = ended(&jobs, &id, Duration::from_secs(8));
@@ -238,13 +238,13 @@ async fn a_stop_by_the_person_ends_every_job() {
 
     let third = started(&jobs, &["/bin/sleep", "62"]).await;
     let shown = {
-        jobs.watch_once(Some(How::Person));
+        jobs.watch_once(Some(How::Person)).unwrap();
         ended(&jobs, &id_of(&third), Duration::from_secs(8))
     };
     assert_eq!(shown["how"], "person", "a saved Stop ends it too: {shown}");
 
     let fourth = started(&jobs, &["/bin/sleep", "63"]).await;
-    jobs.watch_once(Some(How::OnConsole));
+    jobs.watch_once(Some(How::OnConsole)).unwrap();
     let shown = ended(&jobs, &id_of(&fourth), Duration::from_secs(8));
     assert_eq!(shown["how"], "on-console", "{shown}");
 }
@@ -283,7 +283,7 @@ async fn the_leaders_status_is_kept_until_its_group_ends() {
     let job = started(&jobs, &["/bin/sh", "-c", "sleep 2 & exit 3"]).await;
     let id = id_of(&job);
     std::thread::sleep(Duration::from_millis(500));
-    jobs.watch_once(None);
+    jobs.watch_once(None).unwrap();
     let shown = jobs.show(Some(&id))["job"].clone();
     assert_eq!(shown["state"], "running", "its child still runs: {shown}");
     assert!(
@@ -336,7 +336,7 @@ async fn a_job_log_past_its_limit_starts_again() {
     .await;
     let id = id_of(&job);
     assert!(eventually(|| {
-        jobs.watch_once(None);
+        jobs.watch_once(None).unwrap();
         jobs.show(Some(&id))["job"]["logResets"] == 1
     }));
     assert_eq!(jobs.log(&id, 100)["size"], 0);
@@ -376,7 +376,11 @@ async fn a_record_that_cannot_be_read_is_shown_and_never_acted_on() {
     let folder = tempfile::tempdir().unwrap();
     let jobs = jobs_in(folder.path());
     let id = JobId::new();
-    std::fs::write(jobs.folder().join(format!("{id}.json")), b"{\"version\":2}").unwrap();
+    std::fs::write(
+        jobs.folder().unwrap().join(format!("{id}.json")),
+        b"{\"version\":2}",
+    )
+    .unwrap();
     let shown = jobs.show(Some(&id))["job"].clone();
     assert_eq!(shown["state"], "unknown", "{shown}");
     let refused = jobs.stop(
@@ -409,10 +413,10 @@ async fn a_stop_the_client_leaves_is_finished_by_the_daemon() {
     // Only supervision runs from here.
     let until = Instant::now() + Duration::from_secs(8);
     while Instant::now() < until && alive(pid_of(&job)) {
-        jobs.watch_once(None);
+        jobs.watch_once(None).unwrap();
         std::thread::sleep(Duration::from_millis(100));
     }
-    jobs.watch_once(None);
+    jobs.watch_once(None).unwrap();
     let shown = jobs.show(Some(&id))["job"].clone();
     assert_eq!(shown["state"], "ended", "{shown}");
     assert_eq!(shown["signal"], "SIGKILL");

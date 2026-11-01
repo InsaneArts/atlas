@@ -15,11 +15,11 @@ use crate::{
         protocol::{JobFailure, JobId, JobRefusal, JobReply, JobStart, JobState, failure},
         run,
     },
-    error::Code,
+    error::{Code, Error, Result},
     host_session::now_ms,
 };
 use nix::sys::signal::Signal;
-use serde_json::Value;
+use serde_json::{Value, json};
 use std::{
     ffi::OsString,
     fs::OpenOptions,
@@ -102,7 +102,7 @@ impl Jobs {
             log_resets: 0,
         };
 
-        let mut state = self.state();
+        let mut state = self.state().map_err(|error| json!(error))?;
         let records = state.store.records();
         let running: Vec<&Record> = records
             .iter()
@@ -174,19 +174,19 @@ impl Jobs {
         let mut child = match command.spawn() {
             Ok(child) => child,
             Err(error) => {
-                self.forget(&record.id).await;
+                if let Err(error) = self.forget(&record.id).await {
+                    return json!(error);
+                }
                 return failure(Code::SpawnFailed, format!("{program}: {error}"));
             }
         };
 
-        let Some(record) = self.record_launched(&record, &child).await else {
-            let _ = child.start_kill();
-            let _ = tokio::time::timeout(REAP, child.wait()).await;
-            self.forget(&record.id).await;
-            return failure(
-                Code::SpawnFailed,
-                "The job's process could not be observed or recorded",
-            );
+        let record = match self.record_launched(&record, &child).await {
+            Ok(record) => record,
+            Err(error) => {
+                self.retain_unobserved_child(record.id.clone(), child);
+                return unconfirmed(&record, &error.error);
+            }
         };
         let Some(identity) = record.identity() else {
             return failure(Code::SpawnFailed, "The job's process could not be observed");
@@ -200,7 +200,10 @@ impl Jobs {
         let jobs = self.clone();
         tokio::task::spawn_blocking(move || jobs.running_now(record, child, lifetime, &identity))
             .await
-            .unwrap_or_else(|_| failure(Code::Job, "The job's start could not be confirmed"))
+            .unwrap_or_else(|_| {
+                self.fail_supervision();
+                json!(Self::unavailable().uncertain())
+            })
     }
 
     /// The launcher's command: it logs to `log`, gives the program its own
@@ -243,8 +246,8 @@ impl Jobs {
     }
 
     /// `record` as launched by `child`, its process's identity read and
-    /// written, or nothing when it could not be read or recorded.
-    async fn record_launched(self: &Arc<Self>, record: &Record, child: &Child) -> Option<Record> {
+    /// written, or an error when it could not be read or recorded.
+    async fn record_launched(self: &Arc<Self>, record: &Record, child: &Child) -> Result<Record> {
         // Read while it is this daemon's unreaped child, so it is exact. The
         // launcher waits on its standard input until its record says so: a
         // daemon that ends before then leaves nothing running.
@@ -252,22 +255,32 @@ impl Jobs {
         let jobs = self.clone();
         let mut launched_record = record.clone();
         tokio::task::spawn_blocking(move || {
-            let pid = pid?;
-            let started = crate::process::start(pid).ok()?;
+            let state = jobs.state()?;
+            let refused = || {
+                Error::new(
+                    Code::SpawnFailed,
+                    "The job's process could not be observed or recorded",
+                )
+            };
+            let pid = pid.ok_or_else(refused)?;
+            let started =
+                crate::process::start(pid).map_err(|error| refused().with_source(error))?;
             launched_record.pid = Some(pid);
             launched_record.start = Some(started);
             launched_record.pgid = Some(pid);
             launched_record.state = JobState::Launched;
-            launched_record.identity()?;
-            jobs.state()
+            launched_record.identity().ok_or_else(refused)?;
+            state
                 .store
                 .write(&launched_record)
-                .ok()
-                .map(|()| launched_record)
+                .map_err(|error| refused().with_source(error))?;
+            Ok(launched_record)
         })
         .await
-        .ok()
-        .flatten()
+        .map_err(|error| {
+            self.fail_supervision();
+            Self::unavailable().with_source(error)
+        })?
     }
 
     /// End a launch that failed with `said`, and reply. `setsid` says
@@ -279,6 +292,10 @@ impl Jobs {
         said: String,
         setsid: bool,
     ) -> Value {
+        if let Err(error) = self.state() {
+            self.retain_unobserved_child(record.id.clone(), child);
+            return unconfirmed(&record, &error.error);
+        }
         if !setsid {
             // Before its session of its own the launcher is this
             // daemon's child alone, still waiting or exiting: ending it
@@ -286,7 +303,9 @@ impl Jobs {
             let _ = child.start_kill();
             return match tokio::time::timeout(REAP, child.wait()).await {
                 Ok(_) => {
-                    self.forget(&record.id).await;
+                    if let Err(error) = self.forget(&record.id).await {
+                        return unconfirmed(&record, &error.error);
+                    }
                     failure(Code::SpawnFailed, said)
                 }
                 Err(_) => {
@@ -294,7 +313,8 @@ impl Jobs {
                     tokio::task::spawn_blocking(move || jobs.keep_unconfirmed(record, child, &said))
                         .await
                         .unwrap_or_else(|_| {
-                            failure(Code::Job, "The job's start could not be confirmed")
+                            self.fail_supervision();
+                            json!(Self::unavailable().uncertain())
                         })
                 }
             };
@@ -315,6 +335,14 @@ impl Jobs {
         lifetime: u64,
         identity: &JobIdentity,
     ) -> Value {
+        let mut state = match self.state() {
+            Ok(state) => state,
+            Err(error) => {
+                self.retain_unobserved_child(record.id.clone(), child);
+                return unconfirmed(&record, &error.error);
+            }
+        };
+        state.children.insert(record.id.clone(), child);
         let leader = self.kernel.process(identity.pid()).ok().flatten();
         let own = leader.as_ref().is_some_and(|leader| {
             leader.instance.start == identity.start()
@@ -322,16 +350,16 @@ impl Jobs {
                 && leader.owned_by(self.uid)
         });
         if !own {
-            return self.keep_unconfirmed(
-                record,
-                child,
+            record.state = JobState::Running;
+            state.store.put(&record);
+            state.running += 1;
+            return unconfirmed(
+                &record,
                 "The job started, but Atlas could not confirm it runs as the helper in a process group of its own",
             );
         }
-        let mut state = self.state();
         record.state = JobState::Running;
         record.ends_at = now_ms().saturating_add(lifetime);
-        state.children.insert(record.id.clone(), child);
         let written = state.store.put(&record);
         state.running += 1;
         let processes = self.kernel.of_user(self.uid).ok();
@@ -370,18 +398,28 @@ impl Jobs {
         let id = record.id.clone();
         let jobs = self.clone();
         let killing = record.clone();
-        let _ = tokio::task::spawn_blocking(move || {
-            let mut state = jobs.state();
+        let outcome = tokio::task::spawn_blocking(move || {
+            let mut state = match jobs.state() {
+                Ok(state) => state,
+                Err(error) => {
+                    jobs.retain_unobserved_child(killing.id.clone(), child);
+                    return Err(error);
+                }
+            };
             state.children.insert(killing.id.clone(), child);
             let _ = jobs.signal(&state, &killing, None, Signal::SIGKILL);
+            Ok(())
         })
         .await;
+        if let Err(error) = self.worker_outcome(outcome) {
+            return unconfirmed(&record, &error.error);
+        }
         let until = tokio::time::Instant::now() + REAP;
         loop {
             let jobs = self.clone();
             let looked = record.clone();
-            let ended = tokio::task::spawn_blocking(move || {
-                let mut state = jobs.state();
+            let ended = tokio::task::spawn_blocking(move || -> Result<bool> {
+                let mut state = jobs.state()?;
                 let reaped = state
                     .children
                     .get_mut(&looked.id)
@@ -389,12 +427,21 @@ impl Jobs {
                 if reaped {
                     state.children.remove(&looked.id);
                 }
-                reaped && jobs.judge(&state, &looked, None).0 == Verdict::Ended
+                Ok(reaped && jobs.judge(&state, &looked, None).0 == Verdict::Ended)
             })
-            .await
-            .unwrap_or(false);
+            .await;
+            let ended = match ended {
+                Ok(Ok(ended)) => ended,
+                Ok(Err(error)) => return unconfirmed(&record, &error.error),
+                Err(_) => {
+                    self.fail_supervision();
+                    return unconfirmed(&record, &Self::unavailable().error);
+                }
+            };
             if ended {
-                self.forget(&id).await;
+                if let Err(error) = self.forget(&id).await {
+                    return unconfirmed(&record, &error.error);
+                }
                 return failure(Code::SpawnFailed, said);
             }
             if tokio::time::Instant::now() >= until {
@@ -404,7 +451,10 @@ impl Jobs {
         }
         let jobs = self.clone();
         tokio::task::spawn_blocking(move || {
-            let mut state = jobs.state();
+            let mut state = match jobs.state() {
+                Ok(state) => state,
+                Err(error) => return unconfirmed(&record, &error.error),
+            };
             let mut record = record;
             record.state = JobState::Running;
             state.store.put(&record);
@@ -412,14 +462,23 @@ impl Jobs {
             unconfirmed(&record, &said)
         })
         .await
-        .unwrap_or_else(|_| failure(Code::Job, "The job's start could not be confirmed"))
+        .unwrap_or_else(|_| {
+            self.fail_supervision();
+            json!(Self::unavailable().uncertain())
+        })
     }
 
     /// Keep `record`'s job, which may run, supervised but unconfirmed: its
     /// record stays, its leader is held, and the reply says its outcome is
     /// not known.
     fn keep_unconfirmed(&self, mut record: Record, child: Child, said: &str) -> Value {
-        let mut state = self.state();
+        let mut state = match self.state() {
+            Ok(state) => state,
+            Err(error) => {
+                self.retain_unobserved_child(record.id.clone(), child);
+                return unconfirmed(&record, &error.error);
+            }
+        };
         record.state = JobState::Running;
         state.children.insert(record.id.clone(), child);
         state.store.put(&record);
@@ -428,10 +487,15 @@ impl Jobs {
     }
 
     /// Remove `id`'s record and log, on a blocking thread.
-    async fn forget(self: &Arc<Self>, id: &JobId) {
+    async fn forget(self: &Arc<Self>, id: &JobId) -> Result<()> {
         let jobs = self.clone();
         let id = id.clone();
-        let _ = tokio::task::spawn_blocking(move || jobs.state().store.forget(&id)).await;
+        let outcome = tokio::task::spawn_blocking(move || {
+            jobs.state()?.store.forget(&id);
+            Ok(())
+        })
+        .await;
+        self.worker_outcome(outcome)
     }
 }
 

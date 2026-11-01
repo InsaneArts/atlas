@@ -16,6 +16,7 @@ use crate::{
         protocol::{How, JobState, Left},
         run,
     },
+    error::Result,
     host_session::now_ms,
     process::Info,
 };
@@ -46,8 +47,8 @@ impl Jobs {
     /// person stopped agents, or the helper is on screen), carry stops on,
     /// keep logs within their limit, and prune old records now and then.
     /// What a job is, is read from its record each time, never from a count.
-    pub fn watch_once(&self, forced: Option<How>) {
-        let mut state = self.state();
+    pub fn watch_once(&self, forced: Option<How>) -> Result<()> {
+        let mut state = self.state()?;
         let now = now_ms();
         let records = state.store.records();
         let processes = self.kernel.of_user(self.uid).ok();
@@ -72,15 +73,16 @@ impl Jobs {
             state.store.prune(now);
             state.pruned = Some(Instant::now());
         }
+        Ok(())
     }
 
     /// How long until the next look: sooner while a job is stopping.
-    pub fn interval(&self) -> Duration {
-        if self.state().stopping {
+    pub fn interval(&self) -> Result<Duration> {
+        Ok(if self.state()?.stopping {
             WATCH_STOPPING
         } else {
             WATCH
-        }
+        })
     }
 
     /// Count again, from the records, the jobs that may still run and
@@ -373,8 +375,8 @@ impl Jobs {
     /// one that ended or whose leader is gone is ended, and one whose
     /// record cannot be read, or whose processes do not match it or cannot
     /// be read, is shown as it is and never signalled.
-    pub(super) fn adopt(&self) {
-        let mut state = self.state();
+    pub(super) fn adopt(&self) -> Result<()> {
+        let mut state = self.state()?;
         let processes = self.kernel.of_user(self.uid).ok();
         for read in state.store.records() {
             let Found::Record(mut record) = read else {
@@ -413,6 +415,24 @@ impl Jobs {
             }
         }
         self.count(&mut state);
+        Ok(())
+    }
+
+    pub(super) fn worker_outcome(
+        &self,
+        outcome: std::result::Result<Result<()>, tokio::task::JoinError>,
+    ) -> Result<()> {
+        match outcome {
+            Ok(Ok(())) => Ok(()),
+            Ok(Err(error)) => {
+                self.fail_supervision();
+                Err(error)
+            }
+            Err(error) => {
+                self.fail_supervision();
+                Err(Self::unavailable().with_source(error))
+            }
+        }
     }
 }
 
@@ -436,22 +456,37 @@ fn note_seen(record: &mut Record, processes: Option<&[Info]>, jobs: &Jobs) {
     );
 }
 
-/// Watch `jobs` until dropped: about once a second, five times a second
+/// Watch `jobs` until stopping: about once a second, five times a second
 /// while one is stopping. A Stop is seen through the input service's
 /// saved `stop_marker`; the helper on screen through `on_console`.
-pub async fn supervise(jobs: Arc<Jobs>, stop_marker: PathBuf, on_console: fn() -> bool) {
+pub async fn supervise(
+    jobs: Arc<Jobs>,
+    stop_marker: PathBuf,
+    on_console: fn() -> bool,
+    mut stopping: tokio::sync::watch::Receiver<bool>,
+) -> Result<()> {
     loop {
-        tokio::time::sleep(jobs.interval()).await;
+        if *stopping.borrow() {
+            return Ok(());
+        }
+        tokio::select! {
+            _ = tokio::time::sleep(jobs.interval()?) => {}
+            _ = stopping.changed() => return Ok(()),
+        }
+        if *stopping.borrow() {
+            return Ok(());
+        }
         let watched = jobs.clone();
         let marker = stop_marker.clone();
-        let _ = tokio::task::spawn_blocking(move || {
+        let outcome = tokio::task::spawn_blocking(move || {
             let stopped = marker.exists();
             watched.watch_once(if on_console() {
                 Some(How::OnConsole)
             } else {
                 stopped.then_some(How::Person)
-            });
+            })
         })
         .await;
+        jobs.worker_outcome(outcome)?;
     }
 }

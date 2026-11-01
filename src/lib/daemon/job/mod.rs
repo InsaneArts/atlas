@@ -40,7 +40,7 @@ use nix::sys::signal::Signal;
 use observe::{Kernel, Live};
 use record::Stopping;
 use reply::{already_ended, identity, refused_by, unknown};
-use serde_json::Value;
+use serde_json::{Value, json};
 use signal::Signalled;
 use std::{
     collections::{HashMap, HashSet},
@@ -48,7 +48,10 @@ use std::{
     io::{Read, Seek, SeekFrom},
     os::unix::fs::OpenOptionsExt,
     path::{Path, PathBuf},
-    sync::{Arc, Mutex, MutexGuard, PoisonError},
+    sync::{
+        Arc, Mutex, MutexGuard,
+        atomic::{AtomicBool, Ordering},
+    },
     time::{Duration, Instant},
 };
 use store::{Found, Store};
@@ -88,6 +91,8 @@ pub struct Jobs {
     boot: String,
     log_limit: u64,
     kernel: Box<dyn Kernel>,
+    /// Independent of poison; only a fresh supervisor can trust ownership again.
+    unavailable: AtomicBool,
     state: Mutex<State>,
 }
 
@@ -127,6 +132,7 @@ impl Jobs {
             boot,
             log_limit,
             kernel,
+            unavailable: AtomicBool::new(false),
             state: Mutex::new(State {
                 store: Store::open(daemon)?,
                 children: HashMap::new(),
@@ -138,30 +144,33 @@ impl Jobs {
                 stopped_all: None,
             }),
         };
-        jobs.adopt();
+        jobs.adopt()?;
         Ok(jobs)
     }
 
     /// The folder the records are in.
-    pub fn folder(&self) -> PathBuf {
-        self.state().store.directory().to_owned()
+    /// Returns an error when supervision is unavailable, until the daemon restarts.
+    pub fn folder(&self) -> Result<PathBuf> {
+        Ok(self.state()?.store.directory().to_owned())
     }
 
     /// How many jobs may still run, as the records said last.
-    pub fn running(&self) -> usize {
-        self.state().running
+    /// Returns an error rather than a count when supervision is unavailable.
+    pub fn running(&self) -> Result<usize> {
+        Ok(self.state()?.running)
     }
 
     /// What the daemon's hello says of its jobs: how many may run, how many
     /// are launching, and how many records it cannot read, whose jobs may
     /// still run too.
-    pub fn census(&self) -> Census {
-        let state = self.state();
-        Census {
+    /// Returns an error when supervision is unavailable; unknown jobs never become zero.
+    pub fn census(&self) -> Result<Census> {
+        let state = self.state()?;
+        Ok(Census {
             running: state.running,
             launching: state.launching.len(),
             unresolved: state.unresolved,
-        }
+        })
     }
 
     /// Carry out `request`, the reply its connection gets. What reads the
@@ -171,9 +180,11 @@ impl Jobs {
         let blocking = |answer: Box<dyn FnOnce(&Jobs) -> Value + Send>| {
             let jobs = self.clone();
             async move {
-                tokio::task::spawn_blocking(move || answer(&jobs))
+                let worker = jobs.clone();
+                tokio::task::spawn_blocking(move || answer(&worker))
                     .await
                     .unwrap_or_else(|_| {
+                        jobs.fail_supervision();
                         failure(Code::Job, "The helper could not answer about its jobs")
                     })
             }
@@ -213,11 +224,19 @@ impl Jobs {
         let prepared = match tokio::task::spawn_blocking(move || jobs.prepare(&asked)).await {
             Ok(Ok(prepared)) => prepared,
             Ok(Err(refusal)) => return refusal,
-            Err(_) => return failure(Code::SpawnFailed, "The job could not be prepared"),
+            Err(_) => {
+                self.fail_supervision();
+                return failure(Code::SpawnFailed, "The job could not be prepared");
+            }
         };
         let id = prepared.record.id.clone();
         let reply = self.launch(prepared, &start).await;
-        self.state().launching.remove(&id);
+        match self.state() {
+            Ok(mut state) => {
+                state.launching.remove(&id);
+            }
+            Err(error) => return json!(error.uncertain()),
+        }
         reply
     }
 
@@ -225,7 +244,10 @@ impl Jobs {
     /// first, then TERM goes to its group after a fresh look; KILL follows
     /// after `grace` from the supervision, which needs no client.
     pub fn stop(&self, id: &JobId, expect: &Expected, grace: Duration) -> Value {
-        let mut state = self.state();
+        let mut state = match self.state() {
+            Ok(state) => state,
+            Err(error) => return json!(error),
+        };
         let mut record = match state.store.read(id) {
             None => return unknown(id),
             Some(Found::Unreadable(_)) => {
@@ -313,7 +335,10 @@ impl Jobs {
     /// and names those nothing could be sent to and those whose processes
     /// could not be read.
     pub fn stop_all(&self, reason: StopReason) -> Value {
-        let mut state = self.state();
+        let mut state = match self.state() {
+            Ok(state) => state,
+            Err(error) => return json!(error),
+        };
         let processes = self.kernel.of_user(self.uid).ok();
         let now = now_ms();
         state.stopped_all = Some((now, How::from(reason)));
@@ -377,7 +402,10 @@ impl Jobs {
 
     /// One job, or every one, as it stands now.
     pub fn show(&self, id: Option<&JobId>) -> Value {
-        let mut state = self.state();
+        let mut state = match self.state() {
+            Ok(state) => state,
+            Err(error) => return json!(error),
+        };
         let processes = self.kernel.of_user(self.uid).ok();
         let now = now_ms();
         let reads = match id {
@@ -421,7 +449,10 @@ impl Jobs {
     /// The last `bytes` of job `id`'s output, as base64, with the task the
     /// job belongs to.
     pub fn log(&self, id: &JobId, bytes: usize) -> Value {
-        let state = self.state();
+        let state = match self.state() {
+            Ok(state) => state,
+            Err(error) => return json!(error),
+        };
         let (resets, task) = match state.store.read(id) {
             None => return unknown(id),
             Some(Found::Record(record)) => (record.log_resets, record.task.clone()),
@@ -462,8 +493,39 @@ impl Jobs {
         .into_value()
     }
 
-    fn state(&self) -> MutexGuard<'_, State> {
-        self.state.lock().unwrap_or_else(PoisonError::into_inner)
+    fn state(&self) -> Result<MutexGuard<'_, State>> {
+        if self.unavailable.load(Ordering::SeqCst) {
+            return Err(Self::unavailable());
+        }
+        let state = self.state.lock().map_err(|_| {
+            self.fail_supervision();
+            Self::unavailable()
+        })?;
+        if self.unavailable.load(Ordering::SeqCst) {
+            return Err(Self::unavailable());
+        }
+        Ok(state)
+    }
+
+    pub(super) fn unavailable() -> Error {
+        Error::new(
+            Code::Job,
+            "The helper could not answer about its jobs; restart the daemon to recover",
+        )
+    }
+
+    pub(super) fn fail_supervision(&self) {
+        self.unavailable.store(true, Ordering::SeqCst);
+    }
+
+    /// Poison recovery here only retains ownership; it cannot observe or settle jobs.
+    fn retain_unobserved_child(&self, id: JobId, child: Child) {
+        self.fail_supervision();
+        let mut state = match self.state.lock() {
+            Ok(state) => state,
+            Err(poisoned) => poisoned.into_inner(),
+        };
+        state.children.insert(id, child);
     }
 }
 

@@ -350,6 +350,13 @@ struct Table {
     /// while a group is being listed.
     replace_during_group: AtomicBool,
     reads: AtomicUsize,
+    panic_on_read: AtomicBool,
+    watching: Mutex<
+        Option<(
+            tokio::sync::oneshot::Sender<()>,
+            std::sync::mpsc::Receiver<()>,
+        )>,
+    >,
     signals: Mutex<Vec<(i32, Signal)>>,
 }
 
@@ -367,6 +374,15 @@ impl Table {
     }
 
     fn read(&self) -> Result<Vec<Info>> {
+        let watching = self.watching.lock().unwrap().take();
+        if let Some((entered, release)) = watching {
+            entered.send(()).unwrap();
+            release.recv_timeout(Duration::from_secs(10)).unwrap();
+        }
+        assert!(
+            !self.panic_on_read.load(Ordering::SeqCst),
+            "private worker cause"
+        );
         if self.failing.load(Ordering::SeqCst) {
             return Err(Error::new(Code::State, "The process list is unavailable"));
         }
@@ -497,7 +513,7 @@ fn an_identity_refusal_followed_by_a_stop_never_signals() {
     let table = Table::with(vec![moved, process(4313, later(1), 9999, 4312)]);
     let (_folder, jobs) = jobs_with(&record(), &table);
     for _ in 0..3 {
-        jobs.watch_once(Some(How::Person));
+        jobs.watch_once(Some(How::Person)).unwrap();
     }
     assert_eq!(shown(&jobs)["refused"], "identity");
     let refused = jobs.stop(
@@ -507,7 +523,7 @@ fn an_identity_refusal_followed_by_a_stop_never_signals() {
     );
     assert!(refused.get("signalled").is_none(), "{refused}");
     for _ in 0..3 {
-        jobs.watch_once(Some(How::Person));
+        jobs.watch_once(Some(How::Person)).unwrap();
     }
     assert!(table.signals().is_empty(), "{:?}", table.signals());
 }
@@ -522,7 +538,7 @@ fn an_adopted_group_without_its_leader_is_reported_never_signalled() {
     assert_eq!(job["how"], "leader-gone");
     assert_eq!(job["left"][0]["pid"], 4313);
     jobs.stop_all(StopReason::Person);
-    jobs.watch_once(Some(How::OnConsole));
+    jobs.watch_once(Some(How::OnConsole)).unwrap();
     assert!(table.signals().is_empty());
 }
 
@@ -534,7 +550,7 @@ fn a_record_whose_group_is_not_its_leaders_is_refused_on_load() {
     let (_folder, jobs) = jobs_with(&corrupt, &table);
     assert_eq!(shown(&jobs)["state"], "unknown");
     jobs.stop_all(StopReason::Person);
-    jobs.watch_once(Some(How::Person));
+    jobs.watch_once(Some(How::Person)).unwrap();
     assert!(table.signals().is_empty());
 }
 
@@ -545,15 +561,15 @@ fn a_failed_process_query_ends_nothing_and_is_tried_again() {
     due.ends_at = 0;
     let (_folder, jobs) = jobs_with(&due, &table);
     table.failing.store(true, Ordering::SeqCst);
-    jobs.watch_once(None);
-    jobs.watch_once(None);
+    jobs.watch_once(None).unwrap();
+    jobs.watch_once(None).unwrap();
     let job = shown(&jobs);
     assert_eq!(job["state"], "stopping", "{job}");
     assert_eq!(job["refused"], "unobserved");
     assert!(table.signals().is_empty());
 
     table.failing.store(false, Ordering::SeqCst);
-    jobs.watch_once(None);
+    jobs.watch_once(None).unwrap();
     assert_eq!(table.signals(), [(4312, Signal::SIGTERM)]);
 }
 
@@ -582,12 +598,12 @@ fn a_stop_is_sent_even_when_its_record_cannot_be_written() {
     let (folder, jobs) = jobs_with(&record(), &table);
     let records = folder.path().join("jobs");
     std::fs::set_permissions(&records, std::fs::Permissions::from_mode(0o500)).unwrap();
-    jobs.watch_once(Some(How::Person));
+    jobs.watch_once(Some(How::Person)).unwrap();
     let job = shown(&jobs);
     std::fs::set_permissions(&records, std::fs::Permissions::from_mode(0o700)).unwrap();
     assert_eq!(table.signals(), [(4312, Signal::SIGTERM)]);
     assert_eq!(job["state"], "stopping", "kept in memory: {job}");
-    assert_eq!(jobs.running(), 1);
+    assert_eq!(jobs.running().unwrap(), 1);
 }
 
 #[test]
@@ -609,7 +625,7 @@ fn the_log_of_an_ended_job_whose_processes_still_write_is_kept_in_bounds() {
     let (folder, jobs) = jobs_with(&ended, &table);
     let log = folder.path().join(format!("jobs/{ID}.log"));
     std::fs::write(&log, vec![b'x'; 2 << 20]).unwrap();
-    jobs.watch_once(None);
+    jobs.watch_once(None).unwrap();
     assert_eq!(std::fs::metadata(&log).unwrap().len(), 0);
     assert_eq!(shown(&jobs)["logResets"], 1);
 }
@@ -618,10 +634,10 @@ fn the_log_of_an_ended_job_whose_processes_still_write_is_kept_in_bounds() {
 fn every_job_is_counted_from_the_records() {
     let table = Table::with(vec![leader()]);
     let (_folder, jobs) = jobs_with(&record(), &table);
-    assert_eq!(jobs.running(), 1);
+    assert_eq!(jobs.running().unwrap(), 1);
     table.processes.lock().unwrap().clear();
-    jobs.watch_once(None);
-    assert_eq!(jobs.running(), 0);
+    jobs.watch_once(None).unwrap();
+    assert_eq!(jobs.running().unwrap(), 0);
     assert_eq!(shown(&jobs)["how"], "exited");
 }
 
@@ -677,7 +693,7 @@ fn a_leader_replaced_while_its_group_is_listed_is_never_signalled() {
     );
     assert!(reply.get("signalled").is_none(), "{reply}");
     for _ in 0..3 {
-        jobs.watch_once(Some(How::Person));
+        jobs.watch_once(Some(How::Person)).unwrap();
     }
     assert!(table.signals().is_empty(), "{:?}", table.signals());
 }
@@ -688,9 +704,9 @@ fn a_record_that_cannot_be_read_is_counted_unresolved_and_named_by_a_stop_of_eve
     let (folder, jobs) = jobs_with(&record(), &table);
     let other = JobId::parse("0123456789ab").unwrap();
     std::fs::write(folder.path().join(format!("jobs/{other}.json")), b"{").unwrap();
-    jobs.watch_once(None);
+    jobs.watch_once(None).unwrap();
     assert_eq!(
-        json!(jobs.census()),
+        json!(jobs.census().unwrap()),
         json!({"running": 1, "launching": 0, "unresolved": 1})
     );
     let reply = jobs.stop_all(StopReason::Person);
@@ -709,7 +725,7 @@ fn the_replies_keep_their_wire_shape() {
     let (_f, jobs) = jobs_with(&record(), &table);
     out.push(("show-one", jobs.show(Some(&id))));
     out.push(("show-all", jobs.show(None)));
-    out.push(("census", json!(jobs.census())));
+    out.push(("census", json!(jobs.census().unwrap())));
     out.push(("log-missing", jobs.log(&id, 10)));
     out.push((
         "show-unknown",
@@ -768,8 +784,8 @@ fn the_replies_keep_their_wire_shape() {
     due.ends_at = 0;
     let (_f, jobs) = jobs_with(&due, &table);
     table.failing.store(true, Ordering::SeqCst);
-    jobs.watch_once(None);
-    jobs.watch_once(None);
+    jobs.watch_once(None).unwrap();
+    jobs.watch_once(None).unwrap();
     out.push(("show-refused", jobs.show(Some(&id))));
     out.push(("stop-all-unobserved", jobs.stop_all(StopReason::OnConsole)));
     let t2 = Table::with(vec![leader()]);
@@ -909,4 +925,321 @@ fn the_replies_keep_their_wire_shape() {
         assert_eq!(*name, expected_name);
         assert_eq!(serde_json::to_string(value).unwrap(), expected, "{name}");
     }
+}
+
+#[tokio::test]
+async fn a_failed_supervisor_never_reports_a_settled_job() {
+    let table = Table::with(vec![leader()]);
+    let (folder, jobs) = jobs_with(&record(), &table);
+    let jobs = Arc::new(jobs);
+    let path = folder.path().join(format!("jobs/{ID}.json"));
+    let unreadable = folder.path().join("jobs/0123456789ab.json");
+    std::fs::write(&unreadable, b"{").unwrap();
+    jobs.watch_once(None).unwrap();
+    let before = std::fs::read(&path).unwrap();
+    table.panic_on_read.store(true, Ordering::SeqCst);
+    let (_stopping, stopped) = tokio::sync::watch::channel(false);
+    let outcome = tokio::time::timeout(
+        Duration::from_secs(10),
+        supervise(jobs.clone(), folder.path().join("stop"), || false, stopped),
+    )
+    .await
+    .unwrap();
+    let error = outcome.unwrap_err();
+    assert_eq!(error.code, Code::Job);
+    let cause = std::error::Error::source(&error)
+        .unwrap()
+        .downcast_ref::<tokio::task::JoinError>()
+        .unwrap();
+    assert!(cause.is_panic());
+    assert!(!json!(error).to_string().contains("private worker cause"));
+    assert!(jobs.census().is_err());
+    assert!(jobs.running().is_err());
+    assert!(jobs.folder().is_err());
+    assert!(jobs.interval().is_err());
+    assert!(jobs.watch_once(None).is_err());
+    for reply in [
+        jobs.show(None),
+        jobs.log(&record().id, 10),
+        jobs.stop(&record().id, &record().expected().unwrap(), Duration::ZERO),
+        jobs.stop_all(StopReason::Person),
+        jobs.start(JobStart {
+            argv: vec!["/usr/bin/true".into()],
+            lifetime: Duration::from_secs(60),
+            name: None,
+            task: None,
+            session: None,
+        })
+        .await,
+    ] {
+        assert_eq!(reply["ok"], false, "{reply}");
+        assert_eq!(reply["code"], "job", "{reply}");
+        assert!(reply.get("job").is_none(), "{reply}");
+    }
+    assert_eq!(std::fs::read(path).unwrap(), before);
+    assert_eq!(std::fs::read(unreadable).unwrap(), b"{");
+    let state = jobs
+        .state
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    assert_eq!((state.running, state.unresolved), (1, 1));
+    assert!(table.signals().is_empty());
+    assert!(jobs.unavailable.load(Ordering::SeqCst));
+}
+
+#[test]
+fn a_cancelled_queued_watch_makes_supervision_unavailable() {
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .max_blocking_threads(1)
+        .build()
+        .unwrap();
+    let table = Table::with(vec![leader()]);
+    let (_folder, jobs) = jobs_with(&record(), &table);
+    let jobs = Arc::new(jobs);
+    let (entered, started) = tokio::sync::oneshot::channel();
+    let (release, waiting) = std::sync::mpsc::channel();
+    runtime.block_on(async {
+        let blocker = tokio::task::spawn_blocking(move || {
+            entered.send(()).unwrap();
+            waiting.recv_timeout(Duration::from_secs(10)).unwrap();
+        });
+        started.await.unwrap();
+        let watched = jobs.clone();
+        let queued = tokio::task::spawn_blocking(move || watched.watch_once(None));
+        queued.abort();
+        release.send(()).unwrap();
+        blocker.await.unwrap();
+        let outcome = queued.await;
+        let error = jobs.worker_outcome(outcome).unwrap_err();
+        assert!(
+            std::error::Error::source(&error)
+                .unwrap()
+                .downcast_ref::<tokio::task::JoinError>()
+                .unwrap()
+                .is_cancelled()
+        );
+        assert!(jobs.census().is_err());
+        assert_eq!(jobs.state.lock().unwrap().running, 1);
+        assert!(table.signals().is_empty());
+    });
+}
+
+#[test]
+fn poisoned_job_state_is_unavailable_until_reopened() {
+    let table = Table::with(vec![leader()]);
+    let (folder, jobs) = jobs_with(&record(), &table);
+    assert!(
+        std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            let _state = jobs.state.lock().unwrap();
+            panic!("private poison cause");
+        }))
+        .is_err()
+    );
+    assert!(jobs.census().is_err());
+    jobs.state.clear_poison();
+    assert!(
+        jobs.census().is_err(),
+        "clearing poison cannot restore supervision"
+    );
+    assert_eq!(jobs.state.lock().unwrap().running, 1);
+    assert_eq!(jobs.show(None)["code"], "job");
+    let reopened = Jobs::open_in(
+        folder.path(),
+        PathBuf::from("/nonexistent"),
+        UID,
+        LOG_LIMIT,
+        Box::new(Shared(table.clone())),
+        BOOT.into(),
+    )
+    .unwrap();
+    assert_eq!(reopened.running().unwrap(), 1);
+    assert_eq!(shown(&reopened)["state"], "running");
+    assert!(table.signals().is_empty());
+}
+
+#[tokio::test]
+async fn stopping_supervision_joins_the_in_flight_worker() {
+    let table = Table::with(vec![leader()]);
+    let (folder, jobs) = jobs_with(&record(), &table);
+    let jobs = Arc::new(jobs);
+    let (entered, watching) = tokio::sync::oneshot::channel();
+    let (release, waiting) = std::sync::mpsc::channel();
+    *table.watching.lock().unwrap() = Some((entered, waiting));
+    let (stopping, stopped) = tokio::sync::watch::channel(false);
+    let supervisor = tokio::spawn(supervise(
+        jobs.clone(),
+        folder.path().join("stop"),
+        || false,
+        stopped,
+    ));
+    tokio::time::timeout(Duration::from_secs(10), watching)
+        .await
+        .unwrap()
+        .unwrap();
+    stopping.send_replace(true);
+    assert!(
+        !supervisor.is_finished(),
+        "the worker still owns its observation"
+    );
+    release.send(()).unwrap();
+    tokio::time::timeout(Duration::from_secs(10), supervisor)
+        .await
+        .unwrap()
+        .unwrap()
+        .unwrap();
+    assert_eq!(jobs.running().unwrap(), 1);
+    assert!(table.signals().is_empty());
+}
+
+#[tokio::test]
+async fn failed_observation_preserves_records_and_child_identity() {
+    use std::os::unix::fs::PermissionsExt;
+    for failure in ["unavailable", "poisoned", "unwritable"] {
+        let table = Table::with(vec![leader()]);
+        let (folder, mut jobs) = jobs_with(&record(), &table);
+        let launcher = folder.path().join("launcher");
+        // The input pipe holds this disposable launcher; its timeout bounds a broken test.
+        std::fs::write(&launcher, "#!/bin/sh\nread -r -t 20 go\n").unwrap();
+        std::fs::set_permissions(&launcher, std::fs::Permissions::from_mode(0o700)).unwrap();
+        jobs.launcher = launcher;
+        let jobs = Arc::new(jobs);
+        let start = JobStart {
+            argv: vec!["/usr/bin/true".into()],
+            lifetime: Duration::from_secs(60),
+            name: None,
+            task: None,
+            session: None,
+        };
+        let prepared = jobs.prepare(&start).unwrap();
+        let id = prepared.record.id.clone();
+        let path = folder.path().join(format!("jobs/{id}.json"));
+        let before = std::fs::read(&path).unwrap();
+        let records = folder.path().join("jobs");
+        match failure {
+            "poisoned" => assert!(
+                std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                    let _state = jobs.state.lock().unwrap();
+                    panic!("private poison cause");
+                }))
+                .is_err()
+            ),
+            "unwritable" => {
+                std::fs::set_permissions(&records, std::fs::Permissions::from_mode(0o500)).unwrap()
+            }
+            _ => jobs.fail_supervision(),
+        }
+        let reply = jobs.launch(prepared, &start).await;
+        std::fs::set_permissions(&records, std::fs::Permissions::from_mode(0o700)).unwrap();
+        assert_eq!(reply["uncertain"], true, "{reply}");
+        assert_eq!(reply["job"]["id"], id.as_str());
+        assert_eq!(std::fs::read(path).unwrap(), before);
+        assert!(jobs.census().is_err());
+        assert!(table.signals().is_empty());
+        let mut child = {
+            let mut state = jobs
+                .state
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner());
+            assert!(state.launching.contains(&id));
+            state.children.remove(&id).unwrap()
+        };
+        let pid = child.id().unwrap();
+        let identity = crate::process::start(i32::try_from(pid).unwrap()).unwrap();
+        assert!(
+            child.try_wait().unwrap().is_none(),
+            "the child was retained alive"
+        );
+        assert_eq!(
+            crate::process::start(i32::try_from(pid).unwrap()).unwrap(),
+            identity
+        );
+        child.kill().await.unwrap();
+    }
+}
+
+#[tokio::test]
+async fn a_panicked_launch_confirmation_retains_the_launched_child() {
+    use std::os::unix::fs::PermissionsExt;
+    let table = Table::with(vec![leader()]);
+    let (folder, mut jobs) = jobs_with(&record(), &table);
+    let launcher = folder.path().join("launcher");
+    // This protocol stand-in has a bounded lifetime; it never receives a group signal.
+    std::fs::write(
+        &launcher,
+        "#!/bin/sh\nread -r -t 20 go\nprintf 'setsid\\n'\nexec 1>&-\nexec /bin/sleep 20\n",
+    )
+    .unwrap();
+    std::fs::set_permissions(&launcher, std::fs::Permissions::from_mode(0o700)).unwrap();
+    jobs.launcher = launcher;
+    let jobs = Arc::new(jobs);
+    let start = JobStart {
+        argv: vec!["/usr/bin/true".into()],
+        lifetime: Duration::from_secs(60),
+        name: None,
+        task: None,
+        session: None,
+    };
+    let prepared = jobs.prepare(&start).unwrap();
+    let id = prepared.record.id.clone();
+    table.panic_on_read.store(true, Ordering::SeqCst);
+    let reply = jobs.launch(prepared, &start).await;
+    assert_eq!(reply["uncertain"], true, "{reply}");
+    assert!(jobs.census().is_err());
+    let mut child = {
+        let mut state = jobs
+            .state
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        let Found::Record(record) = state.store.read(&id).unwrap() else {
+            panic!("record was lost")
+        };
+        assert_eq!(record.state, JobState::Launched);
+        let child = state.children.remove(&id).unwrap();
+        assert_eq!(
+            record.pid,
+            child.id().map(|pid| i32::try_from(pid).unwrap())
+        );
+        assert_eq!(
+            record.start,
+            Some(crate::process::start(record.pid.unwrap()).unwrap())
+        );
+        child
+    };
+    assert!(child.try_wait().unwrap().is_none());
+    assert!(table.signals().is_empty());
+    child.kill().await.unwrap();
+}
+
+#[test]
+fn reopened_jobs_are_adopted_by_fresh_identity() {
+    let table = Table::with(vec![leader()]);
+    let (folder, jobs) = jobs_with(&record(), &table);
+    let unreadable = folder.path().join("jobs/0123456789ab.json");
+    std::fs::write(&unreadable, b"{").unwrap();
+    jobs.fail_supervision();
+    drop(jobs);
+    let reopen = || {
+        Jobs::open_in(
+            folder.path(),
+            PathBuf::from("/nonexistent"),
+            UID,
+            LOG_LIMIT,
+            Box::new(Shared(table.clone())),
+            BOOT.into(),
+        )
+        .unwrap()
+    };
+    let adopted = reopen();
+    assert_eq!(shown(&adopted)["state"], "running");
+    assert_eq!(shown(&adopted)["adopted"], true);
+    assert_eq!(adopted.census().unwrap().unresolved, 1);
+    drop(adopted);
+    *table.processes.lock().unwrap() = vec![process(4312, later(1), 4312, 1)];
+    let refused = reopen();
+    let reply = refused.stop(&record().id, &record().expected().unwrap(), Duration::ZERO);
+    assert!(reply.get("signalled").is_none(), "{reply}");
+    assert_eq!(shown(&refused)["state"], "ended");
+    assert_eq!(std::fs::read(unreadable).unwrap(), b"{");
+    assert!(table.signals().is_empty());
 }

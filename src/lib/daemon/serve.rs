@@ -88,7 +88,10 @@ impl Daemon {
 
     /// The daemon's hello: its facts, and the background jobs it keeps.
     fn hello(&self) -> Value {
-        facts::hello(&self.manager, self.jobs.as_deref().map(Jobs::census))
+        match self.jobs.as_deref().map(Jobs::census).transpose() {
+            Ok(census) => facts::hello(&self.manager, census),
+            Err(error) => json!(error),
+        }
     }
 
     /// Completes once the daemon has begun to stop.
@@ -186,6 +189,10 @@ pub async fn serve(uid: u32, controller_uid: u32, socket: PathBuf) -> Result<()>
     )
     .await?;
 
+    // Both listeners exist before work starts, so setup failure leaves no worker behind.
+    let mut interrupt = signal(SignalKind::interrupt())?;
+    let mut terminate = signal(SignalKind::terminate())?;
+
     // A Screen Recording grant reaches this process only through a restart.
     let restarter = daemon.clone();
     let consent = tokio::spawn(facts::request_consent_on_arrival(
@@ -203,11 +210,12 @@ pub async fn serve(uid: u32, controller_uid: u32, socket: PathBuf) -> Result<()>
     // comes from the same layout.
     let marker = std::env::var_os("HOME")
         .map(|home| crate::setup::helper::Layout::new(uid, PathBuf::from(home)).stop_marker());
-    let supervision = match (&daemon.jobs, marker) {
+    let mut supervision = match (&daemon.jobs, marker) {
         (Some(jobs), Some(marker)) => Some(tokio::spawn(job::supervise(
             jobs.clone(),
             marker,
             daemon.on_console,
+            daemon.stopping.subscribe(),
         ))),
         _ => None,
     };
@@ -215,13 +223,20 @@ pub async fn serve(uid: u32, controller_uid: u32, socket: PathBuf) -> Result<()>
     let slots = Arc::new(Semaphore::new(CONNECTIONS));
     let mut tasks = JoinSet::new();
 
-    // Both listeners exist before the loop, so a signal that arrives between
-    // two passes is still delivered.
-    let mut interrupt = signal(SignalKind::interrupt())?;
-    let mut terminate = signal(SignalKind::terminate())?;
-
     let outcome = loop {
         tokio::select! {
+            result = async {
+                match supervision.as_mut() {
+                    Some(supervision) => supervision.await,
+                    None => std::future::pending().await,
+                }
+            } => {
+                supervision = None;
+                if let Some(jobs) = &daemon.jobs {
+                    jobs.fail_supervision();
+                }
+                break supervisor_outcome(result, false);
+            }
             // Stopped from outside (macOS's Quit & Reopen after a new
             // permission, say): exit unsuccessfully so launchd starts it
             // again. Uninstalling unloads the job first, so it stays down.
@@ -282,9 +297,27 @@ pub async fn serve(uid: u32, controller_uid: u32, socket: PathBuf) -> Result<()>
     consent.abort();
     recording.abort();
     if let Some(supervision) = supervision {
-        supervision.abort();
+        let supervised = supervisor_outcome(supervision.await, true);
+        if supervised.is_err() {
+            if let Some(jobs) = &daemon.jobs {
+                jobs.fail_supervision();
+            }
+            return supervised;
+        }
     }
     outcome
+}
+
+fn supervisor_outcome(
+    outcome: std::result::Result<Result<()>, tokio::task::JoinError>,
+    stopping: bool,
+) -> Result<()> {
+    match outcome {
+        Ok(Ok(())) if stopping => Ok(()),
+        Ok(Ok(())) => Err(Jobs::unavailable()),
+        Ok(Err(error)) => Err(error),
+        Err(error) => Err(Jobs::unavailable().with_source(error)),
+    }
 }
 
 /// Serve on a Tokio runtime in a worker thread while this (main) thread runs
@@ -1781,6 +1814,66 @@ mod tests {
             .unwrap(),
         ));
         (folder, Arc::new(daemon))
+    }
+
+    #[tokio::test]
+    async fn daemon_shutdown_observes_the_supervisor_outcome() {
+        for stopping in [false, true] {
+            let complete = tokio::spawn(async { Ok(()) });
+            assert_eq!(
+                supervisor_outcome(complete.await, stopping).is_ok(),
+                stopping
+            );
+
+            let failed = tokio::spawn(async {
+                Err(Jobs::unavailable().with_source(std::io::Error::from_raw_os_error(libc::EIO)))
+            });
+            let error = supervisor_outcome(failed.await, stopping).unwrap_err();
+            assert_eq!(error.code, Code::Job);
+            assert_eq!(
+                std::error::Error::source(&error)
+                    .unwrap()
+                    .downcast_ref::<std::io::Error>()
+                    .unwrap()
+                    .raw_os_error(),
+                Some(libc::EIO)
+            );
+
+            let panicked = tokio::spawn(async { panic!("private supervisor cause") });
+            let error = supervisor_outcome(panicked.await, stopping).unwrap_err();
+            assert_eq!(error.code, Code::Job);
+            assert!(
+                std::error::Error::source(&error)
+                    .unwrap()
+                    .downcast_ref::<tokio::task::JoinError>()
+                    .unwrap()
+                    .is_panic()
+            );
+            assert!(
+                !json!(error)
+                    .to_string()
+                    .contains("private supervisor cause")
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn unavailable_jobs_refuse_hello_instead_of_reporting_zero() {
+        let (_folder, daemon) = with_jobs(false);
+        daemon.jobs.as_ref().unwrap().fail_supervision();
+        let hello = daemon.hello();
+        assert_eq!(hello["ok"], false);
+        assert_eq!(hello["code"], "job");
+        assert!(hello.get("daemon").is_none());
+        let reply = daemon
+            .jobs
+            .as_ref()
+            .unwrap()
+            .serve(JobRequest::Show { id: None })
+            .await;
+        assert_eq!(reply["ok"], false);
+        assert_eq!(reply["code"], "job");
+        assert!(reply.get("jobs").is_none());
     }
 
     #[tokio::test]

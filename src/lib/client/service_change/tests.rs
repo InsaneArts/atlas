@@ -73,7 +73,17 @@ fn service_changes_respect_host_exits_without_treating_unknown_hosts_as_idle() {
             .unwrap();
 
         assert_eq!(
-            service_blocker(&client, false, u128::from(now) * 1_000_000).as_deref(),
+            crate::overview::service_blocker_with(
+                &client,
+                false,
+                u128::from(now) * 1_000_000,
+                |_, instances| {
+                    crate::host_session::liveness::Snapshot::sample(instances, |instance| {
+                        instance.state()
+                    })
+                },
+            )
+            .as_deref(),
             blocks.then_some("worker is active in the helper."),
             "host state: {state:?}"
         );
