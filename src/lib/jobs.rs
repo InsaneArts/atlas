@@ -246,8 +246,8 @@ async fn expected_for(client: &Client, id: &JobId, task: Option<&Key>) -> Result
                 Code::Job,
                 "That task's record does not list this job; atlas job list --all shows whose it is",
             )
-            .with("reason", JobRefusal::Unknown)
-            .with("id", id)),
+            .with("reason", json!(JobRefusal::Unknown))
+            .with("id", json!(id))),
         };
     }
     let mine = client.task.as_ref().map(|task| task.key().clone());
@@ -266,8 +266,8 @@ async fn expected_for(client: &Client, id: &JobId, task: Option<&Key>) -> Result
         theirs => {
             let expected = shown.job().and_then(JobView::expected).ok_or_else(|| {
                 Error::new(Code::Job, "The job has not finished starting")
-                    .with("reason", JobRefusal::Unknown)
-                    .with("id", id)
+                    .with("reason", json!(JobRefusal::Unknown))
+                    .with("id", json!(id))
             })?;
             // No task's record lists it: the helper's record is all it is
             // checked against, whichever task that record names.
@@ -319,9 +319,9 @@ fn other_task(id: &JobId, theirs: &Key, command: &str) -> Error {
              session was lost: atlas job {command} {id} --task {theirs}"
         ),
     )
-    .with("reason", JobRefusal::OtherTask)
-    .with("id", id)
-    .with("task", theirs)
+    .with("reason", json!(JobRefusal::OtherTask))
+    .with("id", json!(id))
+    .with("task", json!(theirs))
 }
 
 /// Why the helper refused a job request, when the refusal says.
@@ -843,7 +843,7 @@ fn refused(reply: &Value) -> Error {
     let mut error = crate::transport::refusal(reply);
     for field in ["reason", "id", "task", "state"] {
         if let Some(value) = reply.get(field).filter(|value| !value.is_null()) {
-            error = error.with(field, value);
+            error = error.with(field, value.clone());
         }
     }
     error

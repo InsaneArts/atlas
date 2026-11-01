@@ -183,7 +183,7 @@ pub(super) fn unconfirmed(mut error: Error, names: &[String]) -> Error {
         "{asked} ({}). Their copies were kept; run atlas close --app NAME again.",
         error.error
     );
-    error.with("signalled", named)
+    error.with("signalled", json!(named))
 }
 
 /// Quit apps in the helper: one by name (every process of it), or with

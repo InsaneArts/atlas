@@ -89,6 +89,39 @@ fn malformed_job_lists_are_not_reported_as_no_running_jobs() {
     );
 }
 
+#[test]
+fn each_refusal_boundary_keeps_only_its_named_fields() {
+    for uncertain in [false, true] {
+        let reply = json!({
+            "ok": false, "code": "job", "error": "No", "uncertain": uncertain,
+            "reason": "other-task", "id": ID, "task": "task", "state": "running",
+            "holder": "person", "unread": "slow", "found": {"pid": 812},
+            "performed": 2, "partial": true, "secret": "unrelated-refusal-secret-4b72"
+        });
+        let error = refused(&reply);
+        assert_eq!(
+            serde_json::to_value(error).unwrap(),
+            json!({"ok": false, "code": "job", "error": "No", "uncertain": uncertain,
+                "reason": "other-task", "id": ID, "task": "task", "state": "running"})
+        );
+
+        for absent in [None, Some(Value::Null)] {
+            let mut reply = reply.clone();
+            for field in ["reason", "id", "task", "state"] {
+                if let Some(value) = &absent {
+                    reply[field] = value.clone();
+                } else {
+                    reply.as_object_mut().unwrap().remove(field);
+                }
+            }
+            assert_eq!(
+                serde_json::to_value(refused(&reply)).unwrap(),
+                json!({"ok": false, "code": "job", "error": "No", "uncertain": uncertain})
+            );
+        }
+    }
+}
+
 const ID: &str = "7c2e91a04b3f";
 
 fn id() -> JobId {

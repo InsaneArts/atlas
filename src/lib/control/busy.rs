@@ -17,7 +17,7 @@ pub(crate) fn seconds(waited: Duration) -> u64 {
 pub(super) fn busy_person(waited: Option<Duration>) -> Error {
     let error = Error::new(Code::Busy, crate::error::PERSON_HAS_CONTROL).held_by(Holder::Person);
     match waited {
-        Some(waited) => error.with("waited", seconds(waited)),
+        Some(waited) => error.with("waited", serde_json::json!(seconds(waited))),
         None => error,
     }
 }
@@ -39,8 +39,8 @@ pub(super) fn busy_agent(waited: Option<Duration>, wait: Duration) -> Error {
     let error = Error::new(Code::Busy, message).held_by(Holder::Agent);
     match waited {
         Some(waited) => error
-            .with("waited", seconds(waited))
-            .with("next", crate::ui::hints::WAITED),
+            .with("waited", serde_json::json!(seconds(waited)))
+            .with("next", serde_json::json!(crate::ui::hints::WAITED)),
         None => error,
     }
 }
@@ -51,8 +51,8 @@ pub(super) fn busy_agent(waited: Option<Duration>, wait: Duration) -> Error {
 pub(super) fn busy_running(message: impl Into<String>) -> Error {
     Error::new(Code::Busy, message)
         .held_by(Holder::Agent)
-        .with("running", "command")
-        .with("next", crate::ui::hints::COMMAND_RUNNING)
+        .with("running", serde_json::json!("command"))
+        .with("next", serde_json::json!(crate::ui::hints::COMMAND_RUNNING))
 }
 
 /// Busy because a command an agent started with `run` still runs, for

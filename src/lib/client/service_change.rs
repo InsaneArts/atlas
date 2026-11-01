@@ -16,7 +16,7 @@ const NEXT: &str = "Wait for the work to finish, or add --allow-disrupt to permi
 fn busy(message: impl Into<String>) -> Error {
     Error::new(Code::Busy, message)
         .held_by(Holder::Agent)
-        .with("next", NEXT)
+        .with("next", serde_json::json!(NEXT))
 }
 
 impl Client {

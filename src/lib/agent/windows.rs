@@ -144,7 +144,7 @@ pub async fn wait(
             };
 
             return Ok(json!(
-                Error::new(Code::WaitFailed, error).with("timedOut", true)
+                Error::new(Code::WaitFailed, error).with("timedOut", json!(true))
             ));
         }
 

@@ -120,7 +120,7 @@ impl Scanned {
         } else {
             "Try again. If it stays incomplete, click the point from a screenshot instead."
         };
-        error.with("next", next)
+        error.with("next", json!(next))
     }
 
     /// Whether the app handed back itself in place of its windows.
@@ -431,7 +431,7 @@ pub(super) fn choose<'a>(elements: &'a [Element], filter: &ElementFilter) -> Res
         return Err(if candidates.is_empty() {
             error
         } else {
-            error.with("candidates", candidates)
+            error.with("candidates", json!(candidates))
         });
     };
 
@@ -455,7 +455,7 @@ pub(super) fn choose<'a>(elements: &'a [Element], filter: &ElementFilter) -> Res
             Code::Input,
             "The selected control is disabled; no click was sent",
         )
-        .with("next", crate::ui::hints::DISABLED_CONTROL));
+        .with("next", json!(crate::ui::hints::DISABLED_CONTROL)));
     }
 
     Ok(element)

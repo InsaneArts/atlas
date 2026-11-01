@@ -28,7 +28,7 @@ impl Down {
                 Code::FocusChanged,
                 "A deferred Dock press cannot continue in the app; no input was sent",
             )
-            .with("reason", "point"));
+            .with("reason", serde_json::json!("point")));
         }
         match phase {
             PointerPhase::Down => Err(Error::new(Code::Input, "A mouse button is already held")),
@@ -163,7 +163,7 @@ fn resolve<T>(
             Code::FocusChanged,
             "The Dock is at that point, not the app; no click was sent",
         )
-        .with("reason", "point"));
+        .with("reason", serde_json::json!("point")));
     }
     if button != Button::Left || !modifiers.is_empty() {
         return Err(Error::new(

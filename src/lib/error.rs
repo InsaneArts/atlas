@@ -6,9 +6,9 @@ use std::{error::Error as StdError, fmt};
 
 pub type Result<T> = std::result::Result<T, Error>;
 
-#[derive(Debug, Serialize)]
+#[derive(Serialize)]
 pub struct Error {
-    pub ok: bool,
+    ok: bool,
     pub code: Code,
     pub error: String,
     pub uncertain: bool,
@@ -90,17 +90,31 @@ impl Error {
     }
 
     /// Add `value` under `key` for programs to act on. The keys every
-    /// failure has are never replaced: such a key is ignored (and refused
-    /// in a debug build).
+    /// failure has are never replaced: such a key is ignored.
+    ///
+    /// Details must already be JSON values; arbitrary serializers cannot
+    /// silently turn a failed serialization into null.
+    ///
+    /// ```compile_fail,E0308
+    /// use atlas::error::{Code, Error};
+    /// use serde::{Serialize, Serializer};
+    ///
+    /// struct Failing;
+    /// impl Serialize for Failing {
+    ///     fn serialize<S: Serializer>(&self, _: S) -> Result<S::Ok, S::Error> {
+    ///         Err(serde::ser::Error::custom("cannot serialize"))
+    ///     }
+    /// }
+    ///
+    /// let _ = Error::new(Code::Io, "Read failed").with("detail", Failing);
+    /// ```
     #[must_use]
-    pub fn with(mut self, key: &str, value: impl Serialize) -> Self {
+    pub fn with(mut self, key: &str, value: serde_json::Value) -> Self {
         const OWN: [&str; 5] = ["ok", "code", "error", "uncertain", "holder"];
-        debug_assert!(!OWN.contains(&key), "{key} is part of every failure");
         if OWN.contains(&key) {
             return self;
         }
 
-        let value = serde_json::to_value(value).unwrap_or(serde_json::Value::Null);
         self.details.insert(key.to_owned(), value);
         self
     }
@@ -118,10 +132,11 @@ impl Error {
                      check the file's permissions and flags.",
                     path.display()
                 ),
-            );
+            )
+            .with_source(error);
         }
 
-        Self::new(Code::Io, format!("{}: {error}", path.display()))
+        Self::new(Code::Io, format!("{}: {error}", path.display())).with_source(error)
     }
 }
 
@@ -372,6 +387,19 @@ impl PartialEq<str> for Code {
     }
 }
 
+impl fmt::Debug for Error {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("Error")
+            .field("ok", &self.ok)
+            .field("code", &self.code)
+            .field("error", &self.error)
+            .field("uncertain", &self.uncertain)
+            .field("holder", &self.holder)
+            .field("details", &self.details)
+            .finish()
+    }
+}
+
 impl fmt::Display for Error {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.write_str(&self.error)
@@ -386,19 +414,124 @@ impl StdError for Error {
 
 impl From<std::io::Error> for Error {
     fn from(value: std::io::Error) -> Self {
-        Self::new(Code::Io, value.to_string())
+        Self::new(Code::Io, value.to_string()).with_source(value)
     }
 }
 
 impl From<serde_json::Error> for Error {
     fn from(value: serde_json::Error) -> Self {
-        Self::new(Code::InvalidJson, value.to_string())
+        Self::new(Code::InvalidJson, value.to_string()).with_source(value)
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn io_causes_keep_their_kind_and_errno() {
+        for original in [
+            std::io::Error::from_raw_os_error(libc::ENOENT),
+            std::io::Error::new(std::io::ErrorKind::TimedOut, "Read timed out"),
+        ] {
+            let message = original.to_string();
+            let kind = original.kind();
+            let errno = original.raw_os_error();
+            let error = Error::from(original);
+            assert_eq!(
+                serde_json::to_value(&error).unwrap(),
+                json!({"ok": false, "code": "io", "error": message, "uncertain": false})
+            );
+            assert_eq!(error.to_string(), message);
+            let source = error
+                .source()
+                .unwrap()
+                .downcast_ref::<std::io::Error>()
+                .unwrap();
+            assert_eq!(source.kind(), kind);
+            assert_eq!(source.raw_os_error(), errno);
+        }
+    }
+
+    #[test]
+    fn json_causes_keep_their_location() {
+        let original =
+            serde_json::from_str::<serde_json::Value>("{\n  \"missing\":\n}").unwrap_err();
+        let message = original.to_string();
+        let location = (original.line(), original.column(), original.classify());
+        let error = Error::from(original);
+        assert_eq!(
+            serde_json::to_value(&error).unwrap(),
+            json!({"ok": false, "code": "invalid-json", "error": message, "uncertain": false})
+        );
+        assert_eq!(error.to_string(), message);
+        let source = error
+            .source()
+            .unwrap()
+            .downcast_ref::<serde_json::Error>()
+            .unwrap();
+        assert_eq!(
+            (source.line(), source.column(), source.classify()),
+            location
+        );
+    }
+
+    #[test]
+    fn private_causes_do_not_appear_in_public_diagnostics() {
+        #[derive(Debug)]
+        struct PrivateCause(&'static str);
+
+        impl fmt::Display for PrivateCause {
+            fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+                f.write_str(self.0)
+            }
+        }
+
+        impl StdError for PrivateCause {}
+
+        let canary = "private-source-canary-7c81e9";
+        let source = std::io::Error::other(PrivateCause(canary));
+        let error = Error::new(Code::Io, "Read failed")
+            .with_source(source)
+            .uncertain()
+            .held_by(Holder::Agent)
+            .with("pending", json!(true));
+        assert!(error.source().unwrap().to_string().contains(canary));
+        for diagnostic in [
+            error.to_string(),
+            format!("{error:?}"),
+            format!("{error:#?}"),
+            serde_json::to_string(&error).unwrap(),
+            serde_json::to_string_pretty(&error).unwrap(),
+        ] {
+            assert!(!diagnostic.contains(canary), "{diagnostic}");
+            assert!(!diagnostic.contains("PrivateCause"), "{diagnostic}");
+            assert!(diagnostic.contains("Read failed"), "{diagnostic}");
+        }
+        assert_eq!(
+            serde_json::to_value(&error).unwrap(),
+            json!({"ok": false, "code": "io", "error": "Read failed", "uncertain": true,
+                "holder": "agent", "pending": true})
+        );
+    }
+
+    #[test]
+    fn reserved_detail_keys_never_replace_failure_fields() {
+        let mut error = Error::new(Code::Busy, "Wait")
+            .uncertain()
+            .held_by(Holder::Person)
+            .with("detail", serde_json::Value::Null);
+        let expected = serde_json::to_value(&error).unwrap();
+        for key in ["ok", "code", "error", "uncertain", "holder"] {
+            error = error.with(key, json!("replacement"));
+            assert_eq!(serde_json::to_value(&error).unwrap(), expected);
+            assert!(!error.details.contains_key(key));
+        }
+        assert_eq!(error.details.get("detail"), Some(&serde_json::Value::Null));
+        let plain = Error::new(Code::Busy, "Wait").with("holder", json!("agent"));
+        assert!(serde_json::to_value(plain).unwrap().get("holder").is_none());
+    }
 
     #[test]
     fn a_failure_names_its_holder_and_details_only_when_set() {
@@ -410,7 +543,7 @@ mod tests {
 
         let held = Error::new(Code::Busy, "Wait")
             .held_by(Holder::Person)
-            .with("next", "Wait for them");
+            .with("next", serde_json::json!("Wait for them"));
         assert_eq!(
             serde_json::to_value(&held).unwrap(),
             serde_json::json!({"ok": false, "code": "busy", "error": "Wait", "uncertain": false,

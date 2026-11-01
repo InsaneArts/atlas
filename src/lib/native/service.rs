@@ -1156,7 +1156,7 @@ mod tests {
             }
             if prepare && self.sheet {
                 return Err(Error::new(Code::FocusChanged, "A sheet blocks the window")
-                    .with("reason", "sheet"));
+                    .with("reason", json!("sheet")));
             }
             self.asked.push(expect.clone());
             let index = self.logged("check");
@@ -1164,7 +1164,7 @@ mod tests {
             if self.script.get(index) == Some(&Step::Refuse) {
                 return Err(
                     Error::new(Code::FocusChanged, "Calculator has keyboard focus")
-                        .with("reason", "app")
+                        .with("reason", json!("app"))
                         .with("found", json!({"app": "Calculator", "pid": 812})),
                 );
             }

@@ -101,7 +101,7 @@ impl Unread {
                 "The app withheld its windows, as apps do while the Mac's screen is locked"
             }
         };
-        Error::new(Code::Native, said).with("unread", self)
+        Error::new(Code::Native, said).with("unread", serde_json::json!(self))
     }
 }
 

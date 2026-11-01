@@ -41,7 +41,7 @@ pub async fn install(client: &Client, path: &Path) -> Result<Value> {
                  atlas cleanup --apply before installing it again."
             ),
         )
-        .with("installId", earlier));
+        .with("installId", serde_json::json!(earlier)));
     }
 
     // Copying, installing and removing the copy happen under one ownership,

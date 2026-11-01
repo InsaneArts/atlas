@@ -464,7 +464,7 @@ fn handed_in(
                 " Atlas could not remove what it began copying at {}; it stays claimed for this task.",
                 leftover.join(", ")
             ));
-            Err(error.with("leftover", leftover))
+            Err(error.with("leftover", serde_json::json!(leftover)))
         }
     }
 }

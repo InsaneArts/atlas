@@ -128,10 +128,10 @@ impl Viewer {
 
         Err(match cleanup {
             Ok(()) => error,
-            Err(cleanup) => Error {
-                error: format!("{} {}", error.error, cleanup.error),
-                ..cleanup
-            },
+            Err(mut cleanup) => {
+                cleanup.error = format!("{} {}", error.error, cleanup.error);
+                cleanup
+            }
         })
     }
 

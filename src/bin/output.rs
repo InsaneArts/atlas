@@ -122,8 +122,8 @@ mod tests {
 
         let waited = Error::new(Code::Busy, "Kept")
             .held_by(Holder::Agent)
-            .with("waited", 30)
-            .with("next", hints::WAITED);
+            .with("waited", json!(30))
+            .with("next", json!(hints::WAITED));
         assert_eq!(
             failure(&waited, true)["next"],
             hints::WAITED,
@@ -131,15 +131,15 @@ mod tests {
         );
 
         let yours = Error::new(Code::Uncertain, "Unknown")
-            .with("yours", true)
-            .with("next", hints::UNKNOWN_OWN);
+            .with("yours", json!(true))
+            .with("next", json!(hints::UNKNOWN_OWN));
         assert_eq!(
             failure(&yours, true)["next"],
             hints::UNKNOWN_OWN,
             "an unknown action of this session's own keeps its step"
         );
 
-        let said = Error::new(Code::Elements, "Incomplete").with("next", "Try again.");
+        let said = Error::new(Code::Elements, "Incomplete").with("next", json!("Try again."));
         assert_eq!(
             failure(&said, true)["next"],
             "Try again.",
@@ -283,7 +283,7 @@ mod tests {
         }
 
         let error = Error::new(Code::FocusChanged, "Calculator has keyboard focus")
-            .with("reason", "unreadable");
+            .with("reason", json!("unreadable"));
         assert_eq!(
             failure(&error, true)["next"],
             hints::focus_changed(false, hints::InTheWay::Unknown(hints::Unsure::Front))

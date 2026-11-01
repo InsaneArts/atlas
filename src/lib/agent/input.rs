@@ -268,7 +268,7 @@ impl Unconfirmed {
         }
         for kept in ["reason", "unread", "found"] {
             if !reply[kept].is_null() {
-                error = error.with(kept, &reply[kept]);
+                error = error.with(kept, reply[kept].clone());
             }
         }
 

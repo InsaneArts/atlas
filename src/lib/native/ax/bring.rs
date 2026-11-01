@@ -227,7 +227,7 @@ fn refused(reason: &str, message: &str) -> Error {
         Code::FocusChanged,
         format!("{message}, so this action and the rest were not sent"),
     )
-    .with("reason", reason)
+    .with("reason", serde_json::json!(reason))
 }
 
 struct WindowRef<E> {

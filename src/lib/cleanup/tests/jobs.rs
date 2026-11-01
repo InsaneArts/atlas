@@ -94,7 +94,7 @@ async fn a_job_step_says_what_left_and_why_it_could_not_stop() {
         foreign.to_string(),
         Err(
             Error::new(Code::Job, "Part of the job runs as another account")
-                .with("reason", "other-account"),
+                .with("reason", serde_json::json!("other-account")),
         ),
     );
 

@@ -826,6 +826,22 @@ mod tests {
     }
 
     #[test]
+    fn each_refusal_boundary_keeps_only_its_named_fields() {
+        for uncertain in [false, true] {
+            let error = super::refusal(&json!({
+                "ok": false, "code": "bad-request", "error": "No", "uncertain": uncertain,
+                "holder": "person", "reason": "app", "unread": "slow", "found": {"pid": 812},
+                "performed": 2, "partial": true, "id": "job", "task": "task", "state": "running",
+                "secret": "unrelated-refusal-secret-4b72"
+            }));
+            assert_eq!(
+                serde_json::to_value(error).unwrap(),
+                json!({"ok": false, "code": "bad-request", "error": "No", "uncertain": uncertain})
+            );
+        }
+    }
+
+    #[test]
     fn a_command_the_helper_stopped_part_way_stays_uncertain_with_its_code() {
         for code in ["on-console", "restart", "transport"] {
             let reply = json!({

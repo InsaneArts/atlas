@@ -189,7 +189,7 @@ fn not_opened(reply: &Value, copied: &[crate::handoff::Copied]) -> Error {
             "macOS did not finish opening that in time; it may still be launching: \
              run atlas wait --app NAME, or look with atlas apps",
         )
-        .with("timedOut", true)
+        .with("timedOut", json!(true))
     } else {
         let output = run_output(reply, 4096).unwrap_or_default();
         let said = String::from_utf8_lossy(&output).trim().to_owned();
@@ -203,9 +203,14 @@ fn not_opened(reply: &Value, copied: &[crate::handoff::Copied]) -> Error {
         )
     };
 
-    error = error.with("opened", false);
+    error = error.with("opened", json!(false));
     if !copied.is_empty() {
-        error = error.with("copied", copied);
+        // Non-Unicode paths leave the whole copied detail null, as before.
+        let copied: Option<Vec<Value>> = copied
+            .iter()
+            .map(|copy| Some(json!({"from": copy.from.to_str()?, "to": copy.to.to_str()?})))
+            .collect();
+        error = error.with("copied", copied.map_or(Value::Null, Value::Array));
     }
 
     error
@@ -275,3 +280,48 @@ while read -r label; do
   /bin/launchctl remove "$label" 2>/dev/null && echo "$label"
 done
 exit 0"#;
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::{files::Token, handoff::Copied};
+    use std::{ffi::OsString, os::unix::ffi::OsStringExt, path::PathBuf};
+
+    #[test]
+    fn a_failed_launch_keeps_copied_paths_or_explicit_null_for_non_unicode_paths() {
+        let reply = json!({"timedOut": true});
+        for invalid in [None, Some("from"), Some("to")] {
+            let mut copied = vec![Copied {
+                from: PathBuf::from("/original/note.txt"),
+                to: PathBuf::from("/copies/note.txt"),
+                token: Token::new(),
+            }];
+            let expected = match invalid {
+                None => json!([{"from": "/original/note.txt", "to": "/copies/note.txt"}]),
+                Some(field) => {
+                    let path = PathBuf::from(OsString::from_vec(b"/note-\xff.txt".to_vec()));
+                    if field == "from" {
+                        copied[0].from = path;
+                    } else {
+                        copied[0].to = path;
+                    }
+                    Value::Null
+                }
+            };
+            let error = not_opened(&reply, &copied);
+            assert_eq!(
+                serde_json::to_value(error).unwrap(),
+                json!({"ok": false, "code": "wait-failed", "uncertain": false,
+                    "error": "macOS did not finish opening that in time; it may still be launching: \
+                              run atlas wait --app NAME, or look with atlas apps",
+                    "timedOut": true, "opened": false, "copied": expected})
+            );
+        }
+        assert!(
+            serde_json::to_value(not_opened(&reply, &[]))
+                .unwrap()
+                .get("copied")
+                .is_none()
+        );
+    }
+}

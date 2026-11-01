@@ -1275,14 +1275,26 @@ async fn a_busy_input_service_says_who_holds_control() {
         (json!("someone"), None),
         (Value::Null, None),
     ] {
-        let (_dir, client, listener, session) = native_client();
-        let mut caller = Box::pin(client.acquire_input("owner", &session.epoch));
-        let mut acquire = dispatched(&mut caller, &listener, "acquire").await;
-        let reply = json!({"ok": false, "code": "busy", "error": "refused", "holder": holder});
-        answer(&mut acquire, reply).await;
-        let error = caller.await.unwrap_err();
-        assert_eq!(error.code, "busy");
-        assert_eq!(error.holder, expected, "{holder}");
+        for uncertain in [false, true] {
+            let (_dir, client, listener, session) = native_client();
+            let mut caller = Box::pin(client.acquire_input("owner", &session.epoch));
+            let mut acquire = dispatched(&mut caller, &listener, "acquire").await;
+            let reply = json!({"ok": false, "code": "busy", "error": "refused", "holder": holder,
+                "uncertain": uncertain, "reason": "app", "unread": "slow", "found": {"pid": 812},
+                "performed": 2, "partial": true, "id": "job", "task": "task", "state": "running",
+                "secret": "unrelated-refusal-secret-4b72"});
+            answer(&mut acquire, reply).await;
+            let error = caller.await.unwrap_err();
+            assert_eq!(error.code, "busy");
+            assert_eq!(error.holder, expected, "{holder}");
+            let mut kept =
+                json!({"ok": false, "code": "busy", "error": "refused", "uncertain": uncertain});
+            if let Some(expected) = expected {
+                kept["holder"] = json!(expected);
+            }
+            assert_eq!(serde_json::to_value(error).unwrap(), kept);
+            assert_eq!(client.controller.pending().unwrap().is_empty(), !uncertain);
+        }
     }
 }
 

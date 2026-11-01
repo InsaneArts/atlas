@@ -203,7 +203,7 @@ impl Interrupt {
                 signal,
                 " while waiting for another Atlas command to finish; nothing was done.",
             )
-            .with("waited", crate::control::seconds(waited))),
+            .with("waited", serde_json::json!(crate::control::seconds(waited)))),
         }
     }
 
@@ -428,7 +428,8 @@ fn cut_error(signal: Signal) -> Error {
 /// left.
 fn interrupted(signal: Signal, how: &str) -> Error {
     let name = signal.as_str();
-    Error::new(Code::Interrupted, format!("Stopped by {name}{how}")).with("signal", name)
+    Error::new(Code::Interrupted, format!("Stopped by {name}{how}"))
+        .with("signal", serde_json::json!(name))
 }
 
 #[cfg(test)]

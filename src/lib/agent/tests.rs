@@ -958,7 +958,9 @@ fn a_stopped_type_counts_the_parts_the_helper_performed() {
     let parts = type_parts(&"z".repeat(64));
     let refused = json!({"ok": false, "code": "focus-changed", "reason": "app",
         "found": {"app": "Calculator", "pid": 900}, "error": "Calculator has keyboard focus",
-        "performed": 2, "partial": false, "uncertain": false, "cleanupError": "kept out"});
+        "holder": "person", "unread": "slow",
+        "performed": 2, "partial": false, "uncertain": false, "cleanupError": "kept out",
+        "secret": "unrelated-refusal-secret-4b72", "id": "job", "task": "task", "state": "running"});
     let reply = |value: &Value| Unconfirmed::from_reply(value);
 
     let report = stopped_typing(64, 3, 1, &parts, reply(&refused));
@@ -971,6 +973,13 @@ fn a_stopped_type_counts_the_parts_the_helper_performed() {
     assert_eq!(report["error"], "Calculator has keyboard focus");
     assert_eq!(report["reason"], "app");
     assert_eq!(report["found"], refused["found"]);
+    assert_eq!(
+        report,
+        json!({"ok": false, "code": "focus-changed", "reason": "app",
+            "found": {"app": "Calculator", "pid": 900}, "error": "Calculator has keyboard focus",
+            "holder": "person", "unread": "slow", "uncertain": false,
+            "typed": 96, "batches": 3, "confirmedBatches": 1, "partial": true})
+    );
     assert!(
         report.get("cleanupError").is_none(),
         "only what agents act on"

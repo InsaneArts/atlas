@@ -129,7 +129,9 @@ pub async fn collect(client: &Client, files: &[String], max_size: u64) -> Result
     let person = crate::config::home().ok();
     for source in files {
         if let Some(refused) = given(source, person.as_deref()) {
-            return Err(Error::new(Code::Collect, refused.error).with("reason", refused.reason));
+            return Err(
+                Error::new(Code::Collect, refused.error).with("reason", json!(refused.reason))
+            );
         }
     }
 

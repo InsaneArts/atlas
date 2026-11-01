@@ -131,7 +131,7 @@ fn a_disabled_control_keeps_its_next_step_in_human_output() {
         Code::Input,
         "The selected control is disabled; no click was sent",
     )
-    .with("next", hints::DISABLED_CONTROL);
+    .with("next", json!(hints::DISABLED_CONTROL));
     let expected = format!("✗ {}\n  → {}", refused.error, hints::DISABLED_CONTROL);
 
     assert_eq!(error(&refused), expected);
@@ -1034,7 +1034,8 @@ fn a_focus_refusal_card_advises_by_what_was_in_the_way_and_what_was_sent() {
     assert!(left.err.contains("send only the rest"), "{}", left.err);
 
     let sheet = error(
-        &Error::new(Code::FocusChanged, "A sheet is open over window 4120").with("reason", "sheet"),
+        &Error::new(Code::FocusChanged, "A sheet is open over window 4120")
+            .with("reason", json!("sheet")),
     );
     assert!(sheet.contains("deal with the sheet"), "{sheet}");
     assert!(!sheet.contains("Bring the app to the front"), "{sheet}");

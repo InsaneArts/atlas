@@ -370,7 +370,7 @@ fn require(
             .is_some_and(|why| why == "unreadable")
     });
     if (outcome.is_ok() || unread) && Instant::now() >= deadline {
-        return Err(unreadable().with("unread", Unread::Slow));
+        return Err(unreadable().with("unread", json!(Unread::Slow)));
     }
 
     outcome
@@ -749,9 +749,9 @@ fn unread_by(error: Error) -> Error {
 
 /// A `focus-changed` refusal for `reason`, naming what was `found`.
 fn refused(reason: Reason, message: String, found: Option<Found>) -> Error {
-    let error = Error::new(Code::FocusChanged, message).with("reason", reason);
+    let error = Error::new(Code::FocusChanged, message).with("reason", json!(reason));
     match found {
-        Some(found) => error.with("found", found),
+        Some(found) => error.with("found", json!(found)),
         None => error,
     }
 }
