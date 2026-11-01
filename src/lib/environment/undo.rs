@@ -245,8 +245,9 @@ struct RollbackReply {
 
 impl RollbackReply {
     fn read(reply: &Value) -> Self {
-        let phase = Lenient::<Phase>::deserialize(&reply["phase"])
-            .ok()
+        let phase = reply["phase"]
+            .as_str()
+            .and_then(|_| Lenient::<Phase>::deserialize(&reply["phase"]).ok())
             .as_ref()
             .and_then(PlanPhase::started);
         Self {
@@ -304,6 +305,10 @@ mod tests {
             (json!(7), None),
             (json!([]), None),
             (json!({}), None),
+            (json!({"applying": null}), None),
+            (json!({"applied": null}), None),
+            (json!({"rollingBack": null}), None),
+            (json!({"rolledBack": null}), None),
         ] {
             assert_eq!(
                 RollbackReply::read(&json!({"phase": phase})).phase,

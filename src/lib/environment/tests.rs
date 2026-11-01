@@ -1639,6 +1639,10 @@ async fn an_unknown_preview_phase_never_starts_rollback() {
         json!({"phase": true}),
         json!({"phase": []}),
         json!({"phase": {}}),
+        json!({"phase": {"applying": null}}),
+        json!({"phase": {"applied": null}}),
+        json!({"phase": {"rollingBack": null}}),
+        json!({"phase": {"rolledBack": null}}),
     ] {
         let sandbox = Sandbox::new();
         let (client, helper) = Helper::client(&sandbox.root, UID);
@@ -1752,6 +1756,10 @@ async fn a_real_rollback_requires_explicit_settlement() {
         json!({"phase": "rolledBack", "resumeRequired": true}),
         json!({"phase": "rollingBack", "resumeRequired": false}),
         json!({"phase": "future", "resumeRequired": false}),
+        json!({"phase": {"applying": null}, "resumeRequired": false}),
+        json!({"phase": {"applied": null}, "resumeRequired": false}),
+        json!({"phase": {"rollingBack": null}, "resumeRequired": false}),
+        json!({"phase": {"rolledBack": null}, "resumeRequired": false}),
         json!({"resumeRequired": false}),
     ] {
         let sandbox = Sandbox::new();
