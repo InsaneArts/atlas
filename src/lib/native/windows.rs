@@ -132,13 +132,20 @@ pub(crate) fn same_routing(before: &[Window], after: &[Window]) -> bool {
     fn routes(windows: &[Window]) -> impl Iterator<Item = (i64, i64, i64, &Bounds)> {
         windows
             .iter()
-            .filter(|window| window.alpha > 0.0)
+            .filter(|window| window.alpha > 0.0 && !window.is_capture_indicator())
             .map(|window| (window.number, window.pid, window.layer, &window.bounds))
     }
     routes(before).eq(routes(after))
 }
 
 impl Window {
+    /// Whether this is the indicator the Window Server raises above the menu
+    /// bar when a capture starts: it comes and goes by itself and moves no
+    /// click to another window.
+    fn is_capture_indicator(&self) -> bool {
+        self.layer > MENU_BAR_LAYER && self.owner.as_deref() == Some("Window Server")
+    }
+
     /// Whether this is the menu bar, the Window Server's window that shows
     /// the frontmost app's titles.
     pub fn is_menu_bar(&self) -> bool {
@@ -513,6 +520,18 @@ mod tests {
             after.swap(0, 1);
             assert_eq!(same_routing(&before, &after), alpha == 0.0);
         }
+    }
+
+    #[test]
+    fn the_capture_indicator_a_screenshot_raises_leaves_routing_the_same() {
+        let before = vec![placed(42, 0, None, 1.0)];
+        let mut after = before.clone();
+        let mut indicator = placed(99, 2147483630, Some("StatusIndicator"), 1.0);
+        indicator.owner = Some("Window Server".into());
+        after.insert(0, indicator);
+
+        assert!(same_routing(&before, &after));
+        assert!(same_routing(&after, &before));
     }
 
     /// A window of process 8 at `layer` with `title`, at one place.
