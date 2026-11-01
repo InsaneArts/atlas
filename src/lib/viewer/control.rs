@@ -49,8 +49,24 @@ impl Viewer {
             }
         }
 
-        completion?;
-        recorded
+        let outcome = match (completion, recorded) {
+            (Err(mut error), Err(recording)) => {
+                error.error.push_str(&format!(
+                    "; recording released input also failed: {recording}"
+                ));
+                Err(error)
+            }
+            (Err(error), _) | (_, Err(error)) => Err(error),
+            _ => Ok(()),
+        };
+        if let Err(error) = &outcome {
+            // Timer and shutdown callers have no reply channel. Never print lease tokens or input.
+            eprintln!(
+                "End viewer input control failed ({}, uncertain={}); check pending recovery",
+                error.code, error.uncertain
+            );
+        }
+        outcome
     }
 
     /// End whichever control is held in a task of its own, which finishes

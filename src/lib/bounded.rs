@@ -95,7 +95,9 @@ fn read(stream: Option<impl Read + Send + 'static>) -> io::Result<mpsc::Receiver
         .name("atlas-output".to_owned())
         .spawn(move || {
             let mut bytes = Vec::new();
+            // A read failure closes the channel and keeps the caller's bounded failure policy.
             if stream.read_to_end(&mut bytes).is_ok() {
+                // The caller may have timed out; a lost notification changes no cleanup outcome.
                 let _ = sender.send(bytes);
             }
         })?;
@@ -106,11 +108,31 @@ fn read(stream: Option<impl Read + Send + 'static>) -> io::Result<mpsc::Receiver
 /// be killed is reaped only if it already ended, so this never waits on it.
 fn stop(child: &mut Child) {
     let group = i32::try_from(child.id()).ok().map(Pid::from_raw);
-    let grouped = group.is_some_and(|group| killpg(group, Signal::SIGKILL).is_ok());
+    let grouped = group.is_some_and(|group| match killpg(group, Signal::SIGKILL) {
+        Ok(()) => true,
+        Err(nix::errno::Errno::ESRCH) => false,
+        Err(error) => {
+            eprintln!("Stop bounded command group {group}: {error}");
+            false
+        }
+    });
     if grouped || child.kill().is_ok() {
-        let _ = child.wait();
+        if let Err(error) = child.wait() {
+            eprintln!(
+                "Reap bounded command {} after stopping it: {error}",
+                child.id()
+            );
+        }
     } else {
-        let _ = child.try_wait();
+        // Never block on a child we could not stop. Failure is tolerated, not an exit acknowledgement.
+        match child.try_wait() {
+            Ok(Some(_)) => {}
+            Ok(None) => eprintln!("Stop bounded command {} was not confirmed", child.id()),
+            Err(error) => eprintln!(
+                "Inspect bounded command {} after failed stop: {error}",
+                child.id()
+            ),
+        }
     }
 }
 

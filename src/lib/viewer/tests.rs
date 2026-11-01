@@ -848,6 +848,54 @@ async fn giving_control_back_waits_for_the_final_input_recording() {
 }
 
 #[tokio::test]
+async fn a_failed_release_keeps_the_recording_failure_and_pending_recovery() {
+    let directory = tempfile::tempdir().unwrap();
+    let viewer = http::configured(client(directory.path()), "127.0.0.1:1".into(), None);
+    let client = viewer.client();
+    viewer
+        .lease
+        .lock()
+        .await
+        .acquire(&client.controller)
+        .unwrap();
+    client.record_for_test(
+        &json!({"op": "input", "actions": [{"type": "text", "text": "private-input-canary"}]}),
+        &json!({"ok": true}),
+    );
+    let output = client.output_dir().unwrap();
+    let obstruction = output.join(crate::activity_log::LOCK);
+    std::fs::create_dir(&obstruction).unwrap();
+
+    let error = tokio::time::timeout(Duration::from_secs(5), viewer.release(None))
+        .await
+        .unwrap()
+        .unwrap_err();
+    assert_eq!(error.code, Code::Uncertain);
+    assert!(error.uncertain);
+    assert!(
+        error.error.contains("native cleanup was not confirmed"),
+        "{error}"
+    );
+    assert!(
+        error.error.contains("recording released input also failed"),
+        "{error}"
+    );
+    assert!(
+        error.error.contains(&output.display().to_string()),
+        "{error}"
+    );
+    let public = serde_json::to_string(&error).unwrap();
+    assert!(!public.contains("private-input-canary"));
+    assert_eq!(client.controller.unresolved().unwrap().len(), 1);
+    assert!(!viewer.lease.lock().await.active());
+
+    std::fs::remove_dir(obstruction).unwrap();
+    client.flush_person_input().await.unwrap();
+    assert_eq!(crate::activity_log::recent(output, 1).len(), 1);
+    assert_eq!(client.controller.unresolved().unwrap().len(), 1);
+}
+
+#[tokio::test]
 async fn shutdown_flushes_buffered_input_even_without_a_control_token() {
     let dir = tempfile::tempdir().unwrap();
     let viewer = http::configured(client(dir.path()), "127.0.0.1:1".into(), None);

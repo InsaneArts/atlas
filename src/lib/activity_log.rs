@@ -379,7 +379,12 @@ fn id(value: &Value) -> String {
 /// the log over once it has grown past [`ROTATE_AT`]. It waits its turn
 /// behind other writers, so it runs off any async runtime.
 pub(crate) fn append(directory: &Path, row: &Row) -> Result<()> {
-    append_using(directory, row, |file, bytes| file.write_all(bytes))
+    append_using(directory, row, |file, bytes| file.write_all(bytes)).map_err(
+        crate::context::context(format_args!(
+            "Append activity log in {}",
+            directory.display()
+        )),
+    )
 }
 
 fn append_using(
@@ -418,7 +423,10 @@ fn append_using(
     let bytes = format!("{line}\n");
     let length = file.metadata()?.len();
     if let Err(error) = write(&mut file, bytes.as_bytes()) {
-        file.set_len(length)?;
+        file.set_len(length)
+            .map_err(crate::context::context(format_args!(
+                "Restore activity log length after append failed ({error})"
+            )))?;
         return Err(error.into());
     }
     Ok(())

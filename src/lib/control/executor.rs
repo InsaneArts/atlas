@@ -4,6 +4,7 @@
 //! process that reused its PID.
 use super::Pending;
 use crate::{
+    context::context,
     error::{Code, Error, Result},
     files::token,
     process::Start,
@@ -36,8 +37,12 @@ impl ExecutorClaims {
                     .lock
                     .try_clone()
                     .map(|file| (claim.live.clone(), file))
+                    .map_err(context(format_args!(
+                        "Clone executor claim {}",
+                        claim.live.display()
+                    )))
             })
-            .collect::<std::io::Result<Vec<_>>>()?;
+            .collect::<Result<Vec<_>>>()?;
         Ok(Self(EXECUTOR_CLAIMS.with(|bound| bound.replace(files))))
     }
 }
@@ -72,10 +77,14 @@ pub(super) fn record_executor_with(
         for (live, file) in claims.iter() {
             publish_executor_with(live, &record, |file, record| file.write_all(record))?;
             let mut file = file;
-            file.set_len(0)?;
-            file.seek(SeekFrom::Start(0))?;
-            file.write_all(&record)?;
-            file.sync_all()?;
+            file.set_len(0)
+                .and_then(|()| file.seek(SeekFrom::Start(0)))
+                .and_then(|_| file.write_all(&record))
+                .and_then(|()| file.sync_all())
+                .map_err(context(format_args!(
+                    "Persist executor claim {}",
+                    live.display()
+                )))?;
         }
         Ok(())
     })
@@ -104,7 +113,11 @@ pub(super) fn publish_executor_with(
         .write(true)
         .mode(0o600)
         .custom_flags(libc::O_NOFOLLOW)
-        .open(&temporary)?;
+        .open(&temporary)
+        .map_err(context(format_args!(
+            "Create executor record for {}",
+            live.display()
+        )))?;
     let result = (|| {
         write(&mut file, record)?;
         file.sync_all()?;
@@ -112,8 +125,11 @@ pub(super) fn publish_executor_with(
         File::open(directory)?.sync_all()?;
         Ok(())
     })();
+    // The old record and its live flock survive a failed replacement; retry can publish again.
     let _ = fs::remove_file(temporary);
-    result
+    result.map_err(|error: Error| {
+        context(format_args!("Publish executor record {}", path.display()))(error)
+    })
 }
 
 pub(super) fn claim_executor_running(file: &File, live: &Path) -> bool {

@@ -1,6 +1,7 @@
 //! Atlas's settings: which account is the helper and where its sockets, the
 //! shared command and the screenshots live, read from a small TOML file
 //! whose relative paths resolve against the file itself.
+use crate::context::context;
 use crate::error::{Code, Error, Result};
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
 use std::{
@@ -135,9 +136,11 @@ impl Config {
         }
 
         let mut bytes = Vec::new();
-        fs::File::open(path)?
+        fs::File::open(path)
+            .map_err(context(format_args!("Open settings {}", path.display())))?
             .take(LIMIT + 1)
-            .read_to_end(&mut bytes)?;
+            .read_to_end(&mut bytes)
+            .map_err(context(format_args!("Read settings {}", path.display())))?;
 
         if bytes.len() as u64 > LIMIT {
             return Err(Error::new(Code::Config, "Configuration exceeds 16 KiB"));
@@ -260,12 +263,26 @@ pub(crate) fn write_beside(
             .write(true)
             .mode(mode)
             .custom_flags(libc::O_NOFOLLOW)
-            .open(&temporary)?;
-        write(&mut file)?;
-        file.sync_all()?;
+            .open(&temporary)
+            .map_err(context(format_args!(
+                "Create replacement for {}",
+                path.display()
+            )))?;
+        write(&mut file).map_err(context(format_args!(
+            "Write replacement for {}",
+            path.display()
+        )))?;
+        file.sync_all().map_err(context(format_args!(
+            "Sync replacement for {}",
+            path.display()
+        )))?;
 
-        place(&temporary)
+        place(&temporary).map_err(context(format_args!(
+            "Place replacement at {}",
+            path.display()
+        )))
     })();
+    // A failed write keeps its primary error; a successful rename already removed this name.
     let _ = fs::remove_file(&temporary);
 
     result
@@ -296,7 +313,11 @@ pub(crate) fn save_private(path: &Path, bytes: &[u8]) -> Result<()> {
         fs::DirBuilder::new()
             .recursive(true)
             .mode(0o700)
-            .create(parent)?;
+            .create(parent)
+            .map_err(context(format_args!(
+                "Create private directory {}",
+                parent.display()
+            )))?;
     }
 
     write_atomic(path, bytes, 0o600)
@@ -318,7 +339,8 @@ pub fn resolve_parent(path: &Path) -> Result<PathBuf> {
 /// aliases of an absent socket share a lock.
 pub fn resolve_path(path: &Path) -> Result<PathBuf> {
     if path.exists() {
-        return Ok(fs::canonicalize(path)?);
+        return fs::canonicalize(path)
+            .map_err(context(format_args!("Resolve path {}", path.display())));
     }
 
     resolve_parent(path)
@@ -327,6 +349,38 @@ pub fn resolve_path(path: &Path) -> Result<PathBuf> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn replacement_failures_name_the_step_and_destination() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("record");
+        fs::write(&path, b"previous").unwrap();
+        for (step, writing) in [("Write", true), ("Place", false)] {
+            let error = write_beside(
+                &path,
+                0o600,
+                |file| {
+                    if writing {
+                        Err(std::io::Error::from_raw_os_error(libc::EACCES).into())
+                    } else {
+                        Ok(file.write_all(b"replacement")?)
+                    }
+                },
+                |_| {
+                    assert!(!writing, "a failed write must never be placed");
+                    Err(std::io::Error::from_raw_os_error(libc::EACCES).into())
+                },
+            )
+            .unwrap_err();
+            assert_eq!(error.code, Code::Io);
+            assert!(!error.uncertain);
+            assert!(error.error.starts_with(step), "{error}");
+            assert!(error.error.contains(&path.display().to_string()), "{error}");
+            assert!(error.error.contains("os error 13"), "{error}");
+            assert_eq!(fs::read(&path).unwrap(), b"previous");
+            assert_eq!(fs::read_dir(directory.path()).unwrap().count(), 1);
+        }
+    }
 
     /// A probe that is a link keeps its own path, so install replaces the
     /// link and never the executable it points to.

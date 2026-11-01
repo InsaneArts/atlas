@@ -444,7 +444,7 @@ pub async fn supervise(jobs: Arc<Jobs>, stop_marker: PathBuf, on_console: fn() -
         tokio::time::sleep(jobs.interval()).await;
         let watched = jobs.clone();
         let marker = stop_marker.clone();
-        let _ = tokio::task::spawn_blocking(move || {
+        if tokio::task::spawn_blocking(move || {
             let stopped = marker.exists();
             watched.watch_once(if on_console() {
                 Some(How::OnConsole)
@@ -452,6 +452,13 @@ pub async fn supervise(jobs: Arc<Jobs>, stop_marker: PathBuf, on_console: fn() -
                 stopped.then_some(How::Person)
             });
         })
-        .await;
+        .await
+        .is_err()
+        {
+            // Keep supervising; neither a panic nor a cancelled worker proves a job ended.
+            eprintln!(
+                "Job supervision worker failed; job outcomes remain unverified and supervision will retry"
+            );
+        }
     }
 }

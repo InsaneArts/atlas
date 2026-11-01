@@ -1,6 +1,9 @@
 //! The Unix socket a helper-side service listens on, and reading one bounded
 //! request line from it. Shared by the helper daemon and the input service.
-use crate::error::{Code, Error, Result};
+use crate::{
+    context::context,
+    error::{Code, Error, Result},
+};
 use fs2::FileExt;
 use std::{
     fs::{self, File, OpenOptions},
@@ -58,7 +61,11 @@ fn grant_search(directory: &Path, controller: u32) -> Result<()> {
     let granted = std::process::Command::new("/bin/chmod")
         .args(["+a", &format!("user:{name} allow search")])
         .arg(directory)
-        .status()?;
+        .status()
+        .map_err(context(format_args!(
+            "Grant search access to {}",
+            directory.display()
+        )))?;
     if !granted.success() {
         return Err(Error::new(
             Code::Identity,
@@ -77,12 +84,24 @@ fn prepare(parent: &Path, uid: u32, role: &str, policy: Directory) -> Result<()>
     };
 
     match fs::create_dir(parent) {
-        Ok(()) => fs::set_permissions(parent, fs::Permissions::from_mode(mode))?,
+        Ok(()) => {
+            fs::set_permissions(parent, fs::Permissions::from_mode(mode)).map_err(context(
+                format_args!("Set socket directory permissions {}", parent.display()),
+            ))?
+        }
         Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {}
-        Err(error) => return Err(error.into()),
+        Err(error) => {
+            return Err(context(format_args!(
+                "Create socket directory {}",
+                parent.display()
+            ))(error));
+        }
     }
 
-    let metadata = fs::symlink_metadata(parent)?;
+    let metadata = fs::symlink_metadata(parent).map_err(context(format_args!(
+        "Inspect socket directory {}",
+        parent.display()
+    )))?;
     if !metadata.is_dir() || metadata.uid() != uid {
         return Err(refuse(role, "be a directory"));
     }
@@ -90,7 +109,12 @@ fn prepare(parent: &Path, uid: u32, role: &str, policy: Directory) -> Result<()>
     match policy {
         // An ACL may grant writes the mode bits do not show.
         Directory::Shared(_) => {
-            if metadata.mode() & 0o022 != 0 || crate::acl::allows_write(parent)? {
+            if metadata.mode() & 0o022 != 0
+                || crate::acl::allows_write(parent).map_err(context(format_args!(
+                    "Read socket directory ACL {}",
+                    parent.display()
+                )))?
+            {
                 return Err(refuse(role, "deny writes by others"));
             }
         }
@@ -131,7 +155,11 @@ pub(crate) async fn bind(
         .write(true)
         .mode(0o600)
         .custom_flags(libc::O_NOFOLLOW)
-        .open(parent.join("service.lock"))?;
+        .open(parent.join("service.lock"))
+        .map_err(context(format_args!(
+            "Open service lock in {}",
+            parent.display()
+        )))?;
 
     FileExt::try_lock_exclusive(&lock).map_err(|_| {
         Error::new(
@@ -155,7 +183,10 @@ pub(crate) async fn bind(
                     std::io::ErrorKind::ConnectionRefused | std::io::ErrorKind::NotFound
                 ) =>
             {
-                fs::remove_file(socket)?
+                fs::remove_file(socket).map_err(context(format_args!(
+                    "Remove stale socket {}",
+                    socket.display()
+                )))?
             }
             _ => {
                 return Err(Error::new(
@@ -168,12 +199,22 @@ pub(crate) async fn bind(
         }
     }
 
-    let listener = UnixListener::bind(socket)?;
-    fs::set_permissions(socket, fs::Permissions::from_mode(0o666))?;
+    let listener = UnixListener::bind(socket).map_err(context(format_args!(
+        "Bind {role} socket {}",
+        socket.display()
+    )))?;
+    fs::set_permissions(socket, fs::Permissions::from_mode(0o666)).map_err(context(
+        format_args!("Set socket permissions {}", socket.display()),
+    ))?;
 
     let endpoint = Endpoint {
         socket: socket.to_owned(),
-        inode: fs::symlink_metadata(socket)?.ino(),
+        inode: fs::symlink_metadata(socket)
+            .map_err(context(format_args!(
+                "Inspect bound socket {}",
+                socket.display()
+            )))?
+            .ino(),
         _lock: lock,
     };
 
@@ -208,7 +249,10 @@ pub(crate) async fn read_line<R: AsyncRead + Unpin>(
         let mut buffer = [0; 4096];
 
         loop {
-            let n = stream.read(&mut buffer).await?;
+            let n = stream
+                .read(&mut buffer)
+                .await
+                .map_err(context("Read service request"))?;
             if n == 0 {
                 return Err(Error::new(Code::Protocol, "Incomplete request"));
             }

@@ -12,6 +12,7 @@ pub mod cleanup;
 pub mod client;
 pub mod collect;
 pub mod config;
+mod context;
 pub mod control;
 pub mod daemon;
 pub mod digest;

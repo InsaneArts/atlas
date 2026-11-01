@@ -198,7 +198,13 @@ impl Client {
                 .max(Duration::from_millis(run) + RUN_MARGIN);
         }
 
-        transport.connect().await
+        transport
+            .connect()
+            .await
+            .map_err(crate::context::context(format_args!(
+                "Connect mutation service {}",
+                transport.path.display()
+            )))
     }
 
     /// The claim `op` is carried out under, marked as a running command for
@@ -278,6 +284,7 @@ impl Client {
         started: Instant,
     ) -> Result<Value> {
         let interrupt = self.controller.interrupt();
+        // The durable pending claim, not the activity row, owns this running command.
         let _ = self.record_start(request).await;
         let ended = tokio::select! {
             biased;
@@ -300,6 +307,7 @@ impl Client {
             self.controller.abandon_command(claim);
         }
         let failed = json!({"ok": false, "code": recorded_code(&error)});
+        // Preserve the primary failure and pending claim even if its explanatory row is lost.
         let _ = self.record(request, &failed, started.elapsed()).await;
         Err(error)
     }
