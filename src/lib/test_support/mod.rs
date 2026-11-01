@@ -141,3 +141,32 @@ pub(crate) fn client_in(directory: &Path) -> Client {
     client.controller = Controller::at(CONFIGURED_UID, &directory.join("state"));
     client
 }
+
+/// Exact compact JSON, including the line delimiter when the transport sends one.
+pub(crate) fn reply_cost(value: &serde_json::Value, baseline: &serde_json::Value) {
+    let mut serialized = value.to_string();
+    if baseline["newline"] == true {
+        serialized.push('\n');
+    }
+    assert_eq!(
+        serialized.len(),
+        baseline["bytes"].as_u64().unwrap() as usize,
+        "{}",
+        baseline["id"]
+    );
+    assert_eq!(
+        serialized,
+        baseline["serialized"].as_str().unwrap(),
+        "{}",
+        baseline["id"]
+    );
+    let rows = baseline["rowsPointer"].as_str().map_or(0, |pointer| {
+        value.pointer(pointer).unwrap().as_array().unwrap().len()
+    });
+    assert_eq!(
+        rows,
+        baseline["rows"].as_u64().unwrap() as usize,
+        "{}",
+        baseline["id"]
+    );
+}

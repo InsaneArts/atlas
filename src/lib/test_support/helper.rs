@@ -44,6 +44,7 @@ pub(crate) struct Helper {
     moves_after: Option<usize>,
     /// How many identity proofs it gave.
     proofs: AtomicUsize,
+    requests: AtomicUsize,
     /// Whether it refuses a read meant for another session, as a current
     /// daemon does; an older one cannot be told the session.
     pins: bool,
@@ -65,6 +66,7 @@ impl Helper {
             uid,
             moves_after: None,
             proofs: AtomicUsize::new(0),
+            requests: AtomicUsize::new(0),
             pins: true,
         };
 
@@ -75,6 +77,10 @@ impl Helper {
     /// it was given.
     pub(crate) fn proofs(&self) -> usize {
         self.proofs.load(Ordering::Relaxed)
+    }
+
+    pub(crate) fn requests(&self) -> usize {
+        self.requests.load(Ordering::Relaxed)
     }
 
     /// [`Helper::client`] kept along the real path of `directory`, without
@@ -132,6 +138,7 @@ impl Helper {
                 let mut line = String::new();
                 peer.read_line(&mut line).await.unwrap();
                 let request: Value = serde_json::from_str(&line).unwrap();
+                self.requests.fetch_add(1, Ordering::Relaxed);
 
                 let reply = if request["op"] == "hello" {
                     Some(self.hello())

@@ -1141,3 +1141,252 @@ fn the_view_gets_each_windows_title_and_size_but_never_its_place_or_number() {
         json!([{"title": "Ring", "width": 520.0, "height": 860.0}])
     );
 }
+
+fn cost_fixtures(source: &str) -> Vec<Value> {
+    serde_json::from_str(source).unwrap()
+}
+
+fn cost_activity(server: &Server, fixture: &Value) {
+    let output = server.client.output_dir().unwrap();
+    std::fs::create_dir_all(output).unwrap();
+    let rows = fixture["input"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|row| format!("{row}\n"))
+        .collect::<String>();
+    std::fs::write(output.join(crate::activity_log::FILE), rows).unwrap();
+}
+
+#[test]
+fn reply_cost_counts_utf8_bytes_and_escaping() {
+    for fixture in cost_fixtures(include_str!(
+        "../../../tests/fixtures/reply-cost/status.json"
+    )) {
+        let status = summary(&fixture["input"], &BTreeMap::new(), None);
+        let reply = said(&status);
+        let serialized = reply.to_string();
+        if fixture["id"] != "status-pending" {
+            assert!(serialized.len() > serialized.chars().count());
+            assert!(serialized.contains("\\\"draft\\\""));
+            assert!(serialized.contains("\\\\"));
+        }
+        crate::test_support::reply_cost(&reply, &fixture);
+        crate::test_support::reply_cost(&status, &fixture["summaryCost"]);
+    }
+}
+
+#[test]
+fn reply_cost_refuses_larger_bytes_rows_and_duplicate_content() {
+    let fixture = &cost_fixtures(include_str!(
+        "../../../tests/fixtures/reply-cost/status.json"
+    ))[1];
+    let reply = said(&summary(&fixture["input"], &BTreeMap::new(), None));
+    for field in ["bytes", "rows"] {
+        let mut changed = fixture.clone();
+        changed[field] = json!(fixture[field].as_u64().unwrap() + 1);
+        assert!(
+            std::panic::catch_unwind(|| {
+                crate::test_support::reply_cost(&reply, &changed);
+            })
+            .is_err()
+        );
+    }
+    let mut duplicated = reply.clone();
+    duplicated["content"]
+        .as_array_mut()
+        .unwrap()
+        .push(reply["content"][0].clone());
+    assert!(
+        std::panic::catch_unwind(|| {
+            crate::test_support::reply_cost(&duplicated, fixture);
+        })
+        .is_err()
+    );
+}
+
+#[tokio::test]
+async fn reply_cost_counts_the_complete_serialized_envelope() {
+    let activity = cost_fixtures(include_str!(
+        "../../../tests/fixtures/reply-cost/activity.json"
+    ));
+    for fixture in cost_fixtures(include_str!(
+        "../../../tests/fixtures/reply-cost/answer.json"
+    )) {
+        let dir = tempfile::tempdir().unwrap();
+        let server = server(dir.path());
+        server.views.store(true, Ordering::Relaxed);
+        if let Some(source) = fixture["source"].as_str() {
+            cost_activity(
+                &server,
+                activity.iter().find(|row| row["id"] == source).unwrap(),
+            );
+        }
+        let mut reply = server.answer(&fixture["request"]).await.unwrap();
+        crate::test_support::reply_cost(&reply.value, &fixture);
+        reply.delivered();
+    }
+}
+
+#[tokio::test]
+async fn activity_reply_cost_keeps_empty_and_populated_rows() {
+    for fixture in cost_fixtures(include_str!(
+        "../../../tests/fixtures/reply-cost/activity.json"
+    )) {
+        let dir = tempfile::tempdir().unwrap();
+        let server = server(dir.path());
+        cost_activity(&server, &fixture);
+        crate::test_support::reply_cost(&server.activity().await.unwrap(), &fixture);
+    }
+}
+
+#[tokio::test]
+async fn reply_cost_preserves_uncertain_input_and_its_retained_control() {
+    use axum::{Json, Router, http::StatusCode, routing::post};
+    use std::sync::atomic::AtomicUsize;
+
+    let fixture: Value = serde_json::from_str(include_str!(
+        "../../../tests/fixtures/reply-cost/input.json"
+    ))
+    .unwrap();
+    let dir = tempfile::tempdir().unwrap();
+    let server = server(dir.path());
+    server.views.store(true, Ordering::Relaxed);
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let url = format!("http://{}/viewer/", listener.local_addr().unwrap());
+    let calls = Arc::new(AtomicUsize::new(0));
+    let received = calls.clone();
+    let refusal = fixture["viewerReply"].clone();
+    let body = fixture["viewerRequest"].clone();
+    let app = Router::new().route(
+        "/viewer/input",
+        post(move |Json(request): Json<Value>| {
+            received.fetch_add(1, Ordering::Relaxed);
+            assert_eq!(request, body);
+            let refusal = refusal.clone();
+            async move { (StatusCode::CONFLICT, Json(refusal)) }
+        }),
+    );
+    let serving = tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+    *server.held.lock().await = Some(Held {
+        url,
+        ..held("synthetic-lease", Instant::now())
+    });
+    let mut reply = server.answer(&fixture["request"]).await.unwrap();
+    serving.abort();
+    crate::test_support::reply_cost(&reply.value, &fixture);
+    assert_eq!(
+        json!(calls.load(Ordering::Relaxed)),
+        fixture["viewerRequests"]
+    );
+    assert!(server.held.lock().await.is_some());
+    reply.delivered();
+}
+
+#[tokio::test]
+async fn representative_reads_keep_their_helper_request_counts() {
+    use crate::test_support::{Helper, UID};
+
+    for fixture in cost_fixtures(include_str!("../../../tests/fixtures/reply-cost/apps.json")) {
+        for envelope in [false, true] {
+            let dir = tempfile::tempdir().unwrap();
+            let mut server = server(dir.path());
+            server.views.store(true, Ordering::Relaxed);
+            let (client, helper) = Helper::client(dir.path(), UID);
+            server.client = client;
+            let mut operations = Vec::new();
+            let listed = helper
+                .serve(
+                    async {
+                        if envelope {
+                            let mut reply = server.answer(&fixture["request"]).await.unwrap();
+                            reply.delivered();
+                            reply.value
+                        } else {
+                            server.helper_apps().await.unwrap()
+                        }
+                    },
+                    |request| {
+                        let op = request["op"].as_str().unwrap();
+                        operations.push(op.to_owned());
+                        Some(json!({"ok":true, op:fixture["input"][op]}))
+                    },
+                )
+                .await;
+            crate::test_support::reply_cost(
+                &listed,
+                if envelope {
+                    &fixture["answerCost"]
+                } else {
+                    &fixture
+                },
+            );
+            assert_eq!(json!(operations), fixture["helperOperations"]);
+            assert_eq!(json!(helper.proofs()), fixture["helperProofs"]);
+            assert_eq!(json!(helper.requests()), fixture["helperRequests"]);
+        }
+    }
+}
+
+#[tokio::test]
+async fn reply_cost_includes_the_private_frame_in_the_outgoing_envelope() {
+    use crate::test_support::{Helper, UID};
+    use base64::{Engine, engine::general_purpose::STANDARD};
+
+    let fixture: Value = serde_json::from_str(include_str!(
+        "../../../tests/fixtures/reply-cost/frame.json"
+    ))
+    .unwrap();
+    let dir = tempfile::tempdir().unwrap();
+    let mut server = server(dir.path());
+    server.views.store(true, Ordering::Relaxed);
+    let (client, helper) = Helper::client(dir.path(), UID);
+    server.client = client;
+    let png = crate::native::capture::sample_png(640, 360);
+    *server.framed.lock().await = Some((Sha256::digest(&png).into(), fixture["frame"].clone()));
+    *server.last.lock().await = Some((Instant::now(), fixture["status"].clone()));
+    let mut operations = Vec::new();
+    let mut reply = helper
+        .serve(
+            server.answer(&json!({
+                "jsonrpc":"2.0","id":7,"method":"tools/call","params":{"name":"screen_frame"}
+            })),
+            |request| {
+                operations.push(request["op"].as_str().unwrap().to_owned());
+                Some(json!({"ok":true,"width":640,"height":360,"png":STANDARD.encode(&png)}))
+            },
+        )
+        .await
+        .unwrap();
+    crate::test_support::reply_cost(&reply.value, &fixture);
+    assert_eq!(json!(operations), fixture["helperOperations"]);
+    assert_eq!(json!(helper.proofs()), fixture["helperProofs"]);
+    assert_eq!(json!(helper.requests()), fixture["helperRequests"]);
+    assert_eq!(
+        json!(
+            STANDARD
+                .decode(fixture["frame"]["data"].as_str().unwrap())
+                .unwrap()
+                .len()
+        ),
+        fixture["decodedImageBytes"]
+    );
+    reply.delivered();
+}
+
+#[test]
+fn app_reply_cost_preserves_the_window_projection() {
+    for fixture in cost_fixtures(include_str!("../../../tests/fixtures/reply-cost/apps.json")) {
+        let windows: Vec<crate::native::windows::Window> =
+            serde_json::from_value(fixture["input"]["windows"].clone()).unwrap();
+        let mut apps = open_apps(&fixture["input"]["apps"], &json!(windows)).unwrap();
+        for app in &mut apps {
+            only_title_and_size(app);
+        }
+        let reply = json!({
+            "content":[{"type":"text","text":format!("{} apps open in the helper.", apps.len())}],
+            "structuredContent":{"apps":apps},
+        });
+        crate::test_support::reply_cost(&reply, &fixture);
+    }
+}

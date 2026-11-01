@@ -1,0 +1,1872 @@
+[
+  {
+    "id": "apps-0",
+    "rowsPointer": "/structuredContent/apps",
+    "rows": 0,
+    "newline": false,
+    "bytes": 97,
+    "serialized": "{\"content\":[{\"text\":\"0 apps open in the helper.\",\"type\":\"text\"}],\"structuredContent\":{\"apps\":[]}}",
+    "helperOperations": [
+      "apps",
+      "windows"
+    ],
+    "helperProofs": 2,
+    "input": {
+      "apps": [],
+      "windows": []
+    },
+    "helperRequests": 6,
+    "request": {
+      "jsonrpc": "2.0",
+      "id": 7,
+      "method": "tools/call",
+      "params": {
+        "name": "helper_apps"
+      }
+    },
+    "answerCost": {
+      "id": "answer-apps-0",
+      "serialized": "{\"id\":7,\"jsonrpc\":\"2.0\",\"result\":{\"content\":[{\"text\":\"0 apps open in the helper.\",\"type\":\"text\"}],\"structuredContent\":{\"apps\":[],\"canControl\":true,\"canResume\":true,\"control\":false}}}\n",
+      "bytes": 183,
+      "rows": 0,
+      "rowsPointer": "/result/structuredContent/apps",
+      "newline": true
+    }
+  },
+  {
+    "id": "apps-4",
+    "rowsPointer": "/structuredContent/apps",
+    "rows": 4,
+    "newline": false,
+    "bytes": 2167,
+    "serialized": "{\"content\":[{\"text\":\"4 apps open in the helper.\",\"type\":\"text\"}],\"structuredContent\":{\"apps\":[{\"active\":true,\"bundle\":null,\"bundleId\":null,\"hidden\":false,\"launchedAt\":null,\"name\":\"Éditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tline\",\"pid\":812,\"windows\":[{\"height\":480.0,\"title\":\"Éditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tline\",\"width\":640.0}]},{\"active\":false,\"bundle\":null,\"bundleId\":null,\"hidden\":false,\"launchedAt\":null,\"name\":\"Éditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tline\",\"pid\":813,\"windows\":[{\"height\":480.0,\"title\":\"Éditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tline\",\"width\":640.0}]},{\"active\":false,\"bundle\":null,\"bundleId\":null,\"hidden\":false,\"launchedAt\":null,\"name\":\"Éditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tline\",\"pid\":814,\"windows\":[{\"height\":480.0,\"title\":\"Éditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tline\",\"width\":640.0}]},{\"active\":false,\"bundle\":null,\"bundleId\":null,\"hidden\":false,\"launchedAt\":null,\"name\":\"Éditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tline\",\"pid\":815,\"windows\":[{\"height\":480.0,\"title\":\"Éditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tline\",\"width\":640.0}]}]}}",
+    "helperOperations": [
+      "apps",
+      "windows"
+    ],
+    "helperProofs": 2,
+    "input": {
+      "apps": [
+        {
+          "pid": 812,
+          "name": "Éditeur 東京 🦀 \"draft\" \\ folder\nnext\tline",
+          "policy": "regular",
+          "active": true,
+          "hidden": false
+        },
+        {
+          "pid": 813,
+          "name": "Éditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tline",
+          "policy": "regular",
+          "active": false,
+          "hidden": false
+        },
+        {
+          "pid": 814,
+          "name": "Éditeur 東京 🦀 \"draft\" \\ folder\nnext\tline",
+          "policy": "regular",
+          "active": false,
+          "hidden": false
+        },
+        {
+          "pid": 815,
+          "name": "Éditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tline",
+          "policy": "regular",
+          "active": false,
+          "hidden": false
+        }
+      ],
+      "windows": [
+        {
+          "number": 1,
+          "pid": 812,
+          "owner": "Éditeur 東京 🦀 \"draft\" \\ folder\nnext\tline",
+          "title": "Éditeur 東京 🦀 \"draft\" \\ folder\nnext\tline",
+          "layer": 0,
+          "alpha": 1,
+          "bounds": {
+            "x": 0,
+            "y": 0,
+            "width": 640,
+            "height": 480
+          }
+        },
+        {
+          "number": 2,
+          "pid": 813,
+          "owner": "Éditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tline",
+          "title": "Éditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tline",
+          "layer": 0,
+          "alpha": 1,
+          "bounds": {
+            "x": 1,
+            "y": 1,
+            "width": 640,
+            "height": 480
+          }
+        },
+        {
+          "number": 3,
+          "pid": 814,
+          "owner": "Éditeur 東京 🦀 \"draft\" \\ folder\nnext\tline",
+          "title": "Éditeur 東京 🦀 \"draft\" \\ folder\nnext\tline",
+          "layer": 0,
+          "alpha": 1,
+          "bounds": {
+            "x": 2,
+            "y": 2,
+            "width": 640,
+            "height": 480
+          }
+        },
+        {
+          "number": 4,
+          "pid": 815,
+          "owner": "Éditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tline",
+          "title": "Éditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tline",
+          "layer": 0,
+          "alpha": 1,
+          "bounds": {
+            "x": 3,
+            "y": 3,
+            "width": 640,
+            "height": 480
+          }
+        }
+      ]
+    },
+    "helperRequests": 6,
+    "request": {
+      "jsonrpc": "2.0",
+      "id": 7,
+      "method": "tools/call",
+      "params": {
+        "name": "helper_apps"
+      }
+    },
+    "answerCost": {
+      "id": "answer-apps-4",
+      "serialized": "{\"id\":7,\"jsonrpc\":\"2.0\",\"result\":{\"content\":[{\"text\":\"4 apps open in the helper.\",\"type\":\"text\"}],\"structuredContent\":{\"apps\":[{\"active\":true,\"bundle\":null,\"bundleId\":null,\"hidden\":false,\"launchedAt\":null,\"name\":\"Éditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tline\",\"pid\":812,\"windows\":[{\"height\":480.0,\"title\":\"Éditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tline\",\"width\":640.0}]},{\"active\":false,\"bundle\":null,\"bundleId\":null,\"hidden\":false,\"launchedAt\":null,\"name\":\"Éditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tline\",\"pid\":813,\"windows\":[{\"height\":480.0,\"title\":\"Éditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tline\",\"width\":640.0}]},{\"active\":false,\"bundle\":null,\"bundleId\":null,\"hidden\":false,\"launchedAt\":null,\"name\":\"Éditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tline\",\"pid\":814,\"windows\":[{\"height\":480.0,\"title\":\"Éditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tline\",\"width\":640.0}]},{\"active\":false,\"bundle\":null,\"bundleId\":null,\"hidden\":false,\"launchedAt\":null,\"name\":\"Éditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tline\",\"pid\":815,\"windows\":[{\"height\":480.0,\"title\":\"Éditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tline\",\"width\":640.0}]}],\"canControl\":true,\"canResume\":true,\"control\":false}}}\n",
+      "bytes": 2253,
+      "rows": 4,
+      "rowsPointer": "/result/structuredContent/apps",
+      "newline": true
+    }
+  },
+  {
+    "id": "apps-80",
+    "rowsPointer": "/structuredContent/apps",
+    "rows": 80,
+    "newline": false,
+    "bytes": 41536,
+    "serialized": "{\"content\":[{\"text\":\"80 apps open in the helper.\",\"type\":\"text\"}],\"structuredContent\":{\"apps\":[{\"active\":true,\"bundle\":null,\"bundleId\":null,\"hidden\":false,\"launchedAt\":null,\"name\":\"Éditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tline\",\"pid\":812,\"windows\":[{\"height\":480.0,\"title\":\"Éditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tline\",\"width\":640.0}]},{\"active\":false,\"bundle\":null,\"bundleId\":null,\"hidden\":false,\"launchedAt\":null,\"name\":\"Éditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tline\",\"pid\":813,\"windows\":[{\"height\":480.0,\"title\":\"Éditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tline\",\"width\":640.0}]},{\"active\":false,\"bundle\":null,\"bundleId\":null,\"hidden\":false,\"launchedAt\":null,\"name\":\"Éditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tline\",\"pid\":814,\"windows\":[{\"height\":480.0,\"title\":\"Éditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tline\",\"width\":640.0}]},{\"active\":false,\"bundle\":null,\"bundleId\":null,\"hidden\":false,\"launchedAt\":null,\"name\":\"Éditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tline\",\"pid\":815,\"windows\":[{\"height\":480.0,\"title\":\"Éditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tline\",\"width\":640.0}]},{\"active\":false,\"bundle\":null,\"bundleId\":null,\"hidden\":false,\"launchedAt\":null,\"name\":\"Éditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tline\",\"pid\":816,\"windows\":[{\"height\":480.0,\"title\":\"Éditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tline\",\"width\":640.0}]},{\"active\":false,\"bundle\":null,\"bundleId\":null,\"hidden\":false,\"launchedAt\":null,\"name\":\"Éditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tline\",\"pid\":817,\"windows\":[{\"height\":480.0,\"title\":\"Éditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tline\",\"width\":640.0}]},{\"active\":false,\"bundle\":null,\"bundleId\":null,\"hidden\":false,\"launchedAt\":null,\"name\":\"Éditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tline\",\"pid\":818,\"windows\":[{\"height\":480.0,\"title\":\"Éditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tline\",\"width\":640.0}]},{\"active\":false,\"bundle\":null,\"bundleId\":null,\"hidden\":false,\"launchedAt\":null,\"name\":\"Éditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tline\",\"pid\":819,\"windows\":[{\"height\":480.0,\"title\":\"Éditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tline\",\"width\":640.0}]},{\"active\":false,\"bundle\":null,\"bundleId\":null,\"hidden\":false,\"launchedAt\":null,\"name\":\"Éditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tline\",\"pid\":820,\"windows\":[{\"height\":480.0,\"title\":\"Éditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tline\",\"width\":640.0}]},{\"active\":false,\"bundle\":null,\"bundleId\":null,\"hidden\":false,\"launchedAt\":null,\"name\":\"Éditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tline\",\"pid\":821,\"windows\":[{\"height\":480.0,\"title\":\"Éditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tline\",\"width\":640.0}]},{\"active\":false,\"bundle\":null,\"bundleId\":null,\"hidden\":false,\"launchedAt\":null,\"name\":\"Éditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tline\",\"pid\":822,\"windows\":[{\"height\":480.0,\"title\":\"Éditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tline\",\"width\":640.0}]},{\"active\":false,\"bundle\":null,\"bundleId\":null,\"hidden\":false,\"launchedAt\":null,\"name\":\"Éditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tline\",\"pid\":823,\"windows\":[{\"height\":480.0,\"title\":\"Éditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tline\",\"width\":640.0}]},{\"active\":false,\"bundle\":null,\"bundleId\":null,\"hidden\":false,\"launchedAt\":null,\"name\":\"Éditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tline\",\"pid\":824,\"windows\":[{\"height\":480.0,\"title\":\"Éditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tline\",\"width\":640.0}]},{\"active\":false,\"bundle\":null,\"bundleId\":null,\"hidden\":false,\"launchedAt\":null,\"name\":\"Éditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tline\",\"pid\":825,\"windows\":[{\"height\":480.0,\"title\":\"Éditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tline\",\"width\":640.0}]},{\"active\":false,\"bundle\":null,\"bundleId\":null,\"hidden\":false,\"launchedAt\":null,\"name\":\"Éditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tline\",\"pid\":826,\"windows\":[{\"height\":480.0,\"title\":\"Éditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tline\",\"width\":640.0}]},{\"active\":false,\"bundle\":null,\"bundleId\":null,\"hidden\":false,\"launchedAt\":null,\"name\":\"Éditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tline\",\"pid\":827,\"windows\":[{\"height\":480.0,\"title\":\"Éditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tline\",\"width\":640.0}]},{\"active\":false,\"bundle\":null,\"bundleId\":null,\"hidden\":false,\"launchedAt\":null,\"name\":\"Éditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tline\",\"pid\":828,\"windows\":[{\"height\":480.0,\"title\":\"Éditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tline\",\"width\":640.0}]},{\"active\":false,\"bundle\":null,\"bundleId\":null,\"hidden\":false,\"launchedAt\":null,\"name\":\"Éditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tline\",\"pid\":829,\"windows\":[{\"height\":480.0,\"title\":\"Éditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tline\",\"width\":640.0}]},{\"active\":false,\"bundle\":null,\"bundleId\":null,\"hidden\":false,\"launchedAt\":null,\"name\":\"Éditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tline\",\"pid\":830,\"windows\":[{\"height\":480.0,\"title\":\"Éditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tline\",\"width\":640.0}]},{\"active\":false,\"bundle\":null,\"bundleId\":null,\"hidden\":false,\"launchedAt\":null,\"name\":\"Éditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tline\",\"pid\":831,\"windows\":[{\"height\":480.0,\"title\":\"Éditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tline\",\"width\":640.0}]},{\"active\":false,\"bundle\":null,\"bundleId\":null,\"hidden\":false,\"launchedAt\":null,\"name\":\"Éditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tline\",\"pid\":832,\"windows\":[{\"height\":480.0,\"title\":\"Éditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tline\",\"width\":640.0}]},{\"active\":false,\"bundle\":null,\"bundleId\":null,\"hidden\":false,\"launchedAt\":null,\"name\":\"Éditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tline\",\"pid\":833,\"windows\":[{\"height\":480.0,\"title\":\"Éditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tline\",\"width\":640.0}]},{\"active\":false,\"bundle\":null,\"bundleId\":null,\"hidden\":false,\"launchedAt\":null,\"name\":\"Éditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tline\",\"pid\":834,\"windows\":[{\"height\":480.0,\"title\":\"Éditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tline\",\"width\":640.0}]},{\"active\":false,\"bundle\":null,\"bundleId\":null,\"hidden\":false,\"launchedAt\":null,\"name\":\"Éditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tline\",\"pid\":835,\"windows\":[{\"height\":480.0,\"title\":\"Éditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tline\",\"width\":640.0}]},{\"active\":false,\"bundle\":null,\"bundleId\":null,\"hidden\":false,\"launchedAt\":null,\"name\":\"Éditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tline\",\"pid\":836,\"windows\":[{\"height\":480.0,\"title\":\"Éditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tline\",\"width\":640.0}]},{\"active\":false,\"bundle\":null,\"bundleId\":null,\"hidden\":false,\"launchedAt\":null,\"name\":\"Éditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tline\",\"pid\":837,\"windows\":[{\"height\":480.0,\"title\":\"Éditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tline\",\"width\":640.0}]},{\"active\":false,\"bundle\":null,\"bundleId\":null,\"hidden\":false,\"launchedAt\":null,\"name\":\"Éditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tline\",\"pid\":838,\"windows\":[{\"height\":480.0,\"title\":\"Éditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tline\",\"width\":640.0}]},{\"active\":false,\"bundle\":null,\"bundleId\":null,\"hidden\":false,\"launchedAt\":null,\"name\":\"Éditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tline\",\"pid\":839,\"windows\":[{\"height\":480.0,\"title\":\"Éditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tline\",\"width\":640.0}]},{\"active\":false,\"bundle\":null,\"bundleId\":null,\"hidden\":false,\"launchedAt\":null,\"name\":\"Éditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tline\",\"pid\":840,\"windows\":[{\"height\":480.0,\"title\":\"Éditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tline\",\"width\":640.0}]},{\"active\":false,\"bundle\":null,\"bundleId\":null,\"hidden\":false,\"launchedAt\":null,\"name\":\"Éditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tline\",\"pid\":841,\"windows\":[{\"height\":480.0,\"title\":\"Éditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tline\",\"width\":640.0}]},{\"active\":false,\"bundle\":null,\"bundleId\":null,\"hidden\":false,\"launchedAt\":null,\"name\":\"Éditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tline\",\"pid\":842,\"windows\":[{\"height\":480.0,\"title\":\"Éditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tline\",\"width\":640.0}]},{\"active\":false,\"bundle\":null,\"bundleId\":null,\"hidden\":false,\"launchedAt\":null,\"name\":\"Éditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tline\",\"pid\":843,\"windows\":[{\"height\":480.0,\"title\":\"Éditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tline\",\"width\":640.0}]},{\"active\":false,\"bundle\":null,\"bundleId\":null,\"hidden\":false,\"launchedAt\":null,\"name\":\"Éditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tline\",\"pid\":844,\"windows\":[{\"height\":480.0,\"title\":\"Éditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tline\",\"width\":640.0}]},{\"active\":false,\"bundle\":null,\"bundleId\":null,\"hidden\":false,\"launchedAt\":null,\"name\":\"Éditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tline\",\"pid\":845,\"windows\":[{\"height\":480.0,\"title\":\"Éditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tline\",\"width\":640.0}]},{\"active\":false,\"bundle\":null,\"bundleId\":null,\"hidden\":false,\"launchedAt\":null,\"name\":\"Éditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tline\",\"pid\":846,\"windows\":[{\"height\":480.0,\"title\":\"Éditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tline\",\"width\":640.0}]},{\"active\":false,\"bundle\":null,\"bundleId\":null,\"hidden\":false,\"launchedAt\":null,\"name\":\"Éditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tline\",\"pid\":847,\"windows\":[{\"height\":480.0,\"title\":\"Éditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tline\",\"width\":640.0}]},{\"active\":false,\"bundle\":null,\"bundleId\":null,\"hidden\":false,\"launchedAt\":null,\"name\":\"Éditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tline\",\"pid\":848,\"windows\":[{\"height\":480.0,\"title\":\"Éditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tline\",\"width\":640.0}]},{\"active\":false,\"bundle\":null,\"bundleId\":null,\"hidden\":false,\"launchedAt\":null,\"name\":\"Éditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tline\",\"pid\":849,\"windows\":[{\"height\":480.0,\"title\":\"Éditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tline\",\"width\":640.0}]},{\"active\":false,\"bundle\":null,\"bundleId\":null,\"hidden\":false,\"launchedAt\":null,\"name\":\"Éditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tline\",\"pid\":850,\"windows\":[{\"height\":480.0,\"title\":\"Éditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tline\",\"width\":640.0}]},{\"active\":false,\"bundle\":null,\"bundleId\":null,\"hidden\":false,\"launchedAt\":null,\"name\":\"Éditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tline\",\"pid\":851,\"windows\":[{\"height\":480.0,\"title\":\"Éditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tline\",\"width\":640.0}]},{\"active\":false,\"bundle\":null,\"bundleId\":null,\"hidden\":false,\"launchedAt\":null,\"name\":\"Éditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tline\",\"pid\":852,\"windows\":[{\"height\":480.0,\"title\":\"Éditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tline\",\"width\":640.0}]},{\"active\":false,\"bundle\":null,\"bundleId\":null,\"hidden\":false,\"launchedAt\":null,\"name\":\"Éditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tline\",\"pid\":853,\"windows\":[{\"height\":480.0,\"title\":\"Éditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tline\",\"width\":640.0}]},{\"active\":false,\"bundle\":null,\"bundleId\":null,\"hidden\":false,\"launchedAt\":null,\"name\":\"Éditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tline\",\"pid\":854,\"windows\":[{\"height\":480.0,\"title\":\"Éditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tline\",\"width\":640.0}]},{\"active\":false,\"bundle\":null,\"bundleId\":null,\"hidden\":false,\"launchedAt\":null,\"name\":\"Éditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tline\",\"pid\":855,\"windows\":[{\"height\":480.0,\"title\":\"Éditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tline\",\"width\":640.0}]},{\"active\":false,\"bundle\":null,\"bundleId\":null,\"hidden\":false,\"launchedAt\":null,\"name\":\"Éditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tline\",\"pid\":856,\"windows\":[{\"height\":480.0,\"title\":\"Éditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tline\",\"width\":640.0}]},{\"active\":false,\"bundle\":null,\"bundleId\":null,\"hidden\":false,\"launchedAt\":null,\"name\":\"Éditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tline\",\"pid\":857,\"windows\":[{\"height\":480.0,\"title\":\"Éditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tline\",\"width\":640.0}]},{\"active\":false,\"bundle\":null,\"bundleId\":null,\"hidden\":false,\"launchedAt\":null,\"name\":\"Éditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tline\",\"pid\":858,\"windows\":[{\"height\":480.0,\"title\":\"Éditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tline\",\"width\":640.0}]},{\"active\":false,\"bundle\":null,\"bundleId\":null,\"hidden\":false,\"launchedAt\":null,\"name\":\"Éditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tline\",\"pid\":859,\"windows\":[{\"height\":480.0,\"title\":\"Éditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tline\",\"width\":640.0}]},{\"active\":false,\"bundle\":null,\"bundleId\":null,\"hidden\":false,\"launchedAt\":null,\"name\":\"Éditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tline\",\"pid\":860,\"windows\":[{\"height\":480.0,\"title\":\"Éditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tline\",\"width\":640.0}]},{\"active\":false,\"bundle\":null,\"bundleId\":null,\"hidden\":false,\"launchedAt\":null,\"name\":\"Éditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tline\",\"pid\":861,\"windows\":[{\"height\":480.0,\"title\":\"Éditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tline\",\"width\":640.0}]},{\"active\":false,\"bundle\":null,\"bundleId\":null,\"hidden\":false,\"launchedAt\":null,\"name\":\"Éditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tline\",\"pid\":862,\"windows\":[{\"height\":480.0,\"title\":\"Éditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tline\",\"width\":640.0}]},{\"active\":false,\"bundle\":null,\"bundleId\":null,\"hidden\":false,\"launchedAt\":null,\"name\":\"Éditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tline\",\"pid\":863,\"windows\":[{\"height\":480.0,\"title\":\"Éditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tline\",\"width\":640.0}]},{\"active\":false,\"bundle\":null,\"bundleId\":null,\"hidden\":false,\"launchedAt\":null,\"name\":\"Éditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tline\",\"pid\":864,\"windows\":[{\"height\":480.0,\"title\":\"Éditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tline\",\"width\":640.0}]},{\"active\":false,\"bundle\":null,\"bundleId\":null,\"hidden\":false,\"launchedAt\":null,\"name\":\"Éditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tline\",\"pid\":865,\"windows\":[{\"height\":480.0,\"title\":\"Éditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tline\",\"width\":640.0}]},{\"active\":false,\"bundle\":null,\"bundleId\":null,\"hidden\":false,\"launchedAt\":null,\"name\":\"Éditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tline\",\"pid\":866,\"windows\":[{\"height\":480.0,\"title\":\"Éditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tline\",\"width\":640.0}]},{\"active\":false,\"bundle\":null,\"bundleId\":null,\"hidden\":false,\"launchedAt\":null,\"name\":\"Éditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tline\",\"pid\":867,\"windows\":[{\"height\":480.0,\"title\":\"Éditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tline\",\"width\":640.0}]},{\"active\":false,\"bundle\":null,\"bundleId\":null,\"hidden\":false,\"launchedAt\":null,\"name\":\"Éditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tline\",\"pid\":868,\"windows\":[{\"height\":480.0,\"title\":\"Éditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tline\",\"width\":640.0}]},{\"active\":false,\"bundle\":null,\"bundleId\":null,\"hidden\":false,\"launchedAt\":null,\"name\":\"Éditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tline\",\"pid\":869,\"windows\":[{\"height\":480.0,\"title\":\"Éditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tline\",\"width\":640.0}]},{\"active\":false,\"bundle\":null,\"bundleId\":null,\"hidden\":false,\"launchedAt\":null,\"name\":\"Éditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tline\",\"pid\":870,\"windows\":[{\"height\":480.0,\"title\":\"Éditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tline\",\"width\":640.0}]},{\"active\":false,\"bundle\":null,\"bundleId\":null,\"hidden\":false,\"launchedAt\":null,\"name\":\"Éditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tline\",\"pid\":871,\"windows\":[{\"height\":480.0,\"title\":\"Éditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tline\",\"width\":640.0}]},{\"active\":false,\"bundle\":null,\"bundleId\":null,\"hidden\":false,\"launchedAt\":null,\"name\":\"Éditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tline\",\"pid\":872,\"windows\":[{\"height\":480.0,\"title\":\"Éditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tline\",\"width\":640.0}]},{\"active\":false,\"bundle\":null,\"bundleId\":null,\"hidden\":false,\"launchedAt\":null,\"name\":\"Éditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tline\",\"pid\":873,\"windows\":[{\"height\":480.0,\"title\":\"Éditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tline\",\"width\":640.0}]},{\"active\":false,\"bundle\":null,\"bundleId\":null,\"hidden\":false,\"launchedAt\":null,\"name\":\"Éditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tline\",\"pid\":874,\"windows\":[{\"height\":480.0,\"title\":\"Éditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tline\",\"width\":640.0}]},{\"active\":false,\"bundle\":null,\"bundleId\":null,\"hidden\":false,\"launchedAt\":null,\"name\":\"Éditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tline\",\"pid\":875,\"windows\":[{\"height\":480.0,\"title\":\"Éditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tline\",\"width\":640.0}]},{\"active\":false,\"bundle\":null,\"bundleId\":null,\"hidden\":false,\"launchedAt\":null,\"name\":\"Éditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tline\",\"pid\":876,\"windows\":[{\"height\":480.0,\"title\":\"Éditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tline\",\"width\":640.0}]},{\"active\":false,\"bundle\":null,\"bundleId\":null,\"hidden\":false,\"launchedAt\":null,\"name\":\"Éditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tline\",\"pid\":877,\"windows\":[{\"height\":480.0,\"title\":\"Éditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tline\",\"width\":640.0}]},{\"active\":false,\"bundle\":null,\"bundleId\":null,\"hidden\":false,\"launchedAt\":null,\"name\":\"Éditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tline\",\"pid\":878,\"windows\":[{\"height\":480.0,\"title\":\"Éditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tline\",\"width\":640.0}]},{\"active\":false,\"bundle\":null,\"bundleId\":null,\"hidden\":false,\"launchedAt\":null,\"name\":\"Éditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tline\",\"pid\":879,\"windows\":[{\"height\":480.0,\"title\":\"Éditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tline\",\"width\":640.0}]},{\"active\":false,\"bundle\":null,\"bundleId\":null,\"hidden\":false,\"launchedAt\":null,\"name\":\"Éditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tline\",\"pid\":880,\"windows\":[{\"height\":480.0,\"title\":\"Éditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tline\",\"width\":640.0}]},{\"active\":false,\"bundle\":null,\"bundleId\":null,\"hidden\":false,\"launchedAt\":null,\"name\":\"Éditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tline\",\"pid\":881,\"windows\":[{\"height\":480.0,\"title\":\"Éditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tline\",\"width\":640.0}]},{\"active\":false,\"bundle\":null,\"bundleId\":null,\"hidden\":false,\"launchedAt\":null,\"name\":\"Éditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tline\",\"pid\":882,\"windows\":[{\"height\":480.0,\"title\":\"Éditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tline\",\"width\":640.0}]},{\"active\":false,\"bundle\":null,\"bundleId\":null,\"hidden\":false,\"launchedAt\":null,\"name\":\"Éditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tline\",\"pid\":883,\"windows\":[{\"height\":480.0,\"title\":\"Éditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tline\",\"width\":640.0}]},{\"active\":false,\"bundle\":null,\"bundleId\":null,\"hidden\":false,\"launchedAt\":null,\"name\":\"Éditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tline\",\"pid\":884,\"windows\":[{\"height\":480.0,\"title\":\"Éditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tline\",\"width\":640.0}]},{\"active\":false,\"bundle\":null,\"bundleId\":null,\"hidden\":false,\"launchedAt\":null,\"name\":\"Éditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tline\",\"pid\":885,\"windows\":[{\"height\":480.0,\"title\":\"Éditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tline\",\"width\":640.0}]},{\"active\":false,\"bundle\":null,\"bundleId\":null,\"hidden\":false,\"launchedAt\":null,\"name\":\"Éditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tline\",\"pid\":886,\"windows\":[{\"height\":480.0,\"title\":\"Éditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tline\",\"width\":640.0}]},{\"active\":false,\"bundle\":null,\"bundleId\":null,\"hidden\":false,\"launchedAt\":null,\"name\":\"Éditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tline\",\"pid\":887,\"windows\":[{\"height\":480.0,\"title\":\"Éditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tline\",\"width\":640.0}]},{\"active\":false,\"bundle\":null,\"bundleId\":null,\"hidden\":false,\"launchedAt\":null,\"name\":\"Éditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tline\",\"pid\":888,\"windows\":[{\"height\":480.0,\"title\":\"Éditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tline\",\"width\":640.0}]},{\"active\":false,\"bundle\":null,\"bundleId\":null,\"hidden\":false,\"launchedAt\":null,\"name\":\"Éditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tline\",\"pid\":889,\"windows\":[{\"height\":480.0,\"title\":\"Éditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tline\",\"width\":640.0}]},{\"active\":false,\"bundle\":null,\"bundleId\":null,\"hidden\":false,\"launchedAt\":null,\"name\":\"Éditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tline\",\"pid\":890,\"windows\":[{\"height\":480.0,\"title\":\"Éditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tline\",\"width\":640.0}]},{\"active\":false,\"bundle\":null,\"bundleId\":null,\"hidden\":false,\"launchedAt\":null,\"name\":\"Éditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tline\",\"pid\":891,\"windows\":[{\"height\":480.0,\"title\":\"Éditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tline\",\"width\":640.0}]}]}}",
+    "helperOperations": [
+      "apps",
+      "windows"
+    ],
+    "helperProofs": 2,
+    "input": {
+      "apps": [
+        {
+          "pid": 812,
+          "name": "Éditeur 東京 🦀 \"draft\" \\ folder\nnext\tline",
+          "policy": "regular",
+          "active": true,
+          "hidden": false
+        },
+        {
+          "pid": 813,
+          "name": "Éditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tline",
+          "policy": "regular",
+          "active": false,
+          "hidden": false
+        },
+        {
+          "pid": 814,
+          "name": "Éditeur 東京 🦀 \"draft\" \\ folder\nnext\tline",
+          "policy": "regular",
+          "active": false,
+          "hidden": false
+        },
+        {
+          "pid": 815,
+          "name": "Éditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tline",
+          "policy": "regular",
+          "active": false,
+          "hidden": false
+        },
+        {
+          "pid": 816,
+          "name": "Éditeur 東京 🦀 \"draft\" \\ folder\nnext\tline",
+          "policy": "regular",
+          "active": false,
+          "hidden": false
+        },
+        {
+          "pid": 817,
+          "name": "Éditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tline",
+          "policy": "regular",
+          "active": false,
+          "hidden": false
+        },
+        {
+          "pid": 818,
+          "name": "Éditeur 東京 🦀 \"draft\" \\ folder\nnext\tline",
+          "policy": "regular",
+          "active": false,
+          "hidden": false
+        },
+        {
+          "pid": 819,
+          "name": "Éditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tline",
+          "policy": "regular",
+          "active": false,
+          "hidden": false
+        },
+        {
+          "pid": 820,
+          "name": "Éditeur 東京 🦀 \"draft\" \\ folder\nnext\tline",
+          "policy": "regular",
+          "active": false,
+          "hidden": false
+        },
+        {
+          "pid": 821,
+          "name": "Éditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tline",
+          "policy": "regular",
+          "active": false,
+          "hidden": false
+        },
+        {
+          "pid": 822,
+          "name": "Éditeur 東京 🦀 \"draft\" \\ folder\nnext\tline",
+          "policy": "regular",
+          "active": false,
+          "hidden": false
+        },
+        {
+          "pid": 823,
+          "name": "Éditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tline",
+          "policy": "regular",
+          "active": false,
+          "hidden": false
+        },
+        {
+          "pid": 824,
+          "name": "Éditeur 東京 🦀 \"draft\" \\ folder\nnext\tline",
+          "policy": "regular",
+          "active": false,
+          "hidden": false
+        },
+        {
+          "pid": 825,
+          "name": "Éditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tline",
+          "policy": "regular",
+          "active": false,
+          "hidden": false
+        },
+        {
+          "pid": 826,
+          "name": "Éditeur 東京 🦀 \"draft\" \\ folder\nnext\tline",
+          "policy": "regular",
+          "active": false,
+          "hidden": false
+        },
+        {
+          "pid": 827,
+          "name": "Éditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tline",
+          "policy": "regular",
+          "active": false,
+          "hidden": false
+        },
+        {
+          "pid": 828,
+          "name": "Éditeur 東京 🦀 \"draft\" \\ folder\nnext\tline",
+          "policy": "regular",
+          "active": false,
+          "hidden": false
+        },
+        {
+          "pid": 829,
+          "name": "Éditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tline",
+          "policy": "regular",
+          "active": false,
+          "hidden": false
+        },
+        {
+          "pid": 830,
+          "name": "Éditeur 東京 🦀 \"draft\" \\ folder\nnext\tline",
+          "policy": "regular",
+          "active": false,
+          "hidden": false
+        },
+        {
+          "pid": 831,
+          "name": "Éditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tline",
+          "policy": "regular",
+          "active": false,
+          "hidden": false
+        },
+        {
+          "pid": 832,
+          "name": "Éditeur 東京 🦀 \"draft\" \\ folder\nnext\tline",
+          "policy": "regular",
+          "active": false,
+          "hidden": false
+        },
+        {
+          "pid": 833,
+          "name": "Éditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tline",
+          "policy": "regular",
+          "active": false,
+          "hidden": false
+        },
+        {
+          "pid": 834,
+          "name": "Éditeur 東京 🦀 \"draft\" \\ folder\nnext\tline",
+          "policy": "regular",
+          "active": false,
+          "hidden": false
+        },
+        {
+          "pid": 835,
+          "name": "Éditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tline",
+          "policy": "regular",
+          "active": false,
+          "hidden": false
+        },
+        {
+          "pid": 836,
+          "name": "Éditeur 東京 🦀 \"draft\" \\ folder\nnext\tline",
+          "policy": "regular",
+          "active": false,
+          "hidden": false
+        },
+        {
+          "pid": 837,
+          "name": "Éditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tline",
+          "policy": "regular",
+          "active": false,
+          "hidden": false
+        },
+        {
+          "pid": 838,
+          "name": "Éditeur 東京 🦀 \"draft\" \\ folder\nnext\tline",
+          "policy": "regular",
+          "active": false,
+          "hidden": false
+        },
+        {
+          "pid": 839,
+          "name": "Éditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tline",
+          "policy": "regular",
+          "active": false,
+          "hidden": false
+        },
+        {
+          "pid": 840,
+          "name": "Éditeur 東京 🦀 \"draft\" \\ folder\nnext\tline",
+          "policy": "regular",
+          "active": false,
+          "hidden": false
+        },
+        {
+          "pid": 841,
+          "name": "Éditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tline",
+          "policy": "regular",
+          "active": false,
+          "hidden": false
+        },
+        {
+          "pid": 842,
+          "name": "Éditeur 東京 🦀 \"draft\" \\ folder\nnext\tline",
+          "policy": "regular",
+          "active": false,
+          "hidden": false
+        },
+        {
+          "pid": 843,
+          "name": "Éditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tline",
+          "policy": "regular",
+          "active": false,
+          "hidden": false
+        },
+        {
+          "pid": 844,
+          "name": "Éditeur 東京 🦀 \"draft\" \\ folder\nnext\tline",
+          "policy": "regular",
+          "active": false,
+          "hidden": false
+        },
+        {
+          "pid": 845,
+          "name": "Éditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tline",
+          "policy": "regular",
+          "active": false,
+          "hidden": false
+        },
+        {
+          "pid": 846,
+          "name": "Éditeur 東京 🦀 \"draft\" \\ folder\nnext\tline",
+          "policy": "regular",
+          "active": false,
+          "hidden": false
+        },
+        {
+          "pid": 847,
+          "name": "Éditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tline",
+          "policy": "regular",
+          "active": false,
+          "hidden": false
+        },
+        {
+          "pid": 848,
+          "name": "Éditeur 東京 🦀 \"draft\" \\ folder\nnext\tline",
+          "policy": "regular",
+          "active": false,
+          "hidden": false
+        },
+        {
+          "pid": 849,
+          "name": "Éditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tline",
+          "policy": "regular",
+          "active": false,
+          "hidden": false
+        },
+        {
+          "pid": 850,
+          "name": "Éditeur 東京 🦀 \"draft\" \\ folder\nnext\tline",
+          "policy": "regular",
+          "active": false,
+          "hidden": false
+        },
+        {
+          "pid": 851,
+          "name": "Éditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tline",
+          "policy": "regular",
+          "active": false,
+          "hidden": false
+        },
+        {
+          "pid": 852,
+          "name": "Éditeur 東京 🦀 \"draft\" \\ folder\nnext\tline",
+          "policy": "regular",
+          "active": false,
+          "hidden": false
+        },
+        {
+          "pid": 853,
+          "name": "Éditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tline",
+          "policy": "regular",
+          "active": false,
+          "hidden": false
+        },
+        {
+          "pid": 854,
+          "name": "Éditeur 東京 🦀 \"draft\" \\ folder\nnext\tline",
+          "policy": "regular",
+          "active": false,
+          "hidden": false
+        },
+        {
+          "pid": 855,
+          "name": "Éditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tline",
+          "policy": "regular",
+          "active": false,
+          "hidden": false
+        },
+        {
+          "pid": 856,
+          "name": "Éditeur 東京 🦀 \"draft\" \\ folder\nnext\tline",
+          "policy": "regular",
+          "active": false,
+          "hidden": false
+        },
+        {
+          "pid": 857,
+          "name": "Éditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tline",
+          "policy": "regular",
+          "active": false,
+          "hidden": false
+        },
+        {
+          "pid": 858,
+          "name": "Éditeur 東京 🦀 \"draft\" \\ folder\nnext\tline",
+          "policy": "regular",
+          "active": false,
+          "hidden": false
+        },
+        {
+          "pid": 859,
+          "name": "Éditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tline",
+          "policy": "regular",
+          "active": false,
+          "hidden": false
+        },
+        {
+          "pid": 860,
+          "name": "Éditeur 東京 🦀 \"draft\" \\ folder\nnext\tline",
+          "policy": "regular",
+          "active": false,
+          "hidden": false
+        },
+        {
+          "pid": 861,
+          "name": "Éditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tline",
+          "policy": "regular",
+          "active": false,
+          "hidden": false
+        },
+        {
+          "pid": 862,
+          "name": "Éditeur 東京 🦀 \"draft\" \\ folder\nnext\tline",
+          "policy": "regular",
+          "active": false,
+          "hidden": false
+        },
+        {
+          "pid": 863,
+          "name": "Éditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tline",
+          "policy": "regular",
+          "active": false,
+          "hidden": false
+        },
+        {
+          "pid": 864,
+          "name": "Éditeur 東京 🦀 \"draft\" \\ folder\nnext\tline",
+          "policy": "regular",
+          "active": false,
+          "hidden": false
+        },
+        {
+          "pid": 865,
+          "name": "Éditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tline",
+          "policy": "regular",
+          "active": false,
+          "hidden": false
+        },
+        {
+          "pid": 866,
+          "name": "Éditeur 東京 🦀 \"draft\" \\ folder\nnext\tline",
+          "policy": "regular",
+          "active": false,
+          "hidden": false
+        },
+        {
+          "pid": 867,
+          "name": "Éditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tline",
+          "policy": "regular",
+          "active": false,
+          "hidden": false
+        },
+        {
+          "pid": 868,
+          "name": "Éditeur 東京 🦀 \"draft\" \\ folder\nnext\tline",
+          "policy": "regular",
+          "active": false,
+          "hidden": false
+        },
+        {
+          "pid": 869,
+          "name": "Éditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tline",
+          "policy": "regular",
+          "active": false,
+          "hidden": false
+        },
+        {
+          "pid": 870,
+          "name": "Éditeur 東京 🦀 \"draft\" \\ folder\nnext\tline",
+          "policy": "regular",
+          "active": false,
+          "hidden": false
+        },
+        {
+          "pid": 871,
+          "name": "Éditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tline",
+          "policy": "regular",
+          "active": false,
+          "hidden": false
+        },
+        {
+          "pid": 872,
+          "name": "Éditeur 東京 🦀 \"draft\" \\ folder\nnext\tline",
+          "policy": "regular",
+          "active": false,
+          "hidden": false
+        },
+        {
+          "pid": 873,
+          "name": "Éditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tline",
+          "policy": "regular",
+          "active": false,
+          "hidden": false
+        },
+        {
+          "pid": 874,
+          "name": "Éditeur 東京 🦀 \"draft\" \\ folder\nnext\tline",
+          "policy": "regular",
+          "active": false,
+          "hidden": false
+        },
+        {
+          "pid": 875,
+          "name": "Éditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tline",
+          "policy": "regular",
+          "active": false,
+          "hidden": false
+        },
+        {
+          "pid": 876,
+          "name": "Éditeur 東京 🦀 \"draft\" \\ folder\nnext\tline",
+          "policy": "regular",
+          "active": false,
+          "hidden": false
+        },
+        {
+          "pid": 877,
+          "name": "Éditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tline",
+          "policy": "regular",
+          "active": false,
+          "hidden": false
+        },
+        {
+          "pid": 878,
+          "name": "Éditeur 東京 🦀 \"draft\" \\ folder\nnext\tline",
+          "policy": "regular",
+          "active": false,
+          "hidden": false
+        },
+        {
+          "pid": 879,
+          "name": "Éditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tline",
+          "policy": "regular",
+          "active": false,
+          "hidden": false
+        },
+        {
+          "pid": 880,
+          "name": "Éditeur 東京 🦀 \"draft\" \\ folder\nnext\tline",
+          "policy": "regular",
+          "active": false,
+          "hidden": false
+        },
+        {
+          "pid": 881,
+          "name": "Éditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tline",
+          "policy": "regular",
+          "active": false,
+          "hidden": false
+        },
+        {
+          "pid": 882,
+          "name": "Éditeur 東京 🦀 \"draft\" \\ folder\nnext\tline",
+          "policy": "regular",
+          "active": false,
+          "hidden": false
+        },
+        {
+          "pid": 883,
+          "name": "Éditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tline",
+          "policy": "regular",
+          "active": false,
+          "hidden": false
+        },
+        {
+          "pid": 884,
+          "name": "Éditeur 東京 🦀 \"draft\" \\ folder\nnext\tline",
+          "policy": "regular",
+          "active": false,
+          "hidden": false
+        },
+        {
+          "pid": 885,
+          "name": "Éditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tline",
+          "policy": "regular",
+          "active": false,
+          "hidden": false
+        },
+        {
+          "pid": 886,
+          "name": "Éditeur 東京 🦀 \"draft\" \\ folder\nnext\tline",
+          "policy": "regular",
+          "active": false,
+          "hidden": false
+        },
+        {
+          "pid": 887,
+          "name": "Éditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tline",
+          "policy": "regular",
+          "active": false,
+          "hidden": false
+        },
+        {
+          "pid": 888,
+          "name": "Éditeur 東京 🦀 \"draft\" \\ folder\nnext\tline",
+          "policy": "regular",
+          "active": false,
+          "hidden": false
+        },
+        {
+          "pid": 889,
+          "name": "Éditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tline",
+          "policy": "regular",
+          "active": false,
+          "hidden": false
+        },
+        {
+          "pid": 890,
+          "name": "Éditeur 東京 🦀 \"draft\" \\ folder\nnext\tline",
+          "policy": "regular",
+          "active": false,
+          "hidden": false
+        },
+        {
+          "pid": 891,
+          "name": "Éditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tline",
+          "policy": "regular",
+          "active": false,
+          "hidden": false
+        }
+      ],
+      "windows": [
+        {
+          "number": 1,
+          "pid": 812,
+          "owner": "Éditeur 東京 🦀 \"draft\" \\ folder\nnext\tline",
+          "title": "Éditeur 東京 🦀 \"draft\" \\ folder\nnext\tline",
+          "layer": 0,
+          "alpha": 1,
+          "bounds": {
+            "x": 0,
+            "y": 0,
+            "width": 640,
+            "height": 480
+          }
+        },
+        {
+          "number": 2,
+          "pid": 813,
+          "owner": "Éditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tline",
+          "title": "Éditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tline",
+          "layer": 0,
+          "alpha": 1,
+          "bounds": {
+            "x": 1,
+            "y": 1,
+            "width": 640,
+            "height": 480
+          }
+        },
+        {
+          "number": 3,
+          "pid": 814,
+          "owner": "Éditeur 東京 🦀 \"draft\" \\ folder\nnext\tline",
+          "title": "Éditeur 東京 🦀 \"draft\" \\ folder\nnext\tline",
+          "layer": 0,
+          "alpha": 1,
+          "bounds": {
+            "x": 2,
+            "y": 2,
+            "width": 640,
+            "height": 480
+          }
+        },
+        {
+          "number": 4,
+          "pid": 815,
+          "owner": "Éditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tline",
+          "title": "Éditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tline",
+          "layer": 0,
+          "alpha": 1,
+          "bounds": {
+            "x": 3,
+            "y": 3,
+            "width": 640,
+            "height": 480
+          }
+        },
+        {
+          "number": 5,
+          "pid": 816,
+          "owner": "Éditeur 東京 🦀 \"draft\" \\ folder\nnext\tline",
+          "title": "Éditeur 東京 🦀 \"draft\" \\ folder\nnext\tline",
+          "layer": 0,
+          "alpha": 1,
+          "bounds": {
+            "x": 4,
+            "y": 4,
+            "width": 640,
+            "height": 480
+          }
+        },
+        {
+          "number": 6,
+          "pid": 817,
+          "owner": "Éditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tline",
+          "title": "Éditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tline",
+          "layer": 0,
+          "alpha": 1,
+          "bounds": {
+            "x": 5,
+            "y": 5,
+            "width": 640,
+            "height": 480
+          }
+        },
+        {
+          "number": 7,
+          "pid": 818,
+          "owner": "Éditeur 東京 🦀 \"draft\" \\ folder\nnext\tline",
+          "title": "Éditeur 東京 🦀 \"draft\" \\ folder\nnext\tline",
+          "layer": 0,
+          "alpha": 1,
+          "bounds": {
+            "x": 6,
+            "y": 6,
+            "width": 640,
+            "height": 480
+          }
+        },
+        {
+          "number": 8,
+          "pid": 819,
+          "owner": "Éditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tline",
+          "title": "Éditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tline",
+          "layer": 0,
+          "alpha": 1,
+          "bounds": {
+            "x": 7,
+            "y": 7,
+            "width": 640,
+            "height": 480
+          }
+        },
+        {
+          "number": 9,
+          "pid": 820,
+          "owner": "Éditeur 東京 🦀 \"draft\" \\ folder\nnext\tline",
+          "title": "Éditeur 東京 🦀 \"draft\" \\ folder\nnext\tline",
+          "layer": 0,
+          "alpha": 1,
+          "bounds": {
+            "x": 8,
+            "y": 8,
+            "width": 640,
+            "height": 480
+          }
+        },
+        {
+          "number": 10,
+          "pid": 821,
+          "owner": "Éditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tline",
+          "title": "Éditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tline",
+          "layer": 0,
+          "alpha": 1,
+          "bounds": {
+            "x": 9,
+            "y": 9,
+            "width": 640,
+            "height": 480
+          }
+        },
+        {
+          "number": 11,
+          "pid": 822,
+          "owner": "Éditeur 東京 🦀 \"draft\" \\ folder\nnext\tline",
+          "title": "Éditeur 東京 🦀 \"draft\" \\ folder\nnext\tline",
+          "layer": 0,
+          "alpha": 1,
+          "bounds": {
+            "x": 10,
+            "y": 10,
+            "width": 640,
+            "height": 480
+          }
+        },
+        {
+          "number": 12,
+          "pid": 823,
+          "owner": "Éditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tline",
+          "title": "Éditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tline",
+          "layer": 0,
+          "alpha": 1,
+          "bounds": {
+            "x": 11,
+            "y": 11,
+            "width": 640,
+            "height": 480
+          }
+        },
+        {
+          "number": 13,
+          "pid": 824,
+          "owner": "Éditeur 東京 🦀 \"draft\" \\ folder\nnext\tline",
+          "title": "Éditeur 東京 🦀 \"draft\" \\ folder\nnext\tline",
+          "layer": 0,
+          "alpha": 1,
+          "bounds": {
+            "x": 12,
+            "y": 12,
+            "width": 640,
+            "height": 480
+          }
+        },
+        {
+          "number": 14,
+          "pid": 825,
+          "owner": "Éditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tline",
+          "title": "Éditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tline",
+          "layer": 0,
+          "alpha": 1,
+          "bounds": {
+            "x": 13,
+            "y": 13,
+            "width": 640,
+            "height": 480
+          }
+        },
+        {
+          "number": 15,
+          "pid": 826,
+          "owner": "Éditeur 東京 🦀 \"draft\" \\ folder\nnext\tline",
+          "title": "Éditeur 東京 🦀 \"draft\" \\ folder\nnext\tline",
+          "layer": 0,
+          "alpha": 1,
+          "bounds": {
+            "x": 14,
+            "y": 14,
+            "width": 640,
+            "height": 480
+          }
+        },
+        {
+          "number": 16,
+          "pid": 827,
+          "owner": "Éditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tline",
+          "title": "Éditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tline",
+          "layer": 0,
+          "alpha": 1,
+          "bounds": {
+            "x": 15,
+            "y": 15,
+            "width": 640,
+            "height": 480
+          }
+        },
+        {
+          "number": 17,
+          "pid": 828,
+          "owner": "Éditeur 東京 🦀 \"draft\" \\ folder\nnext\tline",
+          "title": "Éditeur 東京 🦀 \"draft\" \\ folder\nnext\tline",
+          "layer": 0,
+          "alpha": 1,
+          "bounds": {
+            "x": 16,
+            "y": 16,
+            "width": 640,
+            "height": 480
+          }
+        },
+        {
+          "number": 18,
+          "pid": 829,
+          "owner": "Éditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tline",
+          "title": "Éditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tline",
+          "layer": 0,
+          "alpha": 1,
+          "bounds": {
+            "x": 17,
+            "y": 17,
+            "width": 640,
+            "height": 480
+          }
+        },
+        {
+          "number": 19,
+          "pid": 830,
+          "owner": "Éditeur 東京 🦀 \"draft\" \\ folder\nnext\tline",
+          "title": "Éditeur 東京 🦀 \"draft\" \\ folder\nnext\tline",
+          "layer": 0,
+          "alpha": 1,
+          "bounds": {
+            "x": 18,
+            "y": 18,
+            "width": 640,
+            "height": 480
+          }
+        },
+        {
+          "number": 20,
+          "pid": 831,
+          "owner": "Éditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tline",
+          "title": "Éditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tline",
+          "layer": 0,
+          "alpha": 1,
+          "bounds": {
+            "x": 19,
+            "y": 19,
+            "width": 640,
+            "height": 480
+          }
+        },
+        {
+          "number": 21,
+          "pid": 832,
+          "owner": "Éditeur 東京 🦀 \"draft\" \\ folder\nnext\tline",
+          "title": "Éditeur 東京 🦀 \"draft\" \\ folder\nnext\tline",
+          "layer": 0,
+          "alpha": 1,
+          "bounds": {
+            "x": 20,
+            "y": 20,
+            "width": 640,
+            "height": 480
+          }
+        },
+        {
+          "number": 22,
+          "pid": 833,
+          "owner": "Éditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tline",
+          "title": "Éditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tline",
+          "layer": 0,
+          "alpha": 1,
+          "bounds": {
+            "x": 21,
+            "y": 21,
+            "width": 640,
+            "height": 480
+          }
+        },
+        {
+          "number": 23,
+          "pid": 834,
+          "owner": "Éditeur 東京 🦀 \"draft\" \\ folder\nnext\tline",
+          "title": "Éditeur 東京 🦀 \"draft\" \\ folder\nnext\tline",
+          "layer": 0,
+          "alpha": 1,
+          "bounds": {
+            "x": 22,
+            "y": 22,
+            "width": 640,
+            "height": 480
+          }
+        },
+        {
+          "number": 24,
+          "pid": 835,
+          "owner": "Éditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tline",
+          "title": "Éditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tline",
+          "layer": 0,
+          "alpha": 1,
+          "bounds": {
+            "x": 23,
+            "y": 23,
+            "width": 640,
+            "height": 480
+          }
+        },
+        {
+          "number": 25,
+          "pid": 836,
+          "owner": "Éditeur 東京 🦀 \"draft\" \\ folder\nnext\tline",
+          "title": "Éditeur 東京 🦀 \"draft\" \\ folder\nnext\tline",
+          "layer": 0,
+          "alpha": 1,
+          "bounds": {
+            "x": 24,
+            "y": 24,
+            "width": 640,
+            "height": 480
+          }
+        },
+        {
+          "number": 26,
+          "pid": 837,
+          "owner": "Éditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tline",
+          "title": "Éditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tline",
+          "layer": 0,
+          "alpha": 1,
+          "bounds": {
+            "x": 25,
+            "y": 25,
+            "width": 640,
+            "height": 480
+          }
+        },
+        {
+          "number": 27,
+          "pid": 838,
+          "owner": "Éditeur 東京 🦀 \"draft\" \\ folder\nnext\tline",
+          "title": "Éditeur 東京 🦀 \"draft\" \\ folder\nnext\tline",
+          "layer": 0,
+          "alpha": 1,
+          "bounds": {
+            "x": 26,
+            "y": 26,
+            "width": 640,
+            "height": 480
+          }
+        },
+        {
+          "number": 28,
+          "pid": 839,
+          "owner": "Éditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tline",
+          "title": "Éditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tline",
+          "layer": 0,
+          "alpha": 1,
+          "bounds": {
+            "x": 27,
+            "y": 27,
+            "width": 640,
+            "height": 480
+          }
+        },
+        {
+          "number": 29,
+          "pid": 840,
+          "owner": "Éditeur 東京 🦀 \"draft\" \\ folder\nnext\tline",
+          "title": "Éditeur 東京 🦀 \"draft\" \\ folder\nnext\tline",
+          "layer": 0,
+          "alpha": 1,
+          "bounds": {
+            "x": 28,
+            "y": 28,
+            "width": 640,
+            "height": 480
+          }
+        },
+        {
+          "number": 30,
+          "pid": 841,
+          "owner": "Éditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tline",
+          "title": "Éditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tline",
+          "layer": 0,
+          "alpha": 1,
+          "bounds": {
+            "x": 29,
+            "y": 29,
+            "width": 640,
+            "height": 480
+          }
+        },
+        {
+          "number": 31,
+          "pid": 842,
+          "owner": "Éditeur 東京 🦀 \"draft\" \\ folder\nnext\tline",
+          "title": "Éditeur 東京 🦀 \"draft\" \\ folder\nnext\tline",
+          "layer": 0,
+          "alpha": 1,
+          "bounds": {
+            "x": 30,
+            "y": 30,
+            "width": 640,
+            "height": 480
+          }
+        },
+        {
+          "number": 32,
+          "pid": 843,
+          "owner": "Éditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tline",
+          "title": "Éditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tline",
+          "layer": 0,
+          "alpha": 1,
+          "bounds": {
+            "x": 31,
+            "y": 31,
+            "width": 640,
+            "height": 480
+          }
+        },
+        {
+          "number": 33,
+          "pid": 844,
+          "owner": "Éditeur 東京 🦀 \"draft\" \\ folder\nnext\tline",
+          "title": "Éditeur 東京 🦀 \"draft\" \\ folder\nnext\tline",
+          "layer": 0,
+          "alpha": 1,
+          "bounds": {
+            "x": 32,
+            "y": 32,
+            "width": 640,
+            "height": 480
+          }
+        },
+        {
+          "number": 34,
+          "pid": 845,
+          "owner": "Éditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tline",
+          "title": "Éditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tline",
+          "layer": 0,
+          "alpha": 1,
+          "bounds": {
+            "x": 33,
+            "y": 33,
+            "width": 640,
+            "height": 480
+          }
+        },
+        {
+          "number": 35,
+          "pid": 846,
+          "owner": "Éditeur 東京 🦀 \"draft\" \\ folder\nnext\tline",
+          "title": "Éditeur 東京 🦀 \"draft\" \\ folder\nnext\tline",
+          "layer": 0,
+          "alpha": 1,
+          "bounds": {
+            "x": 34,
+            "y": 34,
+            "width": 640,
+            "height": 480
+          }
+        },
+        {
+          "number": 36,
+          "pid": 847,
+          "owner": "Éditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tline",
+          "title": "Éditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tline",
+          "layer": 0,
+          "alpha": 1,
+          "bounds": {
+            "x": 35,
+            "y": 35,
+            "width": 640,
+            "height": 480
+          }
+        },
+        {
+          "number": 37,
+          "pid": 848,
+          "owner": "Éditeur 東京 🦀 \"draft\" \\ folder\nnext\tline",
+          "title": "Éditeur 東京 🦀 \"draft\" \\ folder\nnext\tline",
+          "layer": 0,
+          "alpha": 1,
+          "bounds": {
+            "x": 36,
+            "y": 36,
+            "width": 640,
+            "height": 480
+          }
+        },
+        {
+          "number": 38,
+          "pid": 849,
+          "owner": "Éditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tline",
+          "title": "Éditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tline",
+          "layer": 0,
+          "alpha": 1,
+          "bounds": {
+            "x": 37,
+            "y": 37,
+            "width": 640,
+            "height": 480
+          }
+        },
+        {
+          "number": 39,
+          "pid": 850,
+          "owner": "Éditeur 東京 🦀 \"draft\" \\ folder\nnext\tline",
+          "title": "Éditeur 東京 🦀 \"draft\" \\ folder\nnext\tline",
+          "layer": 0,
+          "alpha": 1,
+          "bounds": {
+            "x": 38,
+            "y": 38,
+            "width": 640,
+            "height": 480
+          }
+        },
+        {
+          "number": 40,
+          "pid": 851,
+          "owner": "Éditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tline",
+          "title": "Éditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tline",
+          "layer": 0,
+          "alpha": 1,
+          "bounds": {
+            "x": 39,
+            "y": 39,
+            "width": 640,
+            "height": 480
+          }
+        },
+        {
+          "number": 41,
+          "pid": 852,
+          "owner": "Éditeur 東京 🦀 \"draft\" \\ folder\nnext\tline",
+          "title": "Éditeur 東京 🦀 \"draft\" \\ folder\nnext\tline",
+          "layer": 0,
+          "alpha": 1,
+          "bounds": {
+            "x": 40,
+            "y": 40,
+            "width": 640,
+            "height": 480
+          }
+        },
+        {
+          "number": 42,
+          "pid": 853,
+          "owner": "Éditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tline",
+          "title": "Éditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tline",
+          "layer": 0,
+          "alpha": 1,
+          "bounds": {
+            "x": 41,
+            "y": 41,
+            "width": 640,
+            "height": 480
+          }
+        },
+        {
+          "number": 43,
+          "pid": 854,
+          "owner": "Éditeur 東京 🦀 \"draft\" \\ folder\nnext\tline",
+          "title": "Éditeur 東京 🦀 \"draft\" \\ folder\nnext\tline",
+          "layer": 0,
+          "alpha": 1,
+          "bounds": {
+            "x": 42,
+            "y": 42,
+            "width": 640,
+            "height": 480
+          }
+        },
+        {
+          "number": 44,
+          "pid": 855,
+          "owner": "Éditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tline",
+          "title": "Éditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tline",
+          "layer": 0,
+          "alpha": 1,
+          "bounds": {
+            "x": 43,
+            "y": 43,
+            "width": 640,
+            "height": 480
+          }
+        },
+        {
+          "number": 45,
+          "pid": 856,
+          "owner": "Éditeur 東京 🦀 \"draft\" \\ folder\nnext\tline",
+          "title": "Éditeur 東京 🦀 \"draft\" \\ folder\nnext\tline",
+          "layer": 0,
+          "alpha": 1,
+          "bounds": {
+            "x": 44,
+            "y": 44,
+            "width": 640,
+            "height": 480
+          }
+        },
+        {
+          "number": 46,
+          "pid": 857,
+          "owner": "Éditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tline",
+          "title": "Éditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tline",
+          "layer": 0,
+          "alpha": 1,
+          "bounds": {
+            "x": 45,
+            "y": 45,
+            "width": 640,
+            "height": 480
+          }
+        },
+        {
+          "number": 47,
+          "pid": 858,
+          "owner": "Éditeur 東京 🦀 \"draft\" \\ folder\nnext\tline",
+          "title": "Éditeur 東京 🦀 \"draft\" \\ folder\nnext\tline",
+          "layer": 0,
+          "alpha": 1,
+          "bounds": {
+            "x": 46,
+            "y": 46,
+            "width": 640,
+            "height": 480
+          }
+        },
+        {
+          "number": 48,
+          "pid": 859,
+          "owner": "Éditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tline",
+          "title": "Éditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tline",
+          "layer": 0,
+          "alpha": 1,
+          "bounds": {
+            "x": 47,
+            "y": 47,
+            "width": 640,
+            "height": 480
+          }
+        },
+        {
+          "number": 49,
+          "pid": 860,
+          "owner": "Éditeur 東京 🦀 \"draft\" \\ folder\nnext\tline",
+          "title": "Éditeur 東京 🦀 \"draft\" \\ folder\nnext\tline",
+          "layer": 0,
+          "alpha": 1,
+          "bounds": {
+            "x": 48,
+            "y": 48,
+            "width": 640,
+            "height": 480
+          }
+        },
+        {
+          "number": 50,
+          "pid": 861,
+          "owner": "Éditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tline",
+          "title": "Éditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tline",
+          "layer": 0,
+          "alpha": 1,
+          "bounds": {
+            "x": 49,
+            "y": 49,
+            "width": 640,
+            "height": 480
+          }
+        },
+        {
+          "number": 51,
+          "pid": 862,
+          "owner": "Éditeur 東京 🦀 \"draft\" \\ folder\nnext\tline",
+          "title": "Éditeur 東京 🦀 \"draft\" \\ folder\nnext\tline",
+          "layer": 0,
+          "alpha": 1,
+          "bounds": {
+            "x": 50,
+            "y": 50,
+            "width": 640,
+            "height": 480
+          }
+        },
+        {
+          "number": 52,
+          "pid": 863,
+          "owner": "Éditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tline",
+          "title": "Éditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tline",
+          "layer": 0,
+          "alpha": 1,
+          "bounds": {
+            "x": 51,
+            "y": 51,
+            "width": 640,
+            "height": 480
+          }
+        },
+        {
+          "number": 53,
+          "pid": 864,
+          "owner": "Éditeur 東京 🦀 \"draft\" \\ folder\nnext\tline",
+          "title": "Éditeur 東京 🦀 \"draft\" \\ folder\nnext\tline",
+          "layer": 0,
+          "alpha": 1,
+          "bounds": {
+            "x": 52,
+            "y": 52,
+            "width": 640,
+            "height": 480
+          }
+        },
+        {
+          "number": 54,
+          "pid": 865,
+          "owner": "Éditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tline",
+          "title": "Éditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tline",
+          "layer": 0,
+          "alpha": 1,
+          "bounds": {
+            "x": 53,
+            "y": 53,
+            "width": 640,
+            "height": 480
+          }
+        },
+        {
+          "number": 55,
+          "pid": 866,
+          "owner": "Éditeur 東京 🦀 \"draft\" \\ folder\nnext\tline",
+          "title": "Éditeur 東京 🦀 \"draft\" \\ folder\nnext\tline",
+          "layer": 0,
+          "alpha": 1,
+          "bounds": {
+            "x": 54,
+            "y": 54,
+            "width": 640,
+            "height": 480
+          }
+        },
+        {
+          "number": 56,
+          "pid": 867,
+          "owner": "Éditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tline",
+          "title": "Éditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tline",
+          "layer": 0,
+          "alpha": 1,
+          "bounds": {
+            "x": 55,
+            "y": 55,
+            "width": 640,
+            "height": 480
+          }
+        },
+        {
+          "number": 57,
+          "pid": 868,
+          "owner": "Éditeur 東京 🦀 \"draft\" \\ folder\nnext\tline",
+          "title": "Éditeur 東京 🦀 \"draft\" \\ folder\nnext\tline",
+          "layer": 0,
+          "alpha": 1,
+          "bounds": {
+            "x": 56,
+            "y": 56,
+            "width": 640,
+            "height": 480
+          }
+        },
+        {
+          "number": 58,
+          "pid": 869,
+          "owner": "Éditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tline",
+          "title": "Éditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tline",
+          "layer": 0,
+          "alpha": 1,
+          "bounds": {
+            "x": 57,
+            "y": 57,
+            "width": 640,
+            "height": 480
+          }
+        },
+        {
+          "number": 59,
+          "pid": 870,
+          "owner": "Éditeur 東京 🦀 \"draft\" \\ folder\nnext\tline",
+          "title": "Éditeur 東京 🦀 \"draft\" \\ folder\nnext\tline",
+          "layer": 0,
+          "alpha": 1,
+          "bounds": {
+            "x": 58,
+            "y": 58,
+            "width": 640,
+            "height": 480
+          }
+        },
+        {
+          "number": 60,
+          "pid": 871,
+          "owner": "Éditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tline",
+          "title": "Éditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tline",
+          "layer": 0,
+          "alpha": 1,
+          "bounds": {
+            "x": 59,
+            "y": 59,
+            "width": 640,
+            "height": 480
+          }
+        },
+        {
+          "number": 61,
+          "pid": 872,
+          "owner": "Éditeur 東京 🦀 \"draft\" \\ folder\nnext\tline",
+          "title": "Éditeur 東京 🦀 \"draft\" \\ folder\nnext\tline",
+          "layer": 0,
+          "alpha": 1,
+          "bounds": {
+            "x": 60,
+            "y": 60,
+            "width": 640,
+            "height": 480
+          }
+        },
+        {
+          "number": 62,
+          "pid": 873,
+          "owner": "Éditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tline",
+          "title": "Éditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tline",
+          "layer": 0,
+          "alpha": 1,
+          "bounds": {
+            "x": 61,
+            "y": 61,
+            "width": 640,
+            "height": 480
+          }
+        },
+        {
+          "number": 63,
+          "pid": 874,
+          "owner": "Éditeur 東京 🦀 \"draft\" \\ folder\nnext\tline",
+          "title": "Éditeur 東京 🦀 \"draft\" \\ folder\nnext\tline",
+          "layer": 0,
+          "alpha": 1,
+          "bounds": {
+            "x": 62,
+            "y": 62,
+            "width": 640,
+            "height": 480
+          }
+        },
+        {
+          "number": 64,
+          "pid": 875,
+          "owner": "Éditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tline",
+          "title": "Éditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tline",
+          "layer": 0,
+          "alpha": 1,
+          "bounds": {
+            "x": 63,
+            "y": 63,
+            "width": 640,
+            "height": 480
+          }
+        },
+        {
+          "number": 65,
+          "pid": 876,
+          "owner": "Éditeur 東京 🦀 \"draft\" \\ folder\nnext\tline",
+          "title": "Éditeur 東京 🦀 \"draft\" \\ folder\nnext\tline",
+          "layer": 0,
+          "alpha": 1,
+          "bounds": {
+            "x": 64,
+            "y": 64,
+            "width": 640,
+            "height": 480
+          }
+        },
+        {
+          "number": 66,
+          "pid": 877,
+          "owner": "Éditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tline",
+          "title": "Éditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tline",
+          "layer": 0,
+          "alpha": 1,
+          "bounds": {
+            "x": 65,
+            "y": 65,
+            "width": 640,
+            "height": 480
+          }
+        },
+        {
+          "number": 67,
+          "pid": 878,
+          "owner": "Éditeur 東京 🦀 \"draft\" \\ folder\nnext\tline",
+          "title": "Éditeur 東京 🦀 \"draft\" \\ folder\nnext\tline",
+          "layer": 0,
+          "alpha": 1,
+          "bounds": {
+            "x": 66,
+            "y": 66,
+            "width": 640,
+            "height": 480
+          }
+        },
+        {
+          "number": 68,
+          "pid": 879,
+          "owner": "Éditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tline",
+          "title": "Éditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tline",
+          "layer": 0,
+          "alpha": 1,
+          "bounds": {
+            "x": 67,
+            "y": 67,
+            "width": 640,
+            "height": 480
+          }
+        },
+        {
+          "number": 69,
+          "pid": 880,
+          "owner": "Éditeur 東京 🦀 \"draft\" \\ folder\nnext\tline",
+          "title": "Éditeur 東京 🦀 \"draft\" \\ folder\nnext\tline",
+          "layer": 0,
+          "alpha": 1,
+          "bounds": {
+            "x": 68,
+            "y": 68,
+            "width": 640,
+            "height": 480
+          }
+        },
+        {
+          "number": 70,
+          "pid": 881,
+          "owner": "Éditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tline",
+          "title": "Éditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tline",
+          "layer": 0,
+          "alpha": 1,
+          "bounds": {
+            "x": 69,
+            "y": 69,
+            "width": 640,
+            "height": 480
+          }
+        },
+        {
+          "number": 71,
+          "pid": 882,
+          "owner": "Éditeur 東京 🦀 \"draft\" \\ folder\nnext\tline",
+          "title": "Éditeur 東京 🦀 \"draft\" \\ folder\nnext\tline",
+          "layer": 0,
+          "alpha": 1,
+          "bounds": {
+            "x": 70,
+            "y": 70,
+            "width": 640,
+            "height": 480
+          }
+        },
+        {
+          "number": 72,
+          "pid": 883,
+          "owner": "Éditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tline",
+          "title": "Éditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tline",
+          "layer": 0,
+          "alpha": 1,
+          "bounds": {
+            "x": 71,
+            "y": 71,
+            "width": 640,
+            "height": 480
+          }
+        },
+        {
+          "number": 73,
+          "pid": 884,
+          "owner": "Éditeur 東京 🦀 \"draft\" \\ folder\nnext\tline",
+          "title": "Éditeur 東京 🦀 \"draft\" \\ folder\nnext\tline",
+          "layer": 0,
+          "alpha": 1,
+          "bounds": {
+            "x": 72,
+            "y": 72,
+            "width": 640,
+            "height": 480
+          }
+        },
+        {
+          "number": 74,
+          "pid": 885,
+          "owner": "Éditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tline",
+          "title": "Éditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tline",
+          "layer": 0,
+          "alpha": 1,
+          "bounds": {
+            "x": 73,
+            "y": 73,
+            "width": 640,
+            "height": 480
+          }
+        },
+        {
+          "number": 75,
+          "pid": 886,
+          "owner": "Éditeur 東京 🦀 \"draft\" \\ folder\nnext\tline",
+          "title": "Éditeur 東京 🦀 \"draft\" \\ folder\nnext\tline",
+          "layer": 0,
+          "alpha": 1,
+          "bounds": {
+            "x": 74,
+            "y": 74,
+            "width": 640,
+            "height": 480
+          }
+        },
+        {
+          "number": 76,
+          "pid": 887,
+          "owner": "Éditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tline",
+          "title": "Éditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tline",
+          "layer": 0,
+          "alpha": 1,
+          "bounds": {
+            "x": 75,
+            "y": 75,
+            "width": 640,
+            "height": 480
+          }
+        },
+        {
+          "number": 77,
+          "pid": 888,
+          "owner": "Éditeur 東京 🦀 \"draft\" \\ folder\nnext\tline",
+          "title": "Éditeur 東京 🦀 \"draft\" \\ folder\nnext\tline",
+          "layer": 0,
+          "alpha": 1,
+          "bounds": {
+            "x": 76,
+            "y": 76,
+            "width": 640,
+            "height": 480
+          }
+        },
+        {
+          "number": 78,
+          "pid": 889,
+          "owner": "Éditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tline",
+          "title": "Éditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tline",
+          "layer": 0,
+          "alpha": 1,
+          "bounds": {
+            "x": 77,
+            "y": 77,
+            "width": 640,
+            "height": 480
+          }
+        },
+        {
+          "number": 79,
+          "pid": 890,
+          "owner": "Éditeur 東京 🦀 \"draft\" \\ folder\nnext\tline",
+          "title": "Éditeur 東京 🦀 \"draft\" \\ folder\nnext\tline",
+          "layer": 0,
+          "alpha": 1,
+          "bounds": {
+            "x": 78,
+            "y": 78,
+            "width": 640,
+            "height": 480
+          }
+        },
+        {
+          "number": 80,
+          "pid": 891,
+          "owner": "Éditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tline",
+          "title": "Éditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tline",
+          "layer": 0,
+          "alpha": 1,
+          "bounds": {
+            "x": 79,
+            "y": 79,
+            "width": 640,
+            "height": 480
+          }
+        }
+      ]
+    },
+    "helperRequests": 6,
+    "request": {
+      "jsonrpc": "2.0",
+      "id": 7,
+      "method": "tools/call",
+      "params": {
+        "name": "helper_apps"
+      }
+    },
+    "answerCost": {
+      "id": "answer-apps-80",
+      "serialized": "{\"id\":7,\"jsonrpc\":\"2.0\",\"result\":{\"content\":[{\"text\":\"80 apps open in the helper.\",\"type\":\"text\"}],\"structuredContent\":{\"apps\":[{\"active\":true,\"bundle\":null,\"bundleId\":null,\"hidden\":false,\"launchedAt\":null,\"name\":\"Éditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tline\",\"pid\":812,\"windows\":[{\"height\":480.0,\"title\":\"Éditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tline\",\"width\":640.0}]},{\"active\":false,\"bundle\":null,\"bundleId\":null,\"hidden\":false,\"launchedAt\":null,\"name\":\"Éditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tline\",\"pid\":813,\"windows\":[{\"height\":480.0,\"title\":\"Éditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tline\",\"width\":640.0}]},{\"active\":false,\"bundle\":null,\"bundleId\":null,\"hidden\":false,\"launchedAt\":null,\"name\":\"Éditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tline\",\"pid\":814,\"windows\":[{\"height\":480.0,\"title\":\"Éditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tline\",\"width\":640.0}]},{\"active\":false,\"bundle\":null,\"bundleId\":null,\"hidden\":false,\"launchedAt\":null,\"name\":\"Éditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tline\",\"pid\":815,\"windows\":[{\"height\":480.0,\"title\":\"Éditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tline\",\"width\":640.0}]},{\"active\":false,\"bundle\":null,\"bundleId\":null,\"hidden\":false,\"launchedAt\":null,\"name\":\"Éditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tline\",\"pid\":816,\"windows\":[{\"height\":480.0,\"title\":\"Éditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tline\",\"width\":640.0}]},{\"active\":false,\"bundle\":null,\"bundleId\":null,\"hidden\":false,\"launchedAt\":null,\"name\":\"Éditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tline\",\"pid\":817,\"windows\":[{\"height\":480.0,\"title\":\"Éditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tline\",\"width\":640.0}]},{\"active\":false,\"bundle\":null,\"bundleId\":null,\"hidden\":false,\"launchedAt\":null,\"name\":\"Éditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tline\",\"pid\":818,\"windows\":[{\"height\":480.0,\"title\":\"Éditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tline\",\"width\":640.0}]},{\"active\":false,\"bundle\":null,\"bundleId\":null,\"hidden\":false,\"launchedAt\":null,\"name\":\"Éditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tline\",\"pid\":819,\"windows\":[{\"height\":480.0,\"title\":\"Éditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tline\",\"width\":640.0}]},{\"active\":false,\"bundle\":null,\"bundleId\":null,\"hidden\":false,\"launchedAt\":null,\"name\":\"Éditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tline\",\"pid\":820,\"windows\":[{\"height\":480.0,\"title\":\"Éditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tline\",\"width\":640.0}]},{\"active\":false,\"bundle\":null,\"bundleId\":null,\"hidden\":false,\"launchedAt\":null,\"name\":\"Éditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tline\",\"pid\":821,\"windows\":[{\"height\":480.0,\"title\":\"Éditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tline\",\"width\":640.0}]},{\"active\":false,\"bundle\":null,\"bundleId\":null,\"hidden\":false,\"launchedAt\":null,\"name\":\"Éditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tline\",\"pid\":822,\"windows\":[{\"height\":480.0,\"title\":\"Éditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tline\",\"width\":640.0}]},{\"active\":false,\"bundle\":null,\"bundleId\":null,\"hidden\":false,\"launchedAt\":null,\"name\":\"Éditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tline\",\"pid\":823,\"windows\":[{\"height\":480.0,\"title\":\"Éditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tline\",\"width\":640.0}]},{\"active\":false,\"bundle\":null,\"bundleId\":null,\"hidden\":false,\"launchedAt\":null,\"name\":\"Éditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tline\",\"pid\":824,\"windows\":[{\"height\":480.0,\"title\":\"Éditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tline\",\"width\":640.0}]},{\"active\":false,\"bundle\":null,\"bundleId\":null,\"hidden\":false,\"launchedAt\":null,\"name\":\"Éditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tline\",\"pid\":825,\"windows\":[{\"height\":480.0,\"title\":\"Éditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tline\",\"width\":640.0}]},{\"active\":false,\"bundle\":null,\"bundleId\":null,\"hidden\":false,\"launchedAt\":null,\"name\":\"Éditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tline\",\"pid\":826,\"windows\":[{\"height\":480.0,\"title\":\"Éditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tline\",\"width\":640.0}]},{\"active\":false,\"bundle\":null,\"bundleId\":null,\"hidden\":false,\"launchedAt\":null,\"name\":\"Éditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tline\",\"pid\":827,\"windows\":[{\"height\":480.0,\"title\":\"Éditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tline\",\"width\":640.0}]},{\"active\":false,\"bundle\":null,\"bundleId\":null,\"hidden\":false,\"launchedAt\":null,\"name\":\"Éditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tline\",\"pid\":828,\"windows\":[{\"height\":480.0,\"title\":\"Éditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tline\",\"width\":640.0}]},{\"active\":false,\"bundle\":null,\"bundleId\":null,\"hidden\":false,\"launchedAt\":null,\"name\":\"Éditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tline\",\"pid\":829,\"windows\":[{\"height\":480.0,\"title\":\"Éditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tline\",\"width\":640.0}]},{\"active\":false,\"bundle\":null,\"bundleId\":null,\"hidden\":false,\"launchedAt\":null,\"name\":\"Éditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tline\",\"pid\":830,\"windows\":[{\"height\":480.0,\"title\":\"Éditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tline\",\"width\":640.0}]},{\"active\":false,\"bundle\":null,\"bundleId\":null,\"hidden\":false,\"launchedAt\":null,\"name\":\"Éditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tline\",\"pid\":831,\"windows\":[{\"height\":480.0,\"title\":\"Éditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tline\",\"width\":640.0}]},{\"active\":false,\"bundle\":null,\"bundleId\":null,\"hidden\":false,\"launchedAt\":null,\"name\":\"Éditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tline\",\"pid\":832,\"windows\":[{\"height\":480.0,\"title\":\"Éditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tline\",\"width\":640.0}]},{\"active\":false,\"bundle\":null,\"bundleId\":null,\"hidden\":false,\"launchedAt\":null,\"name\":\"Éditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tline\",\"pid\":833,\"windows\":[{\"height\":480.0,\"title\":\"Éditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tline\",\"width\":640.0}]},{\"active\":false,\"bundle\":null,\"bundleId\":null,\"hidden\":false,\"launchedAt\":null,\"name\":\"Éditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tline\",\"pid\":834,\"windows\":[{\"height\":480.0,\"title\":\"Éditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tline\",\"width\":640.0}]},{\"active\":false,\"bundle\":null,\"bundleId\":null,\"hidden\":false,\"launchedAt\":null,\"name\":\"Éditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tline\",\"pid\":835,\"windows\":[{\"height\":480.0,\"title\":\"Éditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tline\",\"width\":640.0}]},{\"active\":false,\"bundle\":null,\"bundleId\":null,\"hidden\":false,\"launchedAt\":null,\"name\":\"Éditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tline\",\"pid\":836,\"windows\":[{\"height\":480.0,\"title\":\"Éditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tline\",\"width\":640.0}]},{\"active\":false,\"bundle\":null,\"bundleId\":null,\"hidden\":false,\"launchedAt\":null,\"name\":\"Éditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tline\",\"pid\":837,\"windows\":[{\"height\":480.0,\"title\":\"Éditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tline\",\"width\":640.0}]},{\"active\":false,\"bundle\":null,\"bundleId\":null,\"hidden\":false,\"launchedAt\":null,\"name\":\"Éditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tline\",\"pid\":838,\"windows\":[{\"height\":480.0,\"title\":\"Éditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tline\",\"width\":640.0}]},{\"active\":false,\"bundle\":null,\"bundleId\":null,\"hidden\":false,\"launchedAt\":null,\"name\":\"Éditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tline\",\"pid\":839,\"windows\":[{\"height\":480.0,\"title\":\"Éditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tline\",\"width\":640.0}]},{\"active\":false,\"bundle\":null,\"bundleId\":null,\"hidden\":false,\"launchedAt\":null,\"name\":\"Éditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tline\",\"pid\":840,\"windows\":[{\"height\":480.0,\"title\":\"Éditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tline\",\"width\":640.0}]},{\"active\":false,\"bundle\":null,\"bundleId\":null,\"hidden\":false,\"launchedAt\":null,\"name\":\"Éditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tline\",\"pid\":841,\"windows\":[{\"height\":480.0,\"title\":\"Éditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tline\",\"width\":640.0}]},{\"active\":false,\"bundle\":null,\"bundleId\":null,\"hidden\":false,\"launchedAt\":null,\"name\":\"Éditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tline\",\"pid\":842,\"windows\":[{\"height\":480.0,\"title\":\"Éditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tline\",\"width\":640.0}]},{\"active\":false,\"bundle\":null,\"bundleId\":null,\"hidden\":false,\"launchedAt\":null,\"name\":\"Éditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tline\",\"pid\":843,\"windows\":[{\"height\":480.0,\"title\":\"Éditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tline\",\"width\":640.0}]},{\"active\":false,\"bundle\":null,\"bundleId\":null,\"hidden\":false,\"launchedAt\":null,\"name\":\"Éditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tline\",\"pid\":844,\"windows\":[{\"height\":480.0,\"title\":\"Éditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tline\",\"width\":640.0}]},{\"active\":false,\"bundle\":null,\"bundleId\":null,\"hidden\":false,\"launchedAt\":null,\"name\":\"Éditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tline\",\"pid\":845,\"windows\":[{\"height\":480.0,\"title\":\"Éditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tline\",\"width\":640.0}]},{\"active\":false,\"bundle\":null,\"bundleId\":null,\"hidden\":false,\"launchedAt\":null,\"name\":\"Éditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tline\",\"pid\":846,\"windows\":[{\"height\":480.0,\"title\":\"Éditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tline\",\"width\":640.0}]},{\"active\":false,\"bundle\":null,\"bundleId\":null,\"hidden\":false,\"launchedAt\":null,\"name\":\"Éditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tline\",\"pid\":847,\"windows\":[{\"height\":480.0,\"title\":\"Éditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tline\",\"width\":640.0}]},{\"active\":false,\"bundle\":null,\"bundleId\":null,\"hidden\":false,\"launchedAt\":null,\"name\":\"Éditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tline\",\"pid\":848,\"windows\":[{\"height\":480.0,\"title\":\"Éditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tline\",\"width\":640.0}]},{\"active\":false,\"bundle\":null,\"bundleId\":null,\"hidden\":false,\"launchedAt\":null,\"name\":\"Éditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tline\",\"pid\":849,\"windows\":[{\"height\":480.0,\"title\":\"Éditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tline\",\"width\":640.0}]},{\"active\":false,\"bundle\":null,\"bundleId\":null,\"hidden\":false,\"launchedAt\":null,\"name\":\"Éditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tline\",\"pid\":850,\"windows\":[{\"height\":480.0,\"title\":\"Éditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tline\",\"width\":640.0}]},{\"active\":false,\"bundle\":null,\"bundleId\":null,\"hidden\":false,\"launchedAt\":null,\"name\":\"Éditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tline\",\"pid\":851,\"windows\":[{\"height\":480.0,\"title\":\"Éditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tline\",\"width\":640.0}]},{\"active\":false,\"bundle\":null,\"bundleId\":null,\"hidden\":false,\"launchedAt\":null,\"name\":\"Éditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tline\",\"pid\":852,\"windows\":[{\"height\":480.0,\"title\":\"Éditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tline\",\"width\":640.0}]},{\"active\":false,\"bundle\":null,\"bundleId\":null,\"hidden\":false,\"launchedAt\":null,\"name\":\"Éditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tline\",\"pid\":853,\"windows\":[{\"height\":480.0,\"title\":\"Éditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tline\",\"width\":640.0}]},{\"active\":false,\"bundle\":null,\"bundleId\":null,\"hidden\":false,\"launchedAt\":null,\"name\":\"Éditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tline\",\"pid\":854,\"windows\":[{\"height\":480.0,\"title\":\"Éditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tline\",\"width\":640.0}]},{\"active\":false,\"bundle\":null,\"bundleId\":null,\"hidden\":false,\"launchedAt\":null,\"name\":\"Éditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tline\",\"pid\":855,\"windows\":[{\"height\":480.0,\"title\":\"Éditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tline\",\"width\":640.0}]},{\"active\":false,\"bundle\":null,\"bundleId\":null,\"hidden\":false,\"launchedAt\":null,\"name\":\"Éditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tline\",\"pid\":856,\"windows\":[{\"height\":480.0,\"title\":\"Éditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tline\",\"width\":640.0}]},{\"active\":false,\"bundle\":null,\"bundleId\":null,\"hidden\":false,\"launchedAt\":null,\"name\":\"Éditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tline\",\"pid\":857,\"windows\":[{\"height\":480.0,\"title\":\"Éditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tline\",\"width\":640.0}]},{\"active\":false,\"bundle\":null,\"bundleId\":null,\"hidden\":false,\"launchedAt\":null,\"name\":\"Éditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tline\",\"pid\":858,\"windows\":[{\"height\":480.0,\"title\":\"Éditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tline\",\"width\":640.0}]},{\"active\":false,\"bundle\":null,\"bundleId\":null,\"hidden\":false,\"launchedAt\":null,\"name\":\"Éditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tline\",\"pid\":859,\"windows\":[{\"height\":480.0,\"title\":\"Éditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tline\",\"width\":640.0}]},{\"active\":false,\"bundle\":null,\"bundleId\":null,\"hidden\":false,\"launchedAt\":null,\"name\":\"Éditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tline\",\"pid\":860,\"windows\":[{\"height\":480.0,\"title\":\"Éditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tline\",\"width\":640.0}]},{\"active\":false,\"bundle\":null,\"bundleId\":null,\"hidden\":false,\"launchedAt\":null,\"name\":\"Éditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tline\",\"pid\":861,\"windows\":[{\"height\":480.0,\"title\":\"Éditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tline\",\"width\":640.0}]},{\"active\":false,\"bundle\":null,\"bundleId\":null,\"hidden\":false,\"launchedAt\":null,\"name\":\"Éditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tline\",\"pid\":862,\"windows\":[{\"height\":480.0,\"title\":\"Éditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tline\",\"width\":640.0}]},{\"active\":false,\"bundle\":null,\"bundleId\":null,\"hidden\":false,\"launchedAt\":null,\"name\":\"Éditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tline\",\"pid\":863,\"windows\":[{\"height\":480.0,\"title\":\"Éditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tline\",\"width\":640.0}]},{\"active\":false,\"bundle\":null,\"bundleId\":null,\"hidden\":false,\"launchedAt\":null,\"name\":\"Éditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tline\",\"pid\":864,\"windows\":[{\"height\":480.0,\"title\":\"Éditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tline\",\"width\":640.0}]},{\"active\":false,\"bundle\":null,\"bundleId\":null,\"hidden\":false,\"launchedAt\":null,\"name\":\"Éditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tline\",\"pid\":865,\"windows\":[{\"height\":480.0,\"title\":\"Éditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tline\",\"width\":640.0}]},{\"active\":false,\"bundle\":null,\"bundleId\":null,\"hidden\":false,\"launchedAt\":null,\"name\":\"Éditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tline\",\"pid\":866,\"windows\":[{\"height\":480.0,\"title\":\"Éditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tline\",\"width\":640.0}]},{\"active\":false,\"bundle\":null,\"bundleId\":null,\"hidden\":false,\"launchedAt\":null,\"name\":\"Éditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tline\",\"pid\":867,\"windows\":[{\"height\":480.0,\"title\":\"Éditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tline\",\"width\":640.0}]},{\"active\":false,\"bundle\":null,\"bundleId\":null,\"hidden\":false,\"launchedAt\":null,\"name\":\"Éditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tline\",\"pid\":868,\"windows\":[{\"height\":480.0,\"title\":\"Éditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tline\",\"width\":640.0}]},{\"active\":false,\"bundle\":null,\"bundleId\":null,\"hidden\":false,\"launchedAt\":null,\"name\":\"Éditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tline\",\"pid\":869,\"windows\":[{\"height\":480.0,\"title\":\"Éditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tline\",\"width\":640.0}]},{\"active\":false,\"bundle\":null,\"bundleId\":null,\"hidden\":false,\"launchedAt\":null,\"name\":\"Éditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tline\",\"pid\":870,\"windows\":[{\"height\":480.0,\"title\":\"Éditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tline\",\"width\":640.0}]},{\"active\":false,\"bundle\":null,\"bundleId\":null,\"hidden\":false,\"launchedAt\":null,\"name\":\"Éditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tline\",\"pid\":871,\"windows\":[{\"height\":480.0,\"title\":\"Éditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tline\",\"width\":640.0}]},{\"active\":false,\"bundle\":null,\"bundleId\":null,\"hidden\":false,\"launchedAt\":null,\"name\":\"Éditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tline\",\"pid\":872,\"windows\":[{\"height\":480.0,\"title\":\"Éditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tline\",\"width\":640.0}]},{\"active\":false,\"bundle\":null,\"bundleId\":null,\"hidden\":false,\"launchedAt\":null,\"name\":\"Éditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tline\",\"pid\":873,\"windows\":[{\"height\":480.0,\"title\":\"Éditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tline\",\"width\":640.0}]},{\"active\":false,\"bundle\":null,\"bundleId\":null,\"hidden\":false,\"launchedAt\":null,\"name\":\"Éditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tline\",\"pid\":874,\"windows\":[{\"height\":480.0,\"title\":\"Éditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tline\",\"width\":640.0}]},{\"active\":false,\"bundle\":null,\"bundleId\":null,\"hidden\":false,\"launchedAt\":null,\"name\":\"Éditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tline\",\"pid\":875,\"windows\":[{\"height\":480.0,\"title\":\"Éditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tline\",\"width\":640.0}]},{\"active\":false,\"bundle\":null,\"bundleId\":null,\"hidden\":false,\"launchedAt\":null,\"name\":\"Éditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tline\",\"pid\":876,\"windows\":[{\"height\":480.0,\"title\":\"Éditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tline\",\"width\":640.0}]},{\"active\":false,\"bundle\":null,\"bundleId\":null,\"hidden\":false,\"launchedAt\":null,\"name\":\"Éditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tline\",\"pid\":877,\"windows\":[{\"height\":480.0,\"title\":\"Éditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tline\",\"width\":640.0}]},{\"active\":false,\"bundle\":null,\"bundleId\":null,\"hidden\":false,\"launchedAt\":null,\"name\":\"Éditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tline\",\"pid\":878,\"windows\":[{\"height\":480.0,\"title\":\"Éditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tline\",\"width\":640.0}]},{\"active\":false,\"bundle\":null,\"bundleId\":null,\"hidden\":false,\"launchedAt\":null,\"name\":\"Éditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tline\",\"pid\":879,\"windows\":[{\"height\":480.0,\"title\":\"Éditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tline\",\"width\":640.0}]},{\"active\":false,\"bundle\":null,\"bundleId\":null,\"hidden\":false,\"launchedAt\":null,\"name\":\"Éditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tline\",\"pid\":880,\"windows\":[{\"height\":480.0,\"title\":\"Éditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tline\",\"width\":640.0}]},{\"active\":false,\"bundle\":null,\"bundleId\":null,\"hidden\":false,\"launchedAt\":null,\"name\":\"Éditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tline\",\"pid\":881,\"windows\":[{\"height\":480.0,\"title\":\"Éditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tline\",\"width\":640.0}]},{\"active\":false,\"bundle\":null,\"bundleId\":null,\"hidden\":false,\"launchedAt\":null,\"name\":\"Éditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tline\",\"pid\":882,\"windows\":[{\"height\":480.0,\"title\":\"Éditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tline\",\"width\":640.0}]},{\"active\":false,\"bundle\":null,\"bundleId\":null,\"hidden\":false,\"launchedAt\":null,\"name\":\"Éditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tline\",\"pid\":883,\"windows\":[{\"height\":480.0,\"title\":\"Éditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tline\",\"width\":640.0}]},{\"active\":false,\"bundle\":null,\"bundleId\":null,\"hidden\":false,\"launchedAt\":null,\"name\":\"Éditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tline\",\"pid\":884,\"windows\":[{\"height\":480.0,\"title\":\"Éditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tline\",\"width\":640.0}]},{\"active\":false,\"bundle\":null,\"bundleId\":null,\"hidden\":false,\"launchedAt\":null,\"name\":\"Éditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tline\",\"pid\":885,\"windows\":[{\"height\":480.0,\"title\":\"Éditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tline\",\"width\":640.0}]},{\"active\":false,\"bundle\":null,\"bundleId\":null,\"hidden\":false,\"launchedAt\":null,\"name\":\"Éditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tline\",\"pid\":886,\"windows\":[{\"height\":480.0,\"title\":\"Éditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tline\",\"width\":640.0}]},{\"active\":false,\"bundle\":null,\"bundleId\":null,\"hidden\":false,\"launchedAt\":null,\"name\":\"Éditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tline\",\"pid\":887,\"windows\":[{\"height\":480.0,\"title\":\"Éditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tline\",\"width\":640.0}]},{\"active\":false,\"bundle\":null,\"bundleId\":null,\"hidden\":false,\"launchedAt\":null,\"name\":\"Éditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tline\",\"pid\":888,\"windows\":[{\"height\":480.0,\"title\":\"Éditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tline\",\"width\":640.0}]},{\"active\":false,\"bundle\":null,\"bundleId\":null,\"hidden\":false,\"launchedAt\":null,\"name\":\"Éditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tline\",\"pid\":889,\"windows\":[{\"height\":480.0,\"title\":\"Éditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tline\",\"width\":640.0}]},{\"active\":false,\"bundle\":null,\"bundleId\":null,\"hidden\":false,\"launchedAt\":null,\"name\":\"Éditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tline\",\"pid\":890,\"windows\":[{\"height\":480.0,\"title\":\"Éditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tline\",\"width\":640.0}]},{\"active\":false,\"bundle\":null,\"bundleId\":null,\"hidden\":false,\"launchedAt\":null,\"name\":\"Éditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tline\",\"pid\":891,\"windows\":[{\"height\":480.0,\"title\":\"Éditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tline\",\"width\":640.0}]}],\"canControl\":true,\"canResume\":true,\"control\":false}}}\n",
+      "bytes": 41622,
+      "rows": 80,
+      "rowsPointer": "/result/structuredContent/apps",
+      "newline": true
+    }
+  }
+]

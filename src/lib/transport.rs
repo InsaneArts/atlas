@@ -458,6 +458,25 @@ mod tests {
     use std::{cell::Cell, error::Error as _, io, sync::Arc, time::Duration};
     use tokio::time::{Instant, timeout};
 
+    #[test]
+    fn output_cost_counts_events_only_when_they_are_sent() {
+        let fixtures: Vec<serde_json::Value> =
+            serde_json::from_str(include_str!("../../tests/fixtures/reply-cost/run.json")).unwrap();
+        for fixture in fixtures {
+            let reply = &fixture["input"];
+            crate::test_support::reply_cost(reply, &fixture["eventCost"]);
+            if let Some(bytes) = fixture["decodedBytes"].as_u64() {
+                assert_eq!(
+                    run_output(reply, OUTPUT_LIMIT).unwrap().len(),
+                    bytes as usize
+                );
+            } else {
+                assert_eq!(run_output(reply, OUTPUT_LIMIT), Err(OutputError::Malformed));
+            }
+            crate::test_support::reply_cost(&with_output(reply.clone()), &fixture);
+        }
+    }
+
     fn endpoint() -> Transport {
         Transport {
             path: "/tmp/atlas-test.sock".into(),

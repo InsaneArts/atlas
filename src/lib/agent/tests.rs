@@ -3476,3 +3476,71 @@ async fn looks_and_window_lists_fail_when_window_memory_cannot_be_replaced() {
         assert!(result.is_err(), "listing: {listing}");
     }
 }
+
+#[test]
+fn element_reply_cost_preserves_listing_and_refusal_words() {
+    let fixtures: Vec<Value> = serde_json::from_str(include_str!(
+        "../../../tests/fixtures/reply-cost/elements.json"
+    ))
+    .unwrap();
+    for fixture in fixtures {
+        let scanned = Scanned::from_probe(fixture["input"].clone()).unwrap();
+        let listed = listing(
+            812,
+            &scanned,
+            &ElementFilter::default(),
+            fixture["max"].as_u64().unwrap() as usize,
+            fixture["full"] == true,
+        );
+        crate::test_support::reply_cost(&listed, &fixture);
+    }
+    let fixtures: Vec<Value> = serde_json::from_str(include_str!(
+        "../../../tests/fixtures/reply-cost/choose.json"
+    ))
+    .unwrap();
+    for fixture in fixtures {
+        let elements: Vec<Element> = serde_json::from_value(fixture["input"].clone()).unwrap();
+        let error = choose(&elements, &named(fixture["name"].as_str().unwrap())).unwrap_err();
+        crate::test_support::reply_cost(&serde_json::to_value(error).unwrap(), &fixture);
+    }
+}
+
+#[tokio::test]
+async fn representative_element_reads_keep_their_helper_request_counts() {
+    use crate::test_support::{Helper, UID, completed};
+
+    let fixtures: Vec<Value> = serde_json::from_str(include_str!(
+        "../../../tests/fixtures/reply-cost/elements.json"
+    ))
+    .unwrap();
+    for fixture in fixtures {
+        let dir = tempfile::tempdir().unwrap();
+        let (client, helper) = Helper::client(dir.path(), UID);
+        let mut operations = Vec::new();
+        let listed = helper
+            .serve(
+                elements(
+                    &client,
+                    &Target::Name("TextEdit".into()),
+                    &ElementFilter::default(),
+                    fixture["max"].as_u64().unwrap() as usize,
+                    fixture["full"] == true,
+                ),
+                |request| {
+                    operations.push(request["op"].as_str().unwrap().to_owned());
+                    if request["op"] == "run" {
+                        assert_eq!(request["argv"][1], "elements-info");
+                        Some(completed(&fixture["input"].to_string()))
+                    } else {
+                        textedit_reads(request)
+                    }
+                },
+            )
+            .await
+            .unwrap();
+        crate::test_support::reply_cost(&listed, &fixture);
+        assert_eq!(json!(operations), fixture["helperOperations"]);
+        assert_eq!(json!(helper.proofs()), fixture["helperProofs"]);
+        assert_eq!(json!(helper.requests()), fixture["helperRequests"]);
+    }
+}
