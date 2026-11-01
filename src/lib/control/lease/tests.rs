@@ -355,46 +355,64 @@ async fn a_permit_requires_a_live_token_and_excludes_another_input() {
     assert_eq!(controller.acquire(false).unwrap_err().code, "busy");
 }
 
+fn with_watchdog(scenario: impl FnOnce() + Send + 'static) {
+    let (finished, completion) = std::sync::mpsc::channel();
+    // Keep blocking work and its unwind cleanup off the waiting test thread.
+    // Detaching on timeout lets the test fail even if a Drop or join stalls.
+    std::thread::spawn(move || {
+        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(scenario));
+        let _ = finished.send(result);
+    });
+    if let Err(panic) = completion
+        .recv_timeout(Duration::from_secs(30))
+        .expect("permit scenario did not complete")
+    {
+        std::panic::resume_unwind(panic);
+    }
+}
+
 #[test]
 fn a_contended_permit_settles_in_a_runtime_task() {
-    let directory = tempfile::tempdir().unwrap();
-    let controller = Controller::at(505, directory.path());
-    let lease = Arc::new(Mutex::new(Lease::default()));
-    let start = Instant::now() + Duration::from_secs(3600);
-    let owner = lease
-        .blocking_lock()
-        .acquire_at(&controller, start, || start)
-        .unwrap();
-    let (parked, waiting) = std::sync::mpsc::channel();
-    let runtime = tokio::runtime::Builder::new_current_thread()
-        .on_thread_park(move || {
-            let _ = parked.send(());
-        })
-        .build()
-        .unwrap();
-    let permit = runtime
-        .block_on(ActionPermit::begin(lease.clone(), &owner))
-        .unwrap();
-    let mut held = lease.blocking_lock();
-    held.release_at(start);
-    {
-        let _entered = runtime.enter();
-        drop(permit);
-    }
-    assert!(held.inflight && held.descriptor.is_some());
-    assert_eq!(controller.acquire(false).unwrap_err().code, "busy");
-    assert!(waiting.try_recv().is_err());
-    let (finish, finished) = tokio::sync::oneshot::channel();
-    let worker = std::thread::spawn(move || runtime.block_on(finished).unwrap());
-    // A current-thread runtime parks only after its spawned cleanup has
-    // queued for the held mutex. The next guard follows that cleanup.
-    waiting.recv().unwrap();
-    drop(held);
-    let state = lease.blocking_lock();
-    assert!(!state.inflight && state.descriptor.is_none());
-    assert!(controller.acquire(false).is_ok());
-    finish.send(()).unwrap();
-    worker.join().unwrap();
+    with_watchdog(|| {
+        let directory = tempfile::tempdir().unwrap();
+        let controller = Controller::at(505, directory.path());
+        let lease = Arc::new(Mutex::new(Lease::default()));
+        let start = Instant::now() + Duration::from_secs(3600);
+        let owner = lease
+            .blocking_lock()
+            .acquire_at(&controller, start, || start)
+            .unwrap();
+        let (parked, waiting) = std::sync::mpsc::channel();
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .on_thread_park(move || {
+                let _ = parked.send(());
+            })
+            .build()
+            .unwrap();
+        let permit = runtime
+            .block_on(ActionPermit::begin(lease.clone(), &owner))
+            .unwrap();
+        let mut held = lease.blocking_lock();
+        held.release_at(start);
+        {
+            let _entered = runtime.enter();
+            drop(permit);
+        }
+        assert!(held.inflight && held.descriptor.is_some());
+        assert_eq!(controller.acquire(false).unwrap_err().code, "busy");
+        assert!(waiting.try_recv().is_err());
+        let (finish, finished) = tokio::sync::oneshot::channel();
+        let worker = std::thread::spawn(move || runtime.block_on(finished).unwrap());
+        // A current-thread runtime parks only after its spawned cleanup has
+        // queued for the held mutex. The next guard follows that cleanup.
+        waiting.recv_timeout(Duration::from_secs(5)).unwrap();
+        drop(held);
+        let state = lease.blocking_lock();
+        assert!(!state.inflight && state.descriptor.is_none());
+        assert!(controller.acquire(false).is_ok());
+        finish.send(()).unwrap();
+        worker.join().unwrap();
+    });
 }
 
 thread_local! {
@@ -413,48 +431,52 @@ pub(super) fn blocking_drop_started() {
 
 #[test]
 fn a_permit_settles_without_a_runtime() {
-    let directory = tempfile::tempdir().unwrap();
-    let controller = Controller::at(505, directory.path());
-    let lease = Arc::new(Mutex::new(Lease::default()));
-    let start = Instant::now() + Duration::from_secs(3600);
-    let owner = lease
-        .blocking_lock()
-        .acquire_at(&controller, start, || start)
-        .unwrap();
-    let runtime = tokio::runtime::Builder::new_current_thread()
-        .build()
-        .unwrap();
-    let permit = runtime
-        .block_on(ActionPermit::begin(lease.clone(), &owner))
-        .unwrap();
-    drop(runtime);
-    let (acquired, locked) = std::sync::mpsc::channel();
-    let (proceed, continued) = std::sync::mpsc::channel();
-    let holder = std::thread::spawn({
-        let lease = lease.clone();
-        move || {
-            let mut held = lease.blocking_lock();
-            held.release_at(start);
-            acquired.send(()).unwrap();
-            continued.recv().unwrap();
-        }
+    with_watchdog(|| {
+        let directory = tempfile::tempdir().unwrap();
+        let controller = Controller::at(505, directory.path());
+        let lease = Arc::new(Mutex::new(Lease::default()));
+        let start = Instant::now() + Duration::from_secs(3600);
+        let owner = lease
+            .blocking_lock()
+            .acquire_at(&controller, start, || start)
+            .unwrap();
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .build()
+            .unwrap();
+        let permit = runtime
+            .block_on(ActionPermit::begin(lease.clone(), &owner))
+            .unwrap();
+        drop(runtime);
+        let (acquired, locked) = std::sync::mpsc::channel();
+        let (proceed, continued) = std::sync::mpsc::channel();
+        let holder = std::thread::spawn({
+            let lease = lease.clone();
+            move || {
+                let mut held = lease.blocking_lock();
+                held.release_at(start);
+                acquired.send(()).unwrap();
+                continued.recv_timeout(Duration::from_secs(5)).unwrap();
+            }
+        });
+        locked.recv_timeout(Duration::from_secs(5)).unwrap();
+        assert_eq!(controller.acquire(false).unwrap_err().code, "busy");
+        let (started, dropping_started) = std::sync::mpsc::channel();
+        let (finished, completion) = std::sync::mpsc::channel();
+        let dropping = std::thread::spawn(move || {
+            BLOCKING_DROP.with(|signal| *signal.borrow_mut() = Some(started));
+            drop(permit);
+            finished.send(()).unwrap();
+        });
+        dropping_started
+            .recv_timeout(Duration::from_secs(5))
+            .unwrap();
+        assert!(completion.try_recv().is_err());
+        proceed.send(()).unwrap();
+        completion.recv_timeout(Duration::from_secs(5)).unwrap();
+        dropping.join().unwrap();
+        holder.join().unwrap();
+        let state = lease.blocking_lock();
+        assert!(!state.inflight && state.descriptor.is_none());
+        assert!(controller.acquire(false).is_ok());
     });
-    locked.recv().unwrap();
-    assert_eq!(controller.acquire(false).unwrap_err().code, "busy");
-    let (started, dropping_started) = std::sync::mpsc::channel();
-    let (finished, completion) = std::sync::mpsc::channel();
-    let dropping = std::thread::spawn(move || {
-        BLOCKING_DROP.with(|signal| *signal.borrow_mut() = Some(started));
-        drop(permit);
-        finished.send(()).unwrap();
-    });
-    dropping_started.recv().unwrap();
-    assert!(completion.try_recv().is_err());
-    proceed.send(()).unwrap();
-    completion.recv().unwrap();
-    dropping.join().unwrap();
-    holder.join().unwrap();
-    let state = lease.blocking_lock();
-    assert!(!state.inflight && state.descriptor.is_none());
-    assert!(controller.acquire(false).is_ok());
 }
