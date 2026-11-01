@@ -5,8 +5,8 @@ use objc2_app_kit::{NSApplicationActivationPolicy, NSRunningApplication, NSWorks
 use serde_json::{Value, json};
 
 #[derive(serde::Serialize)]
-pub struct Running {
-    pub pid: i32,
+pub(crate) struct Running {
+    pub(crate) pid: i32,
     #[serde(flatten)]
     fields: Value,
 }
@@ -24,7 +24,7 @@ fn policy(policy: NSApplicationActivationPolicy) -> &'static str {
 /// those that have no process (macOS may still list one that quit, its
 /// process ID -1). Called on worker threads, so each call drains its own
 /// autorelease pool.
-pub fn running() -> Vec<Running> {
+pub(crate) fn running() -> Vec<Running> {
     objc2::rc::autoreleasepool(|_| {
         NSWorkspace::sharedWorkspace()
             .runningApplications()
@@ -52,7 +52,7 @@ pub fn running() -> Vec<Running> {
 /// The bundle identifier of the app running as process `pid`, when one
 /// does and has one. Called on worker threads, so it drains its own
 /// autorelease pool.
-pub fn bundle_id(pid: i64) -> Option<String> {
+pub(crate) fn bundle_id(pid: i64) -> Option<String> {
     bundle_id_with(pid, |pid| {
         objc2::rc::autoreleasepool(|_| {
             NSRunningApplication::runningApplicationWithProcessIdentifier(pid)?

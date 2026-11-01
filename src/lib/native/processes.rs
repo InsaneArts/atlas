@@ -8,7 +8,7 @@ use std::collections::BTreeMap;
 /// Read rows between process observations. Only a helper process present
 /// throughout the read receives an identity. Other rows (including the
 /// Window Server's menu bar) remain visible but cannot resolve an input target.
-pub fn snapshot<T>(
+pub(crate) fn snapshot<T>(
     read: impl FnOnce() -> Result<Vec<T>>,
     pid: impl Fn(&T) -> i64,
 ) -> Result<(Vec<T>, BTreeMap<i64, Start>)> {

@@ -2,11 +2,12 @@
 //! of an element, bounded by the traversal's deadline, and the record of
 //! what failed, what was cut and why the traversal is incomplete.
 use super::{
-    ABSENT, Frame, INCOMPLETE, Stop,
+    ABSENT, INCOMPLETE,
     batch::{BATCH, Batch, Slot, Source},
     ffi,
     text::{bounded_string, getter_failed, prefix_range, prefix_text},
 };
+use crate::screen::{elements::Stop, geometry::Frame};
 use objc2_application_services::{AXError, AXUIElement, AXValue};
 use objc2_core_foundation::{CFArray, CFBoolean, CFIndex, CFNumber, CFRetained, CFString, CFType};
 use std::{collections::BTreeSet, time::Instant};

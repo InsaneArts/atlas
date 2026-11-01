@@ -25,31 +25,31 @@ use objc2_image_io::{
 const BGRA: u32 = CGImageAlphaInfo::PremultipliedFirst.0 | CGImageByteOrderInfo::Order32Little.0;
 
 /// One encoded screenshot.
-pub struct Shot {
-    pub png: Vec<u8>,
-    pub width: u32,
-    pub height: u32,
+pub(crate) struct Shot {
+    pub(crate) png: Vec<u8>,
+    pub(crate) width: u32,
+    pub(crate) height: u32,
     /// The display's backing pixels per point, measured before any
     /// downscaling: an image shrunk to fit a limit holds fewer pixels per
     /// point than this.
-    pub scale: f64,
+    pub(crate) scale: f64,
 }
 
 /// Whether this process may record the screen.
-pub fn permitted() -> bool {
+pub(crate) fn permitted() -> bool {
     CGPreflightScreenCaptureAccess()
 }
 
 /// Ask macOS for Screen Recording, so Atlas appears in System Settings
 /// with a prompt in the helper's session. Returns whether it is allowed now;
 /// a grant takes effect for the next process.
-pub fn request() -> bool {
+pub(crate) fn request() -> bool {
     CGRequestScreenCaptureAccess()
 }
 
 /// The size `width`×`height` scales to so that neither side exceeds `limit`,
 /// keeping the aspect ratio; unchanged when it already fits.
-pub fn fit(width: usize, height: usize, limit: Option<u32>) -> (usize, usize) {
+pub(crate) fn fit(width: usize, height: usize, limit: Option<u32>) -> (usize, usize) {
     let Some(limit) = limit.map(|l| l as usize) else {
         return (width, height);
     };
@@ -67,7 +67,7 @@ pub fn fit(width: usize, height: usize, limit: Option<u32>) -> (usize, usize) {
 
 /// `limit`, lowered to `points`, the captured area's longer side in display
 /// points (rounded up), so the picture holds at most one pixel per point.
-pub fn per_point(limit: Option<u32>, points: f64) -> Option<u32> {
+pub(crate) fn per_point(limit: Option<u32>, points: f64) -> Option<u32> {
     let side = (points.ceil() as u32).max(1);
 
     Some(limit.map_or(side, |limit| limit.min(side)))
@@ -143,7 +143,7 @@ fn encoded(
 /// A screenshot's PNG as a JPEG of `quality` (0 to 1), at most `limit`
 /// pixels on its longest side: small enough to send to an agent app many
 /// times a minute. Its size comes with it.
-pub fn jpeg(png: &[u8], limit: u32, quality: f64) -> Result<(Vec<u8>, u32, u32)> {
+pub(crate) fn jpeg(png: &[u8], limit: u32, quality: f64) -> Result<(Vec<u8>, u32, u32)> {
     let failed = || Error::new(Code::Capture, "The screenshot could not be read");
     let data = CFData::from_bytes(png);
     // SAFETY: live data holding the image, and no options dictionary.
@@ -173,7 +173,7 @@ pub fn jpeg(png: &[u8], limit: u32, quality: f64) -> Result<(Vec<u8>, u32, u32)>
 /// An app's icon as a `size`×`size` PNG, from `image` holding it at
 /// several sizes (the TIFF AppKit gives): drawn from the smallest of them at
 /// least `size` across, else from the largest.
-pub fn icon_png(image: &[u8], size: usize) -> Result<Vec<u8>> {
+pub(crate) fn icon_png(image: &[u8], size: usize) -> Result<Vec<u8>> {
     let failed = || Error::new(Code::Capture, "The icon could not be read");
     let data = CFData::from_bytes(image);
     // SAFETY: live data holding the image, and no options dictionary.
@@ -236,7 +236,7 @@ fn banded(width: usize, height: usize, rows: usize) -> CFRetained<CGImage> {
 
 /// The checked main display, or only `area` of it (in global display
 /// points), at most `limit` pixels on its longest side.
-pub fn main_display(display: u32, area: Option<CGRect>, limit: Option<u32>) -> Result<Shot> {
+pub(crate) fn main_display(display: u32, area: Option<CGRect>, limit: Option<u32>) -> Result<Shot> {
     if !permitted() {
         return Err(Error::new(
             Code::Permission,

@@ -115,13 +115,12 @@ impl Expected {
         let [action] = actions else {
             return Ok(None);
         };
-        if !action.remembers_target() {
-            return Ok(None);
-        }
         let (x, y) = match action.target() {
             ActionTarget::Point(x, y) => (x, y),
             ActionTarget::Drag { from, .. } => from,
-            ActionTarget::Keys | ActionTarget::Nothing => return Ok(None),
+            ActionTarget::Keys | ActionTarget::Nothing | ActionTarget::Pointer(..) => {
+                return Ok(None);
+            }
         };
         let Some(session) = client.host_session.as_ref() else {
             return Ok(None);

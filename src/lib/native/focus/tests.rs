@@ -2,7 +2,7 @@
 //! the reason when anything is out of place, and that the check itself
 //! never moves focus.
 use super::*;
-use crate::native::ax::Frame;
+use crate::{actions::Action, screen::geometry::Frame};
 
 const APP: i64 = 812;
 const OTHER: i64 = 900;
@@ -177,6 +177,24 @@ fn point_with(look: &mut Seen, x: f64, y: f64) -> Result<Option<&'static str>> {
 }
 
 #[test]
+fn retained_pointer_gestures_use_the_same_destination_guards_as_discrete_points() {
+    for focused in [None, Some(APP), Some(OTHER)] {
+        for (x, y) in [(300.0, 650.0), (450.0, 350.0), (300.0, 770.0)] {
+            for expected in [expect(), in_document()] {
+                let seen = || {
+                    Seen::focused(focused)
+                        .showing(under_the_dock())
+                        .docked(icons())
+                };
+                let check =
+                    |need| json!(require(&expected, need, &display(), &mut seen(), later(),));
+                assert_eq!(check(Need::Pointer(x, y)), check(Need::Point(x, y)));
+            }
+        }
+    }
+}
+
+#[test]
 fn remembered_targeting_uses_the_same_point_as_focus_admission() {
     let cases = [
         (
@@ -207,24 +225,27 @@ fn remembered_targeting_uses_the_same_point_as_focus_admission() {
         (json!({"type":"wait","ms":0}), Need::Nothing, false),
         (
             json!({"type":"pointer","phase":"down","x":10,"y":20}),
-            Need::Point(10.0, 20.0),
+            Need::Pointer(10.0, 20.0),
             false,
         ),
         (
             json!({"type":"pointer","phase":"move","x":10,"y":20}),
-            Need::Point(10.0, 20.0),
+            Need::Pointer(10.0, 20.0),
             false,
         ),
         (
             json!({"type":"pointer","phase":"up","x":10,"y":20}),
-            Need::Point(10.0, 20.0),
+            Need::Pointer(10.0, 20.0),
             false,
         ),
     ];
     for (wire, expected, remembered) in cases {
         let action: Action = serde_json::from_value(wire).unwrap();
-        assert_eq!(Need::of(&action), expected);
-        assert_eq!(action.remembers_target(), remembered);
+        assert_eq!(action.target(), expected);
+        assert_eq!(
+            matches!(action.target(), Need::Point(..) | Need::Drag { .. }),
+            remembered
+        );
         assert_eq!(action.target(), expected);
     }
 }
@@ -464,7 +485,7 @@ fn a_drag_is_refused_when_it_would_drop_on_the_dock() {
 #[test]
 fn each_action_needs_what_it_touches_first() {
     let need =
-        |action: serde_json::Value| Need::of(&serde_json::from_value::<Action>(action).unwrap());
+        |action: serde_json::Value| serde_json::from_value::<Action>(action).unwrap().target();
 
     assert_eq!(need(json!({"type": "type", "text": "hi"})), Need::Keys);
     assert_eq!(need(json!({"type": "key", "key": "cmd+s"})), Need::Keys);
@@ -487,7 +508,7 @@ fn each_action_needs_what_it_touches_first() {
     for phase in ["down", "move", "up"] {
         assert_eq!(
             need(json!({"type": "pointer", "phase": phase, "x": 9, "y": 10})),
-            Need::Point(9.0, 10.0),
+            Need::Pointer(9.0, 10.0),
             "a pointer's {phase} may press, carry or drop"
         );
     }

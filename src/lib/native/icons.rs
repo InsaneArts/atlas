@@ -6,7 +6,7 @@ use objc2_foundation::NSString;
 use std::path::Path;
 
 /// The icon of the app bundle at `bundle` as a `size`×`size` PNG.
-pub fn png(bundle: &Path, size: usize) -> Result<Vec<u8>> {
+pub(crate) fn png(bundle: &Path, size: usize) -> Result<Vec<u8>> {
     let missing = || Error::new(Code::Apps, "The app's icon could not be read");
     // Finder's generic icon stands in for a bundle that is not there; no
     // icon is better than a wrong one.

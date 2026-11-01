@@ -3,7 +3,8 @@
 use super::{batch::Source, ffi, scan::Scan};
 use crate::{
     error::{Code, Error, Result},
-    native::windows::{self, Dock},
+    native::windows as native_windows,
+    screen::windows::{self, Dock},
 };
 use objc2_application_services::{AXError, AXUIElement};
 use objc2_core_foundation::{CFRetained, CFString};
@@ -13,7 +14,7 @@ use std::time::{Duration, Instant};
 /// Accessibility reports it; None when no application has it. Waits at most
 /// `timeout`. This sets the calling process's messaging timeout, which the
 /// input service uses for nothing else.
-pub fn focused_pid(timeout: Duration) -> Result<Option<i64>> {
+pub(in crate::native) fn focused_pid(timeout: Duration) -> Result<Option<i64>> {
     let unreadable = || Error::new(Code::Native, "The focused app could not be read");
 
     let system = ffi::system_wide().ok_or_else(unreadable)?;
@@ -40,7 +41,7 @@ pub fn focused_pid(timeout: Duration) -> Result<Option<i64>> {
 }
 
 /// The longest a read of where the Dock takes clicks may take.
-pub const DOCK_TIMEOUT: Duration = Duration::from_millis(250);
+pub(crate) const DOCK_TIMEOUT: Duration = Duration::from_millis(250);
 
 /// Most children of the Dock's application element read; it has one list.
 const DOCK_CHILDREN: usize = 16;
@@ -51,7 +52,7 @@ const DOCK_CHILDREN: usize = 16;
 /// A Dock that shows anything but lists of icons is [`Dock::Other`], and
 /// one that cannot all be read in time is [`Dock::Unread`]; either covers
 /// all of its window.
-pub fn dock(windows: &[windows::Window], timeout: Duration) -> Dock {
+pub(crate) fn dock(windows: &[windows::Window], timeout: Duration) -> Dock {
     let Some(pid) = windows
         .iter()
         .find(|window| window.is_dock())
@@ -107,12 +108,12 @@ pub fn dock(windows: &[windows::Window], timeout: Duration) -> Dock {
 }
 
 /// Find a pressable Dock item, or leave ordinary points to pointer input.
-pub(crate) fn dock_item(
+pub(in crate::native) fn dock_item(
     display: windows::Bounds,
     x: f64,
     y: f64,
 ) -> Result<Option<CFRetained<AXUIElement>>> {
-    let windows = windows::windows()?;
+    let windows = native_windows::windows()?;
     let screen = windows::Screen::new(display, dock(&windows, DOCK_TIMEOUT));
     let Some(window) = windows::top_at(&windows, x, y, &screen).filter(|w| w.is_dock()) else {
         return Ok(None);

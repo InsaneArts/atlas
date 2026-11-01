@@ -1,7 +1,7 @@
 //! Checks of the scan's bookkeeping, the bounds it keeps on text, and how
 //! what it reads is placed and reported.
 use super::{
-    ABSENT, Element, Frame, INCOMPLETE, Limits, Stop,
+    ABSENT, Element, Frame, INCOMPLETE, Limits,
     batch::{BATCH, Batch, Slot, Source, slot},
     elements, ffi,
     menus::{Step, judge, skip_nested_menu},
@@ -10,7 +10,7 @@ use super::{
     text::{TEXT_LIMIT, TEXT_ROLES, bounded_string, prefix_range, prefix_text},
     tree::{reachable, sheet_window, unreachable},
 };
-use crate::screen::elements::why;
+use crate::screen::elements::{Stop, why};
 use objc2_application_services::{AXError, AXUIElement};
 use objc2_core_foundation::{
     CFArray, CFBoolean, CFIndex, CFNumber, CFRetained, CFString, CFType, Type,

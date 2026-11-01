@@ -12,7 +12,7 @@ use std::time::Duration;
 
 #[derive(Debug, Deserialize)]
 #[serde(tag = "type", rename_all = "lowercase", deny_unknown_fields)]
-pub enum Action {
+pub(crate) enum Action {
     Pointer {
         phase: PointerPhase,
         x: f64,
@@ -74,7 +74,12 @@ pub enum Action {
 pub(crate) enum Target {
     Keys,
     Point(f64, f64),
-    Drag { from: (f64, f64), to: (f64, f64) },
+    /// A retained pointer gesture checks its point without consulting window memory.
+    Pointer(f64, f64),
+    Drag {
+        from: (f64, f64),
+        to: (f64, f64),
+    },
     Nothing,
 }
 
@@ -82,10 +87,10 @@ impl Action {
     pub(crate) fn target(&self) -> Target {
         match self {
             Self::Type { .. } | Self::Key { .. } => Target::Keys,
-            Self::Click { x, y, .. }
-            | Self::Scroll { x, y, .. }
-            | Self::Move { x, y }
-            | Self::Pointer { x, y, .. } => Target::Point(*x, *y),
+            Self::Click { x, y, .. } | Self::Scroll { x, y, .. } | Self::Move { x, y } => {
+                Target::Point(*x, *y)
+            }
+            Self::Pointer { x, y, .. } => Target::Pointer(*x, *y),
             Self::Drag {
                 from_x,
                 from_y,
@@ -97,17 +102,6 @@ impl Action {
                 to: (*to_x, *to_y),
             },
             Self::Wait { .. } => Target::Nothing,
-        }
-    }
-
-    pub(crate) fn remembers_target(&self) -> bool {
-        match self {
-            Self::Click { .. } | Self::Scroll { .. } | Self::Move { .. } | Self::Drag { .. } => {
-                true
-            }
-            Self::Pointer { .. } | Self::Type { .. } | Self::Key { .. } | Self::Wait { .. } => {
-                false
-            }
         }
     }
 }
@@ -152,7 +146,7 @@ pub enum Button {
 
 #[derive(Clone, Copy, Debug, Deserialize)]
 #[serde(rename_all = "lowercase")]
-pub enum PointerPhase {
+pub(crate) enum PointerPhase {
     Down,
     Move,
     Up,

@@ -14,18 +14,17 @@ mod ffi;
 mod keyboard;
 mod menus;
 mod scan;
-mod stop;
 mod system;
 mod text;
 mod tree;
 
-pub use crate::screen::elements::{Element, Frame, Limits, Snapshot, Stop};
-pub(crate) use bring::{bring, check_application, target_application};
-pub(crate) use ffi::act;
-pub(crate) use keyboard::{Focused, Judged, Keyboard, Unread, Within, frontmost, keyboard};
-pub(crate) use stop::telling;
-pub(crate) use system::dock_item;
-pub use system::{DOCK_TIMEOUT, dock, focused_pid};
+pub use crate::screen::elements::{Element, Frame, Limits, Snapshot};
+pub(super) use bring::{bring, check_application, target_application};
+pub(super) use ffi::act;
+pub(super) use keyboard::{Focused, Judged, Keyboard, Unread, Within, frontmost, keyboard};
+pub(super) use system::dock_item;
+pub(super) use system::focused_pid;
+pub(crate) use system::{DOCK_TIMEOUT, dock};
 pub use tree::elements;
 
 /// AX errors meaning the element could not be read at all: the request could
@@ -44,6 +43,16 @@ const ABSENT: [AXError; 3] = [
     AXError::AttributeUnsupported,
     AXError::NotImplemented,
 ];
+
+/// Whether an `"attribute:code"` error key says something went wrong,
+/// rather than that the element simply lacks the attribute.
+pub(crate) fn telling(key: &str) -> bool {
+    let code = key
+        .rsplit_once(':')
+        .and_then(|(_, code)| code.parse::<i32>().ok());
+
+    code.is_none_or(|code| !ABSENT.iter().any(|absent| absent.0 == code))
+}
 
 #[cfg(test)]
 mod tests;

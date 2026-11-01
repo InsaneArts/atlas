@@ -1,21 +1,20 @@
-//! On-screen windows of the current graphical session, front to back, read
-//! inside the helper login through CGWindowList. Read-only; titles appear only
-//! where the session's capture permission allows them.
-pub use super::geometry::Bounds;
+//! Observed windows, front to back, and portable interpretation of where
+//! their visible regions route input. Native readers supply the observations.
+pub(crate) use super::geometry::Bounds;
 use super::geometry::Frame;
 use serde::{Deserialize, Serialize};
 
 /// The layer an open menu's window sits on (the pop-up menu level): menu
 /// bar, status item and context menus alike.
-pub const MENU_LAYER: i64 = 101;
+pub(crate) const MENU_LAYER: i64 = 101;
 
 /// The layer of the menu bar itself, a window of the Window Server's that
 /// shows the frontmost app's titles.
-pub const MENU_BAR_LAYER: i64 = 24;
+pub(crate) const MENU_BAR_LAYER: i64 = 24;
 
 /// Layers from the Dock's up hold the Dock, the menu bar and system overlays,
 /// never an app's own windows.
-pub const DOCK_LAYER: i64 = 20;
+pub(crate) const DOCK_LAYER: i64 = 20;
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -126,7 +125,7 @@ impl Window {
 /// What kind of window Accessibility says a window is, by its subrole,
 /// which tells at which layers the window list can show it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Kind {
+pub(crate) enum Kind {
     /// A floating panel, never at the ordinary layer.
     Floating,
     /// A document window, a dialog, a sheet or anything else: at the
@@ -137,7 +136,7 @@ pub enum Kind {
 
 impl Kind {
     /// The kind a window's subrole names.
-    pub fn of(subrole: Option<&str>) -> Self {
+    pub(crate) fn of(subrole: Option<&str>) -> Self {
         match subrole {
             Some("AXFloatingWindow" | "AXSystemFloatingWindow") => Self::Floating,
             _ => Self::Other,
@@ -155,7 +154,7 @@ impl Kind {
 
 /// Which listed window a window Accessibility describes is.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Listed {
+pub(crate) enum Listed {
     /// This one, and only this one.
     One(i64),
     /// None of them.
@@ -180,7 +179,7 @@ fn framed<'a>(
 /// window of process `pid` at its `frame` (see [`framed`]), those whose
 /// layer its `kind` admits and whose title, when both are known, holds the
 /// other's (Chrome adds its own name to what Accessibility reports).
-pub fn described(
+pub(crate) fn described(
     windows: &[Window],
     pid: i64,
     frame: &Frame,
@@ -205,7 +204,7 @@ pub fn described(
 /// and clicking the element: of the app's own windows and open menus at
 /// that frame (see [`framed`]), an ordinary window wins over a same-sized
 /// overlay. None when no window, or more than one, is left.
-pub fn owning_window(windows: &[Window], pid: i64, frame: &Frame) -> Option<i64> {
+pub(crate) fn owning_window(windows: &[Window], pid: i64, frame: &Frame) -> Option<i64> {
     let matching: Vec<&Window> = framed(windows, pid, frame)
         .filter(|window| window.is_apps_or_menu())
         .collect();
@@ -266,18 +265,18 @@ impl Dock {
 /// What pointer events are judged against: the display, and where its
 /// Dock takes clicks.
 #[derive(Debug, Clone, PartialEq)]
-pub struct Screen {
+pub(crate) struct Screen {
     display: Bounds,
     dock: Dock,
 }
 
 impl Screen {
-    pub fn new(display: Bounds, dock: Dock) -> Self {
+    pub(crate) fn new(display: Bounds, dock: Dock) -> Self {
         Self { display, dock }
     }
 
     /// Where the Dock takes clicks.
-    pub fn dock(&self) -> &Dock {
+    pub(crate) fn dock(&self) -> &Dock {
         &self.dock
     }
 
@@ -293,7 +292,7 @@ impl Screen {
 /// windows, front to back, and, when asked for, where the Dock takes
 /// clicks.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub struct Shown {
+pub(crate) struct Shown {
     pub windows: Vec<Window>,
     /// Process identities from this snapshot; absent when the reader could not provide them.
     pub starts: Option<std::collections::BTreeMap<i64, crate::process::Start>>,
@@ -303,7 +302,7 @@ pub struct Shown {
 }
 
 /// What the helper daemon reported; None when it did not answer whole.
-pub fn from_reply(value: &serde_json::Value) -> Option<Shown> {
+pub(crate) fn from_reply(value: &serde_json::Value) -> Option<Shown> {
     (value["ok"] == true)
         .then(|| Shown::deserialize(value).ok())
         .flatten()
@@ -315,7 +314,13 @@ pub fn from_reply(value: &serde_json::Value) -> Option<Shown> {
 /// are click-through overlays, the Dock's only away from where it takes
 /// clicks; every other window in front, the menu bar and any unidentified
 /// overlay included, occludes.
-pub fn unobstructed(windows: &[Window], target: i64, x: f64, y: f64, screen: &Screen) -> bool {
+pub(crate) fn unobstructed(
+    windows: &[Window],
+    target: i64,
+    x: f64,
+    y: f64,
+    screen: &Screen,
+) -> bool {
     let Some(index) = windows.iter().position(|window| window.number == target) else {
         return false;
     };
@@ -333,7 +338,12 @@ pub fn unobstructed(windows: &[Window], target: i64, x: f64, y: f64, screen: &Sc
 /// full-display click-through overlays above the ordinary layer, the same
 /// overlays [`unobstructed`] passes over. Where the Dock takes clicks that
 /// is the Dock's window. `windows` is front to back.
-pub fn top_at<'a>(windows: &'a [Window], x: f64, y: f64, screen: &Screen) -> Option<&'a Window> {
+pub(crate) fn top_at<'a>(
+    windows: &'a [Window],
+    x: f64,
+    y: f64,
+    screen: &Screen,
+) -> Option<&'a Window> {
     windows.iter().find(|window| {
         let overlay = window.layer > 0 && screen.passes(window, x, y);
         window.alpha > 0.0 && !overlay && window.bounds.contains(x, y)
@@ -344,7 +354,7 @@ pub fn top_at<'a>(windows: &'a [Window], x: f64, y: f64, screen: &Screen) -> Opt
 /// windows there is [`unobstructed`], the test a named click's element
 /// passes. A window of its that shows nothing (alpha 0) counts as it does
 /// there, though [`top_at`] names what is shown behind it.
-pub fn reaches(windows: &[Window], pid: i64, x: f64, y: f64, screen: &Screen) -> bool {
+pub(crate) fn reaches(windows: &[Window], pid: i64, x: f64, y: f64, screen: &Screen) -> bool {
     windows
         .iter()
         .any(|window| window.pid == pid && unobstructed(windows, window.number, x, y, screen))
@@ -352,7 +362,11 @@ pub fn reaches(windows: &[Window], pid: i64, x: f64, y: f64, screen: &Screen) ->
 
 /// A whole point inside `target` that is [`unobstructed`], preferring points
 /// near its centre. The point that is tested is the point that is clicked.
-pub fn visible_point(windows: &[Window], target: i64, screen: &Screen) -> Option<(f64, f64)> {
+pub(crate) fn visible_point(
+    windows: &[Window],
+    target: i64,
+    screen: &Screen,
+) -> Option<(f64, f64)> {
     let bounds = &windows
         .iter()
         .find(|window| window.number == target)?
@@ -378,7 +392,7 @@ pub fn visible_point(windows: &[Window], target: i64, screen: &Screen) -> Option
 }
 
 /// The process owning the frontmost ordinary (layer 0) window.
-pub fn frontmost_pid(windows: &[Window]) -> Option<i64> {
+pub(crate) fn frontmost_pid(windows: &[Window]) -> Option<i64> {
     windows
         .iter()
         .find(|window| window.layer == 0)

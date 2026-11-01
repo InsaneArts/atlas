@@ -6,10 +6,13 @@
 //! is bounded by what is left of one deadline. Only copies are made;
 //! nothing is set but each element's own messaging timeout.
 use super::{
-    ABSENT, Element, Frame, ffi,
+    ABSENT, ffi,
     text::{bounded_string, getter_failed},
 };
-use crate::error::{Code, Error, Result};
+use crate::{
+    error::{Code, Error, Result},
+    screen::{elements::Element, geometry::Frame},
+};
 use objc2_application_services::{AXError, AXUIElement, AXValue, AXValueType};
 use objc2_core_foundation::{CFBoolean, CFNull, CFRetained, CFString, CFType};
 use serde::Serialize;
@@ -22,14 +25,14 @@ const PARENTS: usize = 256;
 /// The element with keyboard focus in an app and the process that owns
 /// it, which for a panel another process draws is not the app's.
 #[derive(Debug, Clone)]
-pub(crate) struct Focused {
-    pub(crate) element: Element,
-    pub(crate) pid: i64,
+pub(in crate::native) struct Focused {
+    pub(in crate::native) element: Element,
+    pub(in crate::native) pid: i64,
 }
 
 /// Where the focused element sits, from its parents up to a window.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
-pub(crate) enum Within {
+pub(in crate::native) enum Within {
     /// In the app's focused window, with no sheet between them.
     #[default]
     Window,
@@ -43,23 +46,23 @@ pub(crate) enum Within {
 /// Where keyboard focus is inside one app, as Accessibility reports it.
 /// Never a field's value: no value is read at all.
 #[derive(Debug, Clone, Default)]
-pub(crate) struct Keyboard {
+pub(in crate::native) struct Keyboard {
     /// The app's focused window: its role, subrole, title and frame. None
     /// when the app has none, or when no window is judged.
-    pub(crate) window: Option<Element>,
+    pub(in crate::native) window: Option<Element>,
     /// The focused element: its role, subrole, names and flags. None when
     /// nothing in the app has focus, or when no field is judged.
-    pub(crate) focused: Option<Focused>,
+    pub(in crate::native) focused: Option<Focused>,
     /// Where the focused element sits; [`Within::Window`] when there is
     /// none.
-    pub(crate) within: Within,
+    pub(in crate::native) within: Within,
 }
 
 /// Why Atlas could not tell where keyboard focus is, as a refusal names
 /// it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "lowercase")]
-pub(crate) enum Unread {
+pub(in crate::native) enum Unread {
     /// A read failed.
     Failed,
     /// A read answered something other than what the attribute holds.
@@ -89,7 +92,7 @@ impl Unread {
     }
 
     /// The error a read that could not tell, for this reason, ends with.
-    pub(crate) fn error(self) -> Error {
+    pub(in crate::native) fn error(self) -> Error {
         let said = match self {
             Self::Failed | Self::Malformed => "Where the app's focus is could not be read",
             Self::Cut => "A title or name of the focused window or field is too long to read whole",
@@ -143,9 +146,9 @@ pub(super) trait Ask {
 /// focused window and where the focused element sits in it, and the
 /// focused element itself.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) struct Judged {
-    pub(crate) window: bool,
-    pub(crate) field: bool,
+pub(in crate::native) struct Judged {
+    pub(in crate::native) window: bool,
+    pub(in crate::native) field: bool,
 }
 
 /// One strict read, until its deadline.
@@ -165,6 +168,21 @@ impl<A: Ask> Reader<A> {
         Ok(left)
     }
 
+    pub(super) fn bound(&mut self, element: &A::Element, budget: Duration) -> Result<()> {
+        let left = self.left()?;
+        if !self.ask.bound(element, left.min(budget)) {
+            return Err(Unread::Failed.error());
+        }
+        Ok(())
+    }
+
+    pub(super) fn owned(&mut self, element: &A::Element, pid: i64) -> Result<()> {
+        if self.ask.owner(element) != Some(pid) {
+            return Err(Unread::Failed.error());
+        }
+        Ok(())
+    }
+
     /// One attribute as the app answered it, its request bounded by what
     /// is left just before it is sent. A request that could not be bounded,
     /// or that ended past the deadline, is an error.
@@ -173,13 +191,7 @@ impl<A: Ask> Reader<A> {
         element: &A::Element,
         attribute: &'static str,
     ) -> Result<Answer<A::Element>> {
-        let left = self.left()?;
-        if !self
-            .ask
-            .bound(element, left.min(Duration::from_millis(250)))
-        {
-            return Err(Unread::Failed.error());
-        }
+        self.bound(element, Duration::from_millis(250))?;
 
         let answer = self.ask.ask(element, attribute);
         self.left()?;
@@ -267,7 +279,7 @@ impl<A: Ask> Reader<A> {
             subrole: self.text(element, "AXSubrole")?,
             title: self.text(element, "AXTitle")?,
             frame: self.frame(element)?,
-            ..bare()
+            ..Element::default()
         })
     }
 
@@ -294,7 +306,7 @@ impl<A: Ask> Reader<A> {
             identifier: self.name(element, "AXIdentifier", &mut failed)?,
             enabled: self.flag(element, "AXEnabled")?,
             focused: self.flag(element, "AXFocused")?,
-            ..bare()
+            ..Element::default()
         };
         Ok((field, failed))
     }
@@ -350,29 +362,6 @@ impl<A: Ask> Reader<A> {
             }
         }
         Err(Unread::Deep.error())
-    }
-}
-
-/// An element with nothing read yet.
-fn bare() -> Element {
-    Element {
-        index: 0,
-        depth: 0,
-        window: None,
-        role: None,
-        subrole: None,
-        title: None,
-        description: None,
-        value: None,
-        identifier: None,
-        enabled: None,
-        focused: None,
-        selected: None,
-        frame: None,
-        unreadable: Vec::new(),
-        truncated: Vec::new(),
-        menu: false,
-        mark: None,
     }
 }
 
@@ -444,9 +433,7 @@ pub(super) fn read<A: Ask>(
                 .ask
                 .owner(app)
                 .ok_or_else(|| Unread::Failed.error())?;
-            if reader.ask.owner(&focused) != Some(owner) {
-                return Err(Unread::Failed.error());
-            }
+            reader.owned(&focused, owner)?;
             window = Some(focused);
         }
         if let Some(window) = &window {
@@ -454,9 +441,7 @@ pub(super) fn read<A: Ask>(
                 .ask
                 .owner(app)
                 .ok_or_else(|| Unread::Failed.error())?;
-            if reader.ask.owner(window) != Some(owner) {
-                return Err(Unread::Failed.error());
-            }
+            reader.owned(window, owner)?;
             keyboard.window = Some(reader.window(window)?);
         }
     }
@@ -484,7 +469,7 @@ pub(super) fn read<A: Ask>(
 /// needs, waiting at most `timeout` in all. Any read that fails, answers
 /// something else, is cut short or ends past the deadline makes the whole
 /// answer an error: half an answer could pass a check it should not.
-pub(crate) fn keyboard(pid: i64, timeout: Duration, judged: Judged) -> Result<Keyboard> {
+pub(in crate::native) fn keyboard(pid: i64, timeout: Duration, judged: Judged) -> Result<Keyboard> {
     let deadline = Instant::now() + timeout;
     let pid = libc::pid_t::try_from(pid).map_err(|_| Unread::Failed.error())?;
     let app = ffi::application(pid).ok_or_else(|| Unread::Failed.error())?;
@@ -494,7 +479,7 @@ pub(crate) fn keyboard(pid: i64, timeout: Duration, judged: Judged) -> Result<Ke
 
 /// Some apps omit the system-wide focused application. Their own frontmost
 /// flag and an owned focus reference must both be present to substitute.
-pub(crate) fn frontmost(pid: i64, timeout: Duration) -> Result<bool> {
+pub(in crate::native) fn frontmost(pid: i64, timeout: Duration) -> Result<bool> {
     let deadline = Instant::now() + timeout;
     let pid = libc::pid_t::try_from(pid).map_err(|_| Unread::Failed.error())?;
     let app = ffi::application(pid).ok_or_else(|| Unread::Failed.error())?;

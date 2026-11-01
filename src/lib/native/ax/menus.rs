@@ -1,7 +1,8 @@
 //! What an app draws at the menu layer, found by what lies under a few
 //! points of each window there, and which menus met inside another window
 //! or menu are left out of the scan.
-use super::{Frame, batch::Source, ffi, scan::Scan};
+use super::{batch::Source, ffi, scan::Scan};
+use crate::screen::geometry::Frame;
 use objc2_application_services::AXUIElement;
 use objc2_core_foundation::CFRetained;
 

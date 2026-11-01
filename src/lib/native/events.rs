@@ -104,15 +104,15 @@ impl Source {
 unsafe impl Send for Source {}
 
 pub(super) struct Engine {
-    pub epoch: InputEpoch,
-    pub grant: Option<Grant>,
+    pub(super) epoch: InputEpoch,
+    pub(super) grant: Option<Grant>,
     /// The process resolved for this request, retained through the last post.
-    pub target: Option<crate::process::Instance>,
+    pub(super) target: Option<crate::process::Instance>,
     journal: Option<Journal>,
     journal_dirty: bool,
     /// Events posted or AX presses acknowledged so far: distinguishes input
     /// that already changed something from input that changed nothing.
-    pub(crate) posted: u64,
+    pub(super) posted: u64,
     source: Source,
     held: Option<Button>,
     dock_down: Option<dock::Down>,
@@ -131,8 +131,10 @@ pub(super) struct Engine {
 impl Engine {
     #[cfg(test)]
     pub(super) fn idle(epoch: InputEpoch) -> Self {
-        // An empty test engine can acknowledge release without posting events
-        // or reading a real session. Input execution still requires its guards.
+        Self::with_source(epoch, Source(None))
+    }
+
+    fn with_source(epoch: InputEpoch, source: Source) -> Self {
         Self {
             epoch,
             grant: None,
@@ -140,7 +142,7 @@ impl Engine {
             journal: None,
             journal_dirty: false,
             posted: 0,
-            source: Source(None),
+            source,
             held: None,
             dock_down: None,
             dock_pressed: false,
@@ -160,25 +162,10 @@ impl Engine {
         #[cfg(test)]
         let source = Some(source);
         let source = Source(source);
-        let mut engine = Self {
-            epoch: InputEpoch::from_proof(&session_info()?, std::process::id())?,
-            grant: None,
-            target: None,
-            journal: None,
-            journal_dirty: false,
-            posted: 0,
+        let mut engine = Self::with_source(
+            InputEpoch::from_proof(&session_info()?, std::process::id())?,
             source,
-            held: None,
-            dock_down: None,
-            dock_pressed: false,
-            held_keys: Vec::new(),
-            position: Point { x: 0.0, y: 0.0 },
-            click_count: 1,
-            mouse_number: 0,
-            drag_started: false,
-            flags: 0,
-            post_access: None,
-        };
+        );
 
         if engine.epoch.uid != uid {
             return Err(Error::new(
@@ -189,11 +176,6 @@ impl Engine {
 
         engine.check()?;
         Ok(engine)
-    }
-
-    /// Whether this process may use Accessibility.
-    pub(super) fn trusted() -> bool {
-        accessibility_trusted()
     }
 
     /// An independent proof for the AX worker. No gate lock survives this
@@ -229,7 +211,7 @@ impl Engine {
             ));
         }
 
-        if !Self::trusted() {
+        if !accessibility_trusted() {
             return Err(Error::new(
                 Code::Permission,
                 "The input process does not have Accessibility permission",
@@ -580,6 +562,54 @@ impl Engine {
         }
     }
 
+    /// One drag owns its anchor, paced travel, release and final resting point.
+    async fn drag(&mut self, from: Point, to: Point, button: Button) -> Result<()> {
+        self.pointer(PointerPhase::Down, from, button, &[], 1)
+            .await?;
+
+        self.delay(DRAG_HOLD).await?;
+        // What is dragged follows the pointer from the first moved
+        // step (see the move phase), so the pointer travels that
+        // step past the target, releases there, and then rests on
+        // the target: the window or item moves exactly as asked.
+        let step = Point {
+            x: (to.x - from.x).clamp(-DRAG_ANCHOR, DRAG_ANCHOR),
+            y: (to.y - from.y).clamp(-DRAG_ANCHOR, DRAG_ANCHOR),
+        };
+        let anchor = Point {
+            x: from.x + step.x,
+            y: from.y + step.y,
+        };
+        let end = self.on_display(Point {
+            x: to.x + step.x,
+            y: to.y + step.y,
+        });
+
+        self.pointer(PointerPhase::Move, anchor, button, &[], 1)
+            .await?;
+        self.delay(DRAG_START).await?;
+
+        for step in 1..=DRAG_STEPS {
+            let t = f64::from(step) / f64::from(DRAG_STEPS);
+            self.pointer(
+                PointerPhase::Move,
+                Point {
+                    x: anchor.x + (end.x - anchor.x) * t,
+                    y: anchor.y + (end.y - anchor.y) * t,
+                },
+                button,
+                &[],
+                1,
+            )
+            .await?;
+            self.delay(DRAG_STEP).await?;
+        }
+
+        self.pointer(PointerPhase::Up, end, button, &[], 1).await?;
+        self.pointer(PointerPhase::Move, to, button, &[], 1).await?;
+        Ok(())
+    }
+
     pub(super) async fn perform(&mut self, action: Action) -> Result<()> {
         self.check()?;
 
@@ -625,63 +655,13 @@ impl Engine {
                 to_y,
                 button,
             } => {
-                self.pointer(
-                    PointerPhase::Down,
+                self.drag(
                     Point {
                         x: from_x,
                         y: from_y,
                     },
-                    button,
-                    &[],
-                    1,
-                )
-                .await?;
-
-                self.delay(DRAG_HOLD).await?;
-                // What is dragged follows the pointer from the first moved
-                // step (see the move phase), so the pointer travels that
-                // step past the target, releases there, and then rests on
-                // the target: the window or item moves exactly as asked.
-                let step = Point {
-                    x: (to_x - from_x).clamp(-DRAG_ANCHOR, DRAG_ANCHOR),
-                    y: (to_y - from_y).clamp(-DRAG_ANCHOR, DRAG_ANCHOR),
-                };
-                let anchor = Point {
-                    x: from_x + step.x,
-                    y: from_y + step.y,
-                };
-                let end = self.on_display(Point {
-                    x: to_x + step.x,
-                    y: to_y + step.y,
-                });
-
-                self.pointer(PointerPhase::Move, anchor, button, &[], 1)
-                    .await?;
-                self.delay(DRAG_START).await?;
-
-                for step in 1..=DRAG_STEPS {
-                    let t = f64::from(step) / f64::from(DRAG_STEPS);
-                    self.pointer(
-                        PointerPhase::Move,
-                        Point {
-                            x: anchor.x + (end.x - anchor.x) * t,
-                            y: anchor.y + (end.y - anchor.y) * t,
-                        },
-                        button,
-                        &[],
-                        1,
-                    )
-                    .await?;
-                    self.delay(DRAG_STEP).await?;
-                }
-
-                self.pointer(PointerPhase::Up, end, button, &[], 1).await?;
-                self.pointer(
-                    PointerPhase::Move,
                     Point { x: to_x, y: to_y },
                     button,
-                    &[],
-                    1,
                 )
                 .await?;
             }

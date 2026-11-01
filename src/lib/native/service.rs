@@ -1,15 +1,18 @@
 //! Peer-authenticated input service. Socket handlers can cancel ownership while
 //! the serialized event engine awaits the next step of a gesture.
+//! The service retains its gate, registered work and engine through cleanup;
+//! a vanished request or reply cannot acknowledge an unknown outcome.
 use super::{
+    accessibility_trusted,
     events::Engine,
     focus::{self, Need},
     lease::{Gate, Who},
     session_info,
-    windows::Bounds,
 };
 use crate::{
     actions::{self, Action, Expect},
     error::{Code, Error, Holder, Result},
+    screen::geometry::Bounds,
     session::{Display, InputEpoch},
 };
 use serde::Deserialize;
@@ -223,17 +226,16 @@ fn combine_cleanup(primary: Result<()>, cleanup: Result<()>) -> Result<()> {
 /// Cancelling a request changes ownership without waiting for the engine.
 struct Cancellation {
     gate: Arc<Gate>,
-    owner: String,
-    armed: bool,
+    owner: Option<String>,
 }
 
 impl Drop for Cancellation {
     fn drop(&mut self) {
-        if self.armed {
+        if let Some(owner) = &self.owner {
             // Drop can only try to cancel ownership. It cannot acknowledge
             // release, clear sticky worker failure or settle the controller's
             // pending record, even if cancellation succeeds.
-            let _ = self.gate.cancel(Some(&self.owner));
+            let _ = self.gate.cancel(Some(owner));
         }
     }
 }
@@ -701,7 +703,7 @@ impl Service {
     fn check(&self) -> Result<()> {
         self.operations.check()?;
         if InputEpoch::from_proof(&session_info()?, std::process::id())? != self.epoch()?
-            || !Engine::trusted()
+            || !accessibility_trusted()
         {
             return Err(Error::new(
                 Code::Identity,
@@ -722,263 +724,296 @@ impl Service {
         phase: &watch::Sender<ConnectionPhase>,
     ) -> Result<Value> {
         match request {
-            Request::Hello => {
-                self.operations.reap().await?;
-                let held_input = self
-                    .engine
-                    .try_lock()
-                    .ok()
-                    .map(|engine| engine.held_input());
-
-                Ok(json!({
-                    "ok": true,
-                    "protocolVersion": 1,
-                    "pid": std::process::id(),
-                    "version": env!("CARGO_PKG_VERSION"),
-                    "build": self.build,
-                    "replaced": self.replaced(),
-                    "capabilities": CAPABILITIES,
-                    "accessibility": Engine::trusted(),
-                    "ready": self.check().is_ok(),
-                    "enforcedEpoch": self.epoch()?,
-                    "session": session_info()?,
-                    "controlActive": self.gate.active()?,
-                    "held": self.gate.held()?,
-                    "heldInput": held_input,
-                    "streaming": true,
-                }))
-            }
-            Request::Shutdown { pid } => {
-                // Bound to this process: a replacement that has since bound the same
-                // socket never honours a request meant for its predecessor.
-                if pid != u64::from(std::process::id()) {
-                    return Err(Error::new(
-                        Code::Identity,
-                        "Shutdown names a different input service process",
-                    ));
-                }
-
-                if self.gate.active()? {
-                    return Err(Error::new(
-                        Code::Busy,
-                        "The input service has an active controller",
-                    ));
-                }
-
-                self.operations.drain().await?;
-
-                // Release held input first; only an acknowledged release closes the
-                // gate for good. Holding the engine lock keeps acquire out meanwhile,
-                // and one that took the lock first is seen once it is held.
-                let mut engine = self.engine.lock().await;
-                if self.gate.active()? {
-                    return Err(Error::new(
-                        Code::Busy,
-                        "The input service has an active controller",
-                    ));
-                }
-
-                phase.send_replace(ConnectionPhase::Mutation("shutdown"));
-                if let Err(error) = engine.release() {
-                    return Err(Error::new(
-                        Code::Uncertain,
-                        format!("Held input could not be released: {}", error.error),
-                    )
-                    .uncertain());
-                }
-
-                self.gate.close()?;
-                Ok(json!({ "ok": true, "stopping": true, "pid": std::process::id() }))
-            }
-            // A stop is the person's: it works whatever the session or
-            // permission, and resuming only lets agents ask again.
-            Request::Hold { on } => {
-                let reply = hold(&self.gate, &self.stop_marker, on, phase)?;
-                self.cleanup().await?;
-                Ok(reply)
-            }
-
-            Request::Release { owner } => {
-                self.gate.cancel(Some(&owner))?;
-                phase.send_replace(ConnectionPhase::Mutation("release"));
-                self.cleanup().await?;
-                Ok(json!({ "ok": true, "released": true }))
-            }
-            Request::Renew { owner } => {
-                self.check()?;
-                self.gate.renew(&owner)?;
-                phase.send_replace(ConnectionPhase::Mutation("renew"));
-                Ok(json!({ "ok": true }))
-            }
-            Request::RefusedAcquire(error) => {
-                self.check()?;
-                Err(Error::new(error.code, &error.error).with_source(error))
-            }
-            Request::Reset { epoch: expected } => {
-                let current = InputEpoch::from_proof(&session_info()?, std::process::id())?;
-                if expected != current || !Engine::trusted() {
-                    return Err(Error::new(
-                        Code::Identity,
-                        "Recovery requires the current hidden session and permission",
-                    ));
-                }
-
-                phase.send_replace(ConnectionPhase::Mutation("reset"));
-                reset(&self.operations, &self.engine, &self.gate, |engine| {
-                    let rebound = engine.rebind(current);
-
-                    // Enforce whatever epoch the engine now holds, even when its
-                    // release failed: the two never disagree, and the timer keeps
-                    // retrying that release against the display it was bound to.
-                    *self
-                        .epoch
-                        .write()
-                        .map_err(|_| Error::new(Code::Native, "Input identity failed"))? =
-                        engine.epoch.clone();
-
-                    rebound
-                })
-                .await?;
-                Ok(json!({ "ok": true, "released": true }))
-            }
-            Request::Acquire {
-                owner,
-                epoch: expected,
-                who,
-            } => {
-                self.check()?;
-
-                let epoch = self.epoch()?;
-                if expected != epoch {
-                    return Err(Error::new(
-                        Code::SessionChanged,
-                        "Input coordinates belong to a different session or display",
-                    ));
-                }
-                let mut engine = self.engine.lock().await;
-                self.operations.check()?;
-
-                if let Some(holder) = self.gate.holder()? {
-                    // An agent finding the person in control is told to wait.
-                    let error = Error::new(
-                        Code::Busy,
-                        if who == Who::Agent && holder == Holder::Person {
-                            crate::error::PERSON_HAS_CONTROL
-                        } else {
-                            "The native input service already has a controller"
-                        },
-                    );
-                    return Err(error.held_by(holder));
-                }
-
-                engine.check()?;
-                phase.send_replace(ConnectionPhase::Mutation("acquire"));
-                engine.release()?;
-                engine.grant = Some(self.gate.acquire(&owner, who)?);
-
-                Ok(json!({ "ok": true }))
-            }
+            Request::Hello => self.hello().await,
+            Request::Shutdown { pid } => self.shutdown(pid, phase).await,
+            Request::Hold { on } => self.set_hold(on, phase).await,
+            Request::Release { owner } => self.release(owner, phase).await,
+            Request::Renew { owner } => self.renew(owner, phase),
+            Request::RefusedAcquire(error) => self.refused_acquire(error),
+            Request::Reset { epoch } => self.recover(epoch, phase).await,
+            Request::Acquire { owner, epoch, who } => self.acquire(owner, epoch, who, phase).await,
             Request::Input {
                 owner,
-                epoch: expected,
+                epoch,
                 actions,
                 expect,
-                app: report_app,
-            } => {
-                self.check()?;
-                let expected = expected
-                    .map_err(|error| Error::new(error.code, &error.error).with_source(error))?;
-                let epoch = self.epoch()?;
-                if expected != epoch {
-                    return Err(Error::new(
-                        Code::SessionChanged,
-                        "Input coordinates belong to a different session or display",
-                    ));
-                }
-                let grant = self.gate.grant(&owner)?;
-                let actions = actions
-                    .map_err(|error| Error::new(error.code, &error.error).with_source(error))?;
-                actions::check(
-                    &actions,
-                    &Display {
-                        width: epoch.width,
-                        height: epoch.height,
-                        scale: 1.0,
-                    },
-                )?;
-                let count = actions.len();
-                let expect = expect
-                    .map_err(|error| Error::new(error.code, &error.error).with_source(error))?;
-                let report_app = report_app
-                    .map_err(|error| Error::new(error.code, &error.error).with_source(error))?;
-                agent_target(&self.gate, expect.as_ref())?;
-                phase.send_replace(ConnectionPhase::Mutation("input"));
-                let mut cancellation = Cancellation {
-                    gate: self.gate.clone(),
-                    owner,
-                    armed: true,
-                };
-                let mut engine = self.engine.clone().lock_owned().await;
-                let gate = self.gate.clone();
-                let expected = expect.clone();
-                let outcome = self
-                    .operations
-                    .start(async move {
-                        drop(grant.authorize()?);
-                        engine.grant = Some(grant);
-                        engine.target = expected
-                            .as_ref()
-                            .map(super::ax::target_application)
-                            .transpose()?;
-                        engine.dock_pressed = false;
-                        let result = run(&mut *engine, &gate, actions, expected.as_ref()).await;
-                        engine.target = None;
-                        Ok::<_, Error>(result.map(|field| (field, engine.dock_pressed)))
-                    })
-                    .await?;
-                let result = outcome.await.map_err(|_| worker_failed())?;
-                let (field, dock_pressed) = match result? {
-                    Ok(field) => field,
-                    Err(reply) => return Ok(reply),
-                };
-
-                // The recipient for the agent's activity log, only when asked:
-                // Dock after AXPress, otherwise the owner of the frontmost ordinary
-                // window and its bundle identifier, read once the engine is free.
-                let landed = if report_app && dock_pressed {
-                    Some(("Dock".to_owned(), Some("com.apple.dock".to_owned())))
-                } else if report_app {
-                    tokio::task::spawn_blocking(|| {
-                        frontmost_app().map(|(app, pid)| (app, super::apps::bundle_id(pid)))
-                    })
-                    .await
-                    .ok()
-                    .flatten()
-                } else {
-                    None
-                };
-                let (app, bundle_id) = landed.map_or((None, None), |(app, id)| (Some(app), id));
-
-                let mut reply = json!({
-                    "ok": true,
-                    "performed": count,
-                    "app": app,
-                    "bundleId": bundle_id,
-                });
-                // Echoed, so the controller knows each action was checked.
-                if let Some(expect) = expect {
-                    reply["expect"] = json!(expect);
-                }
-                // The role of the field it named, so an agent's activity may name
-                // the field by the name it gave: never the field's own text.
-                if let Some(role) = field {
-                    reply["field"] = json!({ "role": role });
-                }
-
-                cancellation.armed = false;
-                Ok(reply)
-            }
+                app,
+            } => self.input(owner, epoch, actions, expect, app, phase).await,
         }
+    }
+
+    async fn hello(&self) -> Result<Value> {
+        self.operations.reap().await?;
+        let held_input = self
+            .engine
+            .try_lock()
+            .ok()
+            .map(|engine| engine.held_input());
+
+        Ok(json!({
+            "ok": true,
+            "protocolVersion": 1,
+            "pid": std::process::id(),
+            "version": env!("CARGO_PKG_VERSION"),
+            "build": self.build,
+            "replaced": self.replaced(),
+            "capabilities": CAPABILITIES,
+            "accessibility": accessibility_trusted(),
+            "ready": self.check().is_ok(),
+            "enforcedEpoch": self.epoch()?,
+            "session": session_info()?,
+            "controlActive": self.gate.active()?,
+            "held": self.gate.held()?,
+            "heldInput": held_input,
+            "streaming": true,
+        }))
+    }
+
+    async fn shutdown(&self, pid: u64, phase: &watch::Sender<ConnectionPhase>) -> Result<Value> {
+        // Bound to this process: a replacement that has since bound the same
+        // socket never honours a request meant for its predecessor.
+        if pid != u64::from(std::process::id()) {
+            return Err(Error::new(
+                Code::Identity,
+                "Shutdown names a different input service process",
+            ));
+        }
+
+        if self.gate.active()? {
+            return Err(Error::new(
+                Code::Busy,
+                "The input service has an active controller",
+            ));
+        }
+
+        self.operations.drain().await?;
+
+        // Release held input first; only an acknowledged release closes the
+        // gate for good. Holding the engine lock keeps acquire out meanwhile,
+        // and one that took the lock first is seen once it is held.
+        let mut engine = self.engine.lock().await;
+        if self.gate.active()? {
+            return Err(Error::new(
+                Code::Busy,
+                "The input service has an active controller",
+            ));
+        }
+
+        phase.send_replace(ConnectionPhase::Mutation("shutdown"));
+        if let Err(error) = engine.release() {
+            return Err(Error::new(
+                Code::Uncertain,
+                format!("Held input could not be released: {}", error.error),
+            )
+            .uncertain());
+        }
+
+        self.gate.close()?;
+        Ok(json!({ "ok": true, "stopping": true, "pid": std::process::id() }))
+    }
+
+    /// Stop and resume remain available after session or permission loss.
+    async fn set_hold(&self, on: bool, phase: &watch::Sender<ConnectionPhase>) -> Result<Value> {
+        let reply = hold(&self.gate, &self.stop_marker, on, phase)?;
+        self.cleanup().await?;
+        Ok(reply)
+    }
+
+    async fn release(
+        &self,
+        owner: String,
+        phase: &watch::Sender<ConnectionPhase>,
+    ) -> Result<Value> {
+        self.gate.cancel(Some(&owner))?;
+        phase.send_replace(ConnectionPhase::Mutation("release"));
+        self.cleanup().await?;
+        Ok(json!({ "ok": true, "released": true }))
+    }
+
+    fn renew(&self, owner: String, phase: &watch::Sender<ConnectionPhase>) -> Result<Value> {
+        self.check()?;
+        self.gate.renew(&owner)?;
+        phase.send_replace(ConnectionPhase::Mutation("renew"));
+        Ok(json!({ "ok": true }))
+    }
+
+    fn refused_acquire(&self, error: Arc<Error>) -> Result<Value> {
+        self.check()?;
+        Err(Error::new(error.code, &error.error).with_source(error))
+    }
+
+    async fn recover(
+        &self,
+        expected: InputEpoch,
+        phase: &watch::Sender<ConnectionPhase>,
+    ) -> Result<Value> {
+        let current = InputEpoch::from_proof(&session_info()?, std::process::id())?;
+        if expected != current || !accessibility_trusted() {
+            return Err(Error::new(
+                Code::Identity,
+                "Recovery requires the current hidden session and permission",
+            ));
+        }
+
+        phase.send_replace(ConnectionPhase::Mutation("reset"));
+        reset(&self.operations, &self.engine, &self.gate, |engine| {
+            let rebound = engine.rebind(current);
+
+            // Enforce whatever epoch the engine now holds, even when its
+            // release failed: the two never disagree, and the timer keeps
+            // retrying that release against the display it was bound to.
+            *self
+                .epoch
+                .write()
+                .map_err(|_| Error::new(Code::Native, "Input identity failed"))? =
+                engine.epoch.clone();
+
+            rebound
+        })
+        .await?;
+        Ok(json!({ "ok": true, "released": true }))
+    }
+
+    async fn acquire(
+        &self,
+        owner: String,
+        expected: InputEpoch,
+        who: Who,
+        phase: &watch::Sender<ConnectionPhase>,
+    ) -> Result<Value> {
+        self.check()?;
+
+        let epoch = self.epoch()?;
+        if expected != epoch {
+            return Err(Error::new(
+                Code::SessionChanged,
+                "Input coordinates belong to a different session or display",
+            ));
+        }
+        let mut engine = self.engine.lock().await;
+        self.operations.check()?;
+
+        if let Some(holder) = self.gate.holder()? {
+            // An agent finding the person in control is told to wait.
+            let error = Error::new(
+                Code::Busy,
+                if who == Who::Agent && holder == Holder::Person {
+                    crate::error::PERSON_HAS_CONTROL
+                } else {
+                    "The native input service already has a controller"
+                },
+            );
+            return Err(error.held_by(holder));
+        }
+
+        engine.check()?;
+        phase.send_replace(ConnectionPhase::Mutation("acquire"));
+        engine.release()?;
+        engine.grant = Some(self.gate.acquire(&owner, who)?);
+
+        Ok(json!({ "ok": true }))
+    }
+
+    async fn input(
+        &self,
+        owner: String,
+        expected: std::result::Result<InputEpoch, Arc<Error>>,
+        actions: std::result::Result<Vec<Action>, Arc<Error>>,
+        expect: std::result::Result<Option<Expect>, Arc<Error>>,
+        report_app: std::result::Result<bool, Arc<Error>>,
+        phase: &watch::Sender<ConnectionPhase>,
+    ) -> Result<Value> {
+        self.check()?;
+        let expected =
+            expected.map_err(|error| Error::new(error.code, &error.error).with_source(error))?;
+        let epoch = self.epoch()?;
+        if expected != epoch {
+            return Err(Error::new(
+                Code::SessionChanged,
+                "Input coordinates belong to a different session or display",
+            ));
+        }
+        let grant = self.gate.grant(&owner)?;
+        let actions =
+            actions.map_err(|error| Error::new(error.code, &error.error).with_source(error))?;
+        actions::check(
+            &actions,
+            &Display {
+                width: epoch.width,
+                height: epoch.height,
+                scale: 1.0,
+            },
+        )?;
+        let count = actions.len();
+        let expect =
+            expect.map_err(|error| Error::new(error.code, &error.error).with_source(error))?;
+        let report_app =
+            report_app.map_err(|error| Error::new(error.code, &error.error).with_source(error))?;
+        agent_target(&self.gate, expect.as_ref())?;
+        phase.send_replace(ConnectionPhase::Mutation("input"));
+        let mut cancellation = Cancellation {
+            gate: self.gate.clone(),
+            owner: Some(owner),
+        };
+        let mut engine = self.engine.clone().lock_owned().await;
+        let gate = self.gate.clone();
+        let expected = expect.clone();
+        let outcome = self
+            .operations
+            .start(async move {
+                drop(grant.authorize()?);
+                engine.grant = Some(grant);
+                engine.target = expected
+                    .as_ref()
+                    .map(super::ax::target_application)
+                    .transpose()?;
+                engine.dock_pressed = false;
+                let result = run(&mut *engine, &gate, actions, expected.as_ref()).await;
+                engine.target = None;
+                Ok::<_, Error>(result.map(|field| (field, engine.dock_pressed)))
+            })
+            .await?;
+        let result = outcome.await.map_err(|_| worker_failed())?;
+        let (field, dock_pressed) = match result? {
+            Ok(field) => field,
+            Err(reply) => return Ok(reply),
+        };
+
+        // The recipient for the agent's activity log, only when asked:
+        // Dock after AXPress, otherwise the owner of the frontmost ordinary
+        // window and its bundle identifier, read once the engine is free.
+        let landed = if report_app && dock_pressed {
+            Some(("Dock".to_owned(), Some("com.apple.dock".to_owned())))
+        } else if report_app {
+            tokio::task::spawn_blocking(|| {
+                frontmost_app().map(|(app, pid)| (app, super::apps::bundle_id(pid)))
+            })
+            .await
+            .ok()
+            .flatten()
+        } else {
+            None
+        };
+        let (app, bundle_id) = landed.map_or((None, None), |(app, id)| (Some(app), id));
+
+        let mut reply = json!({
+            "ok": true,
+            "performed": count,
+            "app": app,
+            "bundleId": bundle_id,
+        });
+        // Echoed, so the controller knows each action was checked.
+        if let Some(expect) = expect {
+            reply["expect"] = json!(expect);
+        }
+        // The role of the field it named, so an agent's activity may name
+        // the field by the name it gave: never the field's own text.
+        if let Some(role) = field {
+            reply["field"] = json!({ "role": role });
+        }
+
+        cancellation.owner = None;
+        Ok(reply)
     }
 }
 
@@ -1166,7 +1201,7 @@ async fn run(
         let checked = match expected {
             Some(expected) => {
                 let prepare = !continuation && !engine.held_input();
-                require_within(engine, expected, Need::of(&action), &mut budget, prepare).await
+                require_within(engine, expected, action.target(), &mut budget, prepare).await
             }
             None => Ok(None),
         };
@@ -1256,6 +1291,12 @@ fn frontmost_app() -> Option<(String, i64)> {
 const SESSION_CHECK: Duration = Duration::from_secs(1);
 const SESSION_GONE_CHECKS: u32 = 3;
 
+/// Serve the configured helper's authenticated input socket until shutdown.
+/// The listener, expiry timer, signal receivers and registered work share this
+/// lifetime so every exit closes ownership and drains work before cleanup.
+///
+/// Returns an error if identity, permission, endpoint creation or cleanup fails.
+/// Cleanup failure preserves uncertainty rather than acknowledging release.
 pub async fn serve(uid: u32, controller_uid: u32, socket: PathBuf) -> Result<()> {
     let (build, executable) = started_from();
     crate::session::validate_target_uid(uid, controller_uid)?;
@@ -1428,15 +1469,18 @@ async fn handle(
         Err(error) => return reply(&mut stream, Err(error)).await,
     };
 
-    phase.send_replace(match request {
-        Request::Hello => ConnectionPhase::Read,
-        _ => ConnectionPhase::Refusal,
-    });
-    let shutdown = matches!(request, Request::Shutdown { .. });
-    let owner = match &request {
-        Request::Input { owner, .. } => Some(owner.clone()),
-        _ => None,
+    let (initial, owner, shutdown) = match &request {
+        Request::Hello => (ConnectionPhase::Read, None, false),
+        Request::Shutdown { .. } => (ConnectionPhase::Refusal, None, true),
+        Request::Input { owner, .. } => (ConnectionPhase::Refusal, Some(owner.clone()), false),
+        Request::Hold { .. }
+        | Request::Release { .. }
+        | Request::Renew { .. }
+        | Request::Acquire { .. }
+        | Request::RefusedAcquire(_)
+        | Request::Reset { .. } => (ConnectionPhase::Refusal, None, false),
     };
+    phase.send_replace(initial);
     let result = if let Some(owner) = owner {
         let mut dispatch = std::pin::pin!(service.dispatch(request, &phase));
         let mut extra = [0; 1];
@@ -3885,8 +3929,7 @@ mod tests {
             requests.spawn(async move {
                 let mut cancel = super::Cancellation {
                     gate: gate.clone(),
-                    owner,
-                    armed: true,
+                    owner: Some(owner),
                 };
                 let mut engine = engine.lock_owned().await;
                 let outcome = operations
@@ -3894,7 +3937,7 @@ mod tests {
                     .await
                     .unwrap();
                 let reply = outcome.await.unwrap();
-                cancel.armed = false;
+                cancel.owner = None;
                 *observed.lock().unwrap() = Some(reply);
                 Ok(())
             })
@@ -4007,8 +4050,7 @@ mod tests {
             let request = async {
                 let _cancel = super::Cancellation {
                     gate: gate.clone(),
-                    owner,
-                    armed: true,
+                    owner: Some(owner),
                 };
                 let engine = stand.clone().lock_owned().await;
                 operations

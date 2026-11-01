@@ -3,7 +3,8 @@
 use super::{Button, Engine, Point, PointerPhase};
 use crate::{
     error::{Code, Error, Result},
-    native::{ax, windows::Bounds},
+    native::ax,
+    screen::geometry::Bounds,
 };
 use objc2_application_services::AXError;
 use objc2_core_foundation::CFString;

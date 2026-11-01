@@ -1,75 +1,83 @@
-//! Ownership is independent of the event engine, so cancellation never queues
-//! behind a drag, text insertion or wait. Posting holds this gate briefly.
-use crate::error::{Code, Error, Holder, Result};
-use std::sync::{Arc, Mutex, MutexGuard};
-use std::time::Instant;
+//! Ownership is independent of execution: posting takes this gate briefly;
+//! cancellation never waits behind a drag, text insertion or cleanup.
+use crate::error::{Code, Error, Result};
+use std::{
+    sync::{Arc, Mutex, MutexGuard},
+    time::Instant,
+};
 
-/// Who asks for control: an agent, or the person through a viewer. A stop
-/// refuses agents only, so the person can still take over.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(super) enum Who {
-    Agent,
-    Person,
-}
+pub(super) use crate::error::Holder as Who;
+#[cfg(test)]
+use crate::error::Holder;
 
 #[derive(Default)]
 pub(super) struct Gate(Mutex<State>);
 
 #[derive(Default)]
 pub(super) struct State {
-    owner: Option<String>,
-    previous: Option<String>,
-    expires: Option<Instant>,
+    /// Retained after expiry and release, so only this token may clean up.
+    owner: Option<Owner>,
     closed: bool,
-    /// Whether the person holds control now, not an agent.
-    person: bool,
-    /// The person stopped agents: none may take control until they resume.
+    /// Stopping agents does not prevent the person from taking control.
     held: bool,
-    /// The owner whose control a cancel ended (the person's or the
-    /// controller's doing, not expiry or the gate closing), and whether a
-    /// stop ended it; told once, to that owner's action under way.
-    cancelled: Option<(String, bool)>,
+}
+
+struct Owner {
+    token: String,
+    who: Who,
+    expires: Instant,
+    status: Status,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Status {
+    Active,
+    Lost,
+    Cancelled,
+    Stopped,
 }
 
 impl State {
     fn expire_at(&mut self, now: Instant) {
-        if self.expires.is_some_and(|at| at <= now) {
-            self.owner = None;
+        if let Some(owner) = &mut self.owner
+            && owner.expires <= now
+            && owner.status == Status::Active
+        {
+            owner.status = Status::Lost;
         }
     }
 
-    /// Refuse unless `owner` holds control. An action under way (`acting`)
-    /// whose owner was cancelled is told so, once; anything else that finds
-    /// control gone is told it was lost.
-    fn require_at(&mut self, owner: &str, acting: bool, now: Instant) -> Result<()> {
+    fn holder(&self) -> Option<Who> {
+        self.owner
+            .as_ref()
+            .filter(|owner| owner.status == Status::Active)
+            .map(|owner| owner.who)
+    }
+
+    /// An action hears its cancellation once; renewal only hears lease loss.
+    fn require_at(&mut self, token: &str, acting: bool, now: Instant) -> Result<&mut Owner> {
         self.expire_at(now);
-
-        if self.closed || self.owner.as_deref() != Some(owner) {
-            let ended = self
-                .cancelled
-                .as_ref()
-                .filter(|(cancelled, _)| cancelled == owner)
-                .map(|(_, stopped)| *stopped);
-            if acting
-                && !self.closed
-                && let Some(stopped) = ended
-            {
-                self.cancelled = None;
-                // The person's stop says so, to the agent it cut off.
-                return Err(if stopped {
-                    Error::stopped()
-                } else {
-                    Error::new(Code::Cancelled, "Native control was stopped")
-                });
+        if !self.closed
+            && let Some(owner) = self.owner.as_mut().filter(|owner| owner.token == token)
+        {
+            match owner.status {
+                Status::Active => return Ok(owner),
+                Status::Cancelled | Status::Stopped if acting => {
+                    let status = owner.status;
+                    owner.status = Status::Lost;
+                    return Err(if status == Status::Stopped {
+                        Error::stopped()
+                    } else {
+                        Error::new(Code::Cancelled, "Native control was stopped")
+                    });
+                }
+                Status::Cancelled | Status::Stopped | Status::Lost => {}
             }
-
-            return Err(Error::new(
-                Code::LeaseLost,
-                "Native control was released or expired",
-            ));
         }
-
-        Ok(())
+        Err(Error::new(
+            Code::LeaseLost,
+            "Native control was released or expired",
+        ))
     }
 }
 
@@ -81,34 +89,25 @@ impl Gate {
     }
 
     pub(super) fn active(&self) -> Result<bool> {
-        let state = self.lock()?;
-        self.active_at(state, Instant::now())
+        self.active_at(self.lock()?, Instant::now())
     }
 
     fn active_at(&self, mut state: MutexGuard<'_, State>, now: Instant) -> Result<bool> {
         state.expire_at(now);
-        Ok(state.owner.is_some())
+        Ok(state.holder().is_some())
     }
 
-    /// Who holds control now, if anyone: the person through a viewer, or
-    /// an agent. Read under one lock, so the two never disagree.
-    pub(super) fn holder(&self) -> Result<Option<Holder>> {
-        let state = self.lock()?;
-        self.holder_at(state, Instant::now())
+    pub(super) fn holder(&self) -> Result<Option<Who>> {
+        self.holder_at(self.lock()?, Instant::now())
     }
 
-    fn holder_at(&self, mut state: MutexGuard<'_, State>, now: Instant) -> Result<Option<Holder>> {
+    fn holder_at(&self, mut state: MutexGuard<'_, State>, now: Instant) -> Result<Option<Who>> {
         state.expire_at(now);
-        Ok(match (state.owner.is_some(), state.person) {
-            (false, _) => None,
-            (true, true) => Some(Holder::Person),
-            (true, false) => Some(Holder::Agent),
-        })
+        Ok(state.holder())
     }
 
     pub(super) fn acquire(self: &Arc<Self>, owner: &str, who: Who) -> Result<Grant> {
-        let state = self.lock()?;
-        self.acquire_at(state, owner, who, Instant::now(), Instant::now)
+        self.acquire_at(self.lock()?, owner, who, Instant::now(), Instant::now)
     }
 
     fn acquire_at(
@@ -120,52 +119,43 @@ impl Gate {
         deadline_now: impl FnOnce() -> Instant,
     ) -> Result<Grant> {
         state.expire_at(now);
-
         if state.held && who == Who::Agent && !state.closed {
             return Err(Error::stopped());
         }
-
-        // An agent finding the person in control is told to wait for them.
-        if !state.closed && state.owner.is_some() && state.person && who == Who::Agent {
+        let holder = state.holder();
+        if !state.closed && holder == Some(Who::Person) && who == Who::Agent {
             return Err(
-                Error::new(Code::Busy, crate::error::PERSON_HAS_CONTROL).held_by(Holder::Person)
+                Error::new(Code::Busy, crate::error::PERSON_HAS_CONTROL).held_by(Who::Person)
             );
         }
-
-        if state.closed || state.owner.is_some() {
+        if state.closed || holder.is_some() {
             let error = Error::new(
                 Code::Busy,
                 "The native input service is unavailable or already controlled",
             );
-            return Err(match (state.closed, state.person) {
-                (true, _) => error,
-                (false, true) => error.held_by(Holder::Person),
-                (false, false) => error.held_by(Holder::Agent),
+            return Err(match holder.filter(|_| !state.closed) {
+                Some(holder) => error.held_by(holder),
+                None => error,
             });
         }
-
-        // Owners are `files::token()`s: two hexadecimal digits a byte.
         if crate::files::Token::parse(owner).is_none() {
             return Err(Error::new(Code::Input, "Invalid native owner token"));
         }
-
-        state.owner = Some(owner.to_owned());
-        state.previous = state.owner.clone();
-        state.expires = Some(deadline_now() + super::GRANT_TTL);
-        state.person = who == Who::Person;
-        state.cancelled = None;
-
+        state.owner = Some(Owner {
+            token: owner.to_owned(),
+            who,
+            expires: deadline_now() + super::GRANT_TTL,
+            status: Status::Active,
+        });
         Ok(Grant {
             gate: self.clone(),
             owner: owner.to_owned(),
         })
     }
 
-    /// The grant for an input request: the action under way, so it hears
-    /// of a cancel or a stop that came since control was taken.
+    /// An input request is an action under way, so it hears Stop or cancel.
     pub(super) fn grant(self: &Arc<Self>, owner: &str) -> Result<Grant> {
-        let state = self.lock()?;
-        self.grant_at(state, owner, Instant::now())
+        self.grant_at(self.lock()?, owner, Instant::now())
     }
 
     fn grant_at(
@@ -183,8 +173,7 @@ impl Gate {
     }
 
     pub(super) fn renew(&self, owner: &str) -> Result<()> {
-        let state = self.lock()?;
-        self.renew_at(state, owner, Instant::now(), Instant::now)
+        self.renew_at(self.lock()?, owner, Instant::now(), Instant::now)
     }
 
     fn renew_at(
@@ -194,66 +183,67 @@ impl Gate {
         now: Instant,
         deadline_now: impl FnOnce() -> Instant,
     ) -> Result<()> {
-        state.require_at(owner, false, now)?;
-        state.expires = Some(deadline_now() + super::GRANT_TTL);
+        let owner = state.require_at(owner, false, now)?;
+        owner.expires = deadline_now() + super::GRANT_TTL;
         Ok(())
     }
 
-    /// End ownership on purpose: the person stopped, or the controller
-    /// released it. What was under way then reads as cancelled.
-    pub(super) fn cancel(&self, owner: Option<&str>) -> Result<()> {
+    /// Cancellation deliberately does not sample expiry: an unobserved expiry
+    /// still permits the action to hear who ended it, rather than mere loss.
+    pub(super) fn cancel(&self, token: Option<&str>) -> Result<()> {
         let mut state = self.lock()?;
-        if let Some(owner) = owner
-            && state.previous.as_deref() != Some(owner)
+        if let Some(token) = token
+            && state
+                .owner
+                .as_ref()
+                .is_none_or(|owner| owner.token != token)
         {
             return Err(Error::new(
                 Code::LeaseLost,
                 "This token cannot release another controller",
             ));
         }
-
-        if let Some(owner) = state.owner.take() {
-            state.cancelled = Some((owner, false));
+        if let Some(owner) = &mut state.owner
+            && owner.status == Status::Active
+        {
+            owner.status = Status::Cancelled;
         }
-
         Ok(())
     }
 
-    /// Stop agents (`on`) or let them go on. Stopping ends an agent's
-    /// control as a cancel does, so what it had under way reads as
-    /// cancelled; the person's own control is left alone.
     pub(super) fn hold(&self, on: bool) -> Result<()> {
         let mut state = self.lock()?;
         state.held = on;
-
         if on
-            && !state.person
-            && let Some(owner) = state.owner.take()
+            && let Some(owner) = &mut state.owner
+            && owner.who == Who::Agent
+            && owner.status == Status::Active
         {
-            state.cancelled = Some((owner, true));
+            owner.status = Status::Stopped;
         }
-
         Ok(())
     }
 
-    /// Whether the person has stopped agents.
     pub(super) fn held(&self) -> Result<bool> {
         Ok(self.lock()?.held)
     }
 
-    /// End ownership for a cause that is nobody's doing (the session
-    /// changed, an action failed). What was under way reads as lost.
+    /// Session loss and action failure suppress any earlier cancellation.
     pub(super) fn revoke(&self) -> Result<()> {
-        let mut state = self.lock()?;
-        state.owner = None;
-        state.cancelled = None;
+        if let Some(owner) = &mut self.lock()?.owner {
+            owner.status = Status::Lost;
+        }
         Ok(())
     }
 
     pub(super) fn close(&self) -> Result<()> {
         let mut state = self.lock()?;
         state.closed = true;
-        state.owner = None;
+        if let Some(owner) = &mut state.owner
+            && owner.status == Status::Active
+        {
+            owner.status = Status::Lost;
+        }
         Ok(())
     }
 }
@@ -266,8 +256,7 @@ pub(super) struct Grant {
 
 impl Grant {
     pub(super) fn authorize(&self) -> Result<MutexGuard<'_, State>> {
-        let state = self.gate.lock()?;
-        self.authorize_at(state, Instant::now())
+        self.authorize_at(self.gate.lock()?, Instant::now())
     }
 
     fn authorize_at<'a>(
@@ -284,6 +273,16 @@ impl Grant {
 mod tests {
     use super::*;
 
+    fn cancelled(state: &State) -> Option<(String, bool)> {
+        let owner = state.owner.as_ref()?;
+        match owner.status {
+            Status::Cancelled | Status::Stopped => {
+                Some((owner.token.clone(), owner.status == Status::Stopped))
+            }
+            Status::Active | Status::Lost => None,
+        }
+    }
+
     fn gate() -> Arc<Gate> {
         Arc::new(Gate::default())
     }
@@ -294,6 +293,30 @@ mod tests {
 
     fn code<T>(result: Result<T>) -> &'static str {
         result.err().map_or("ok", |error| error.code.as_str())
+    }
+
+    #[test]
+    fn reacquiring_the_same_token_replaces_its_prior_end_reason() -> Result<()> {
+        let now = Instant::now();
+        for status in [Status::Lost, Status::Cancelled, Status::Stopped] {
+            let gate = gate();
+            let token = owner('a');
+            let old = gate.acquire_at(gate.lock()?, &token, Who::Agent, now, || now)?;
+            match status {
+                Status::Lost => gate.revoke()?,
+                Status::Cancelled => gate.cancel(Some(&token))?,
+                Status::Stopped => {
+                    gate.hold(true)?;
+                    gate.hold(false)?;
+                }
+                Status::Active => {}
+            }
+            let _new = gate.acquire_at(gate.lock()?, &token, Who::Agent, now, || now)?;
+            assert_eq!(code(old.authorize_at(gate.lock()?, now)), "ok");
+            let state = gate.lock()?;
+            assert_eq!(cancelled(&state), None);
+        }
+        Ok(())
     }
 
     #[test]
@@ -416,7 +439,11 @@ mod tests {
                 .acquire_at(gate.lock().unwrap(), &owner('a'), who, checked, || assigned)
                 .unwrap();
             assert_eq!(
-                gate.lock().unwrap().expires,
+                gate.lock()
+                    .unwrap()
+                    .owner
+                    .as_ref()
+                    .map(|owner| owner.expires),
                 Some(assigned + super::super::GRANT_TTL)
             );
             drop(grant.authorize_at(gate.lock().unwrap(), assigned).unwrap());
@@ -439,7 +466,11 @@ mod tests {
         gate.renew_at(gate.lock().unwrap(), &owner('a'), checked, || assigned)
             .unwrap();
         assert_eq!(
-            gate.lock().unwrap().expires,
+            gate.lock()
+                .unwrap()
+                .owner
+                .as_ref()
+                .map(|owner| owner.expires),
             Some(assigned + super::super::GRANT_TTL)
         );
         drop(grant.authorize_at(gate.lock().unwrap(), assigned).unwrap());
@@ -479,7 +510,11 @@ mod tests {
             );
         }
         assert_eq!(
-            gate.lock().unwrap().expires,
+            gate.lock()
+                .unwrap()
+                .owner
+                .as_ref()
+                .map(|owner| owner.expires),
             Some(now + super::super::GRANT_TTL)
         );
     }
@@ -497,7 +532,14 @@ mod tests {
                     start
                 })
                 .unwrap();
-            assert_eq!(gate.lock().unwrap().expires, Some(expires));
+            assert_eq!(
+                gate.lock()
+                    .unwrap()
+                    .owner
+                    .as_ref()
+                    .map(|owner| owner.expires),
+                Some(expires)
+            );
             (gate, grant)
         };
 
@@ -534,7 +576,11 @@ mod tests {
                 expected
             );
             assert_eq!(
-                gate.lock().unwrap().expires,
+                gate.lock()
+                    .unwrap()
+                    .owner
+                    .as_ref()
+                    .map(|owner| owner.expires),
                 Some(if valid {
                     now + Duration::from_secs(6)
                 } else {
@@ -565,19 +611,37 @@ mod tests {
         gate.renew_at(gate.lock().unwrap(), &owner('a'), renewed, || renewed)
             .unwrap();
         let deadline = renewed + Duration::from_secs(6);
-        assert_eq!(gate.lock().unwrap().expires, Some(deadline));
+        assert_eq!(
+            gate.lock()
+                .unwrap()
+                .owner
+                .as_ref()
+                .map(|owner| owner.expires),
+            Some(deadline)
+        );
         assert_eq!(
             code(gate.renew_at(gate.lock().unwrap(), &owner('b'), renewed, || renewed)),
             "lease-lost"
         );
-        assert_eq!(gate.lock().unwrap().expires, Some(deadline));
+        assert_eq!(
+            gate.lock()
+                .unwrap()
+                .owner
+                .as_ref()
+                .map(|owner| owner.expires),
+            Some(deadline)
+        );
         drop(
             first
                 .authorize_at(first.gate.lock().unwrap(), start + Duration::from_secs(6))
                 .unwrap(),
         );
         assert_eq!(
-            gate.lock().unwrap().expires,
+            gate.lock()
+                .unwrap()
+                .owner
+                .as_ref()
+                .map(|owner| owner.expires),
             Some(deadline),
             "authorization does not renew"
         );
@@ -594,18 +658,36 @@ mod tests {
             )
             .unwrap();
         let deadline = acquired + Duration::from_secs(6);
-        assert_eq!(gate.lock().unwrap().expires, Some(deadline));
+        assert_eq!(
+            gate.lock()
+                .unwrap()
+                .owner
+                .as_ref()
+                .map(|owner| owner.expires),
+            Some(deadline)
+        );
         assert_eq!(
             code(gate.renew_at(gate.lock().unwrap(), &owner('a'), acquired, || acquired)),
             "lease-lost"
         );
-        assert_eq!(gate.lock().unwrap().expires, Some(deadline));
+        assert_eq!(
+            gate.lock()
+                .unwrap()
+                .owner
+                .as_ref()
+                .map(|owner| owner.expires),
+            Some(deadline)
+        );
         assert_eq!(
             code(gate.renew_at(gate.lock().unwrap(), &owner('b'), deadline, || deadline)),
             "lease-lost"
         );
         assert_eq!(
-            gate.lock().unwrap().expires,
+            gate.lock()
+                .unwrap()
+                .owner
+                .as_ref()
+                .map(|owner| owner.expires),
             Some(deadline),
             "a lost lease cannot renew"
         );
@@ -632,17 +714,27 @@ mod tests {
                 code(gate.renew_at(gate.lock().unwrap(), &owner('a'), expires, || expires)),
                 "lease-lost"
             );
-            assert_eq!(gate.lock().unwrap().expires, Some(expires));
+            assert_eq!(
+                gate.lock()
+                    .unwrap()
+                    .owner
+                    .as_ref()
+                    .map(|owner| owner.expires),
+                Some(expires)
+            );
             assert_eq!(
                 code(gate.grant_at(gate.lock().unwrap(), &owner('b'), expires)),
                 "lease-lost"
             );
-            assert_eq!(gate.lock().unwrap().cancelled, Some((owner('a'), stopped)));
+            assert_eq!(
+                cancelled(&gate.lock().unwrap()),
+                Some((owner('a'), stopped))
+            );
             assert_eq!(
                 code(grant.authorize_at(grant.gate.lock().unwrap(), expires)),
                 if stopped { "stopped" } else { "cancelled" }
             );
-            assert_eq!(gate.lock().unwrap().cancelled, None);
+            assert_eq!(cancelled(&gate.lock().unwrap()), None);
             assert_eq!(
                 code(grant.authorize_at(grant.gate.lock().unwrap(), expires)),
                 "lease-lost"
@@ -651,7 +743,14 @@ mod tests {
                 code(gate.grant_at(gate.lock().unwrap(), &owner('a'), expires)),
                 "lease-lost"
             );
-            assert_eq!(gate.lock().unwrap().expires, Some(expires));
+            assert_eq!(
+                gate.lock()
+                    .unwrap()
+                    .owner
+                    .as_ref()
+                    .map(|owner| owner.expires),
+                Some(expires)
+            );
         }
     }
 
@@ -675,9 +774,20 @@ mod tests {
                 } else {
                     gate.cancel(Some(&owner('a'))).unwrap();
                 }
-                assert_eq!(gate.lock().unwrap().expires, Some(expires));
                 assert_eq!(
-                    gate.lock().unwrap().previous.as_deref(),
+                    gate.lock()
+                        .unwrap()
+                        .owner
+                        .as_ref()
+                        .map(|owner| owner.expires),
+                    Some(expires)
+                );
+                assert_eq!(
+                    gate.lock()
+                        .unwrap()
+                        .owner
+                        .as_ref()
+                        .map(|owner| owner.token.as_str()),
                     Some(owner('a').as_str())
                 );
                 assert_eq!(
@@ -730,7 +840,7 @@ mod tests {
                 ending == "acquire"
             );
             assert_eq!(
-                gate.lock().unwrap().cancelled,
+                cancelled(&gate.lock().unwrap()),
                 (ending == "close").then(|| (owner('a'), false))
             );
         }
@@ -766,7 +876,11 @@ mod tests {
                 .unwrap(),
         );
         assert_eq!(
-            gate.lock().unwrap().expires,
+            gate.lock()
+                .unwrap()
+                .owner
+                .as_ref()
+                .map(|owner| owner.expires),
             Some(expires + super::super::GRANT_TTL)
         );
         gate.cancel(Some(&owner('b'))).unwrap();

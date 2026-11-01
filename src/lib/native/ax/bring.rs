@@ -1,5 +1,7 @@
 //! Resolve one target and request focus under a single bounded input turn.
 //! AX references and transient window titles stay on the calling worker.
+//! Resolution, each write and final observation share one reader deadline;
+//! retained elements identify the destination but never replace fresh admission.
 use super::{
     ABSENT, Unread, Within, ffi,
     keyboard::{Ask, Live, Reader},
@@ -8,12 +10,12 @@ use crate::{
     actions::Expect,
     error::{Code, Error, Result},
     name::same_text,
-    native::{
-        focus::{CHECK_BUDGET, FIELDS, Need},
+    native::focus::{CHECK_BUDGET, FIELDS, Need},
+    process::{Info, Instance},
+    screen::{
+        select::{ElementFilter, NameMatch},
         windows::{self, Kind, Listed, Window},
     },
-    process::{Info, Instance},
-    screen::select::{ElementFilter, NameMatch},
 };
 use objc2_application_services::AXError;
 use objc2_core_foundation::{CFArray, CFString, CFType, Type};
@@ -64,7 +66,7 @@ impl Backend for Live {
     }
 
     fn windows(&mut self) -> Result<Vec<Window>> {
-        windows::windows()
+        crate::native::windows::windows()
     }
 
     fn list(
@@ -189,21 +191,21 @@ fn application_with(
     (info.instance.pid == pid && info.uid == uid && !info.zombie).then_some(info.instance)
 }
 
-pub(crate) fn application(pid: i64) -> Result<Instance> {
+pub(in crate::native) fn application(pid: i64) -> Result<Instance> {
     application_with(pid, nix::unistd::geteuid().as_raw(), |pid| {
         crate::process::info(pid).ok().flatten()
     })
     .ok_or_else(|| refused("app", "The target app is no longer running"))
 }
 
-pub(crate) fn check_application(target: Option<Instance>) -> Result<()> {
+pub(in crate::native) fn check_application(target: Option<Instance>) -> Result<()> {
     if let Some(target) = target {
         same_application(target, application(target.pid.into()).ok())?;
     }
     Ok(())
 }
 
-pub(crate) fn target_application(expect: &Expect) -> Result<Instance> {
+pub(in crate::native) fn target_application(expect: &Expect) -> Result<Instance> {
     let target = match expect.instance() {
         Some(instance) => instance,
         None => application(expect.pid())?,
@@ -314,14 +316,6 @@ impl<A: Backend> Reader<A> {
         Ok(refs)
     }
 
-    fn bound(&mut self, element: &A::Element, budget: Duration) -> Result<()> {
-        let left = self.left()?;
-        if !self.ask.bound(element, left.min(budget)) {
-            return Err(Unread::Failed.error());
-        }
-        Ok(())
-    }
-
     fn list(
         &mut self,
         element: &A::Element,
@@ -335,13 +329,6 @@ impl<A: Backend> Reader<A> {
             return Err(Unread::Malformed.error());
         }
         Ok(result)
-    }
-
-    fn owned(&mut self, element: &A::Element, pid: i64) -> Result<()> {
-        if self.ask.owner(element) != Some(pid) {
-            return Err(Unread::Failed.error());
-        }
-        Ok(())
     }
 
     fn resolve(&mut self, app: &A::Element, pid: i64, number: i64) -> Result<A::Element> {
@@ -469,90 +456,6 @@ impl<A: Backend> Reader<A> {
         Err(Unread::Deep.error())
     }
 
-    fn blocking(
-        &mut self,
-        app: &A::Element,
-        window: Option<&A::Element>,
-        pid: i64,
-        explicit: bool,
-        point: Option<(f64, f64)>,
-    ) -> Result<()> {
-        // Only an explicit selection grants the unrelated-document exemption.
-        // An app-only command follows the current keyboard destination.
-        let window = window.filter(|_| explicit);
-        let refs = self.window_refs(app, pid)?;
-        if let Some(window) = window {
-            let attached = refs
-                .iter()
-                .any(|entry| entry.element == *window && entry.parent.is_some());
-            if attached || self.text(window, "AXRole")?.as_deref() == Some("AXSheet") {
-                if !refs.iter().any(|entry| entry.element == *window) {
-                    return Err(Unread::Unlisted.error());
-                }
-                if let Some(point) = point {
-                    self.at_sheet(window, point)?;
-                }
-            }
-        }
-        for entry in &refs {
-            self.admit_window(&entry.element, entry.parent.as_ref(), window, pid, explicit)?;
-        }
-        if let Some(window) = window
-            && !refs.iter().any(|entry| entry.element == *window)
-        {
-            self.admit_window(window, None, Some(window), pid, explicit)?;
-            if !self.sheets(window, pid)?.is_empty() {
-                return Err(refused("sheet", "A sheet is open over the target window"));
-            }
-        }
-        let focused = self.reference(app, "AXFocusedWindow")?;
-        let main = self.reference(app, "AXMainWindow")?;
-        for current in [focused.as_ref(), main.as_ref()].into_iter().flatten() {
-            let parent = refs
-                .iter()
-                .find(|entry| entry.element == *current)
-                .and_then(|entry| entry.parent.as_ref());
-            self.admit_window(current, parent, window, pid, explicit)?;
-            for sheet in self.sheets(current, pid)? {
-                self.admit_window(&sheet, Some(current), window, pid, explicit)?;
-            }
-        }
-        if let Some(mut element) = self.reference(app, "AXFocusedUIElement")? {
-            for depth in 0..256 {
-                self.owned(&element, pid)?;
-                if Some(&element) == window {
-                    break;
-                }
-                let role = self.text(&element, "AXRole")?;
-                if role.as_deref() == Some("AXApplication") {
-                    break;
-                }
-                let parent = refs
-                    .iter()
-                    .find(|entry| entry.element == element)
-                    .and_then(|entry| entry.parent.as_ref());
-                self.admit_window(&element, parent, window, pid, explicit)?;
-                if parent.is_some() || matches!(role.as_deref(), Some("AXWindow" | "AXSheet")) {
-                    if role.as_deref() != Some("AXSheet")
-                        && parent.is_none()
-                        && window == focused.as_ref()
-                        && window.is_some()
-                    {
-                        return Err(Unread::Failed.error());
-                    }
-                    break;
-                }
-                element = self
-                    .reference(&element, "AXParent")?
-                    .ok_or_else(|| Unread::Failed.error())?;
-                if depth == 255 {
-                    return Err(Unread::Deep.error());
-                }
-            }
-        }
-        Ok(())
-    }
-
     fn at_sheet(&mut self, sheet: &A::Element, (x, y): (f64, f64)) -> Result<()> {
         let frame = self
             .window(sheet)?
@@ -652,11 +555,257 @@ struct Target<A: Backend> {
     window: Option<A::Element>,
     field: Option<A::Element>,
     number: Option<i64>,
+    writes: Vec<(A::Element, Write)>,
     changed: bool,
     point: Option<(f64, f64)>,
 }
 
 impl<A: Backend> Target<A> {
+    /// Keep an inferred field window as proof, without adding a raise that
+    /// an app-only request did not previously make.
+    fn resolve(ask: A, expect: &Expect, need: Need, deadline: Instant) -> Result<Self> {
+        let mut reader = Reader { ask, deadline };
+        let app = reader
+            .ask
+            .app(expect.pid())
+            .ok_or_else(|| refused("app", "The target app is no longer running"))?;
+        reader.left()?;
+        reader.owned(&app, expect.pid())?;
+        if expect.field().is_some() {
+            // Ignore the result because this read only wakes the browser's page tree.
+            let _ = reader.text(&app, "AXRole");
+        }
+        let point = match need {
+            Need::Point(x, y) | Need::Pointer(x, y) => Some((x, y)),
+            Need::Drag { from, .. } => Some(from),
+            Need::Keys | Need::Nothing => None,
+        };
+        let mut number = if let Some(number) = expect.window() {
+            Some(number)
+        } else if let Some((x, y)) = point {
+            let listed = reader.ask.windows()?;
+            reader.left()?;
+            let menu = listed
+                .iter()
+                .any(|window| window.is_menu_bar() && window.bounds.contains(x, y));
+            if menu {
+                None
+            } else {
+                let candidate = listed
+                    .iter()
+                    .find(|window| {
+                        window.pid == expect.pid()
+                            && window.alpha > 0.0
+                            && window.is_apps_or_menu()
+                            && window.bounds.contains(x, y)
+                    })
+                    .ok_or_else(|| refused("point", "No window of the app is at that point"))?;
+                (candidate.layer != windows::MENU_LAYER).then_some(candidate.number)
+            }
+        } else {
+            None
+        };
+        let window = match number {
+            Some(number) => Some(reader.resolve(&app, expect.pid(), number)?),
+            None => {
+                let focused = reader.reference(&app, "AXFocusedWindow")?;
+                match focused {
+                    Some(window) => Some(window),
+                    None => reader.reference(&app, "AXMainWindow")?,
+                }
+            }
+        };
+        let mut writes = vec![(app.clone(), Write::Flag("AXFrontmost"))];
+        if let (Some(window), Some(_)) = (&window, number) {
+            writes.extend([
+                (window.clone(), Write::Raise),
+                (window.clone(), Write::Flag("AXMain")),
+                (window.clone(), Write::Flag("AXFocused")),
+            ]);
+        }
+        if number.is_none() && expect.field().is_some() {
+            let window = window
+                .as_ref()
+                .ok_or_else(|| refused("field", "No window of the app holds the named field"))?;
+            reader.owned(window, expect.pid())?;
+            let described = reader.window(window)?;
+            let listed = reader.ask.windows()?;
+            let frame = described.frame.ok_or_else(|| Unread::Malformed.error())?;
+            number = Some(
+                match windows::described(
+                    &listed,
+                    expect.pid(),
+                    &frame,
+                    described.title.as_deref(),
+                    Kind::of(described.subrole.as_deref()),
+                ) {
+                    Listed::One(number) => number,
+                    Listed::Missing => return Err(Unread::Unlisted.error()),
+                    Listed::Several => return Err(Unread::Alike.error()),
+                },
+            );
+        }
+        Ok(Self {
+            reader,
+            app,
+            window,
+            number,
+            point,
+            field: None,
+            writes,
+            changed: false,
+        })
+    }
+
+    fn admit(&mut self, expect: &Expect) -> Result<()> {
+        // Only an explicit selection grants the unrelated-document exemption.
+        // An app-only command follows the current keyboard destination.
+        let reader = &mut self.reader;
+        let app = &self.app;
+        let pid = expect.pid();
+        let point = self.point;
+        let explicit = expect.window().is_some() || point.is_some();
+        let window = self.window.as_ref().filter(|_| explicit);
+        let refs = reader.window_refs(app, pid)?;
+        if let Some(window) = window {
+            let attached = refs
+                .iter()
+                .any(|entry| entry.element == *window && entry.parent.is_some());
+            if attached || reader.text(window, "AXRole")?.as_deref() == Some("AXSheet") {
+                if !refs.iter().any(|entry| entry.element == *window) {
+                    return Err(Unread::Unlisted.error());
+                }
+                if let Some(point) = point {
+                    reader.at_sheet(window, point)?;
+                }
+            }
+        }
+        for entry in &refs {
+            reader.admit_window(&entry.element, entry.parent.as_ref(), window, pid, explicit)?;
+        }
+        if let Some(window) = window
+            && !refs.iter().any(|entry| entry.element == *window)
+        {
+            reader.admit_window(window, None, Some(window), pid, explicit)?;
+            if !reader.sheets(window, pid)?.is_empty() {
+                return Err(refused("sheet", "A sheet is open over the target window"));
+            }
+        }
+        let focused = reader.reference(app, "AXFocusedWindow")?;
+        let main = reader.reference(app, "AXMainWindow")?;
+        for current in [focused.as_ref(), main.as_ref()].into_iter().flatten() {
+            let parent = refs
+                .iter()
+                .find(|entry| entry.element == *current)
+                .and_then(|entry| entry.parent.as_ref());
+            reader.admit_window(current, parent, window, pid, explicit)?;
+            for sheet in reader.sheets(current, pid)? {
+                reader.admit_window(&sheet, Some(current), window, pid, explicit)?;
+            }
+        }
+        if let Some(mut element) = reader.reference(app, "AXFocusedUIElement")? {
+            for depth in 0..256 {
+                reader.owned(&element, pid)?;
+                if Some(&element) == window {
+                    break;
+                }
+                let role = reader.text(&element, "AXRole")?;
+                if role.as_deref() == Some("AXApplication") {
+                    break;
+                }
+                let parent = refs
+                    .iter()
+                    .find(|entry| entry.element == element)
+                    .and_then(|entry| entry.parent.as_ref());
+                reader.admit_window(&element, parent, window, pid, explicit)?;
+                if parent.is_some() || matches!(role.as_deref(), Some("AXWindow" | "AXSheet")) {
+                    if role.as_deref() != Some("AXSheet")
+                        && parent.is_none()
+                        && window == focused.as_ref()
+                        && window.is_some()
+                    {
+                        return Err(Unread::Failed.error());
+                    }
+                    break;
+                }
+                element = reader
+                    .reference(&element, "AXParent")?
+                    .ok_or_else(|| Unread::Failed.error())?;
+                if depth == 255 {
+                    return Err(Unread::Deep.error());
+                }
+            }
+        }
+        Ok(())
+    }
+
+    /// Recheck admission and identity for each supported focus write.
+    fn focus(&mut self, expect: &Expect, guard: &impl Fn() -> Result<()>) -> Result<()> {
+        if self.writes.is_empty() {
+            return Ok(());
+        }
+        for (element, operation) in std::mem::take(&mut self.writes) {
+            self.admit(expect)?;
+            guard()?;
+            self.reader.bound(&element, REQUEST)?;
+            let supported = self
+                .reader
+                .ask
+                .supports(&element, operation, self.reader.deadline)?;
+            self.reader.left()?;
+            if !supported {
+                continue;
+            }
+            self.admit(expect)?;
+            if self.field.as_ref() == Some(&element) {
+                let described = Reader::field(&mut self.reader, &element)?;
+                if described.enabled == Some(false) {
+                    return Err(refused("disabled", "That field is disabled"));
+                }
+                if self.reader.within(element.clone(), self.window.as_ref())? != Within::Window {
+                    return Err(Unread::Failed.error());
+                }
+            }
+            if let (Some(window), Some(number)) = (&self.window, self.number) {
+                self.reader.identity(window, expect.pid(), number)?;
+            }
+            guard()?;
+            self.reader.bound(&element, WRITE_BUDGET)?;
+            let status = self.reader.ask.write(&element, operation);
+            if status == AXError::CannotComplete {
+                return Err(Error::new(
+                    Code::Uncertain,
+                    "The app did not acknowledge the focus request",
+                )
+                .uncertain());
+            }
+            self.changed |= status == AXError::Success;
+            guard()?;
+            if status != AXError::Success
+                && !(self.point.is_some()
+                    && self.window.as_ref() == Some(&element)
+                    && operation == Write::Flag("AXFocused"))
+                && !matches!(
+                    status,
+                    AXError::AttributeUnsupported
+                        | AXError::ActionUnsupported
+                        | AXError::NotImplemented
+                )
+            {
+                if self.field.as_ref() == Some(&element) {
+                    return Err(refused(
+                        "field",
+                        "The named field did not accept keyboard focus",
+                    ));
+                }
+                return Err(Unread::Failed.error());
+            }
+            self.reader.left()?;
+        }
+        guard()?;
+        Ok(())
+    }
+
     fn verify(
         &mut self,
         deadline: Instant,
@@ -678,8 +827,7 @@ impl<A: Backend> Target<A> {
     }
 }
 
-/// Admit the target even when it is already ready. Each write is guarded
-/// independently; the callback never holds ownership across remote AX calls.
+/// Resolve and admit the exact destination before any focus write.
 fn prepare<A: Backend>(
     ask: A,
     expect: &Expect,
@@ -689,93 +837,18 @@ fn prepare<A: Backend>(
     ready: &mut impl FnMut(Option<i64>) -> bool,
 ) -> Result<Target<A>> {
     guard()?;
-    let mut reader = Reader { ask, deadline };
-    let app = reader
-        .ask
-        .app(expect.pid())
-        .ok_or_else(|| refused("app", "The target app is no longer running"))?;
-    reader.left()?;
-    reader.owned(&app, expect.pid())?;
-    if expect.field().is_some() {
-        // Ignore the result because this read only wakes the browser's page tree.
-        let _ = reader.text(&app, "AXRole");
-    }
-    let point = match need {
-        Need::Point(x, y) => Some((x, y)),
-        Need::Drag { from, .. } => Some(from),
-        _ => None,
-    };
-    let mut menu = false;
-    let mut number = if let Some(number) = expect.window() {
-        Some(number)
-    } else if let Some((x, y)) = point {
-        let listed = reader.ask.windows()?;
-        reader.left()?;
-        menu = listed
-            .iter()
-            .any(|window| window.is_menu_bar() && window.bounds.contains(x, y));
-        if menu {
-            None
-        } else {
-            let candidate = listed
-                .iter()
-                .find(|window| {
-                    window.pid == expect.pid()
-                        && window.alpha > 0.0
-                        && window.is_apps_or_menu()
-                        && window.bounds.contains(x, y)
-                })
-                .ok_or_else(|| refused("point", "No window of the app is at that point"))?;
-            menu = candidate.layer == windows::MENU_LAYER;
-            if menu { None } else { Some(candidate.number) }
-        }
-    } else {
-        None
-    };
-    let window = match number {
-        Some(number) => Some(reader.resolve(&app, expect.pid(), number)?),
-        None => {
-            let focused = reader.reference(&app, "AXFocusedWindow")?;
-            match focused {
-                Some(window) => Some(window),
-                None => reader.reference(&app, "AXMainWindow")?,
-            }
-        }
-    };
-    let raise = number.is_some() && !menu;
-    if number.is_none() && expect.field().is_some() {
-        let window = window
-            .as_ref()
-            .ok_or_else(|| refused("field", "No window of the app holds the named field"))?;
-        reader.owned(window, expect.pid())?;
-        let described = reader.window(window)?;
-        let listed = reader.ask.windows()?;
-        let frame = described.frame.ok_or_else(|| Unread::Malformed.error())?;
-        number = Some(
-            match windows::described(
-                &listed,
-                expect.pid(),
-                &frame,
-                described.title.as_deref(),
-                Kind::of(described.subrole.as_deref()),
-            ) {
-                Listed::One(number) => number,
-                Listed::Missing => return Err(Unread::Unlisted.error()),
-                Listed::Several => return Err(Unread::Alike.error()),
-            },
-        );
-    }
-    reader.blocking(
-        &app,
-        window.as_ref(),
-        expect.pid(),
-        expect.window().is_some() || point.is_some(),
-        point,
-    )?;
+    let mut target = Target::resolve(ask, expect, need, deadline)?;
+    let raise = target
+        .writes
+        .iter()
+        .any(|(_, write)| *write == Write::Raise);
+    let number = target.number;
+    let point = target.point;
+    target.admit(expect)?;
     guard()?;
     if let (Some(number), Some((x, y))) = (expect.window(), point) {
-        let listed = reader.ask.windows()?;
-        reader.left()?;
+        let listed = target.reader.ask.windows()?;
+        target.reader.left()?;
         let window = listed
             .iter()
             .find(|window| window.pid == expect.pid() && window.number == number)
@@ -790,135 +863,47 @@ fn prepare<A: Backend>(
     if ready(number)
         && (point.is_none()
             || !raise
-            || reader.reference(&app, "AXFocusedWindow")?.as_ref() == window.as_ref())
+            || target
+                .reader
+                .reference(&target.app, "AXFocusedWindow")?
+                .as_ref()
+                == target.window.as_ref())
     {
-        let mut field = None;
         if let Some(name) = expect.field()
-            && let Some(focused) = reader.reference(&app, "AXFocusedUIElement")?
+            && let Some(focused) = target.reader.reference(&target.app, "AXFocusedUIElement")?
         {
-            let described = reader.field(&focused)?;
+            let described = target.reader.field(&focused)?;
             let filter = ElementFilter {
                 name: Some(name.to_owned()),
                 ..Default::default()
             };
             if filter.match_of(&described) == Some(NameMatch::Exact) {
-                field = Some(focused);
+                target.field = Some(focused);
             }
         }
-        if expect.field().is_none() || field.is_some() {
-            return Ok(Target {
-                reader,
-                app,
-                window,
-                field,
-                number,
-                changed: false,
-                point,
-            });
+        if expect.field().is_none() || target.field.is_some() {
+            target.writes.clear();
+            return Ok(target);
         }
     }
-    reader.left()?;
-    let field = if let Some(name) = expect.field() {
-        let window = window
+    target.reader.left()?;
+    if let Some(name) = expect.field() {
+        let window = target
+            .window
             .as_ref()
             .ok_or_else(|| refused("field", "No window of the app holds the named field"))?;
-        Some(reader.find_field(window, expect.pid(), name)?)
-    } else {
-        None
-    };
-    let mut writes = vec![(app.clone(), Write::Flag("AXFrontmost"))];
-    if raise {
-        let window = window.as_ref().ok_or_else(|| Unread::Unlisted.error())?;
-        writes.extend([
-            (window.clone(), Write::Raise),
-            (window.clone(), Write::Flag("AXMain")),
-            (window.clone(), Write::Flag("AXFocused")),
-        ]);
+        target.field = Some(target.reader.find_field(window, expect.pid(), name)?);
     }
-    if let Some(field) = &field {
-        writes.push((field.clone(), Write::Flag("AXFocused")));
+    if let Some(field) = &target.field {
+        target
+            .writes
+            .push((field.clone(), Write::Flag("AXFocused")));
     }
-    let mut changed = false;
-    for (element, operation) in writes {
-        reader.blocking(
-            &app,
-            window.as_ref(),
-            expect.pid(),
-            expect.window().is_some() || point.is_some(),
-            point,
-        )?;
-        guard()?;
-        reader.bound(&element, REQUEST)?;
-        let supported = reader.ask.supports(&element, operation, reader.deadline)?;
-        reader.left()?;
-        if !supported {
-            continue;
-        }
-        reader.blocking(
-            &app,
-            window.as_ref(),
-            expect.pid(),
-            expect.window().is_some() || point.is_some(),
-            point,
-        )?;
-        if field.as_ref() == Some(&element) {
-            let described = Reader::field(&mut reader, &element)?;
-            if described.enabled == Some(false) {
-                return Err(refused("disabled", "That field is disabled"));
-            }
-            if reader.within(element.clone(), window.as_ref())? != Within::Window {
-                return Err(Unread::Failed.error());
-            }
-        }
-        if let (Some(window), Some(number)) = (&window, number) {
-            reader.identity(window, expect.pid(), number)?;
-        }
-        guard()?;
-        reader.bound(&element, WRITE_BUDGET)?;
-        let status = reader.ask.write(&element, operation);
-        if status == AXError::CannotComplete {
-            return Err(Error::new(
-                Code::Uncertain,
-                "The app did not acknowledge the focus request",
-            )
-            .uncertain());
-        }
-        changed |= status == AXError::Success;
-        guard()?;
-        if status != AXError::Success
-            && !(point.is_some()
-                && window.as_ref() == Some(&element)
-                && operation == Write::Flag("AXFocused"))
-            && !matches!(
-                status,
-                AXError::AttributeUnsupported
-                    | AXError::ActionUnsupported
-                    | AXError::NotImplemented
-            )
-        {
-            if field.as_ref() == Some(&element) {
-                return Err(refused(
-                    "field",
-                    "The named field did not accept keyboard focus",
-                ));
-            }
-            return Err(Unread::Failed.error());
-        }
-        reader.left()?;
-    }
-    guard()?;
-    Ok(Target {
-        reader,
-        app,
-        window,
-        field,
-        number,
-        changed,
-        point,
-    })
+    target.focus(expect, guard)?;
+    Ok(target)
 }
 
-pub(crate) fn bring(
+pub(in crate::native) fn bring(
     expect: &Expect,
     need: Need,
     deadline: Instant,
@@ -947,22 +932,10 @@ fn settle<A: Backend>(
         let checking = deadline.min(target.reader.ask.now() + CHECK_BUDGET);
         target.reader.deadline = checking;
         let result = (|| {
-            target.reader.blocking(
-                &target.app,
-                target.window.as_ref(),
-                expect.pid(),
-                expect.window().is_some() || target.point.is_some(),
-                target.point,
-            )?;
+            target.admit(expect)?;
             let mut result = target.verify(checking, &mut verify);
             if result.is_ok() {
-                target.reader.blocking(
-                    &target.app,
-                    target.window.as_ref(),
-                    expect.pid(),
-                    expect.window().is_some() || target.point.is_some(),
-                    target.point,
-                )?;
+                target.admit(expect)?;
                 // Admission is another observation. Its scan may outlive the
                 // earlier proof, so verify the destination again before returning.
                 result = target.verify(checking, &mut verify);

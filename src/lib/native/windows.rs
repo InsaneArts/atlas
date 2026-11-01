@@ -1,8 +1,4 @@
-pub use crate::screen::windows::{
-    Bounds, DOCK_LAYER, Dock, Kind, Listed, MENU_BAR_LAYER, MENU_LAYER, Screen, Shown, Window,
-    described, from_reply, frontmost_pid, owning_window, reaches, top_at, unobstructed,
-    visible_point,
-};
+pub(crate) use crate::screen::windows::{Bounds, Dock, MENU_LAYER, Window};
 use crate::{
     error::{Code, Error, Result},
     native::cf,
@@ -32,7 +28,7 @@ fn read_window(entry: &cf::Record) -> Option<Window> {
 }
 
 /// On-screen windows in front-to-back order.
-pub fn windows() -> Result<Vec<Window>> {
+pub(crate) fn windows() -> Result<Vec<Window>> {
     let options =
         CGWindowListOption::OptionOnScreenOnly | CGWindowListOption::ExcludeDesktopElements;
     let list = cf::windows(options)

@@ -4,7 +4,7 @@ pub use super::geometry::Frame;
 use serde::{Deserialize, Serialize};
 use std::{collections::BTreeSet, time::Duration};
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Element {
     /// Position in depth-first order, stable within one snapshot.

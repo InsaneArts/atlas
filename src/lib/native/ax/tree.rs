@@ -2,7 +2,7 @@
 //! windows, its menu bar titles and the menus it has open), the walk down
 //! from there, and what each element met on the way reports.
 use super::{
-    ABSENT, Element, Frame, Limits, Snapshot, Stop,
+    ABSENT,
     batch::{Batch, Source},
     ffi,
     menus::{Drawn, skip_nested_menu},
@@ -10,8 +10,10 @@ use super::{
 };
 use crate::{
     error::{Code, Error, Result},
-    native::{
-        self,
+    native,
+    screen::{
+        elements::{Element, Limits, Snapshot, Stop},
+        geometry::Frame,
         windows::{self, MENU_LAYER},
     },
 };
@@ -93,7 +95,7 @@ pub fn elements(pid: i32, limits: Limits) -> Result<Snapshot> {
     // must reach; any it does not might hold an unseen match.
     let mut unvisited: Vec<CFRetained<AXUIElement>> = Vec::new();
 
-    let listed = match windows::windows() {
+    let listed = match native::windows::windows() {
         Ok(listed) => listed,
         Err(_) => {
             scan.stop(Stop::Unread);

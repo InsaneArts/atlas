@@ -68,19 +68,19 @@ pub fn session_info() -> Result<Value> {
     unsafe_code,
     reason = "FFI: the Accessibility trust query has no safe binding"
 )]
-pub fn accessibility_trusted() -> bool {
+pub(crate) fn accessibility_trusted() -> bool {
     // SAFETY: no arguments; only reads this process's consent.
     unsafe { objc2_application_services::AXIsProcessTrusted() }
 }
 
 #[cfg(target_os = "macos")]
-pub mod apps;
+pub(crate) mod apps;
 #[cfg(target_os = "macos")]
 pub mod ax;
 #[cfg(target_os = "macos")]
-pub mod capture;
+pub(crate) mod capture;
 #[cfg(target_os = "macos")]
-pub mod cf;
+pub(crate) mod cf;
 #[cfg(target_os = "macos")]
 pub(crate) mod endpoint;
 #[cfg(target_os = "macos")]
@@ -88,14 +88,14 @@ mod events;
 #[cfg(target_os = "macos")]
 mod focus;
 #[cfg(target_os = "macos")]
-pub mod icons;
+pub(crate) mod icons;
 #[cfg(target_os = "macos")]
 mod journal;
 #[cfg(target_os = "macos")]
 mod lease;
 #[cfg(target_os = "macos")]
-pub mod processes;
+pub(crate) mod processes;
 #[cfg(target_os = "macos")]
 pub mod service;
 #[cfg(target_os = "macos")]
-pub mod windows;
+pub(crate) mod windows;

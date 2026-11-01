@@ -18,15 +18,15 @@ use std::{
 #[derive(Clone, PartialEq, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 pub(super) struct Held {
-    pub epoch: InputEpoch,
-    pub button: Option<Button>,
-    pub keys: Vec<u16>,
-    pub x: f64,
-    pub y: f64,
-    pub count: u8,
+    pub(super) epoch: InputEpoch,
+    pub(super) button: Option<Button>,
+    pub(super) keys: Vec<u16>,
+    pub(super) x: f64,
+    pub(super) y: f64,
+    pub(super) count: u8,
     #[serde(default)]
-    pub mouse_number: i64,
-    pub flags: u64,
+    pub(super) mouse_number: i64,
+    pub(super) flags: u64,
 }
 
 /// The last successful replacement is cached only to avoid writing an unchanged
@@ -171,7 +171,7 @@ fn set_aside(path: &Path, held: &Held) -> Result<PathBuf> {
 /// is for a service that crashed. A power cut ends the login whose input
 /// was held, and a journal from an earlier login is set aside, not
 /// replayed.
-pub(super) fn store(path: &Path, held: &Held) -> Result<()> {
+fn store(path: &Path, held: &Held) -> Result<()> {
     let temporary = path.with_extension("pending");
     let bytes = serde_json::to_vec(held).map_err(context("Encode held-input journal", path))?;
     write_private_with(&temporary, &bytes, Durability::Kernel)

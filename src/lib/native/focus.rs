@@ -4,14 +4,16 @@
 //! keyboard focus; pointer actions need the app's own window, or the named
 //! one, to be the top one at the point. Preparation requests focus first;
 //! the final verifier independently proves where input would land.
-use super::{
-    ax::{self, Element, Focused, Judged, Keyboard, Unread, Within},
-    windows::{self, Bounds, Dock, Kind, Listed, Screen, Window},
-};
+use super::ax::{self, Focused, Judged, Keyboard, Unread, Within};
 use crate::{
-    actions::{Action, Expect},
+    actions::Expect,
     error::{Code, Error, Result},
-    screen::select::{ElementFilter, shown_name},
+    native::windows as native_windows,
+    screen::{
+        elements::Element,
+        select::{ElementFilter, shown_name},
+        windows::{self, Bounds, Dock, Kind, Listed, Screen, Window},
+    },
 };
 use serde::Serialize;
 use serde_json::json;
@@ -61,13 +63,6 @@ const NOT_SENT: &str = "so this action and the rest were not sent";
 
 /// The neutral action destination, used here for focus admission.
 pub(crate) use crate::actions::Target as Need;
-
-impl Need {
-    /// Every pointer phase checks its point; a drag checks both endpoints.
-    pub(super) fn of(action: &Action) -> Self {
-        action.target()
-    }
-}
 
 /// Where on its way a pointer action is checked, as a refusal names it.
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -244,7 +239,7 @@ impl Look for Live {
     fn windows(&mut self) -> Result<&[Window]> {
         if self.windows.is_none() {
             self.left()?;
-            self.windows = Some(windows::windows()?);
+            self.windows = Some(native_windows::windows()?);
         }
 
         Ok(self.windows.as_deref().unwrap_or_default())
@@ -325,7 +320,7 @@ fn require(
     let outcome = match need {
         Need::Nothing => return Ok(None),
         Need::Keys => active(expect, look).and_then(|()| inside(expect, look)),
-        Need::Point(x, y) => active(expect, look)
+        Need::Point(x, y) | Need::Pointer(x, y) => active(expect, look)
             .and_then(|()| point(expect, (x, y), Spot::At, display, look))
             .map(|()| None),
         Need::Drag { from, to } => active(expect, look)
