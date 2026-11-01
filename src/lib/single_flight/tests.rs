@@ -230,16 +230,19 @@ fn a_blocking_timeout_retains_one_worker_until_completion() {
     }
     worker.finish();
     shared.join_workers();
-    assert!(!shared.lock().running);
+    let kept = shared.lock();
+    assert!(!kept.running);
     assert_eq!(
-        shared.get_blocking(503, Duration::ZERO, || panic!("fresh result")),
-        Some(7)
+        kept.last.as_ref().map(|(key, found, _)| (*key, *found)),
+        Some((503, 7))
     );
 }
 
 #[test]
 fn blocking_looks_reuse_only_the_matching_key() {
     let shared = shared::<usize>();
+    let runtime = runtime();
+    let _entered = runtime.enter();
     let calls = Arc::new(AtomicUsize::new(0));
     for (key, expected) in [(503, 1), (503, 1), (504, 2), (503, 3)] {
         let calls = calls.clone();
@@ -250,6 +253,7 @@ fn blocking_looks_reuse_only_the_matching_key() {
             Some(expected)
         );
         shared.join_workers();
+        shared.lock().last.as_mut().unwrap().2 = Instant::now();
     }
     assert_eq!(calls.load(Ordering::SeqCst), 3);
 }

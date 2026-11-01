@@ -716,8 +716,6 @@ fn at_most_sixty_four_records_stay_and_those_with_leftovers_go_last() {
         .update(&new, TEST_NOW, &client.controller, |_| {})
         .unwrap();
 
-    store.prune_at(new.key(), &[], TEST_NOW);
-
     let left = store.listed(LISTED);
     assert_eq!(left.len(), MAX_RECORDS);
     assert!(

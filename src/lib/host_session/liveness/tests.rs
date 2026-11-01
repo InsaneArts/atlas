@@ -133,10 +133,23 @@ fn a_host_exit_is_seen_without_a_record_write() {
             .spawn()
             .unwrap(),
     );
-    let mut ready = String::new();
-    std::io::BufReader::new(child.0.stdout.take().unwrap())
-        .read_line(&mut ready)
-        .unwrap();
+    let stdout = child.0.stdout.take().unwrap();
+    let ready = std::thread::scope(|scope| {
+        let (cancel, cancelled) = std::sync::mpsc::channel();
+        let process = &mut child.0;
+        let watchdog = scope.spawn(move || {
+            if cancelled.recv_timeout(Duration::from_secs(5)).is_err() {
+                let _ = process.kill();
+                process.wait().unwrap();
+            }
+        });
+        let mut ready = String::new();
+        let result = std::io::BufReader::new(stdout).read_line(&mut ready);
+        let _ = cancel.send(());
+        watchdog.join().unwrap();
+        result.unwrap();
+        ready
+    });
     assert_eq!(ready, "ready\n");
     let pid = i32::try_from(child.0.id()).unwrap();
     let instance = Instance::new(
