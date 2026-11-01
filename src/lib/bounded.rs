@@ -6,7 +6,7 @@ use nix::{
     unistd::Pid,
 };
 use std::{
-    io::{self, Read},
+    io::{self, Read, Write},
     os::unix::process::CommandExt,
     process::{Child, Command, Output, Stdio},
     sync::mpsc,
@@ -107,31 +107,48 @@ fn read(stream: Option<impl Read + Send + 'static>) -> io::Result<mpsc::Receiver
 /// Kill `child` with its process group and reap it. A child that could not
 /// be killed is reaped only if it already ended, so this never waits on it.
 fn stop(child: &mut Child) {
+    stop_with(
+        child,
+        |group| killpg(group, Signal::SIGKILL),
+        &mut io::stderr(),
+    );
+}
+
+fn stop_with(
+    child: &mut Child,
+    kill_group: impl FnOnce(Pid) -> nix::Result<()>,
+    diagnostics: &mut impl Write,
+) {
     let group = i32::try_from(child.id()).ok().map(Pid::from_raw);
-    let grouped = group.is_some_and(|group| match killpg(group, Signal::SIGKILL) {
-        Ok(()) => true,
-        Err(nix::errno::Errno::ESRCH) => false,
-        Err(error) => {
-            eprintln!("Stop bounded command group {group}: {error}");
-            false
-        }
-    });
-    if grouped || child.kill().is_ok() {
-        if let Err(error) = child.wait() {
-            eprintln!(
-                "Reap bounded command {} after stopping it: {error}",
+    let stopped = group.map(kill_group);
+    let grouped = matches!(stopped, Some(Ok(())));
+    let (action, reaped) = if grouped || child.kill().is_ok() {
+        ("Reap", child.wait().map(Some))
+    } else {
+        // Never block on a child we could not stop. Failure is tolerated, not an exit acknowledgement.
+        ("Inspect", child.try_wait())
+    };
+    if let Some(Err(error)) = stopped
+        && error != nix::errno::Errno::ESRCH
+        && let Some(group) = group
+    {
+        let _ = writeln!(diagnostics, "Stop bounded command group {group}: {error}");
+    }
+    match reaped {
+        Ok(Some(_)) => {}
+        Ok(None) => {
+            let _ = writeln!(
+                diagnostics,
+                "Stop bounded command {} was not confirmed",
                 child.id()
             );
         }
-    } else {
-        // Never block on a child we could not stop. Failure is tolerated, not an exit acknowledgement.
-        match child.try_wait() {
-            Ok(Some(_)) => {}
-            Ok(None) => eprintln!("Stop bounded command {} was not confirmed", child.id()),
-            Err(error) => eprintln!(
-                "Inspect bounded command {} after failed stop: {error}",
+        Err(error) => {
+            let _ = writeln!(
+                diagnostics,
+                "{action} bounded command {} after stopping it: {error}",
                 child.id()
-            ),
+            );
         }
     }
 }
@@ -146,12 +163,61 @@ fn late() -> io::Error {
 
 #[cfg(test)]
 mod tests {
-    use super::{LISTING, LOOKUP, output};
+    use super::{LISTING, LOOKUP, output, stop_with};
     use std::{
-        io::ErrorKind,
+        io::{self, ErrorKind, Write},
+        os::unix::process::{CommandExt, ExitStatusExt},
         process::Command,
         time::{Duration, Instant},
     };
+
+    #[test]
+    fn failed_diagnostics_do_not_prevent_killing_and_reaping_a_child() {
+        struct FailedDiagnostics {
+            pid: nix::unistd::Pid,
+            writes: usize,
+        }
+
+        impl Write for FailedDiagnostics {
+            fn write(&mut self, _: &[u8]) -> io::Result<usize> {
+                self.writes += 1;
+                assert_eq!(
+                    nix::sys::wait::waitpid(self.pid, Some(nix::sys::wait::WaitPidFlag::WNOHANG)),
+                    Err(nix::errno::Errno::ECHILD),
+                    "cleanup finishes before diagnostics are written"
+                );
+                Err(ErrorKind::BrokenPipe.into())
+            }
+
+            fn flush(&mut self) -> io::Result<()> {
+                Ok(())
+            }
+        }
+
+        let mut child = Command::new("/bin/sleep")
+            .arg("5")
+            .process_group(0)
+            .spawn()
+            .unwrap();
+        let mut diagnostics = FailedDiagnostics {
+            pid: nix::unistd::Pid::from_raw(child.id().try_into().unwrap()),
+            writes: 0,
+        };
+        let stopped = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            stop_with(
+                &mut child,
+                |_| Err(nix::errno::Errno::EPERM),
+                &mut diagnostics,
+            );
+        }));
+        let status = child.try_wait().unwrap();
+        let _ = child.kill();
+        let _ = child.wait();
+
+        assert!(stopped.is_ok(), "failed diagnostics must not panic");
+        assert!(diagnostics.writes > 0);
+        assert_eq!(status.unwrap().signal(), Some(libc::SIGKILL));
+    }
 
     #[test]
     fn a_command_that_ends_in_time_gives_its_output_and_status() {

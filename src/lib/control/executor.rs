@@ -125,7 +125,6 @@ pub(super) fn publish_executor_with(
         File::open(directory)?.sync_all()?;
         Ok(())
     })();
-    // The old record and its live flock survive a failed replacement; retry can publish again.
     let _ = fs::remove_file(temporary);
     result.map_err(|error: Error| {
         context(format_args!("Publish executor record {}", path.display()))(error)

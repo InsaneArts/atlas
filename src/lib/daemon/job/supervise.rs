@@ -21,6 +21,7 @@ use crate::{
 };
 use nix::sys::signal::Signal;
 use std::{
+    io::{self, Write},
     os::unix::process::ExitStatusExt,
     path::PathBuf,
     sync::Arc,
@@ -440,6 +441,15 @@ fn note_seen(record: &mut Record, processes: Option<&[Info]>, jobs: &Jobs) {
 /// while one is stopping. A Stop is seen through the input service's
 /// saved `stop_marker`; the helper on screen through `on_console`.
 pub async fn supervise(jobs: Arc<Jobs>, stop_marker: PathBuf, on_console: fn() -> bool) {
+    supervise_with(jobs, stop_marker, on_console, io::stderr()).await;
+}
+
+pub(super) async fn supervise_with(
+    jobs: Arc<Jobs>,
+    stop_marker: PathBuf,
+    on_console: fn() -> bool,
+    mut diagnostics: impl Write,
+) {
     loop {
         tokio::time::sleep(jobs.interval()).await;
         let watched = jobs.clone();
@@ -456,7 +466,8 @@ pub async fn supervise(jobs: Arc<Jobs>, stop_marker: PathBuf, on_console: fn() -
         .is_err()
         {
             // Keep supervising; neither a panic nor a cancelled worker proves a job ended.
-            eprintln!(
+            let _ = writeln!(
+                diagnostics,
                 "Job supervision worker failed; job outcomes remain unverified and supervision will retry"
             );
         }

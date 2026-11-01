@@ -453,6 +453,55 @@ fn jobs_with(record: &Record, table: &Arc<Table>) -> (tempfile::TempDir, Jobs) {
     (folder, opened)
 }
 
+#[tokio::test]
+async fn supervision_retries_after_a_worker_panics_even_when_diagnostics_fail() {
+    struct FailedDiagnostics(Arc<AtomicUsize>);
+
+    impl std::io::Write for FailedDiagnostics {
+        fn write(&mut self, _: &[u8]) -> std::io::Result<usize> {
+            self.0.fetch_add(1, Ordering::SeqCst);
+            Err(std::io::ErrorKind::BrokenPipe.into())
+        }
+
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
+    }
+
+    fn on_console() -> bool {
+        static LOOKS: AtomicUsize = AtomicUsize::new(0);
+        assert!(LOOKS.fetch_add(1, Ordering::SeqCst) > 0, "worker failed");
+        false
+    }
+
+    let table = Table::with(vec![leader()]);
+    let (directory, jobs) = jobs_with(&record(), &table);
+    let marker = directory.path().join("stop");
+    std::fs::write(&marker, "").unwrap();
+    let writes = Arc::new(AtomicUsize::new(0));
+    let watcher = tokio::spawn(supervise::supervise_with(
+        Arc::new(jobs),
+        marker,
+        on_console,
+        FailedDiagnostics(writes.clone()),
+    ));
+    let retried = tokio::time::timeout(Duration::from_secs(5), async {
+        while table.signals().is_empty() && !watcher.is_finished() {
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await;
+    watcher.abort();
+    let _ = watcher.await;
+
+    assert!(
+        retried.is_ok(),
+        "supervision must retry within the deadline"
+    );
+    assert!(writes.load(Ordering::SeqCst) > 0);
+    assert_eq!(table.signals(), vec![(4312, Signal::SIGTERM)]);
+}
+
 fn shown(jobs: &Jobs) -> Value {
     jobs.show(Some(&JobId::parse(ID).unwrap()))["job"].clone()
 }
