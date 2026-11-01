@@ -1165,7 +1165,13 @@ mod tests {
         );
         // The failed reply did not suppress the requested effect or supply
         // an acknowledgement on the caller's behalf.
-        daemon.restarting.notified().await;
+        let notified = daemon.restarting.notified();
+        tokio::pin!(notified);
+        std::future::poll_fn(|cx| {
+            assert!(std::future::Future::poll(notified.as_mut(), cx).is_ready());
+            std::task::Poll::Ready(())
+        })
+        .await;
     }
 
     #[tokio::test]
@@ -1338,12 +1344,16 @@ mod tests {
             biased;
             result = &mut drain => panic!("owned work was abandoned: {result:?}"),
             result = gone => assert!(result.is_err()),
+            () = tokio::time::sleep(STOP) => panic!("the idle handler was not cancelled"),
         }
         assert!(idle.is_finished());
         assert_eq!(slots.available_permits(), 1);
         assert!(!run.is_finished());
         resume.send(()).unwrap();
-        drain.await.unwrap();
+        tokio::time::timeout(STOP, drain)
+            .await
+            .expect("owned work did not drain")
+            .unwrap();
         assert!(run.is_finished());
     }
 

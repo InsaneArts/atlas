@@ -523,8 +523,8 @@ impl Service {
         }
 
         if operation == Operation::Release {
-            phase.send_replace(ConnectionPhase::Mutation("release"));
             self.gate.cancel(Some(owner))?;
+            phase.send_replace(ConnectionPhase::Mutation("release"));
             self.cleanup().await?;
             return Ok(json!({ "ok": true, "released": true }));
         }
@@ -561,8 +561,8 @@ impl Service {
         self.check()?;
 
         if operation == Operation::Renew {
-            phase.send_replace(ConnectionPhase::Mutation("renew"));
             self.gate.renew(owner)?;
+            phase.send_replace(ConnectionPhase::Mutation("renew"));
             return Ok(json!({ "ok": true }));
         }
 
@@ -1140,9 +1140,10 @@ async fn handle(
         tokio::select! {
             reply = &mut dispatch => reply,
             _ = stream.read(&mut extra) => {
-                if let Some(owner) = request["owner"].as_str() {
+                if let Some(owner) = request["owner"].as_str()
+                    && service.gate.cancel(Some(owner)).is_ok()
+                {
                     phase.send_replace(ConnectionPhase::Mutation("input"));
-                    let _ = service.gate.cancel(Some(owner));
                 }
                 dispatch.await
             }
@@ -1256,6 +1257,49 @@ mod tests {
         operations.check().unwrap();
         assert!(!gate.held().unwrap());
         assert!(!marker.exists());
+    }
+
+    #[tokio::test]
+    async fn an_abandoned_ownership_refusal_keeps_the_current_controller_healthy() {
+        let operations = super::Operations::default();
+        let gate = Arc::new(Gate::default());
+        let owner = "a".repeat(48);
+        let grant = gate.acquire(&owner, super::Who::Agent).unwrap();
+        for operation in ["release", "renew", "input"] {
+            let (mut client, mut server) = UnixStream::pair().unwrap();
+            client
+                .write_all(
+                    format!("{}\n", json!({"op": operation, "owner": "b".repeat(48)})).as_bytes(),
+                )
+                .await
+                .unwrap();
+            drop(client);
+            let (phase, observed) = super::watch::channel(super::ConnectionPhase::Refusal);
+            let refused = gate.clone();
+            let mut tasks = super::JoinSet::new();
+            let task = tasks.spawn(async move {
+                let _phase = phase;
+                let request = read_request(&mut server).await?;
+                let owner = request["owner"].as_str().unwrap();
+                let refusal = if request["op"] == "renew" {
+                    refused.renew(owner).unwrap_err()
+                } else {
+                    refused.cancel(Some(owner)).unwrap_err()
+                };
+                assert_eq!(refusal.code, Code::LeaseLost);
+                assert!(!refusal.uncertain);
+                super::reply(&mut server, Err(refusal)).await
+            });
+            let mut phases = super::HashMap::from([(task.id(), observed)]);
+            let outcome = tasks.join_next_with_id().await.unwrap();
+            assert!(matches!(outcome, Ok((_, Err(_)))));
+            super::connection_outcome(outcome, &mut phases, &operations, false).unwrap();
+            operations.check().unwrap();
+            assert!(gate.active().unwrap());
+            drop(grant.authorize().unwrap());
+            gate.renew(&owner).unwrap();
+        }
+        operations.drain().await.unwrap();
     }
 
     #[tokio::test]
