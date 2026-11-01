@@ -81,10 +81,15 @@ impl Lease {
     /// lock is still kept for another viewer or for one still settling. The
     /// token, which the viewer presents to act, renew and release.
     pub fn acquire(&mut self, controller: &Controller) -> Result<String> {
-        self.acquire_at(controller, Instant::now())
+        self.acquire_at(controller, Instant::now(), Instant::now)
     }
 
-    fn acquire_at(&mut self, controller: &Controller, now: Instant) -> Result<String> {
+    fn acquire_at(
+        &mut self,
+        controller: &Controller,
+        now: Instant,
+        completed: impl FnOnce() -> Instant,
+    ) -> Result<String> {
         self.expire_at(now);
 
         if self.descriptor.is_some() {
@@ -94,7 +99,7 @@ impl Lease {
         self.descriptor = Some(controller.acquire_for_person()?);
         let token = token();
         self.owner = Some(token.clone());
-        self.expires = now + self.ttl;
+        self.expires = completed() + self.ttl;
 
         Ok(token)
     }
@@ -129,12 +134,17 @@ impl Lease {
 
     /// [`Lease::require`] `token`, then give it its full time to live again.
     pub fn renew(&mut self, token: &str) -> Result<()> {
-        self.renew_at(token, Instant::now())
+        self.renew_at(token, Instant::now(), Instant::now)
     }
 
-    fn renew_at(&mut self, token: &str, now: Instant) -> Result<()> {
+    fn renew_at(
+        &mut self,
+        token: &str,
+        now: Instant,
+        completed: impl FnOnce() -> Instant,
+    ) -> Result<()> {
         self.require_at(token, now)?;
-        self.expires = now + self.ttl;
+        self.expires = completed() + self.ttl;
         Ok(())
     }
 

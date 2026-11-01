@@ -842,70 +842,90 @@ fn epoch() -> Epoch {
 
 #[tokio::test]
 async fn expiry_during_acquire_keeps_the_descriptor_until_cleanup_completes() {
-    let dir = tempfile::tempdir().unwrap();
-    let socket = dir.path().join("a.sock");
-    let (mut asked, answer) = input_service(&socket, "acquire");
-    let viewer = Arc::new(http::configured(
-        client_with_input(dir.path(), &socket),
-        "127.0.0.1:1".into(),
-        None,
-    ));
-    let client = viewer.client();
-    let taking = tokio::spawn({
-        let viewer = viewer.clone();
-        let client = client.clone();
-        async move { viewer.take_control(&client, &epoch()).await }
-    });
-    assert_eq!(asked.recv().await.as_deref(), Some("acquire"));
-    viewer.lease.lock().await.expire_for_test();
-    assert!(viewer.lease.lock().await.expired());
-    assert!(viewer.lease.lock().await.active());
-    assert_eq!(client.controller.acquire(false).unwrap_err().code, "busy");
-    assert!(!taking.is_finished());
+    tokio::time::timeout(Duration::from_secs(30), async {
+        let dir = tempfile::tempdir().unwrap();
+        let socket = dir.path().join("a.sock");
+        let (mut asked, answer) = input_service(&socket, "acquire");
+        let viewer = Arc::new(http::configured(
+            client_with_input(dir.path(), &socket),
+            "127.0.0.1:1".into(),
+            None,
+        ));
+        let client = viewer.client();
+        let mut taking = tokio::spawn({
+            let viewer = viewer.clone();
+            let client = client.clone();
+            async move { viewer.take_control(&client, &epoch()).await }
+        });
+        tokio::select! {
+            biased;
+            result = &mut taking => {
+                panic!("acquire completed before its native request: {result:?}");
+            }
+            request = asked.recv() => assert_eq!(request.as_deref(), Some("acquire")),
+        }
+        viewer.lease.lock().await.expire_for_test();
+        assert!(viewer.lease.lock().await.expired());
+        assert!(viewer.lease.lock().await.active());
+        assert_eq!(client.controller.acquire(false).unwrap_err().code, "busy");
+        assert!(!taking.is_finished());
 
-    answer.notify_one();
-    let lost = taking.await.unwrap().unwrap_err();
-    assert_eq!(lost.code, "lease-lost");
-    assert_eq!(asked.recv().await.as_deref(), Some("release"));
-    assert!(client.controller.pending().unwrap().is_empty());
-    assert!(!viewer.lease.lock().await.active());
-    assert!(client.controller.acquire(false).is_ok());
+        answer.notify_one();
+        let lost = taking.await.unwrap().unwrap_err();
+        assert_eq!(lost.code, "lease-lost");
+        assert_eq!(asked.recv().await.as_deref(), Some("release"));
+        assert!(client.controller.pending().unwrap().is_empty());
+        assert!(!viewer.lease.lock().await.active());
+        assert!(client.controller.acquire(false).is_ok());
+    })
+    .await
+    .expect("acquire expiry scenario did not finish");
 }
 
 #[tokio::test]
 async fn expiry_while_release_awaits_keeps_a_successor_excluded() {
-    let dir = tempfile::tempdir().unwrap();
-    let socket = dir.path().join("a.sock");
-    let (mut asked, answer) = input_service(&socket, "release");
-    let viewer = Arc::new(http::configured(
-        client_with_input(dir.path(), &socket),
-        "127.0.0.1:1".into(),
-        None,
-    ));
-    let client = viewer.client();
-    let owner = viewer.take_control(&client, &epoch()).await.unwrap();
-    assert_eq!(asked.recv().await.as_deref(), Some("acquire"));
-    let releasing = tokio::spawn({
-        let viewer = viewer.clone();
-        let owner = owner.clone();
-        async move { viewer.release(Some(&owner)).await }
-    });
-    assert_eq!(asked.recv().await.as_deref(), Some("release"));
-    viewer.lease.lock().await.expire_for_test();
-    assert!(viewer.lease.lock().await.active());
-    assert_eq!(
-        viewer.lease.lock().await.renew(&owner).unwrap_err().code,
-        "lease-lost"
-    );
-    assert_eq!(client.controller.acquire(false).unwrap_err().code, "busy");
-    assert_eq!(client.controller.pending().unwrap().len(), 1);
-    assert!(!releasing.is_finished());
+    tokio::time::timeout(Duration::from_secs(30), async {
+        let dir = tempfile::tempdir().unwrap();
+        let socket = dir.path().join("a.sock");
+        let (mut asked, answer) = input_service(&socket, "release");
+        let viewer = Arc::new(http::configured(
+            client_with_input(dir.path(), &socket),
+            "127.0.0.1:1".into(),
+            None,
+        ));
+        let client = viewer.client();
+        let owner = viewer.take_control(&client, &epoch()).await.unwrap();
+        assert_eq!(asked.recv().await.as_deref(), Some("acquire"));
+        let mut releasing = tokio::spawn({
+            let viewer = viewer.clone();
+            let owner = owner.clone();
+            async move { viewer.release(Some(&owner)).await }
+        });
+        tokio::select! {
+            biased;
+            result = &mut releasing => {
+                panic!("release completed before its native request: {result:?}");
+            }
+            request = asked.recv() => assert_eq!(request.as_deref(), Some("release")),
+        }
+        viewer.lease.lock().await.expire_for_test();
+        assert!(viewer.lease.lock().await.active());
+        assert_eq!(
+            viewer.lease.lock().await.renew(&owner).unwrap_err().code,
+            "lease-lost"
+        );
+        assert_eq!(client.controller.acquire(false).unwrap_err().code, "busy");
+        assert_eq!(client.controller.pending().unwrap().len(), 1);
+        assert!(!releasing.is_finished());
 
-    answer.notify_one();
-    releasing.await.unwrap().unwrap();
-    assert!(!viewer.lease.lock().await.active());
-    assert!(client.controller.pending().unwrap().is_empty());
-    assert!(client.controller.acquire(false).is_ok());
+        answer.notify_one();
+        releasing.await.unwrap().unwrap();
+        assert!(!viewer.lease.lock().await.active());
+        assert!(client.controller.pending().unwrap().is_empty());
+        assert!(client.controller.acquire(false).is_ok());
+    })
+    .await
+    .expect("release expiry scenario did not finish");
 }
 
 #[tokio::test]
