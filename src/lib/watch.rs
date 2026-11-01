@@ -14,7 +14,7 @@ use crate::{
     error::{Code, Error, Result},
     files::{Durability, write_private_with},
     host_session::{HostSession, Key},
-    overview::READ_DEADLINE,
+    overview::{READ_DEADLINE, Reading, State},
 };
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
@@ -145,6 +145,7 @@ struct Watch {
     frames: Option<PathBuf>,
     log: Mark,
     said: Value,
+    state: State,
     read_at: Option<Instant>,
     framed_at: Option<Instant>,
     /// The kept screen's digest, and the last id given: ids only go up, so
@@ -162,6 +163,7 @@ impl Watch {
             frames,
             log: None,
             said: Value::Null,
+            state: State::Missing,
             read_at: None,
             framed_at: None,
             kept: None,
@@ -187,9 +189,9 @@ impl Watch {
 
             // A viewer that runs but did not answer leaves the last status
             // standing, rather than a guess at who holds control.
-            if let Some((mut status, source)) = read(client, output, port).await {
+            if let Some((mut status, source)) = read_typed(client, output, port).await {
                 self.add_own_session(client, &mut status).await;
-                if status["overview"]["state"] == "notReady" {
+                if status.state == State::NotReady {
                     self.forget_frame();
                 }
 
@@ -214,27 +216,12 @@ impl Watch {
     /// `status` with the session this watch runs for as `ownSession` in its
     /// overview, found among every live session when the status's own list
     /// is too short to hold it; null when it is none of them.
-    async fn add_own_session(&self, client: &Client, status: &mut Value) {
+    async fn add_own_session(&self, client: &Client, status: &mut Reading) {
         let Some(own) = &self.own else {
             return;
         };
-        if status["overview"]["hostSessions"]
-            .as_array()
-            .is_some_and(|sessions| {
-                sessions
-                    .iter()
-                    .any(|session| session["key"].as_str() == Some(own.as_str()))
-            })
-        {
-            status["overview"]["ownSession"] = status["overview"]["hostSessions"]
-                .as_array()
-                .and_then(|sessions| {
-                    sessions
-                        .iter()
-                        .find(|session| session["key"].as_str() == Some(own.as_str()))
-                })
-                .cloned()
-                .unwrap_or(Value::Null);
+        if let Some((_, entry)) = status.sessions.iter().find(|(key, _)| key == own.as_str()) {
+            status.value["overview"]["ownSession"] = entry.clone();
         } else {
             crate::overview::add_sessions_for(
                 status,
@@ -257,33 +244,32 @@ impl Watch {
     }
 
     /// The line for `status`, when it says something the last one did not.
-    fn news(&mut self, status: &Value, source: &str, mark: Mark) -> Option<Value> {
-        let signature = signature(status, mark);
+    fn news(&mut self, status: &Reading, source: &str, mark: Mark) -> Option<Value> {
+        let signature = signature(&status.value, mark);
         if signature == self.said {
             return None;
         }
 
         self.said = signature;
-        let mut overview = status["overview"].clone();
+        self.state = status.state.clone();
+        let mut overview = status.value["overview"].clone();
         keep_own_host_id(&mut overview, self.own.as_ref());
         Some(json!({
             "type": "status",
             "source": source,
-            "ready": status["ready"] == true,
+            "ready": status.ready,
             "overview": overview,
         }))
     }
 
     /// Whether to keep the screen now.
     fn frame_due(&self, now: Instant) -> bool {
-        let state = self.said["overview"]["state"].as_str().unwrap_or_default();
-        let every = match state {
-            "working" | "control" => FRAME_EVERY,
+        let every = match self.state {
+            State::Working | State::Control => FRAME_EVERY,
             _ => IDLE_FRAME_EVERY,
         };
         self.frames.is_some()
-            && state != "notReady"
-            && !state.is_empty()
+            && !matches!(self.state, State::NotReady | State::Empty | State::Missing)
             && self
                 .framed_at
                 .is_none_or(|at| now.saturating_duration_since(at) >= every)
@@ -367,6 +353,12 @@ pub(crate) async fn read(
     output: &Path,
     port: u16,
 ) -> Option<(Value, &'static str)> {
+    read_typed(client, output, port)
+        .await
+        .map(|(status, source)| (status.value, source))
+}
+
+async fn read_typed(client: &Client, output: &Path, port: u16) -> Option<(Reading, &'static str)> {
     let output = output.to_path_buf();
     let viewer = tokio::task::spawn_blocking(move || {
         let Some(url) = crate::viewer::local(&output, port) else {
@@ -375,7 +367,11 @@ pub(crate) async fn read(
         };
         let status = crate::viewer::fetch(&url, "status.json", VIEWER_DEADLINE, STATUS_LIMIT)
             .ok()
-            .and_then(|body| serde_json::from_slice::<Value>(&body).ok());
+            .and_then(|body| {
+                serde_json::from_slice::<Value>(&body)
+                    .ok()
+                    .map(Reading::decode)
+            });
         Some(status)
     })
     .await
@@ -383,7 +379,7 @@ pub(crate) async fn read(
     .flatten();
 
     match viewer {
-        Some(Some(status)) if status["overview"]["state"].is_string() => Some((status, "viewer")),
+        Some(Some(status)) if status.state.is_string() => Some((status, "viewer")),
         Some(Some(_)) | None => Some((crate::overview::read(client).await, "helper")),
         Some(None) => None,
     }
@@ -520,6 +516,19 @@ fn private_folder(folder: &Path) -> Result<()> {
 }
 
 #[cfg(test)]
+impl Watch {
+    fn fixture_news(&mut self, status: &Value, source: &str, mark: Mark) -> Option<Value> {
+        self.news(&Reading::decode(status.clone()), source, mark)
+    }
+
+    async fn fixture_own_session(&self, client: &Client, status: &mut Value) {
+        let mut reading = Reading::decode(status.take());
+        self.add_own_session(client, &mut reading).await;
+        *status = reading.value;
+    }
+}
+
+#[cfg(test)]
 mod tests {
     use super::*;
     use std::os::unix::fs::PermissionsExt;
@@ -550,14 +559,16 @@ mod tests {
 
         let line = Watch::new(None)
             .for_session(Some(own))
-            .news(&status, "helper", None)
+            .fixture_news(&status, "helper", None)
             .unwrap();
         let sessions = line["overview"]["hostSessions"].as_array().unwrap();
         assert_eq!(sessions[0]["hostSession"], "own");
         assert!(sessions[1].get("hostSession").is_none());
         assert_eq!(sessions[1]["name"], "Codex · right");
 
-        let line = Watch::new(None).news(&status, "helper", None).unwrap();
+        let line = Watch::new(None)
+            .fixture_news(&status, "helper", None)
+            .unwrap();
         let sessions = line["overview"]["hostSessions"].as_array().unwrap();
         assert!(
             sessions
@@ -584,7 +595,7 @@ mod tests {
         let mut watch = Watch::new(None).for_session(Some(own.clone()));
 
         let first = watch
-            .news(&status("waiting", 1, 0), "helper", None)
+            .fixture_news(&status("waiting", 1, 0), "helper", None)
             .unwrap();
         let sessions = first["overview"]["hostSessions"].as_array().unwrap();
         assert_eq!(sessions[0]["hostSession"], "own", "its own session is told");
@@ -593,12 +604,14 @@ mod tests {
 
         assert!(
             watch
-                .news(&status("waiting", 9, 7), "helper", None)
+                .fixture_news(&status("waiting", 9, 7), "helper", None)
                 .is_none(),
             "only ages changed"
         );
         assert!(
-            watch.news(&status("idle", 9, 7), "helper", None).is_some(),
+            watch
+                .fixture_news(&status("idle", 9, 7), "helper", None)
+                .is_some(),
             "a state change is news"
         );
     }
@@ -623,11 +636,11 @@ mod tests {
         let mut listed = json!({"overview": {"hostSessions": [
             {"key": own.key(), "name": "Claude Code · left", "state": "acting"},
         ]}});
-        watch.add_own_session(&client, &mut listed).await;
+        watch.fixture_own_session(&client, &mut listed).await;
         assert_eq!(listed["overview"]["ownSession"]["state"], "acting");
 
         let mut cut = json!({"overview": {"hostSessions": []}});
-        watch.add_own_session(&client, &mut cut).await;
+        watch.fixture_own_session(&client, &mut cut).await;
         assert_eq!(
             cut["overview"]["ownSession"]["key"],
             own.key().as_str(),
@@ -636,32 +649,34 @@ mod tests {
         assert_eq!(cut["overview"]["ownSession"]["state"], "idle");
 
         let mut none = json!({"overview": {}});
-        Watch::new(None).add_own_session(&client, &mut none).await;
+        Watch::new(None)
+            .fixture_own_session(&client, &mut none)
+            .await;
         assert!(none["overview"].get("ownSession").is_none());
     }
 
     #[test]
     fn a_status_is_said_first_then_only_when_what_it_says_changes() {
         let mut watch = Watch::new(None);
-        let first = watch.news(&status("working", "clicked Save", 1), "helper", mark(10));
+        let first = watch.fixture_news(&status("working", "clicked Save", 1), "helper", mark(10));
         assert_eq!(first.as_ref().unwrap()["type"], "status");
         assert_eq!(first.as_ref().unwrap()["source"], "helper");
         assert_eq!(first.unwrap()["overview"]["headline"], "clicked Save");
 
         assert_eq!(
-            watch.news(&status("working", "clicked Save", 9), "helper", mark(10)),
+            watch.fixture_news(&status("working", "clicked Save", 9), "helper", mark(10)),
             None,
             "an age is not news"
         );
         assert!(
             watch
-                .news(&status("working", "clicked Save", 1), "helper", mark(20))
+                .fixture_news(&status("working", "clicked Save", 1), "helper", mark(20))
                 .is_some(),
             "the same action again is news"
         );
         assert!(
             watch
-                .news(&status("idle", "clicked Save", 1), "helper", mark(20))
+                .fixture_news(&status("idle", "clicked Save", 1), "helper", mark(20))
                 .is_some()
         );
     }
@@ -699,15 +714,15 @@ mod tests {
             ("notReady", false),
             ("", false),
         ] {
-            watch.news(&status(state, "", 0), "viewer", None);
+            watch.fixture_news(&status(state, "", 0), "viewer", None);
             assert_eq!(watch.frame_due(start), due, "{state:?}");
         }
 
         watch.framed_at = Some(start);
-        watch.news(&status("working", "", 0), "viewer", None);
+        watch.fixture_news(&status("working", "", 0), "viewer", None);
         assert!(!watch.frame_due(start + Duration::from_millis(500)));
         assert!(watch.frame_due(start + FRAME_EVERY));
-        watch.news(&status("idle", "", 0), "viewer", None);
+        watch.fixture_news(&status("idle", "", 0), "viewer", None);
         assert!(!watch.frame_due(start + FRAME_EVERY));
         assert!(watch.frame_due(start + IDLE_FRAME_EVERY));
         assert!(!Watch::new(None).frame_due(start), "only with a folder");
@@ -727,7 +742,7 @@ mod tests {
             assert!(!watch.frame_due(Instant::now()), "nothing known yet");
             assert!(
                 watch
-                    .news(&json!({"overview": overview}), "viewer", None)
+                    .fixture_news(&json!({"overview": overview}), "viewer", None)
                     .is_some()
             );
             assert_eq!(watch.said["overview"]["state"], overview["state"]);
@@ -904,7 +919,7 @@ mod tests {
         let began = Instant::now();
         let mut status = json!({"overview": {"hostSessions": []}});
         loop {
-            watch.add_own_session(&client, &mut status).await;
+            watch.fixture_own_session(&client, &mut status).await;
             if status["overview"]["ownSession"]["live"] == true {
                 break;
             }
@@ -947,7 +962,7 @@ mod tests {
         let before = fs::read(&path).unwrap();
         let watch = Watch::new(None).for_session(Some(own.key().clone()));
         let mut status = json!({"overview": {"hostSessions": []}});
-        watch.add_own_session(&client, &mut status).await;
+        watch.fixture_own_session(&client, &mut status).await;
         assert!(status["overview"]["ownSession"].is_null());
         assert_eq!(fs::read(path).unwrap(), before);
     }
@@ -965,11 +980,74 @@ mod tests {
             ("acting", true, Value::Null, true),
         ] {
             let mut status = json!({"overview": {"hostSessions": [{"key": own, "state": state, "live": live, "active": live, "ended": ended, "workInProgress": work, "holdsHelper": false}]}});
-            watch.add_own_session(&client, &mut status).await;
+            watch.fixture_own_session(&client, &mut status).await;
             let entry = &status["overview"]["ownSession"];
             assert_eq!(entry["live"], live);
             assert_eq!(entry["ended"], ended);
             assert_eq!(entry["workInProgress"], work);
         }
+    }
+
+    #[test]
+    fn watch_preserves_unknown_future_state_without_inventing_readiness() {
+        let dir = tempfile::tempdir().unwrap();
+        let start = Instant::now();
+        for (state, accepted, frames) in [
+            (json!("futureBusy"), true, true),
+            (json!(""), true, false),
+            (Value::Null, false, false),
+            (json!(7), false, false),
+            (json!(false), false, false),
+        ] {
+            let reading = Reading::decode(json!({"overview": {"state": state, "future": 3}}));
+            assert_eq!(reading.state.is_string(), accepted);
+            let mut watch = Watch::new(Some(dir.path().to_path_buf()));
+            let line = watch.news(&reading, "viewer", None).unwrap();
+            assert_eq!(line["overview"]["state"], state);
+            assert_eq!(line["overview"]["future"], 3);
+            assert_eq!(line["ready"], false);
+            assert_eq!(watch.frame_due(start), frames);
+            watch.framed_at = Some(start);
+            assert!(!watch.frame_due(start + FRAME_EVERY));
+            assert_eq!(watch.frame_due(start + IDLE_FRAME_EVERY), frames);
+        }
+    }
+
+    #[test]
+    fn frame_cadence_uses_the_retained_state_instead_of_the_projection() {
+        let dir = tempfile::tempdir().unwrap();
+        let start = Instant::now();
+        let mut reading =
+            Reading::decode(json!({"ready": false, "overview": {"state": "working"}}));
+        reading.value["ready"] = json!(true);
+        reading.value["overview"]["state"] = json!("notReady");
+        let mut watch = Watch::new(Some(dir.path().to_path_buf()));
+        let line = watch.news(&reading, "viewer", None).unwrap();
+        assert_eq!(line["ready"], false);
+        assert!(watch.frame_due(start));
+        watch.framed_at = Some(start);
+        watch.said["overview"]["state"] = json!("idle");
+        assert!(watch.frame_due(start + FRAME_EVERY));
+    }
+
+    #[tokio::test]
+    async fn an_own_session_uses_the_decoded_key_instead_of_the_projection() {
+        let dir = tempfile::tempdir().unwrap();
+        let client = crate::test_support::client(dir.path());
+        let own = Key::of(crate::host_session::Host::Codex, "own");
+        let mut reading = Reading::decode(json!({"overview": {"hostSessions": [
+            {"key": own, "state": "futureBusy", "extension": true}
+        ]}}));
+        reading.value["overview"]["hostSessions"] = json!([]);
+        Watch::new(None)
+            .for_session(Some(own.clone()))
+            .add_own_session(&client, &mut reading)
+            .await;
+        assert_eq!(
+            reading.value["overview"]["ownSession"],
+            json!({
+                "key": own, "state": "futureBusy", "extension": true
+            })
+        );
     }
 }

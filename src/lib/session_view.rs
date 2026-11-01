@@ -116,6 +116,10 @@ pub(crate) struct Scene<'a> {
 }
 
 /// What the apps are told of one session beyond its record.
+///
+/// Lifetime, work and recovery are independent: an ended host can still have
+/// running work or an unknown outcome. `state` orders attention; it does not
+/// replace `live`, `work_in_progress` or `holds_helper`.
 #[derive(Clone, Debug, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub(crate) struct Shown {

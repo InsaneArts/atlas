@@ -38,6 +38,8 @@ pub(crate) fn service_blocker(client: &Client, recovery: bool, now: u128) -> Opt
     service_blocker_with(client, recovery, now, Snapshot::polled)
 }
 
+// size-exception: replacement is one ordered proof of idle. Keep pending,
+// command lifetime and recent activity refusals together so unknown stays busy.
 pub(crate) fn service_blocker_with(
     client: &Client,
     recovery: bool,
@@ -141,16 +143,16 @@ pub(crate) fn service_blocker_with(
         .live(facts)
         .into_iter()
         .find(|listed| {
-            let key = listed.entry["key"].as_str().filter(|key| !key.is_empty());
+            let key = (!listed.key.is_empty()).then_some(listed.key.as_str());
             listed.shown.holds_helper
                 || listed.running_command
                 || (!recovering_own
                     && key != own
-                    && listed.entry["ended"].is_null()
+                    && listed.ended.is_none()
                     && now_ms.saturating_sub(listed.last_seen) <= crate::time::ms(SERVICE_IDLE))
         })
         .map(|listed| {
-            let name = listed.entry["name"].as_str().unwrap_or("Another session");
+            let name = &listed.name;
             if listed.running_command {
                 return format!("{name} has a command still running in the helper.");
             }
@@ -196,18 +198,21 @@ pub(crate) fn service_blocker_with(
 /// own session: never for an agent's reply. Beside them, whether the apps
 /// speak of sessions at all and which one has the helper. The records and
 /// notes are read off the runtime.
-pub(crate) async fn add_host_sessions(status: &mut Value, client: &Client, now: u128) {
+pub(crate) async fn add_host_sessions(status: &mut super::Reading, client: &Client, now: u128) {
     add_sessions_for(status, client, now, None).await;
 }
 
 pub(crate) async fn add_sessions_for(
-    status: &mut Value,
+    status: &mut super::Reading,
     client: &Client,
     now: u128,
     own: Option<&Key>,
 ) {
     let client = client.clone();
-    let facts = SessionFacts::of(status, now);
+    let facts = SessionFacts {
+        now,
+        ..status.facts
+    };
     let has_own = own.is_some();
     let own = own.cloned();
     let (listed, own_entry) = tokio::task::spawn_blocking(move || {
@@ -216,19 +221,28 @@ pub(crate) async fn add_sessions_for(
         };
         let own_entry = own.and_then(|key| {
             reading
-                .entries(facts)
+                .live(facts)
                 .into_iter()
-                .find(|entry| entry["key"].as_str() == Some(key.as_str()))
+                .find(|entry| entry.key == key.as_str())
+                .map(Listed::into_entry)
         });
         (reading.summary(facts), own_entry)
     })
     .await
     .unwrap_or_default();
-    status["overview"]["hostSessions"] = json!(listed.sessions);
-    status["overview"]["moreSessions"] = json!(listed.more);
-    status["overview"]["sessionsShown"] = json!(listed.shown);
-    status["overview"]["holder"] = json!(listed.holder);
-    if has_own && let Some(overview) = status["overview"].as_object_mut() {
+    status.sessions = listed.sessions;
+    let value = &mut status.value;
+    value["overview"]["hostSessions"] = json!(
+        status
+            .sessions
+            .iter()
+            .map(|(_, entry)| entry)
+            .collect::<Vec<_>>()
+    );
+    value["overview"]["moreSessions"] = json!(listed.more);
+    value["overview"]["sessionsShown"] = json!(listed.shown);
+    value["overview"]["holder"] = json!(listed.holder);
+    if has_own && let Some(overview) = value["overview"].as_object_mut() {
         overview.insert("ownSession".into(), own_entry.unwrap_or(Value::Null));
     }
 }
@@ -247,7 +261,16 @@ pub(crate) struct SessionFacts {
 
 impl SessionFacts {
     /// The facts `status` gives, with its overview, at `now`.
-    pub(crate) fn of(status: &Value, now: u128) -> Self {
+    pub(super) fn of(overview: &super::Overview, now: u128) -> Self {
+        Self {
+            pending: overview.pending.unresolved > 0,
+            agent_holds: overview.mode == super::Mode::Agent && overview.agent_holds,
+            now,
+        }
+    }
+
+    /// Compatibility facts decoded once at viewer HTTP ingress.
+    pub(crate) fn decode(status: &Value, now: u128) -> Self {
         let overview = &status["overview"];
         Self {
             pending: overview["pending"].as_u64().unwrap_or(0) > 0,
@@ -272,7 +295,7 @@ impl SessionFacts {
 /// The sessions [`add_host_sessions`] lists.
 #[derive(Default)]
 pub(super) struct HostSessions {
-    pub(super) sessions: Vec<Value>,
+    pub(super) sessions: Vec<(String, Value)>,
     /// How many more relevant sessions there are than are listed.
     pub(super) more: usize,
     /// Whether two or more sessions remain relevant.
@@ -285,6 +308,9 @@ pub(super) struct HostSessions {
 /// One session [`add_host_sessions`] may list: what it is, when it was
 /// last seen, and how it is shown.
 struct Listed {
+    key: String,
+    name: String,
+    ended: Option<u64>,
     entry: Value,
     last_seen: u64,
     shown: session_view::Shown,
@@ -307,13 +333,12 @@ fn summarize(listed: Vec<Listed>) -> HostSessions {
     let holder = listed
         .iter()
         .find(|listed| listed.shown.holds_helper)
-        .and_then(|listed| listed.entry["key"].as_str())
-        .map(str::to_owned);
+        .map(|listed| listed.key.clone());
     let more = listed.len().saturating_sub(SESSIONS);
     let sessions = listed
         .into_iter()
         .take(SESSIONS)
-        .map(Listed::into_entry)
+        .map(|listed| (listed.key.clone(), listed.into_entry()))
         .collect();
 
     HostSessions {
@@ -477,6 +502,9 @@ impl SessionReading {
                 let uncertain = unknown.get(&record.key).copied().unwrap_or(0);
                 let (shown, lifetime) = scene.project(record);
                 shown.relevant().then(|| Listed {
+                    key: record.key.to_string(),
+                    name: name_of(&named, &record.key, Some(record.host)),
+                    ended: lifetime.ended,
                     entry: host_session(seen, &named, uncertain, lifetime),
                     last_seen: record.last_seen,
                     running_command: causes
@@ -489,6 +517,9 @@ impl SessionReading {
         for note in first {
             let Some(key) = &note.session else { continue };
             listed.push(Listed {
+                key: key.to_string(),
+                name: name_of(&named, key, note.host),
+                ended: None,
                 entry: first_command(key, note, &named),
                 last_seen: note.since,
                 shown: scene.shown(&Who::Host(key.clone()), false),
@@ -499,6 +530,9 @@ impl SessionReading {
         }
         if let Some((started, last_seen)) = scene.terminal() {
             listed.push(Listed {
+                key: String::new(),
+                name: session_view::TERMINAL.to_owned(),
+                ended: None,
                 entry: terminal(started, last_seen, now_ms),
                 last_seen,
                 shown: scene.shown(&Who::Terminal, false),

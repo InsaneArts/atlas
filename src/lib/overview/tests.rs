@@ -140,7 +140,7 @@ fn the_status_lists_recent_host_sessions_and_who_holds_the_helper() {
     assert_eq!(listed.more, 3);
     assert!(listed.shown, "ten live sessions");
     assert_eq!(listed.holder.as_deref(), Some(sessions[9].key().as_str()));
-    let sessions_listed = &listed.sessions;
+    let sessions_listed: Vec<_> = listed.sessions.iter().map(|(_, entry)| entry).collect();
     assert_eq!(
         sessions_listed[0]["key"],
         idle.key().as_str(),
@@ -183,7 +183,7 @@ fn the_status_lists_recent_host_sessions_and_who_holds_the_helper() {
     );
     assert!(!listed.shown, "one live session speaks of none");
     assert_eq!(listed.holder, None);
-    let only = &listed.sessions[0];
+    let only = &listed.sessions[0].1;
     assert_eq!(only["key"], idle.key().as_str());
     assert_eq!(only["uncertain"], 1);
     assert_eq!(only["active"], false);
@@ -221,6 +221,7 @@ fn the_agents_commands_no_host_named_are_listed_as_terminal_beside_the_hosts() {
     let names: Vec<&str> = listed
         .sessions
         .iter()
+        .map(|(_, entry)| entry)
         .map(|entry| entry["name"].as_str().unwrap())
         .collect();
     assert!(
@@ -228,13 +229,13 @@ fn the_agents_commands_no_host_named_are_listed_as_terminal_beside_the_hosts() {
         "its record was seen last"
     );
     assert_eq!(names[1], "Terminal");
-    let terminal = &listed.sessions[1];
+    let terminal = &listed.sessions[1].1;
     assert_eq!(terminal["key"], "");
     assert_eq!(terminal["host"], "none");
     assert_eq!(terminal["state"], "idle");
     assert_eq!(terminal["latest"]["says"], "clicked in Notes");
     assert!(terminal.get("hostSession").is_none());
-    assert_eq!(listed.sessions[0]["latest"]["says"], "typed in Opie");
+    assert_eq!(listed.sessions[0].1["latest"]["says"], "typed in Opie");
 }
 
 #[test]
@@ -253,7 +254,7 @@ fn a_session_on_its_first_command_is_listed_from_its_note() {
 
     let listed = host_sessions(&client, facts(false, crate::client::timestamp()));
     assert_eq!(listed.sessions.len(), 1);
-    let entry = &listed.sessions[0];
+    let entry = &listed.sessions[0].1;
     assert_eq!(entry["key"], session.key().as_str());
     assert_eq!(entry["name"], "Codex");
     assert_eq!(entry["state"], "acting");
@@ -282,7 +283,7 @@ fn a_session_on_its_first_command_is_named_by_its_host_and_folder_as_its_record_
         .unwrap();
 
     let listed = host_sessions(&client, facts(false, crate::client::timestamp()));
-    let entry = &listed.sessions[0];
+    let entry = &listed.sessions[0].1;
     assert_eq!(entry["name"], "Codex · left");
     assert_eq!(entry["folder"], "left");
 
@@ -303,6 +304,7 @@ fn a_session_on_its_first_command_is_named_by_its_host_and_folder_as_its_record_
     let names: BTreeMap<&str, &str> = listed
         .sessions
         .iter()
+        .map(|(_, entry)| entry)
         .map(|entry| {
             (
                 entry["key"].as_str().unwrap(),
@@ -333,6 +335,7 @@ fn a_session_on_its_first_command_is_named_by_its_host_and_folder_as_its_record_
     let entry = listed
         .sessions
         .iter()
+        .map(|(_, entry)| entry)
         .find(|entry| entry["key"] == named.key().as_str())
         .unwrap();
     assert_eq!(
@@ -378,6 +381,7 @@ fn a_first_commands_name_stays_once_its_record_is_written() {
         listed
             .sessions
             .iter()
+            .map(|(_, entry)| entry)
             .find(|entry| entry["key"] == first.key().as_str())
             .map(|entry| (entry["name"].clone(), entry["started"].clone()))
             .unwrap()
@@ -420,6 +424,7 @@ fn a_session_running_its_first_command_is_listed_acting_by_its_name() {
     let entry = listed
         .sessions
         .iter()
+        .map(|(_, entry)| entry)
         .find(|entry| entry["key"] == agent.key().as_str())
         .expect("listed from its running command's note");
     assert_eq!(entry["name"], "agent-a · left");
@@ -435,6 +440,7 @@ fn a_session_running_its_first_command_is_listed_acting_by_its_name() {
         listed
             .sessions
             .iter()
+            .map(|(_, entry)| entry)
             .all(|entry| entry["key"] != agent.key().as_str()),
         "nothing lists it once its command ends with no record"
     );
@@ -477,7 +483,7 @@ fn a_session_at_work_has_never_ended_whatever_its_record_says() {
         .acquire(true)
         .unwrap();
     let listed = host_sessions(&client, facts(false, crate::client::timestamp()));
-    let entry = &listed.sessions[0];
+    let entry = &listed.sessions[0].1;
     assert_eq!(entry["state"], "acting");
     assert_eq!(
         (&entry["live"], &entry["ended"], &entry["active"]),
@@ -488,7 +494,7 @@ fn a_session_at_work_has_never_ended_whatever_its_record_says() {
     // Any command of it refreshes its record, a read too.
     touch(&client, &resumed).unwrap();
     let listed = host_sessions(&client, facts(false, crate::client::timestamp()));
-    let entry = &listed.sessions[0];
+    let entry = &listed.sessions[0].1;
     assert_eq!(entry["state"], "idle");
     assert_eq!(
         (&entry["live"], &entry["ended"], &entry["active"]),
@@ -518,7 +524,7 @@ fn an_ended_session_waits_for_no_recovery() {
     fs::write(output.join(activity_log::FILE), format!("{row}\n")).unwrap();
 
     let listed = host_sessions(&client, facts(true, now));
-    assert_eq!(listed.sessions[0]["waitingFor"], "recovery");
+    assert_eq!(listed.sessions[0].1["waitingFor"], "recovery");
 
     let path = output.join(format!("sessions/{}.json", session.key()));
     let mut record: Value = serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
@@ -562,7 +568,13 @@ fn ended_sessions_are_neither_listed_nor_counted_as_more() {
     let listed = host_sessions(&client, facts(false, crate::client::timestamp()));
     assert_eq!(listed.sessions.len(), 2, "ten ended");
     assert_eq!(listed.more, 0);
-    assert!(listed.sessions.iter().all(|entry| entry["live"] == true));
+    assert!(
+        listed
+            .sessions
+            .iter()
+            .map(|(_, entry)| entry)
+            .all(|entry| entry["live"] == true)
+    );
 }
 
 #[test]
@@ -1153,7 +1165,7 @@ fn an_ended_causer_is_visible_without_being_live() {
             .unwrap(),
     );
     let listed = host_sessions(&client, facts(true, crate::client::timestamp()));
-    let entry = &listed.sessions[0];
+    let entry = &listed.sessions[0].1;
     assert!(entry["ended"].is_number());
     assert_eq!(entry["live"], false);
     assert_eq!(entry["active"], false);
@@ -1374,4 +1386,84 @@ fn marker_contention_preserves_a_gone_hosts_verified_running_work() {
     drop(claim);
     assert!(read().entries(facts).is_empty());
     drop(lock);
+}
+
+// Legacy JSON fixtures enter the typed core through this test-only adapter.
+fn overview(report: &Value, lease: bool, pending: Pending, activity: &[Row], now: u128) -> Value {
+    let mut diagnosis = crate::session::diagnosis(report["session"].clone(), 502);
+    diagnosis.ready = report["ready"] == true;
+    diagnosis.first_step = report["nextSteps"][0]
+        .as_str()
+        .unwrap_or("The helper is not ready")
+        .into();
+    diagnosis.value = report.clone();
+    let absence = match report["absence"].as_str() {
+        Some("loggedOut") => Some(crate::session::Absence::LoggedOut(String::new())),
+        Some("missing") => Some(crate::session::Absence::Missing),
+        _ => None,
+    };
+    let doctor = crate::capability::Doctor {
+        diagnosis,
+        native: crate::capability::NativeState::Failed,
+        absence,
+    };
+    super::overview(&doctor, lease, pending, activity, now).value
+}
+
+#[test]
+fn overview_decisions_survive_a_tampered_doctor_projection() {
+    let mut diagnosis = crate::session::diagnosis(json!({"ok": true}), 502);
+    diagnosis.ready = false;
+    diagnosis.first_step = crate::session::Guidance::StartInput;
+    let mut doctor = crate::capability::Doctor {
+        diagnosis,
+        native: crate::capability::NativeState::Failed,
+        absence: None,
+    };
+    doctor.diagnosis.value["ready"] = json!(true);
+    doctor.diagnosis.value["nextSteps"] = json!(["invented guidance"]);
+    doctor.diagnosis.value["session"]["ok"] = json!(false);
+    doctor.diagnosis.value["capabilities"]["nativeDialogs"]["state"] = json!("passed");
+    let summary = super::overview(&doctor, false, Pending::default(), &[], NOW);
+    assert_eq!(summary.state, State::NeedsYou);
+    assert_eq!(summary.value["mode"], "blocked");
+    assert_eq!(summary.value["nativeDialogs"], "failed");
+    assert_eq!(summary.value["recoverable"], true);
+    assert_eq!(
+        summary.value["reason"],
+        "Mouse and keyboard stopped in the helper. Recover starts them again."
+    );
+    let mut summary = summary;
+    summary.value["mode"] = json!("agent");
+    summary.value["pending"] = json!(1);
+    let facts = SessionFacts::of(&summary, NOW);
+    assert!(!facts.pending);
+    assert!(!facts.agent_holds);
+}
+
+#[test]
+fn externally_supplied_recovery_words_keep_the_existing_recovery_decision() {
+    let diagnosis = crate::session::diagnosis(
+        json!({
+            "ok": true,
+            "sessionProof": {"error": crate::session::START_INPUT},
+            "permissions": {"screenCapture": true}
+        }),
+        502,
+    );
+    assert_eq!(diagnosis.value["nextSteps"][0], crate::session::START_INPUT);
+    assert!(matches!(
+        diagnosis.first_step,
+        crate::session::Guidance::StartInput
+    ));
+    let mut doctor = crate::capability::Doctor {
+        diagnosis,
+        native: crate::capability::NativeState::Unknown,
+        absence: None,
+    };
+    doctor.diagnosis.value["nextSteps"] = json!(["different words"]);
+    assert_eq!(
+        super::overview(&doctor, false, Pending::default(), &[], NOW).state,
+        State::NeedsYou
+    );
 }

@@ -159,48 +159,83 @@ fn generation_at(status: &Value, uid: u32, boot: u64) -> Option<Generation> {
 
 /// Doctor's view of native dialogs: unknown, stale, passed or failed.
 pub fn assess(record: Option<&Record>, current: Option<&Generation>, at: u64) -> Value {
+    assessment(record, current, at).value()
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) enum NativeState {
+    Unknown,
+    Stale,
+    Passed,
+    Failed,
+}
+
+struct Assessment<'a> {
+    state: NativeState,
+    reason: &'static str,
+    record: Option<&'a Record>,
+    at: u64,
+}
+
+impl Assessment<'_> {
+    fn value(&self) -> Value {
+        let mut value = json!({"state": self.state, "reason": self.reason});
+        if let Some(record) = self.record {
+            value["observedAt"] = json!(record.observed_at);
+            value["ageSeconds"] = json!(self.at.saturating_sub(record.observed_at));
+            value["checks"] = json!(record.checks);
+            value["evidence"] = json!(record.evidence);
+        }
+        value
+    }
+}
+
+fn assessment<'a>(
+    record: Option<&'a Record>,
+    current: Option<&Generation>,
+    at: u64,
+) -> Assessment<'a> {
+    use NativeState::{Failed, Passed, Stale, Unknown};
     let Some(record) = record else {
-        return json!({
-            "state": "unknown",
-            "reason": "Native Save/Open has no recorded check. Panels can be inert without \
+        return Assessment {
+            state: Unknown,
+            reason: "Native Save/Open has no recorded check. Panels can be inert without \
                        authenticated Screen Sharing; use atlas run or atlas open instead.",
-        });
+            record: None,
+            at,
+        };
     };
 
     let (state, reason) = if !record.consistent() {
         (
-            "unknown",
+            Unknown,
             "The recorded observation is inconsistent and was ignored",
         )
     } else if record.observed_at > at.saturating_add(SKEW) {
-        ("unknown", "The recorded observation is dated in the future")
+        (Unknown, "The recorded observation is dated in the future")
     } else if current != Some(&record.generation) {
         (
-            "stale",
+            Stale,
             "The helper session, display, capture or input process changed since it was observed",
         )
     } else if at.saturating_sub(record.observed_at) > FRESH.as_secs() {
-        ("stale", "The observation is older than 30 minutes")
+        (Stale, "The observation is older than 30 minutes")
     } else if record.passed {
         (
-            "passed",
+            Passed,
             "Native Save and Open completed with exact bytes at the recorded time; this is not a connection check",
         )
     } else {
-        (
-            "failed",
-            "Native Save/Open did not complete in this session",
-        )
+        (Failed, "Native Save/Open did not complete in this session")
     };
 
-    json!({
-        "state": state,
-        "reason": reason,
-        "observedAt": record.observed_at,
-        "ageSeconds": at.saturating_sub(record.observed_at),
-        "checks": record.checks,
-        "evidence": record.evidence,
-    })
+    Assessment {
+        state,
+        reason,
+        record: Some(record),
+        at,
+    }
 }
 
 /// Static guidance, not a test of the page or remote connection.
@@ -209,22 +244,52 @@ const WEB_CONTENT: &str = "Safari/WebKit can stay blank without authenticated Sc
 
 /// Doctor's native-dialog assessment for a status snapshot.
 pub fn native_dialogs(status: &Value, uid: u32) -> Value {
-    let record = record_path(uid)
+    let record = read_record(uid);
+    assess(record.as_ref(), generation(status, uid).as_ref(), now())
+}
+
+fn read_record(uid: u32) -> Option<Record> {
+    record_path(uid)
         .ok()
         .and_then(|path| fs::read(path).ok())
-        .and_then(|bytes| serde_json::from_slice::<Record>(&bytes).ok());
-
-    assess(record.as_ref(), generation(status, uid).as_ref(), now())
+        .and_then(|bytes| serde_json::from_slice::<Record>(&bytes).ok())
 }
 
 /// Doctor's report with the recorded native-dialog observation in place of
 /// the default unknown.
 pub fn doctor(status: Value, uid: u32) -> Value {
-    let native = native_dialogs(&status, uid);
-    with_capabilities(crate::session::diagnose(status, uid), native)
+    doctor_report(status, uid).diagnosis.value
 }
 
-fn with_capabilities(mut report: Value, native: Value) -> Value {
+pub(crate) struct Doctor {
+    pub(crate) diagnosis: crate::session::Diagnosis,
+    pub(crate) native: NativeState,
+    pub(crate) absence: Option<crate::session::Absence>,
+}
+
+pub(crate) fn doctor_report(status: Value, uid: u32) -> Doctor {
+    let record = read_record(uid);
+    let observation = crate::session::Observation::decode(&status);
+    let current = boot_time().and_then(|boot| {
+        observation
+            .require_hidden(uid)
+            .ok()
+            .filter(|session| session.input)
+            .map(|session| Generation::of(&session.epoch, boot))
+    });
+    let assessment = assessment(record.as_ref(), current.as_ref(), now());
+    let native = assessment.state;
+    let projection = assessment.value();
+    let mut diagnosis = observation.diagnose(status, uid);
+    diagnosis.value = with_capabilities(diagnosis.value, native, projection);
+    Doctor {
+        diagnosis,
+        native,
+        absence: None,
+    }
+}
+
+fn with_capabilities(mut report: Value, state: NativeState, native: Value) -> Value {
     report["capabilities"]["nativeDialogs"] = native;
 
     report["capabilities"]["webContent"] = json!({
@@ -233,9 +298,7 @@ fn with_capabilities(mut report: Value, native: Value) -> Value {
     });
 
     let mut warnings = report["warnings"].as_array().cloned().unwrap_or_default();
-    warnings.push(json!(compact_warning(
-        report["capabilities"]["nativeDialogs"]["state"].as_str()
-    )));
+    warnings.push(json!(compact_warning(state)));
     report["warnings"] = json!(warnings);
 
     report
@@ -245,12 +308,12 @@ fn with_capabilities(mut report: Value, native: Value) -> Value {
 pub const NATIVE_DIALOGS_FAILED: &str =
     "Native Save/Open failed its last check; cancel inert panels and use atlas run or atlas open.";
 
-fn compact_warning(state: Option<&str>) -> String {
+fn compact_warning(state: NativeState) -> String {
     let native = match state {
-        Some("passed") => "Native Save/Open passed a dated check, not a connection check.",
-        Some("failed") => NATIVE_DIALOGS_FAILED,
-        Some("stale") => "Native Save/Open's check is stale; use atlas run or atlas open.",
-        _ => "Native Save/Open is unqualified; use atlas run or atlas open.",
+        NativeState::Passed => "Native Save/Open passed a dated check, not a connection check.",
+        NativeState::Failed => NATIVE_DIALOGS_FAILED,
+        NativeState::Stale => "Native Save/Open's check is stale; use atlas run or atlas open.",
+        NativeState::Unknown => "Native Save/Open is unqualified; use atlas run or atlas open.",
     };
     format!("{native} {WEB_CONTENT}")
 }
@@ -259,8 +322,14 @@ fn compact_warning(state: Option<&str>) -> String {
 /// warnings. Otherwise it is the report without the raw helper status it was
 /// judged from: the verdict, each check, what to do, and which helper and
 /// display. `doctor --verbose` keeps everything for diagnosis.
-pub fn summary(mut report: Value) -> Value {
-    if report["ready"] == true {
+pub fn summary(report: Value) -> Value {
+    // Public report ingress; the remaining fields are presentation only.
+    let ready = report["ready"] == true;
+    summarize(report, ready)
+}
+
+fn summarize(mut report: Value, ready: bool) -> Value {
+    if ready {
         let warnings = report["warnings"].as_array().cloned().unwrap_or_default();
         return json!({"ok": true, "ready": true, "warnings": warnings});
     }
@@ -1156,6 +1225,12 @@ mod tests {
                     "display": {"width": 1920, "height": 1080},
                 },
             }),
+            match native {
+                "passed" => NativeState::Passed,
+                "failed" => NativeState::Failed,
+                "stale" => NativeState::Stale,
+                _ => NativeState::Unknown,
+            },
             json!({"state": native}),
         )
     }
@@ -1244,11 +1319,61 @@ mod tests {
         assert_eq!(summed["nextSteps"], json!(["Run atlas start-input."]));
         assert_eq!(
             summed["warnings"],
-            json!(["The display changed.", compact_warning(Some("failed"))])
+            json!(["The display changed.", compact_warning(NativeState::Failed)])
         );
         assert_eq!(summed["capabilities"]["nativeDialogs"]["state"], "failed");
         assert_eq!(summed["absence"], "loggedOut");
         assert_eq!(summed["account"], "atlas");
         assert!(summed.get("session").is_none());
+    }
+
+    #[test]
+    fn a_failed_native_check_keeps_its_exact_warning() {
+        let report = with_capabilities(
+            json!({"warnings": ["existing"]}),
+            NativeState::Failed,
+            json!({"state": "passed"}),
+        );
+        assert_eq!(
+            report["warnings"],
+            json!(["existing", format!("{NATIVE_DIALOGS_FAILED} {WEB_CONTENT}")])
+        );
+        assert_eq!(report["capabilities"]["nativeDialogs"]["state"], "passed");
+    }
+
+    #[test]
+    fn missing_proof_never_upgrades_capability() {
+        for status in [
+            Value::Null,
+            json!({}),
+            json!({"ok": true}),
+            json!({
+                "ok": true, "user": {"uid": 502},
+                "session": {"managerName": "Aqua", "onConsole": false},
+                "inputService": {"ok": true, "ready": true, "accessibility": true}
+            }),
+        ] {
+            let diagnosis = crate::session::diagnosis(status, 502);
+            assert!(!diagnosis.ready);
+            assert!(diagnosis.observation.require_hidden(502).is_err());
+            assert!(!diagnosis.value["capabilities"]["input"].as_bool().unwrap());
+        }
+        let native = assessment(None, None, 100);
+        assert_eq!(native.state, NativeState::Unknown);
+        assert_eq!(
+            native.value(),
+            json!({
+                "state": "unknown",
+                "reason": "Native Save/Open has no recorded check. Panels can be inert without authenticated Screen Sharing; use atlas run or atlas open instead."
+            })
+        );
+    }
+
+    #[test]
+    fn a_summary_uses_the_readiness_fact_instead_of_the_projection() {
+        assert_eq!(
+            summarize(json!({"ready": false, "warnings": ["kept"]}), true),
+            json!({"ok": true, "ready": true, "warnings": ["kept"]})
+        );
     }
 }

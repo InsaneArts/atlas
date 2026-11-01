@@ -55,6 +55,8 @@ async fn the_async_status_read_never_parses_the_snapshot_on_the_runtime_worker()
 
     let status = viewer.status().await;
 
+    assert_eq!(status["ready"], false);
+    assert_eq!(status["overview"]["state"], "notReady");
     assert_eq!(status["overview"]["activity"].as_array().unwrap().len(), 1);
     let threads = observation.threads();
     assert!(!threads.is_empty(), "the cold status read built a snapshot");

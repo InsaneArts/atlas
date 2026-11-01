@@ -70,6 +70,7 @@ fn within(value: f64, max: f64) -> bool {
 /// The facts a proof supplied, before any caller's identity is trusted.
 #[derive(Clone, Debug)]
 struct ProofObservation {
+    error: Option<String>,
     ok: Option<bool>,
     uid: Option<u64>,
     parent_pid: Option<u64>,
@@ -84,6 +85,7 @@ struct ProofObservation {
 impl ProofObservation {
     fn decode(proof: &Value) -> Self {
         Self {
+            error: proof["error"].as_str().map(str::to_owned),
             ok: proof["ok"].as_bool(),
             uid: proof["uid"].as_u64(),
             parent_pid: proof["parentPID"].as_u64(),
@@ -208,14 +210,16 @@ fn capability_names(value: &Value) -> Vec<String> {
 #[derive(Clone, Debug)]
 pub(crate) struct NativeObservation {
     pub(crate) ok: bool,
+    queried: bool,
     protocol_version: Option<u64>,
     pub(crate) pid: Option<u64>,
     pub(crate) ready: Option<bool>,
     accessibility: PermissionObservation,
     epoch: Option<InputEpoch>,
     pinned: PinObservation,
-    control_active: Option<bool>,
-    held_input: Option<bool>,
+    pub(crate) control_active: Option<bool>,
+    pub(crate) held: bool,
+    pub(crate) held_input: Option<bool>,
     build: Option<String>,
     replaced: bool,
     capabilities: Vec<String>,
@@ -230,6 +234,7 @@ impl NativeObservation {
             .unwrap_or(0);
         Self {
             ok: value["ok"] == true,
+            queried: !value.is_null(),
             protocol_version: value["protocolVersion"].as_u64(),
             pid: reported_pid,
             ready: value["ready"].as_bool(),
@@ -239,6 +244,7 @@ impl NativeObservation {
                 .ok(),
             pinned: PinObservation::decode(&value["enforcedEpoch"]),
             control_active: value["controlActive"].as_bool(),
+            held: value["held"] == true,
             held_input: value["heldInput"].as_bool(),
             build: value["build"].as_str().map(str::to_owned),
             replaced: value["replaced"] == true,
@@ -284,17 +290,18 @@ impl NativeObservation {
 /// Keeping it never authorizes an effect against a later session.
 #[derive(Clone, Debug)]
 pub(crate) struct Observation {
-    ok: bool,
-    code: Option<String>,
+    pub(crate) ok: bool,
+    pub(crate) code: Option<String>,
     error: Option<String>,
     uid: Option<u64>,
     home: Option<std::path::PathBuf>,
     on_console: Option<bool>,
     aqua: bool,
-    capture_pid: Option<u32>,
+    pub(crate) capture_pid: Option<u32>,
     display: Option<Display>,
     proof: ProofObservation,
     capture: PermissionObservation,
+    pub(crate) accessibility: PermissionObservation,
     daemon_capabilities: Vec<String>,
     pub(crate) native: NativeObservation,
     installed_build: Option<String>,
@@ -318,10 +325,18 @@ impl Observation {
             display: Display::deserialize(&value["display"]).ok(),
             proof: ProofObservation::decode(&value["sessionProof"]),
             capture: PermissionObservation::decode(&value["permissions"]["screenCapture"], ok),
+            accessibility: PermissionObservation::decode(
+                &value["permissions"]["accessibility"],
+                true,
+            ),
             daemon_capabilities: capability_names(&value["daemon"]),
             native: NativeObservation::decode(&value["inputService"]),
             installed_build: value["installedBuild"].as_str().map(str::to_owned),
         }
+    }
+
+    pub(crate) fn display_valid(&self) -> bool {
+        self.display.as_ref().is_some_and(Display::valid)
     }
 
     pub(crate) fn has_capability(&self, name: &str) -> bool {
@@ -516,11 +531,45 @@ pub fn repinnable(value: &Value, session: &Session) -> bool {
     NativeObservation::decode(&value["inputService"]).repinnable(session)
 }
 
+/// The concrete recovery action and the words accompanying other advice.
+#[derive(Clone, Debug)]
+pub(crate) enum Guidance {
+    StartInput,
+    Advice(String),
+}
+
+impl From<&str> for Guidance {
+    fn from(text: &str) -> Self {
+        // External error guidance can use the same words as the recovery action.
+        if text == START_INPUT {
+            Self::StartInput
+        } else {
+            Self::Advice(text.to_owned())
+        }
+    }
+}
+
+impl Guidance {
+    pub(crate) fn text(&self) -> &str {
+        match self {
+            Self::StartInput => START_INPUT,
+            Self::Advice(text) => text,
+        }
+    }
+}
+
+pub(crate) struct Diagnosis {
+    pub(crate) value: Value,
+    pub(crate) observation: Observation,
+    pub(crate) ready: bool,
+    pub(crate) first_step: Guidance,
+}
+
 struct Check {
     name: &'static str,
     /// None when the fact cannot be observed yet; never reported as missing.
     ok: Option<bool>,
-    next_step: String,
+    next_step: Guidance,
 }
 
 /// Whether `status` shows input service `pid` ready in the hidden helper with
@@ -571,165 +620,200 @@ pub fn input_current(status: &Value, uid: u32, pid: u32) -> bool {
 /// input service. Whether native Save/Open dialogs work is a separate
 /// observation ([`crate::capability`]) that `ready` never implies.
 pub fn diagnose(value: Value, uid: u32) -> Value {
-    let session = require_hidden(&value, uid).ok();
-    let reachable = value["ok"] == true;
-    let native = &value["inputService"];
-    let native_reachable = native["ok"] == true;
-    // The input service is only queried once the capture side proves a hidden
-    // helper; an unqueried service is unknown, not failed.
-    let queried = reachable && !native.is_null();
-    let known = |fact: bool, ok: bool| fact.then_some(ok);
+    diagnosis(value, uid).value
+}
 
-    // A blocked shell says nothing of the helper, so it may well be running.
-    let blocked = "Unknown until this shell can reach the helper.";
+pub(crate) fn diagnosis(value: Value, uid: u32) -> Diagnosis {
+    Observation::decode(&value).diagnose(value, uid)
+}
 
-    let (unknown, not_queried) = if value["code"] == "blocked" {
-        (blocked, blocked)
-    } else {
-        (
-            "Unknown until the helper is running.",
-            "Unknown until the helper runs in the background.",
-        )
-    };
+impl Observation {
+    pub(crate) fn diagnose(self, value: Value, uid: u32) -> Diagnosis {
+        let observation = self;
+        let session = observation.require_hidden(uid).ok();
+        let checks = observation.checks(uid, session.as_ref());
 
-    let connection = if value["code"] == "identity" {
-        value["error"]
-            .as_str()
-            .unwrap_or("The socket belongs to another account")
-    } else if value["code"] == "blocked" {
-        value["error"]
-            .as_str()
-            .unwrap_or("This shell may not connect to the helper; run atlas outside a sandbox.")
-    } else {
-        "Start the helper: run atlas init (safe to run again)."
-    };
+        let mut warnings = Vec::new();
 
-    let hidden_guidance = if value["user"]["uid"]
-        .as_u64()
-        .is_some_and(|v| v != u64::from(uid))
-    {
-        "A different account answered than the configured helper; run atlas init."
-    } else if value["session"]["onConsole"] == true || value["sessionProof"]["onConsole"] == true {
-        "Switch back to your own account without logging the helper out."
-    } else {
-        // The session check's own reason, when it gave one, says what to fix.
-        value["sessionProof"]["error"].as_str().unwrap_or(
-            "The helper could not be checked. Run atlas restart; if that does not help, \
-             run atlas init.",
-        )
-    };
+        if observation.native.ok && !observation.input_build_current() {
+            warnings.push(
+                "The input service is from an older build; atlas start-input replaces it."
+                    .to_owned(),
+            );
+        }
 
-    let checks = [
-        Check {
-            // A blocked shell cannot tell whether the helper runs.
-            name: if value["code"] == "blocked" {
-                "Helper reachable from here"
-            } else {
-                "Helper running"
+        let details = checks
+            .iter()
+            .map(|check| {
+                json!({
+                    "name": check.name,
+                    "ok": check.ok,
+                    "nextStep": (check.ok != Some(true)).then(|| check.next_step.text()),
+                })
+            })
+            .collect::<Vec<_>>();
+
+        let next_steps = checks
+            .iter()
+            .filter(|check| check.ok == Some(false))
+            .map(|check| check.next_step.text())
+            .collect::<Vec<_>>();
+
+        let ready = checks.iter().all(|check| check.ok == Some(true));
+        let first_step = checks
+            .iter()
+            .find(|check| check.ok == Some(false))
+            .map(|check| check.next_step.clone())
+            .unwrap_or_else(|| Guidance::Advice("The helper is not ready".into()));
+        let observe = session.as_ref().is_some_and(|s| s.capture);
+        let mut report = json!({
+            "ok": true,
+            "ready": ready,
+            "canObserve": observe,
+            "capabilities": {
+                "observe": observe,
+                "input": session.as_ref().is_some_and(|s| s.input || observation.native.repinnable(s)),
+                // Only a fresh native check counts; capability::doctor puts the
+                // recorded observation here.
+                "nativeDialogs": {
+                    "state": "unknown",
+                    "reason": "No fresh native Save/Open observation. Native dialogs were qualified \
+                               only with an authenticated Screen Sharing session into the helper.",
+                },
             },
-            ok: Some(reachable),
-            next_step: connection.into(),
-        },
-        Check {
-            name: "Helper in the background",
-            ok: known(reachable, session.is_some()),
-            next_step: if reachable { hidden_guidance } else { unknown }.into(),
-        },
-        Check {
-            name: "Screen Recording allowed",
-            ok: known(reachable, value["permissions"]["screenCapture"] == true),
-            next_step: if reachable {
-                "In the helper's System Settings › Privacy & Security › Screen & System Audio \
-                 Recording, turn Atlas on."
-            } else {
-                unknown
-            }
-            .into(),
-        },
-        Check {
-            name: "Accessibility allowed",
-            ok: known(native_reachable, native["accessibility"] == true),
-            next_step: if native_reachable || value["permissions"]["accessibility"] == false {
-                "In the helper's System Settings › Privacy & Security › Accessibility, turn \
-                 Atlas on (atlas init walks you through it)."
-            } else if queried {
-                START_INPUT
-            } else {
-                not_queried
-            }
-            .into(),
-        },
-        Check {
-            name: "Input service ready",
-            ok: known(
-                queried,
-                session
-                    .as_ref()
-                    .is_some_and(|s| s.input || repinnable(&value, s)),
-            ),
-            next_step: if queried && value["permissions"]["accessibility"] == false {
-                "Turn on Accessibility for Atlas in the helper first; atlas init walks you through it."
-            } else if queried {
-                START_INPUT
-            } else if reachable {
-                not_queried
-            } else {
-                unknown
-            }
-            .into(),
-        },
-    ];
+            "checks": details,
+            "nextSteps": next_steps,
+            "warnings": warnings,
+        });
 
-    let mut warnings = Vec::new();
+        // The status itself, moved in rather than copied.
+        report["session"] = value;
 
-    if native_reachable && !input_build_current(&value) {
-        warnings.push(
-            "The input service is from an older build; atlas start-input replaces it.".to_owned(),
-        );
+        Diagnosis {
+            value: report,
+            observation,
+            ready,
+            first_step,
+        }
+    }
+}
+
+impl Observation {
+    fn checks(&self, uid: u32, session: Option<&Session>) -> [Check; 5] {
+        let reachable = self.ok;
+        let native_reachable = self.native.ok;
+        // The input service is only queried once the capture side proves a hidden
+        // helper; an unqueried service is unknown, not failed.
+        let queried = reachable && self.native.queried;
+        let known = |fact: bool, ok: bool| fact.then_some(ok);
+
+        // A blocked shell says nothing of the helper, so it may well be running.
+        let blocked = "Unknown until this shell can reach the helper.";
+
+        let (unknown, not_queried) = if self.code.as_deref() == Some("blocked") {
+            (blocked, blocked)
+        } else {
+            (
+                "Unknown until the helper is running.",
+                "Unknown until the helper runs in the background.",
+            )
+        };
+
+        let connection = self.connection_guidance();
+        let hidden_guidance = self.hidden_guidance(uid);
+
+        [
+            Check {
+                // A blocked shell cannot tell whether the helper runs.
+                name: if self.code.as_deref() == Some("blocked") {
+                    "Helper reachable from here"
+                } else {
+                    "Helper running"
+                },
+                ok: Some(reachable),
+                next_step: connection.into(),
+            },
+            Check {
+                name: "Helper in the background",
+                ok: known(reachable, session.is_some()),
+                next_step: if reachable { hidden_guidance } else { unknown }.into(),
+            },
+            Check {
+                name: "Screen Recording allowed",
+                ok: known(reachable, self.capture == PermissionObservation::Allowed),
+                next_step: if reachable {
+                    "In the helper's System Settings › Privacy & Security › Screen & System Audio \
+                     Recording, turn Atlas on."
+                } else {
+                    unknown
+                }
+                .into(),
+            },
+            Check {
+                name: "Accessibility allowed",
+                ok: known(
+                    native_reachable,
+                    self.native.accessibility == PermissionObservation::Allowed,
+                ),
+                next_step: if native_reachable || self.accessibility == PermissionObservation::Denied {
+                    "In the helper's System Settings › Privacy & Security › Accessibility, turn \
+                     Atlas on (atlas init walks you through it)."
+                } else if queried {
+                    START_INPUT
+                } else {
+                    not_queried
+                }
+                .into(),
+            },
+            Check {
+                name: "Input service ready",
+                ok: known(
+                    queried,
+                    session
+                        .as_ref()
+                        .is_some_and(|s| s.input || self.native.repinnable(s)),
+                ),
+                next_step: if queried && self.accessibility == PermissionObservation::Denied {
+                    "Turn on Accessibility for Atlas in the helper first; atlas init walks you through it."
+                } else if queried {
+                    START_INPUT
+                } else if reachable {
+                    not_queried
+                } else {
+                    unknown
+                }
+                .into(),
+            },
+        ]
     }
 
-    let details = checks
-        .iter()
-        .map(|check| {
-            json!({
-                "name": check.name,
-                "ok": check.ok,
-                "nextStep": (check.ok != Some(true)).then_some(&check.next_step),
-            })
-        })
-        .collect::<Vec<_>>();
+    fn connection_guidance(&self) -> &str {
+        if self.code.as_deref() == Some("identity") {
+            self.error
+                .as_deref()
+                .unwrap_or("The socket belongs to another account")
+        } else if self.code.as_deref() == Some("blocked") {
+            self.error
+                .as_deref()
+                .unwrap_or("This shell may not connect to the helper; run atlas outside a sandbox.")
+        } else {
+            "Start the helper: run atlas init (safe to run again)."
+        }
+    }
 
-    let next_steps = checks
-        .iter()
-        .filter(|check| check.ok == Some(false))
-        .map(|check| &check.next_step)
-        .collect::<Vec<_>>();
-
-    let observe = session.as_ref().is_some_and(|s| s.capture);
-    let mut report = json!({
-        "ok": true,
-        "ready": checks.iter().all(|check| check.ok == Some(true)),
-        "canObserve": observe,
-        "capabilities": {
-            "observe": observe,
-            "input": session.as_ref().is_some_and(|s| s.input || repinnable(&value, s)),
-            // Only a fresh native check counts; capability::doctor puts the
-            // recorded observation here.
-            "nativeDialogs": {
-                "state": "unknown",
-                "reason": "No fresh native Save/Open observation. Native dialogs were qualified \
-                           only with an authenticated Screen Sharing session into the helper.",
-            },
-        },
-        "checks": details,
-        "nextSteps": next_steps,
-        "warnings": warnings,
-    });
-
-    // The status itself, moved in rather than copied.
-    report["session"] = value;
-
-    report
+    fn hidden_guidance(&self, uid: u32) -> &str {
+        if self.uid.is_some_and(|v| v != u64::from(uid)) {
+            "A different account answered than the configured helper; run atlas init."
+        } else if self.on_console == Some(true) || self.proof.on_console == Some(true) {
+            "Switch back to your own account without logging the helper out."
+        } else {
+            // The session check's own reason, when it gave one, says what to fix.
+            self.proof.error.as_deref().unwrap_or(
+                "The helper could not be checked. Run atlas restart; if that does not help, \
+             run atlas init.",
+            )
+        }
+    }
 }
 
 /// Why a helper that did not answer is down, when this side can tell.

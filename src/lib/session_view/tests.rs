@@ -683,3 +683,39 @@ fn only_a_known_end_projects_to_ended_history() {
         assert!(!shown.live && !lifetime.active);
     }
 }
+
+#[test]
+fn pending_work_and_held_control_remain_independent() {
+    let own = key("own");
+    let holder = note(Some(&own), 1);
+    let causes = [cause(Some(&own))];
+    for pending in [false, true] {
+        for held in [false, true] {
+            for ended in [false, true] {
+                let scene = Scene {
+                    holder: held.then_some(&holder),
+                    causes: &causes,
+                    pending,
+                    ..scene(&[])
+                };
+                let shown = scene.shown(&Who::Host(own.clone()), ended);
+                assert_eq!(shown.live, !ended);
+                assert_eq!(shown.work_in_progress, held);
+                assert_eq!(shown.holds_helper, held && !ended);
+                assert_eq!(shown.waiting_for, None);
+                assert_eq!(
+                    shown.state,
+                    if pending {
+                        SessionState::NeedsYou
+                    } else if held {
+                        SessionState::Acting
+                    } else if ended {
+                        SessionState::Ended
+                    } else {
+                        SessionState::Idle
+                    }
+                );
+            }
+        }
+    }
+}

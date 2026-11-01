@@ -3261,7 +3261,7 @@ async fn a_status_read_without_a_viewer_says_no_viewer_has_control() {
     let mut client = client_in(dir.path());
     client.controller = crate::control::Controller::at(60001, &dir.path().join("state"));
 
-    let status = crate::overview::read(&client).await;
+    let status = crate::overview::read(&client).await.value;
     assert_eq!(status["controlActive"], false);
     assert_eq!(status["overview"]["state"], "notReady", "no helper answers");
     assert_eq!(status["overview"]["label"], "Not ready");

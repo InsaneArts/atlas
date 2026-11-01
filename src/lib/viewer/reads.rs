@@ -38,27 +38,34 @@ impl Viewer {
     /// The helper's status and overview as the app shows them, with
     /// whether control is held.
     pub(super) async fn status(self: &Arc<Self>) -> Value {
+        self.status_reading().await.value
+    }
+
+    async fn status_reading(self: &Arc<Self>) -> crate::overview::Reading {
         // Reading waits on the helper, for a few seconds at most, following
         // the settings included.
         let until = tokio::time::Instant::now() + READ_DEADLINE;
         self.follow_settings().await;
 
         let client = self.client();
-        let mut status = crate::overview::report(&client, until).await;
+        let doctor = crate::overview::report(&client, until).await;
 
         // Ending control waits on the helper too: it finishes by itself
         // when that takes longer than a moment.
-        if status["ready"] != true {
+        if !doctor.diagnosis.ready {
             let ending = self.release_in_background();
             let _ = tokio::time::timeout(Duration::from_secs(1), ending).await;
         }
 
         let active = self.lease.lock().await.active();
-        status["controlActive"] = json!(active);
 
         let (pending, total) = crate::overview::pending(&client.controller);
 
-        self.start_input_after_login(&client, &status["session"], total == 0 && !active);
+        self.start_input_after_login(
+            &client,
+            &doctor.diagnosis.observation,
+            total == 0 && !active,
+        );
 
         let activity_client = client.clone();
         let activity = tokio::task::spawn_blocking(move || {
@@ -70,11 +77,12 @@ impl Viewer {
         .await
         .unwrap_or_default();
         let now = crate::client::timestamp();
-        status["overview"] = crate::overview::overview(&status, active, pending, &activity, now);
+        let overview = crate::overview::overview(&doctor, active, pending, &activity, now);
+        let mut status = crate::overview::Reading::new(doctor, overview, active, now);
         crate::overview::add_host_sessions(&mut status, &client, now).await;
 
-        if let Some(name) = status["overview"]["account"].as_str() {
-            status["overview"]["accountName"] = json!(self.account_title(name).await);
+        if let Some(name) = status.value["overview"]["account"].as_str() {
+            status.value["overview"]["accountName"] = json!(self.account_title(name).await);
         }
 
         status
@@ -351,21 +359,26 @@ impl Viewer {
     /// helper daemon and display, as Recover would, so agents and viewers
     /// carry on by themselves: only in the background, with Accessibility on
     /// and nothing pending or held.
-    fn start_input_after_login(&self, client: &Arc<Client>, session: &Value, settled: bool) {
-        let native = &session["inputService"];
+    fn start_input_after_login(
+        &self,
+        client: &Arc<Client>,
+        session: &crate::session::Observation,
+        settled: bool,
+    ) {
+        let native = &session.native;
         let starts = settled
-            && native["controlActive"] != true
-            && native["heldInput"] != true
-            && session["permissions"]["accessibility"] == true;
+            && native.control_active != Some(true)
+            && native.held_input != Some(true)
+            && session.accessibility == crate::session::PermissionObservation::Allowed;
         let Some(hidden) = starts
-            .then(|| crate::session::require_hidden(session, client.config.helper_uid).ok())
+            .then(|| session.require_hidden(client.config.helper_uid).ok())
             .flatten()
             .filter(|hidden| !hidden.input)
         else {
             return;
         };
 
-        let Some(daemon) = session["daemon"]["pid"].as_u64() else {
+        let Some(daemon) = session.capture_pid else {
             return;
         };
 
