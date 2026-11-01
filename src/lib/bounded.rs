@@ -6,7 +6,7 @@ use nix::{
     unistd::Pid,
 };
 use std::{
-    io::{self, Read, Write},
+    io::{self, Read},
     os::unix::process::CommandExt,
     process::{Child, Command, Output, Stdio},
     sync::mpsc,
@@ -110,14 +110,14 @@ fn stop(child: &mut Child) {
     stop_with(
         child,
         |group| killpg(group, Signal::SIGKILL),
-        &mut io::stderr(),
+        crate::diagnostics::report,
     );
 }
 
 fn stop_with(
     child: &mut Child,
     kill_group: impl FnOnce(Pid) -> nix::Result<()>,
-    diagnostics: &mut impl Write,
+    mut diagnostics: impl FnMut(String),
 ) {
     let group = i32::try_from(child.id()).ok().map(Pid::from_raw);
     let stopped = group.map(kill_group);
@@ -132,23 +132,21 @@ fn stop_with(
         && error != nix::errno::Errno::ESRCH
         && let Some(group) = group
     {
-        let _ = writeln!(diagnostics, "Stop bounded command group {group}: {error}");
+        diagnostics(format!("Stop bounded command group {group}: {error}"));
     }
     match reaped {
         Ok(Some(_)) => {}
         Ok(None) => {
-            let _ = writeln!(
-                diagnostics,
+            diagnostics(format!(
                 "Stop bounded command {} was not confirmed",
                 child.id()
-            );
+            ));
         }
         Err(error) => {
-            let _ = writeln!(
-                diagnostics,
+            diagnostics(format!(
                 "{action} bounded command {} after stopping it: {error}",
                 child.id()
-            );
+            ));
         }
     }
 }
@@ -165,58 +163,50 @@ fn late() -> io::Error {
 mod tests {
     use super::{LISTING, LOOKUP, output, stop_with};
     use std::{
-        io::{self, ErrorKind, Write},
+        io::ErrorKind,
         os::unix::process::{CommandExt, ExitStatusExt},
         process::Command,
         time::{Duration, Instant},
     };
 
     #[test]
-    fn failed_diagnostics_do_not_prevent_killing_and_reaping_a_child() {
-        struct FailedDiagnostics {
-            pid: nix::unistd::Pid,
-            writes: usize,
-        }
-
-        impl Write for FailedDiagnostics {
-            fn write(&mut self, _: &[u8]) -> io::Result<usize> {
-                self.writes += 1;
-                assert_eq!(
-                    nix::sys::wait::waitpid(self.pid, Some(nix::sys::wait::WaitPidFlag::WNOHANG)),
-                    Err(nix::errno::Errno::ECHILD),
-                    "cleanup finishes before diagnostics are written"
-                );
-                Err(ErrorKind::BrokenPipe.into())
+    fn stalled_diagnostics_do_not_delay_killing_and_reaping_a_child() {
+        let (diagnostics, writing, resume) = crate::test_support::stalled_diagnostics();
+        diagnostics.report("first diagnostic".into());
+        writing.recv_timeout(Duration::from_secs(1)).unwrap();
+        let (finished, stopped) = std::sync::mpsc::channel();
+        let worker = std::thread::spawn(move || {
+            // Fill the queue while its writer is stalled.
+            for _ in 0..64 {
+                diagnostics.report("queued diagnostic".into());
             }
-
-            fn flush(&mut self) -> io::Result<()> {
-                Ok(())
-            }
-        }
-
-        let mut child = Command::new("/bin/sleep")
-            .arg("5")
-            .process_group(0)
-            .spawn()
-            .unwrap();
-        let mut diagnostics = FailedDiagnostics {
-            pid: nix::unistd::Pid::from_raw(child.id().try_into().unwrap()),
-            writes: 0,
-        };
-        let stopped = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            let mut child = Command::new("/bin/sleep")
+                .arg("5")
+                .process_group(0)
+                .spawn()
+                .unwrap();
+            let mut messages = Vec::new();
             stop_with(
                 &mut child,
                 |_| Err(nix::errno::Errno::EPERM),
-                &mut diagnostics,
+                |message| {
+                    diagnostics.report(message.clone());
+                    messages.push(message);
+                },
             );
-        }));
-        let status = child.try_wait().unwrap();
-        let _ = child.kill();
-        let _ = child.wait();
+            let status = child.try_wait().unwrap();
+            let _ = child.kill();
+            let _ = child.wait();
+            let _ = finished.send((status, messages));
+        });
+        let result = stopped.recv_timeout(Duration::from_secs(1));
+        let _ = resume.send(());
+        worker.join().unwrap();
 
-        assert!(stopped.is_ok(), "failed diagnostics must not panic");
-        assert!(diagnostics.writes > 0);
+        let (status, messages) = result.expect("cleanup must finish while diagnostics are stalled");
         assert_eq!(status.unwrap().signal(), Some(libc::SIGKILL));
+        assert_eq!(messages.len(), 1);
+        assert!(messages[0].contains("EPERM"));
     }
 
     #[test]

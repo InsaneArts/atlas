@@ -9,7 +9,10 @@ use crate::{
     session::Epoch,
 };
 use serde_json::{Value, json};
-use std::sync::Arc;
+use std::{
+    io::{self, Write},
+    sync::Arc,
+};
 
 /// What a control request asks: to send input, or to take, renew or end
 /// control, or the menu bar's emergency stop.
@@ -26,6 +29,14 @@ impl Viewer {
     /// End `owner`'s control (any control, without one) in the helper it
     /// was taken on.
     pub(super) async fn release(&self, owner: Option<&str>) -> Result<()> {
+        self.release_with(owner, &mut io::stderr()).await
+    }
+
+    pub(super) async fn release_with(
+        &self,
+        owner: Option<&str>,
+        diagnostics: &mut impl Write,
+    ) -> Result<()> {
         let (previous, client) = {
             let mut lease = self.lease.lock().await;
             (lease.begin_release(owner)?, self.holder())
@@ -61,7 +72,8 @@ impl Viewer {
         };
         if let Err(error) = &outcome {
             // Timer and shutdown callers have no reply channel. Never print lease tokens or input.
-            eprintln!(
+            let _ = writeln!(
+                diagnostics,
                 "End viewer input control failed ({}, uncertain={}); check pending recovery",
                 error.code, error.uncertain
             );

@@ -454,20 +454,7 @@ fn jobs_with(record: &Record, table: &Arc<Table>) -> (tempfile::TempDir, Jobs) {
 }
 
 #[tokio::test]
-async fn supervision_retries_after_a_worker_panics_even_when_diagnostics_fail() {
-    struct FailedDiagnostics(Arc<AtomicUsize>);
-
-    impl std::io::Write for FailedDiagnostics {
-        fn write(&mut self, _: &[u8]) -> std::io::Result<usize> {
-            self.0.fetch_add(1, Ordering::SeqCst);
-            Err(std::io::ErrorKind::BrokenPipe.into())
-        }
-
-        fn flush(&mut self) -> std::io::Result<()> {
-            Ok(())
-        }
-    }
-
+async fn supervision_retries_and_escalates_while_diagnostics_are_stalled() {
     fn on_console() -> bool {
         static LOOKS: AtomicUsize = AtomicUsize::new(0);
         assert!(LOOKS.fetch_add(1, Ordering::SeqCst) > 0, "worker failed");
@@ -475,15 +462,28 @@ async fn supervision_retries_after_a_worker_panics_even_when_diagnostics_fail() 
     }
 
     let table = Table::with(vec![leader()]);
-    let (directory, jobs) = jobs_with(&record(), &table);
+    let mut stopping = record();
+    stopping.state = JobState::Stopping;
+    let mut stop = Stopping::new(How::Person, 0, 0);
+    stop.term_sent = true;
+    stopping.stopping = Some(stop);
+    let (directory, jobs) = jobs_with(&stopping, &table);
     let marker = directory.path().join("stop");
-    std::fs::write(&marker, "").unwrap();
-    let writes = Arc::new(AtomicUsize::new(0));
+    let (diagnostics, writing, resume) = crate::test_support::stalled_diagnostics();
+    diagnostics.report("first diagnostic".into());
+    writing.recv_timeout(Duration::from_secs(1)).unwrap();
+    let reports = Arc::new(AtomicUsize::new(0));
+    let reported = reports.clone();
     let watcher = tokio::spawn(supervise::supervise_with(
         Arc::new(jobs),
         marker,
         on_console,
-        FailedDiagnostics(writes.clone()),
+        move |message| {
+            for _ in 0..64 {
+                diagnostics.report(message.clone());
+            }
+            reported.fetch_add(1, Ordering::SeqCst);
+        },
     ));
     let retried = tokio::time::timeout(Duration::from_secs(5), async {
         while table.signals().is_empty() && !watcher.is_finished() {
@@ -491,6 +491,7 @@ async fn supervision_retries_after_a_worker_panics_even_when_diagnostics_fail() 
         }
     })
     .await;
+    let _ = resume.send(());
     watcher.abort();
     let _ = watcher.await;
 
@@ -498,8 +499,8 @@ async fn supervision_retries_after_a_worker_panics_even_when_diagnostics_fail() 
         retried.is_ok(),
         "supervision must retry within the deadline"
     );
-    assert!(writes.load(Ordering::SeqCst) > 0);
-    assert_eq!(table.signals(), vec![(4312, Signal::SIGTERM)]);
+    assert!(reports.load(Ordering::SeqCst) > 0);
+    assert_eq!(table.signals(), vec![(4312, Signal::SIGKILL)]);
 }
 
 fn shown(jobs: &Jobs) -> Value {

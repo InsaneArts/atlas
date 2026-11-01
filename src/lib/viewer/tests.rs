@@ -849,6 +849,19 @@ async fn giving_control_back_waits_for_the_final_input_recording() {
 
 #[tokio::test]
 async fn a_failed_release_keeps_the_recording_failure_and_pending_recovery() {
+    struct FailedDiagnostics(usize);
+
+    impl std::io::Write for FailedDiagnostics {
+        fn write(&mut self, _: &[u8]) -> std::io::Result<usize> {
+            self.0 += 1;
+            Err(std::io::ErrorKind::BrokenPipe.into())
+        }
+
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
+    }
+
     let directory = tempfile::tempdir().unwrap();
     let viewer = http::configured(client(directory.path()), "127.0.0.1:1".into(), None);
     let client = viewer.client();
@@ -866,10 +879,15 @@ async fn a_failed_release_keeps_the_recording_failure_and_pending_recovery() {
     let obstruction = output.join(crate::activity_log::LOCK);
     std::fs::create_dir(&obstruction).unwrap();
 
-    let error = tokio::time::timeout(Duration::from_secs(5), viewer.release(None))
-        .await
-        .unwrap()
-        .unwrap_err();
+    let mut diagnostics = FailedDiagnostics(0);
+    let error = tokio::time::timeout(
+        Duration::from_secs(5),
+        viewer.release_with(None, &mut diagnostics),
+    )
+    .await
+    .unwrap()
+    .unwrap_err();
+    assert!(diagnostics.0 > 0);
     assert_eq!(error.code, Code::Uncertain);
     assert!(error.uncertain);
     assert!(
