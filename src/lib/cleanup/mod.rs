@@ -16,7 +16,7 @@ mod targets;
 mod tests;
 
 use crate::{
-    client::{Actor, Client},
+    client::{Actor, AppList, Client},
     daemon::protocol::Shown,
     environment::PlanState,
     error::Result,
@@ -124,7 +124,7 @@ pub(crate) async fn preview(
     let apps = if looks_at_apps {
         hands.apps().await?
     } else {
-        json!({"ok": true, "apps": []})
+        AppList::empty()
     };
     let plans: Vec<Token> = to_run
         .iter()
@@ -349,14 +349,14 @@ pub(crate) async fn apply(
 async fn running_named(
     hands: &impl Hands,
     loaded: &Loaded,
-    listed: Option<&Value>,
-) -> Option<Value> {
+    listed: Option<&AppList>,
+) -> Option<AppList> {
     if loaded.opened_by_name().is_empty() {
         return None;
     }
     match listed {
         Some(listed) => Some(listed.clone()),
-        None => hands.apps().await.ok().filter(|apps| apps["ok"] == true),
+        None => hands.apps().await.ok(),
     }
 }
 

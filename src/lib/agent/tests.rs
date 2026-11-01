@@ -272,22 +272,22 @@ fn app_pid(windows: &[Window], target: &Target) -> Result<i64> {
 /// An `apps` row is found by its shown name or its bundle's file name.
 #[test]
 fn an_app_row_is_named_by_its_shown_or_file_name() {
-    let row = json!({
+    let row = app_row(json!({
         "name": "Éditeur de texte",
         "executable": "/System/Applications/TextEdit.app/Contents/MacOS/TextEdit",
-    });
+    }));
     assert!(app_named(&row, "éditeur de texte"));
     assert!(app_named(&row, "TextEdit"));
     assert!(
         !app_named(&row, "Contents"),
         "a folder on the way is not a name"
     );
-    assert!(!app_named(&json!({"name": "Finder"}), "TextEdit"));
+    assert!(!app_named(&app_row(json!({"name": "Finder"})), "TextEdit"));
 
-    let nested = json!({
+    let nested = app_row(json!({
         "name": "Simulator",
         "executable": "/Applications/Xcode.app/Contents/Developer/Applications/Simulator.app/Contents/MacOS/Simulator",
-    });
+    }));
 
     assert!(
         !app_named(&nested, "Xcode"),
@@ -3065,10 +3065,12 @@ async fn a_close_keeps_the_apps_identity_after_it_has_quit() {
 
 #[test]
 fn an_app_name_keeps_its_identity_only_when_its_processes_agree() {
-    let apps = |second: Value| {
-        json!({"apps": [
-            {"name": "TextEdit", "bundleId": "com.apple.TextEdit"}, second
-        ]})
+    let apps = |mut second: Value| {
+        second["pid"] = json!(2);
+        crate::client::AppList::decode(json!({"ok": true, "apps": [
+            {"pid": 1, "name": "TextEdit", "bundleId": "com.apple.TextEdit"}, second
+        ]}))
+        .unwrap()
     };
     assert!(
         named_app(
@@ -3551,5 +3553,86 @@ async fn representative_element_reads_keep_their_helper_request_counts() {
         assert_eq!(json!(operations), fixture["helperOperations"]);
         assert_eq!(json!(helper.proofs()), fixture["helperProofs"]);
         assert_eq!(json!(helper.requests()), fixture["helperRequests"]);
+    }
+}
+
+fn app_row(mut fields: Value) -> crate::client::AppRow {
+    fields["pid"] = json!(1);
+    crate::client::AppList::decode(json!({"ok": true, "apps": [fields]}))
+        .unwrap()
+        .rows()[0]
+        .clone()
+}
+
+#[test]
+fn target_selection_pins_the_listed_process_start() {
+    let apps = crate::client::AppList::decode(json!({"ok": true,
+        "apps": [{"pid": 812, "name": "Editor", "active": true}],
+        "starts": {"812": [123, 456]}}))
+    .unwrap();
+    let app = named_app(&apps, "editor").unwrap();
+    let expect = snapshot_expect(app.pid() as i64, apps.starts().unwrap()).unwrap();
+    assert_eq!(expect.pid(), 812);
+    assert_eq!(
+        expect.instance(),
+        Some(crate::process::Instance::new(812, [123, 456]))
+    );
+}
+
+#[tokio::test]
+async fn app_targets_preserve_absent_valid_and_malformed_process_identities() {
+    use crate::test_support::{Helper, UID};
+    let directory = tempfile::tempdir().unwrap();
+    let (client, helper) = Helper::client(directory.path(), UID);
+    for target in [Target::Pid(812), Target::Name("Editor".into())] {
+        for starts in [
+            None,
+            Some(json!({"812": [123, 456]})),
+            Some(Value::Null),
+            Some(json!({"812": [123]})),
+            Some(json!({})),
+            Some(json!({"812": [0, 0]})),
+        ] {
+            let mut reply = json!({"ok": true, "apps": [
+                {"pid": 812, "name": "Editor", "active": true}
+            ]});
+            if let Some(starts) = &starts {
+                reply["starts"] = starts.clone();
+            }
+            let result = helper
+                .serve(
+                    async {
+                        let verified = client.verify().await?;
+                        target_among(&client, &verified, &target, None).await
+                    },
+                    |_| Some(reply.clone()),
+                )
+                .await;
+            match starts {
+                None => assert_eq!(result.unwrap().instance(), None),
+                Some(value) if value == json!({"812": [123, 456]}) => {
+                    assert_eq!(
+                        result.unwrap().instance(),
+                        Some(crate::process::Instance::new(812, [123, 456]))
+                    );
+                }
+                Some(value) if value == json!({}) || value == json!({"812": [0, 0]}) => {
+                    let error = result.unwrap_err();
+                    assert_eq!(error.code, Code::Elements);
+                    assert_eq!(
+                        error.error,
+                        "The app's process changed while it was being resolved; look again"
+                    );
+                }
+                Some(_) => {
+                    let error = result.unwrap_err();
+                    assert_eq!(error.code, Code::Protocol);
+                    assert_eq!(
+                        error.error,
+                        "The helper's process identities were malformed"
+                    );
+                }
+            }
+        }
     }
 }

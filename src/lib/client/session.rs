@@ -239,7 +239,7 @@ impl Client {
         }
 
         let open = self
-            .apps()
+            .running_apps()
             .await
             .map(|reply| crate::app_selection::left_open(&reply))
             .unwrap_or_default();

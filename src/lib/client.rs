@@ -18,6 +18,7 @@ mod stop;
 mod tests;
 mod windows;
 
+pub(crate) use apps::{AppList, AppRow};
 #[cfg(test)]
 pub(crate) use capture::prune_captures;
 pub use capture::{Frame, SCREENSHOT_SIDE, Size, png_dimensions};

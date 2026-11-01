@@ -47,7 +47,7 @@ pub async fn install(client: &Client, path: &Path) -> Result<Value> {
     // Copying, installing and removing the copy happen under one ownership,
     // so no other open, close or cleanup interleaves.
     let ownership = client.controller.acquire(false)?;
-    let running = Running::listed(&client.apps().await?);
+    let running = Running::listed(&client.running_apps().await?);
 
     let id = Token::new();
     let install = Owned::Install {

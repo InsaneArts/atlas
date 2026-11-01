@@ -7,7 +7,7 @@ use super::{
     receipt::{Receipt, Receipts},
 };
 use crate::{
-    client::Client,
+    client::{AppList, Client},
     error::{Code, Error, Result},
     host_session::{
         Key, now_ms,
@@ -241,14 +241,13 @@ impl Loaded {
     /// The apps the scope's tasks opened by name that still run, by the
     /// helper's app list `running`: listed, never quit. With no list, each
     /// is listed, as it may still run.
-    pub(crate) fn left(&self, running: Option<&Value>) -> Vec<Value> {
+    pub(crate) fn left(&self, running: Option<&AppList>) -> Vec<Value> {
         let runs = |app: &str| {
             running.is_none_or(|listed| {
-                listed["apps"]
-                    .as_array()
-                    .into_iter()
-                    .flatten()
-                    .filter_map(|listed| listed["name"].as_str())
+                listed
+                    .rows()
+                    .iter()
+                    .filter_map(|listed| listed.name())
                     .any(|name| crate::ui::text::same_text(name, app))
             })
         };

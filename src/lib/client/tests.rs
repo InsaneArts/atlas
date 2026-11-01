@@ -3,7 +3,6 @@
 //! activity rows they write.
 use super::*;
 use super::{
-    apps::app_list,
     capture::{Cropped, capture_name, cropped, meets, placement, screenshot_request},
     input::expectation,
     record::{PERSON_INPUT_SPAN, PersonInput, worked},
@@ -3392,7 +3391,7 @@ fn a_refused_app_list_keeps_its_code() {
         "error": "Running applications could not be listed"});
 
     for (reply, code) in [(busy, Code::Busy), (failed, Code::Apps)] {
-        let error = app_list(reply).unwrap_err();
+        let error = AppList::decode(reply).unwrap_err();
         assert_eq!((error.code, error.uncertain), (code, false));
     }
 }
@@ -3415,7 +3414,7 @@ fn a_reply_without_an_app_array_is_never_an_empty_list() {
     ];
 
     for reply in malformed {
-        let error = app_list(reply.clone()).unwrap_err();
+        let error = AppList::decode(reply.clone()).unwrap_err();
         assert_eq!(
             (error.code, error.uncertain),
             (Code::Protocol, false),
@@ -3427,11 +3426,11 @@ fn a_reply_without_an_app_array_is_never_an_empty_list() {
 #[test]
 fn a_truly_empty_list_is_an_empty_list() {
     let empty = json!({"ok": true, "apps": [], "elapsedMs": 1.5});
-    assert_eq!(app_list(empty.clone()).unwrap(), empty);
+    assert_eq!(AppList::decode(empty.clone()).unwrap().project(), empty);
 
     let listed = json!({"ok": true, "apps": [{"pid": 812, "name": null, "bundleId": null,
         "executable": "/x", "active": true, "hidden": false, "policy": "regular"}]});
-    assert_eq!(app_list(listed.clone()).unwrap(), listed);
+    assert_eq!(AppList::decode(listed.clone()).unwrap().project(), listed);
 }
 
 #[tokio::test]
@@ -3453,7 +3452,10 @@ async fn process_identities_stay_internal_to_app_resolution_in_current_and_older
             )
             .await
             .unwrap();
-        assert_eq!(internal["starts"], reply["starts"]);
+        assert_eq!(
+            internal.starts().unwrap().unwrap().get(&812),
+            Some(&[123, 456])
+        );
         let public = helper
             .serve(client.apps(), |_| Some(reply.clone()))
             .await
@@ -3726,5 +3728,22 @@ impl Client {
             self.host_session.as_ref()?.key(),
         )
         .unwrap()
+    }
+}
+
+#[tokio::test]
+async fn public_apps_discard_malformed_starts_without_rejecting_valid_rows() {
+    use crate::test_support::{Helper, UID};
+    let directory = tempfile::tempdir().unwrap();
+    let (client, helper) = Helper::client(directory.path(), UID);
+    for starts in [Value::Null, json!([1]), json!({"812": [123]}), json!(false)] {
+        let reply = json!({"ok": true, "apps": [{"pid": 812}], "starts": starts});
+        let mut public = helper
+            .serve(client.apps(), |_| Some(reply.clone()))
+            .await
+            .unwrap();
+        assert!(public["elapsedMs"].is_number());
+        public.as_object_mut().unwrap().remove("elapsedMs");
+        assert_eq!(public, json!({"ok": true, "apps": [{"pid": 812}]}));
     }
 }

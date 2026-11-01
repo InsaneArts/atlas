@@ -9,7 +9,7 @@ use super::{
 use crate::{
     agent::{self, Quitting},
     app_selection::Process,
-    client::{Actor, Client},
+    client::{Actor, AppList, Client},
     collect::{self, Intact},
     control::Ownership,
     daemon::protocol::{JobId, Shown},
@@ -69,8 +69,8 @@ impl Hands for Live<'_> {
         &self.copies
     }
 
-    async fn apps(&self) -> Result<Value> {
-        self.client.apps().await
+    async fn apps(&self) -> Result<AppList> {
+        self.client.running_apps().await
     }
 
     async fn plan_states(&self, ids: &[Token]) -> Result<Vec<PlanState>> {
@@ -91,12 +91,12 @@ impl Hands for Live<'_> {
         let started = Instant::now();
         // Done once nothing in a fresh list runs from the task's bundles,
         // whatever it is called.
-        let left = |apps: &Value, _: &[u64]| {
+        let left = |apps: &AppList, _: &[u64]| {
             still_running(apps, folders)
                 .into_iter()
-                .map(|app| match app["app"].as_str() {
+                .map(|app| match app.name() {
                     Some(name) if !name.is_empty() => name.to_owned(),
-                    _ => format!("process {}", app["pid"]),
+                    _ => format!("process {}", app.pid()),
                 })
                 .collect()
         };

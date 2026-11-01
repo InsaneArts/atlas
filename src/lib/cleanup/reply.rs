@@ -7,6 +7,7 @@ use super::{
     scope::{Loaded, Scope},
 };
 use crate::{
+    client::AppList,
     handoff,
     host_session::{
         Key,
@@ -92,7 +93,7 @@ pub(super) fn said_state(value: &mut Value, entry: &Entry) {
 pub(super) fn left(
     loaded: &Loaded,
     receipt: Option<&Receipt>,
-    running: Option<&Value>,
+    running: Option<&AppList>,
 ) -> Vec<Value> {
     let mut left = loaded.left(running);
     let untraced = receipt
@@ -115,7 +116,7 @@ pub(super) fn applied(
     scope: &Scope,
     loaded: &Loaded,
     receipt: &Receipt,
-    running: Option<&Value>,
+    running: Option<&AppList>,
 ) -> Value {
     let steps: Vec<Value> = receipt
         .steps
@@ -152,7 +153,7 @@ pub(super) fn nothing(
     scope: &Scope,
     loaded: &Loaded,
     mode: super::Mode,
-    running: Option<&Value>,
+    running: Option<&AppList>,
 ) -> Value {
     let preview = mode == super::Mode::Preview;
     json!({

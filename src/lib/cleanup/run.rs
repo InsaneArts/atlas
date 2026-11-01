@@ -11,6 +11,7 @@ use super::{
 };
 use crate::{
     app_selection::Process,
+    client::AppList,
     collect::{Intact, Kept},
     daemon::protocol::{JobId, JobRefusal, JobState, Left, Shown},
     environment::{InstallState, KeptReason, Outcome as Removed, PlanState, Removal, Undone},
@@ -35,7 +36,7 @@ pub(crate) trait Hands {
     /// Where `open`'s copy folders are.
     fn copies(&self) -> &Path;
     /// The helper's running apps, from a list it gave.
-    async fn apps(&self) -> Result<Value>;
+    async fn apps(&self) -> Result<AppList>;
     /// How far each of `ids` got, read without control.
     async fn plan_states(&self, ids: &[Token]) -> Result<Vec<PlanState>>;
     /// How each of `ids` stands in the helper, read without control: where

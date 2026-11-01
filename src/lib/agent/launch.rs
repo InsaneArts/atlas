@@ -97,7 +97,9 @@ pub(super) async fn open_in(
         && let Ok(apps) = client.apps_in(&verified).await
         && let Some(app) = super::target::named_app(&apps, name)
     {
-        client.record_app_completion(app, started.elapsed()).await;
+        client
+            .record_app_completion(app.name(), app.bundle_id(), started.elapsed())
+            .await;
     }
 
     let mut value = json!({ "ok": true, "opened": true });

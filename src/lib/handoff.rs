@@ -14,7 +14,6 @@ use crate::{
     ui::text::same_text,
 };
 use serde::Serialize;
-use serde_json::Value;
 use std::{
     fs,
     io::Write,
@@ -219,14 +218,12 @@ pub(crate) struct Running {
 impl Running {
     /// The running apps of `apps`, an app list the helper gave; a name or
     /// executable it does not know is empty.
-    pub(crate) fn listed(apps: &Value) -> Vec<Self> {
-        apps["apps"]
-            .as_array()
-            .into_iter()
-            .flatten()
+    pub(crate) fn listed(apps: &crate::client::AppList) -> Vec<Self> {
+        apps.rows()
+            .iter()
             .map(|app| Self {
-                name: app["name"].as_str().unwrap_or("").to_owned(),
-                executable: app["executable"].as_str().unwrap_or("").to_owned(),
+                name: app.name().unwrap_or("").to_owned(),
+                executable: app.executable().unwrap_or("").to_owned(),
             })
             .collect()
     }

@@ -253,12 +253,17 @@ pub(super) fn worked(reply: &Value) -> bool {
 impl Client {
     /// Record the app a completed open or close acted on once its identity
     /// is known. Its command token replaces the lower-level steps on read.
-    pub(crate) async fn record_app_completion(&self, app: &Value, elapsed: Duration) {
+    pub(crate) async fn record_app_completion(
+        &self,
+        name: Option<&str>,
+        bundle_id: Option<&str>,
+        elapsed: Duration,
+    ) {
         if self.doing.is_some() {
             let _ = self
                 .record(
                     &json!({"op": "run"}),
-                    &json!({"ok": true, "app": app}),
+                    &json!({"ok": true, "app": {"name": name, "bundleId": bundle_id}}),
                     elapsed,
                 )
                 .await;

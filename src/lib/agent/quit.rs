@@ -3,7 +3,7 @@
 //! or every app also removes the copies `open` made of them.
 use crate::{
     app_selection::{Closing, Process, atlas_bundle, selected},
-    client::{Client, Run},
+    client::{AppList, Client, Run},
     control::Ownership,
     error::{Code, Error, Result},
     handoff,
@@ -64,7 +64,7 @@ pub(crate) struct Quit {
     pub signalled: Vec<u64>,
     /// The first valid app list in which none of them was left, which
     /// copies are judged against.
-    pub after: Value,
+    pub after: AppList,
 }
 
 /// How waiting for apps to quit ended.
@@ -84,7 +84,7 @@ async fn quit(
     client: &Client,
     ownership: &Ownership,
     processes: &[Process],
-    left: impl Fn(&Value, &[u64]) -> Vec<String>,
+    left: impl Fn(&AppList, &[u64]) -> Vec<String>,
     limit: Duration,
 ) -> Result<Quit> {
     match quit_until(client, ownership, processes, left, limit).await? {
@@ -105,7 +105,7 @@ pub(crate) async fn quit_until(
     client: &Client,
     ownership: &Ownership,
     processes: &[Process],
-    left: impl Fn(&Value, &[u64]) -> Vec<String>,
+    left: impl Fn(&AppList, &[u64]) -> Vec<String>,
     limit: Duration,
 ) -> Result<Quitting> {
     let mut argv = vec![
@@ -143,7 +143,7 @@ pub(crate) async fn quit_until(
 
     loop {
         let after = client
-            .apps()
+            .running_apps()
             .await
             .map_err(|error| unconfirmed(error, &names_by_quit(processes, &signalled, true)))?;
         let still = left(&after, &signalled);
@@ -194,6 +194,8 @@ pub async fn close(client: &Client, closing: Closing<'_>) -> Result<Value> {
 }
 
 /// [`close`], with `open`'s copies under `copies`.
+// size-exception: selection, exit proof and copy removal share one ownership.
+// Keeping their order together makes the close identity and copy-retention tests reviewable.
 pub(super) async fn close_in(
     client: &Client,
     closing: Closing<'_>,
@@ -211,12 +213,16 @@ pub(super) async fn close_in(
     let ownership = client.controller.acquire_beside_commands()?;
     let started = Instant::now();
     let atlas = atlas_bundle();
-    let apps = client.apps().await?;
+    let apps = client.running_apps().await?;
     let processes = selected(&apps, closing, atlas.as_deref());
     // Keep only identity, before the app disappears from the running list.
     let identity = match closing {
-        Closing::App(name) => super::target::named_app(&apps, name)
-            .map(|app| json!({"name": app["name"], "bundleId": app["bundleId"]})),
+        Closing::App(name) => super::target::named_app(&apps, name).map(|app| {
+            (
+                app.name().map(str::to_owned),
+                app.bundle_id().map(str::to_owned),
+            )
+        }),
         Closing::All => None,
     };
 
@@ -238,7 +244,7 @@ pub(super) async fn close_in(
         // One app is closed once no process of its name is left (a relaunch
         // counts); everything once each process signalled is gone, whatever
         // started since.
-        let left = |apps: &Value, pids: &[u64]| {
+        let left = |apps: &AppList, pids: &[u64]| {
             let mut left: Vec<String> = selected(apps, closing, atlas.as_deref())
                 .into_iter()
                 .filter(|process| matches!(closing, Closing::App(_)) || pids.contains(&process.pid))
@@ -305,8 +311,10 @@ pub(super) async fn close_in(
         }
     }
 
-    if let Some(app) = identity {
-        client.record_app_completion(&app, started.elapsed()).await;
+    if let Some((name, bundle_id)) = identity {
+        client
+            .record_app_completion(name.as_deref(), bundle_id.as_deref(), started.elapsed())
+            .await;
     }
     Ok(reply)
 }

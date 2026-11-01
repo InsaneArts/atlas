@@ -3,13 +3,12 @@
 use super::windows::{DockRead, window_snapshot};
 use crate::{
     actions::Expect,
-    client::{Client, Verified},
+    client::{AppList, AppRow, Client, Verified},
     error::{Code, Error, Result},
     native::windows::{MENU_LAYER, Shown, Window},
     process::{Instance, Start},
     ui::text::same_text,
 };
-use serde_json::Value;
 use std::collections::BTreeMap;
 
 /// Bind the target to the identity read with its helper snapshot. Older
@@ -35,14 +34,14 @@ pub(super) fn snapshot_expect(pid: i64, starts: Option<&BTreeMap<i64, Start>>) -
 
 /// An app's identity from the helper's app list, when every process of
 /// that name agrees on its bundle. Ambiguous names never borrow an ID.
-pub(super) fn named_app<'a>(apps: &'a Value, name: &str) -> Option<&'a Value> {
-    let mut named = apps["apps"]
-        .as_array()?
+pub(super) fn named_app<'a>(apps: &'a AppList, name: &str) -> Option<&'a AppRow> {
+    let mut named = apps
+        .rows()
         .iter()
-        .filter(|app| app["name"].as_str().is_some_and(|app| same_text(app, name)));
+        .filter(|app| app.name().is_some_and(|app| same_text(app, name)));
     let first = named.next()?;
     named
-        .all(|app| app["bundleId"] == first["bundleId"])
+        .all(|app| app.bundle_id() == first.bundle_id())
         .then_some(first)
 }
 
@@ -153,21 +152,11 @@ pub(super) async fn target_among(
     }
 
     let apps = client.apps_in(verified).await?;
-    let starts: Option<BTreeMap<i64, Start>> = apps
-        .get("starts")
-        .map(|value| serde_json::from_value(value.clone()))
-        .transpose()
-        .map_err(|_| {
-            Error::new(
-                Code::Protocol,
-                "The helper's process identities were malformed",
-            )
-        })?;
-    // apps_in returns only replies whose apps field passed array validation.
-    let rows = apps["apps"].as_array().expect("validated app list");
+    let starts = apps.starts()?;
+    let rows = apps.rows();
     let name = match target {
         Target::Pid(pid) => {
-            if !rows.iter().any(|app| app["pid"] == *pid) {
+            if !rows.iter().any(|app| app.pid() as i64 == *pid) {
                 return Err(Error::new(
                     Code::Elements,
                     format!(
@@ -175,17 +164,17 @@ pub(super) async fn target_among(
                     ),
                 ));
             }
-            return snapshot_expect(*pid, starts.as_ref());
+            return snapshot_expect(*pid, starts);
         }
         Target::Name(name) => name,
     };
-    let named: Vec<&Value> = rows.iter().filter(|app| app_named(app, name)).collect();
+    let named: Vec<&AppRow> = rows.iter().filter(|app| app_named(app, name)).collect();
     if let Some(pid) = named
         .iter()
-        .find(|app| app["active"] == true)
-        .and_then(|app| app["pid"].as_i64())
+        .find(|app| app.active())
+        .map(|app| app.pid() as i64)
     {
-        return snapshot_expect(pid, starts.as_ref());
+        return snapshot_expect(pid, starts);
     }
     Err(Error::new(
         Code::Elements,
@@ -202,9 +191,9 @@ pub(super) async fn target_among(
 /// Whether an `apps` row is the app called `name`: by the name it shows,
 /// which may be localized, or by the file name of its executable or of its
 /// own (innermost) bundle.
-pub(super) fn app_named(app: &Value, name: &str) -> bool {
-    let shown = app["name"].as_str().is_some_and(|own| same_text(own, name));
-    let executable = app["executable"].as_str().map(std::path::Path::new);
+pub(super) fn app_named(app: &AppRow, name: &str) -> bool {
+    let shown = app.name().is_some_and(|own| same_text(own, name));
+    let executable = app.executable().map(std::path::Path::new);
     let bundle = executable.and_then(|path| {
         path.ancestors()
             .find(|ancestor| ancestor.extension().is_some_and(|ext| ext == "app"))

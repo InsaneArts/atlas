@@ -1,18 +1,21 @@
 //! Shared application-selection policy for close-all and held logout.
-use crate::ui::text::same_text;
+use crate::{
+    client::{AppList, AppRow},
+    ui::text::same_text,
+};
 use serde_json::{Value, json};
 
 /// Whether a running app (as `apps` lists it) belongs to macOS or to Atlas
 /// itself; neither is ever closed. Atlas is known by its bundle identifier
 /// too, so a development build never closes the installed app.
-fn protected(running: &Value, atlas: Option<&str>) -> bool {
-    let executable = running["executable"].as_str().unwrap_or("");
+fn protected(running: &AppRow, atlas: Option<&str>) -> bool {
+    let executable = running.executable().unwrap_or("");
     (["/System/Library/", "/usr/", "/Library/Apple/"]
         .iter()
         .any(|system| executable.starts_with(system))
         && !executable.starts_with("/usr/local/"))
         || atlas.is_some_and(|bundle| executable.starts_with(bundle))
-        || running["bundleId"].as_str().is_some_and(|id| {
+        || running.bundle_id().is_some_and(|id| {
             id == crate::setup::IDENTIFIER
                 || id
                     .strip_prefix(crate::setup::IDENTIFIER)
@@ -85,50 +88,44 @@ pub(crate) struct Within {
 }
 
 /// The running apps `closing` selects.
-pub(crate) fn selected(apps: &Value, closing: Closing, atlas: Option<&str>) -> Vec<Process> {
-    apps["apps"]
-        .as_array()
-        .into_iter()
-        .flatten()
+pub(crate) fn selected(apps: &AppList, closing: Closing, atlas: Option<&str>) -> Vec<Process> {
+    apps.rows()
+        .iter()
         .filter(|running| match closing {
-            Closing::App(app) => running["name"]
-                .as_str()
-                .is_some_and(|name| same_text(name, app)),
+            Closing::App(app) => running.name().is_some_and(|name| same_text(name, app)),
             // An app someone opened: the main program of an app bundle (not
             // a helper or service inside one), with a Dock icon, or a menu
             // bar app that is not part of macOS (its own, such as Siri,
             // start with the session). Background-only processes are
             // services, not apps left open.
             Closing::All => {
-                let executable = running["executable"].as_str().unwrap_or("");
-                let apple = running["bundleId"]
-                    .as_str()
+                let executable = running.executable().unwrap_or("");
+                let apple = running
+                    .bundle_id()
                     .is_some_and(|id| id.starts_with("com.apple."));
 
                 app_program(executable)
                     && !protected(running, atlas)
-                    && match running["policy"].as_str() {
+                    && match running.policy() {
                         Some("regular") => true,
                         Some("accessory") => !apple && !executable.starts_with("/System/"),
                         _ => false,
                     }
             }
         })
-        .filter_map(|running| {
-            Some(Process {
-                pid: running["pid"].as_u64()?,
-                executable: running["executable"].as_str().unwrap_or("").to_owned(),
-                name: running["name"].as_str().unwrap_or("").to_owned(),
-                protected: protected(running, atlas),
-                within: None,
-            })
+        .map(|running| Process {
+            pid: running.pid(),
+            executable: running.executable().unwrap_or("").to_owned(),
+            name: running.name().unwrap_or("").to_owned(),
+            protected: protected(running, atlas),
+            within: None,
         })
         .collect()
 }
 
 /// The apps someone opened in the helper and left open, by name: what
 /// `close --all` would quit.
-pub(crate) fn left_open(apps: &Value) -> Vec<String> {
+pub(crate) fn left_open(apps: &AppList) -> Vec<String> {
     selected(apps, Closing::All, atlas_bundle().as_deref())
         .into_iter()
         .filter(|process| !process.protected)
@@ -168,6 +165,16 @@ pub fn listed(mut reply: Value, all: bool) -> Value {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn app_list(mut reply: Value) -> AppList {
+        reply["ok"] = json!(true);
+        AppList::decode(reply).unwrap()
+    }
+
+    fn app_row(mut row: Value) -> AppRow {
+        row["pid"] = json!(1);
+        app_list(json!({"apps": [row]})).rows()[0].clone()
+    }
 
     #[test]
     fn apps_lists_apps_and_third_party_menu_bar_apps_unless_all() {
@@ -232,26 +239,17 @@ mod tests {
     }
 
     #[test]
-    fn selection_omits_invalid_process_ids_and_preserves_input_order() {
+    fn selection_preserves_validated_process_order() {
         let app = |pid: Value| {
             json!({
                 "name": "Notes", "pid": pid, "policy": "regular",
                 "executable": "/Applications/Notes.app/Contents/MacOS/Notes",
             })
         };
-        let mut missing = app(Value::Null);
-        missing.as_object_mut().unwrap().remove("pid");
-        let apps = json!({"apps": [
-            app(json!(42)),
-            app(json!(-1)),
-            missing,
-            app(json!("7")),
-            app(json!(true)),
-            app(json!(1.5)),
-            app(Value::Null),
-            app(json!(7)),
-            app(json!(u64::MAX)),
-        ]});
+        let apps = AppList::decode(
+            json!({"ok": true, "apps": [app(json!(42)), app(json!(7)), app(json!(i32::MAX))]}),
+        )
+        .unwrap();
 
         let processes = selected(&apps, Closing::All, None);
         assert_eq!(
@@ -259,7 +257,7 @@ mod tests {
                 .into_iter()
                 .map(|process| process.pid)
                 .collect::<Vec<_>>(),
-            [42, 7, u64::MAX]
+            [42, 7, i32::MAX as u64]
         );
     }
 
@@ -279,8 +277,9 @@ mod tests {
             app("Opie QA", "accessory", "/Users/Shared/Opie QA.app/Contents/MacOS/Opie QA"),
         ]});
 
+        let typed = app_list(apps.clone());
         let names = |closing| {
-            selected(&apps, closing, Some("/Applications/Atlas.app"))
+            selected(&typed, closing, Some("/Applications/Atlas.app"))
                 .into_iter()
                 .map(|process| process.name)
                 .collect::<Vec<_>>()
@@ -289,7 +288,7 @@ mod tests {
         assert_eq!(names(Closing::All), ["Calendar", "Safari", "Opie QA"]);
         let open = json!({"apps": [apps["apps"][0], apps["apps"][7], apps["apps"][8]]});
         assert_eq!(
-            left_open(&open),
+            left_open(&app_list(open)),
             ["Safari", "Opie QA"],
             "a held log-out names what close --all would quit"
         );
@@ -302,7 +301,7 @@ mod tests {
         ]});
 
         assert!(
-            selected(&services, Closing::All, None).is_empty(),
+            selected(&app_list(services), Closing::All, None).is_empty(),
             "helpers, services and apps without a program are not apps left open"
         );
 
@@ -313,29 +312,31 @@ mod tests {
         assert!(!app_program("Notes.app/Contents/MacOS/Notes"));
 
         assert!(!protected(
-            &json!({"executable": "/usr/local/Cellar/emacs/Emacs.app/Contents/MacOS/Emacs"}),
+            &app_row(
+                json!({"executable": "/usr/local/Cellar/emacs/Emacs.app/Contents/MacOS/Emacs"})
+            ),
             None
         ));
         assert!(protected(
-            &json!({"executable": "/usr/libexec/sharingd"}),
+            &app_row(json!({"executable": "/usr/libexec/sharingd"})),
             None
         ));
 
         assert_eq!(names(Closing::App("Finder")), ["Finder"], "refused later");
         assert_eq!(names(Closing::App("opie qa")), ["Opie QA"], "any case");
         assert!(names(Closing::App("Opie")).is_empty(), "whole names only");
-        assert!(selected(&apps, Closing::App("Finder"), None)[0].protected);
+        assert!(selected(&typed, Closing::App("Finder"), None)[0].protected);
 
         // A development build, outside the app, still spares the installed
         // Atlas by its identifier.
         let installed = json!({"executable": "/Applications/Atlas.app/Contents/MacOS/atlas",
             "bundleId": "com.insanearts.atlas"});
-        assert!(protected(&installed, None));
+        assert!(protected(&app_row(installed), None));
         let window = json!({"executable": "/Applications/Atlas.app/Contents/Helpers/Atlas.app/x",
             "bundleId": "com.insanearts.atlas.window"});
-        assert!(protected(&window, None));
+        assert!(protected(&app_row(window), None));
         let other = json!({"executable": "/Applications/Other.app/x",
             "bundleId": "com.insanearts.atlasish"});
-        assert!(!protected(&other, None));
+        assert!(!protected(&app_row(other), None));
     }
 }

@@ -204,3 +204,47 @@ async fn new_work_after_a_failed_quit_waits_for_every_quit() {
     }
     assert!(!still_slow.logged().contains(&format!("undo {plan}")));
 }
+
+#[tokio::test]
+async fn cleanup_sees_every_running_app_despite_public_filtering() {
+    use crate::{
+        app_selection,
+        test_support::{Helper, UID},
+    };
+    let directory = tempfile::tempdir().unwrap();
+    let (client, helper) = Helper::client(directory.path(), UID);
+    let rows: Vec<Value> = (1..=75)
+        .map(|pid| {
+            json!({
+                "pid": pid, "name": format!("Helper {pid}"), "policy": "prohibited",
+                "executable": format!("/Applications/Probe.app/Contents/MacOS/Helper{pid}")
+            })
+        })
+        .collect();
+    let reply = json!({"ok": true, "apps": rows, "starts": null});
+    let live = crate::cleanup::live::Live::reading(&client);
+    let mut reads = 0;
+    let apps = helper
+        .serve(live.apps(), |request| {
+            assert_eq!(request["op"], "apps");
+            reads += 1;
+            Some(reply.clone())
+        })
+        .await
+        .unwrap();
+    assert_eq!(reads, 1);
+    assert_eq!(apps.rows().len(), 75);
+    assert_eq!(
+        super::super::targets::still_running(&apps, &["/Applications/Probe.app".into()]).len(),
+        75
+    );
+    let public = helper
+        .serve(client.apps(), |_| Some(reply.clone()))
+        .await
+        .unwrap();
+    assert_eq!(
+        app_selection::listed(public.clone(), false)["apps"],
+        json!([])
+    );
+    assert_eq!(app_selection::listed(public, true)["apps"], reply["apps"]);
+}

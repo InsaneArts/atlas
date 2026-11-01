@@ -8,12 +8,12 @@
 use super::plan::Bundle;
 use crate::{
     app_selection::{Process, Within},
+    client::AppList,
     environment::{InstallState, RunningFrom},
     files::Token,
     handoff,
     host_session::Key,
 };
-use serde_json::{Value, json};
 use std::path::Path;
 
 /// What the quit step signals and waits for, and what it leaves.
@@ -56,7 +56,7 @@ pub(crate) fn targets(
     session: &Key,
     bundles: &[Bundle],
     installs: &[InstallState],
-    apps: &Value,
+    apps: &AppList,
 ) -> Targets {
     let mut proven: Vec<Within> = Vec::new();
     let mut targets = Targets::default();
@@ -94,9 +94,8 @@ pub(crate) fn targets(
         proven.push(within);
     }
 
-    for app in apps["apps"].as_array().into_iter().flatten() {
-        let (Some(pid), Some(executable)) = (app["pid"].as_u64(), app["executable"].as_str())
-        else {
+    for app in apps.rows() {
+        let Some(executable) = app.executable() else {
             continue;
         };
         let Some(within) = proven
@@ -105,11 +104,12 @@ pub(crate) fn targets(
         else {
             continue;
         };
-        if pid > 0 && !targets.processes.iter().any(|known| known.pid == pid) {
+        let pid = app.pid();
+        if !targets.processes.iter().any(|known| known.pid == pid) {
             targets.processes.push(Process {
                 pid,
                 executable: executable.to_owned(),
-                name: app["name"].as_str().unwrap_or("").to_owned(),
+                name: app.name().unwrap_or("").to_owned(),
                 protected: false,
                 within: Some(within.clone()),
             });
@@ -150,19 +150,19 @@ fn helper_process(process: &RunningFrom, within: &Within) -> Option<Process> {
 
 /// The app processes in `apps` (a list the helper gave) that still run
 /// from one of `folders`.
-pub(crate) fn still_running(apps: &Value, folders: &[String]) -> Vec<Value> {
-    apps["apps"]
-        .as_array()
-        .into_iter()
-        .flatten()
+pub(crate) fn still_running<'a>(
+    apps: &'a AppList,
+    folders: &[String],
+) -> Vec<&'a crate::client::AppRow> {
+    apps.rows()
+        .iter()
         .filter(|app| {
-            app["executable"].as_str().is_some_and(|executable| {
+            app.executable().is_some_and(|executable| {
                 folders
                     .iter()
                     .any(|folder| handoff::runs_from(executable, Path::new(folder)))
             })
         })
-        .map(|app| json!({"app": app["name"], "pid": app["pid"]}))
         .collect()
 }
 

@@ -89,7 +89,7 @@ impl Hands for Fake {
         &self.root
     }
 
-    async fn apps(&self) -> Result<Value> {
+    async fn apps(&self) -> Result<AppList> {
         let apps: Vec<Value> = self
             .apps
             .borrow()
@@ -98,7 +98,7 @@ impl Hands for Fake {
                 json!({"pid": pid, "name": name, "executable": executable})
             })
             .collect();
-        Ok(json!({"ok": true, "apps": apps}))
+        AppList::decode(json!({"ok": true, "apps": apps}))
     }
 
     async fn plan_states(&self, ids: &[Token]) -> Result<Vec<PlanState>> {
