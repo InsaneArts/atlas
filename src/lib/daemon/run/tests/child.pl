@@ -23,6 +23,7 @@ sub permit {
 }
 
 $SIG{TERM} = sub { report('term'); exit 0; };
+$SIG{TERM} = sub { report('term'); } if $mode eq 'stubborn';
 $SIG{TERM} = 'DEFAULT' if $mode eq 'term';
 report('ready') unless $mode eq 'unready';
 permit($leader, 'start');
@@ -31,7 +32,7 @@ if ($mode eq 'flood') {
     report('output');
     while (1) { print "y\n" x 32768; }
 }
-if ($mode eq 'group' || $mode eq 'pipe' || $mode eq 'term') {
+if ($mode eq 'group' || $mode eq 'pipe' || $mode eq 'term' || $mode eq 'stubborn') {
     my $child = fork();
     die $! unless defined $child;
     if (!$child) {

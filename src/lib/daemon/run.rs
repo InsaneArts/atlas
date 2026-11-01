@@ -335,6 +335,19 @@ pub enum Cancel {
     OnConsole,
 }
 
+#[derive(Clone, Copy)]
+enum StopCause {
+    Running,
+    Timeout,
+    Cancelled(Cancel),
+}
+
+impl StopCause {
+    fn abandoned(self) -> bool {
+        matches!(self, Self::Cancelled(_))
+    }
+}
+
 /// Run `argv`, sending its events to `events`, and return the final reply.
 /// When `cancel` completes (the client left, the daemon is stopping or the
 /// helper came on screen) or the client stops taking events, the group is
@@ -422,24 +435,41 @@ async fn run_at(
         }
     };
 
-    let mut abandoned = events
+    let mut cause = if events
         .try_send(json!({"event": "started", "pid": pid}))
-        .is_err();
+        .is_err()
+    {
+        StopCause::Cancelled(Cancel::Left)
+    } else {
+        StopCause::Running
+    };
     let deadline = tokio::time::sleep(timeout);
     tokio::pin!(deadline, cancel);
 
     let mut buffer = vec![0; FLUSH];
     let mut output = Output::new();
     let mut status = None;
-    // SIGTERM went to the group; the deadline now marks when SIGKILL follows.
+    // Termination was initiated; the deadline now marks when SIGKILL follows.
     let mut stopping = false;
-    let mut timed_out = false;
     let mut open = true;
     let mut unfinished = false;
     let mut linger = None;
-    let mut cancelled = None;
 
-    if abandoned {
+    // Observation                 Cause/precedence             Independent facts
+    // Deadline, before SIGTERM    Timeout                      Start termination
+    // Deadline, after SIGTERM     Unchanged                    Escalate to SIGKILL
+    // Started channel full/closed Cancelled(Left)              Start termination
+    // Output channel closed       Cancelled(Left)              Drain without forwarding
+    // Output channel full         Unchanged                    Hold/drop as truncated
+    // Explicit Cancel::Left       Cancelled(Left)              Only before abandonment
+    // Explicit Cancel::Stopping   Cancelled(Stopping)          Only before abandonment
+    // Explicit Cancel::OnConsole  Cancelled(OnConsole)         Only before abandonment
+    // Child wait success/failure  Unchanged                    Save result, start linger
+    // Pipe EOF/read failure       Unchanged                    Close; failure unfinished
+    // Linger expiry               Unchanged                    Close as unfinished
+    // Select arbitration is unchanged: cancellation/transport loss overrides a
+    // timeout, but after child exit it need not have initiated termination.
+    if cause.abandoned() {
         signal_group(group, Signal::SIGTERM);
         stopping = true;
         deadline.as_mut().reset(tokio::time::Instant::now() + GRACE);
@@ -453,18 +483,18 @@ async fn run_at(
                     open = false;
                     unfinished = true;
                 }
-                Ok(count) if !abandoned => {
+                Ok(count) if !cause.abandoned() => {
                     output.push(&buffer[..count]);
                     if output.full() && output.flush(&events).is_err() {
-                        abandoned = true;
+                        cause = StopCause::Cancelled(Cancel::Left);
                     }
                 }
                 Ok(_) => {}
             },
             () = tokio::time::sleep_until(output.due.unwrap_or_else(tokio::time::Instant::now)),
-                if output.due.is_some() && !abandoned => {
+                if output.due.is_some() && !cause.abandoned() => {
                 if output.flush(&events).is_err() {
-                    abandoned = true;
+                    cause = StopCause::Cancelled(Cancel::Left);
                 }
             }
             exited = child.wait(), if status.is_none() => {
@@ -477,14 +507,13 @@ async fn run_at(
                 } else {
                     signal_group(group, Signal::SIGTERM);
                     stopping = true;
-                    timed_out = true;
+                    cause = StopCause::Timeout;
                 }
 
                 deadline.as_mut().reset(tokio::time::Instant::now() + GRACE);
             }
-            cause = &mut cancel, if !abandoned => {
-                abandoned = true;
-                cancelled = Some(cause);
+            reason = &mut cancel, if !cause.abandoned() => {
+                cause = StopCause::Cancelled(reason);
             }
             () = tokio::time::sleep_until(linger.unwrap_or_else(tokio::time::Instant::now)),
                 if linger.is_some() && open => {
@@ -493,7 +522,7 @@ async fn run_at(
             }
         }
 
-        if abandoned && !stopping && status.is_none() {
+        if cause.abandoned() && !stopping && status.is_none() {
             signal_group(group, Signal::SIGTERM);
             stopping = true;
             deadline.as_mut().reset(tokio::time::Instant::now() + GRACE);
@@ -505,25 +534,34 @@ async fn run_at(
         end_group(group).await;
     }
 
-    match cancelled {
-        Some(Cancel::Stopping) => {
+    match cause {
+        StopCause::Cancelled(Cancel::Stopping) => {
             return interrupted(Code::Restart, "The helper stopped while the command ran");
         }
-        Some(Cancel::OnConsole) => {
+        StopCause::Cancelled(Cancel::OnConsole) => {
             return interrupted(
                 Code::OnConsole,
                 "The helper came on screen, so the command was stopped",
             );
         }
-        _ => {}
+        StopCause::Cancelled(Cancel::Left) => {
+            return interrupted(Code::Transport, "The client went away");
+        }
+        StopCause::Running | StopCause::Timeout => {}
     }
 
-    if abandoned || output.finish(&events).await.is_err() {
+    if output.finish(&events).await.is_err() {
         return interrupted(Code::Transport, "The client went away");
     }
 
     match status {
-        Some(Ok(status)) => ended(status, timed_out, started, output.truncated, unfinished),
+        Some(Ok(status)) => ended(
+            status,
+            matches!(cause, StopCause::Timeout),
+            started,
+            output.truncated,
+            unfinished,
+        ),
         _ => interrupted(
             Code::WaitFailed,
             "The command's exit status could not be read",
@@ -622,6 +660,200 @@ pub(super) mod tests {
         signal_group(Pid::from_raw(group as i32), None)
     }
 
+    async fn poll_pending(mut command: std::pin::Pin<&mut impl Future<Output = Value>>) {
+        std::future::poll_fn(|context| {
+            assert!(command.as_mut().poll(context).is_pending());
+            std::task::Poll::Ready(())
+        })
+        .await;
+    }
+
+    // Keep runtime time fixed while the real kernel delivers exit readiness.
+    // Observe reaping independently of pipe collection and final delivery.
+    async fn observe_exit(
+        mut command: std::pin::Pin<&mut impl Future<Output = Value>>,
+        leader: crate::process::Instance,
+    ) {
+        let until = Instant::now() + Duration::from_secs(20);
+        std::future::poll_fn(|context| {
+            assert!(Instant::now() < until, "leader was not reaped");
+            assert!(command.as_mut().poll(context).is_pending());
+            if crate::process::info(leader.pid)
+                .unwrap()
+                .is_none_or(|info| info.instance != leader)
+            {
+                return std::task::Poll::Ready(());
+            }
+            // Prevent paused time from auto-advancing before kernel exit.
+            context.waker().wake_by_ref();
+            std::task::Poll::Pending
+        })
+        .await;
+    }
+
+    #[tokio::test]
+    async fn each_stop_cause_preserves_its_reply_and_escalation() {
+        for (reason, timeout_first) in [
+            (None, true),
+            (Some(Cancel::Left), false),
+            (Some(Cancel::Stopping), false),
+            (Some(Cancel::OnConsole), false),
+            (Some(Cancel::Left), true),
+            (Some(Cancel::Stopping), true),
+            (Some(Cancel::OnConsole), true),
+        ] {
+            let mut child = Child::new();
+            let argv = child.argv("stubborn");
+            let (sender, mut receiver) = mpsc::channel(EVENTS);
+            let observer = sender.clone();
+            let (cancel, cancelled) = tokio::sync::oneshot::channel();
+            let command = run(&argv, Duration::from_secs(60), sender, async {
+                cancelled.await.unwrap()
+            });
+            tokio::pin!(command);
+            let ready = async {
+                let leader = child.started(&mut receiver, observer).await;
+                child.message("ready").await;
+                child.permit("start");
+                let descendant = child.message("descendant").await;
+                (leader, descendant)
+            };
+            let (leader, descendant) = tokio::select! {
+                reply = &mut command => panic!("command ended before readiness: {reply}"),
+                processes = ready => processes,
+            };
+            let mut cancel = Some(cancel);
+            if !timeout_first {
+                cancel.take().unwrap().send(reason.unwrap()).unwrap();
+            } else {
+                tokio::time::pause();
+                tokio::time::advance(Duration::from_secs(60)).await;
+                tokio::time::resume();
+            }
+            poll_pending(command.as_mut()).await;
+            tokio::time::pause();
+            {
+                let terms = async {
+                    child.message("term").await;
+                    child.message("term").await;
+                };
+                tokio::pin!(terms);
+                let until = Instant::now() + Duration::from_secs(20);
+                std::future::poll_fn(|context| {
+                    assert!(Instant::now() < until, "SIGTERM was not observed");
+                    let result = terms.as_mut().poll(context);
+                    // The kernel must deliver both reports before grace advances.
+                    if result.is_pending() {
+                        context.waker().wake_by_ref();
+                    }
+                    result
+                })
+                .await;
+            }
+            for process in [leader, descendant] {
+                let info = crate::process::info(process.pid).unwrap().unwrap();
+                assert_eq!(info.instance, process);
+                assert!(
+                    !info.zombie,
+                    "SIGTERM leaves this fixture alive for escalation"
+                );
+            }
+            if timeout_first && let Some(reason) = reason {
+                cancel.take().unwrap().send(reason).unwrap();
+                poll_pending(command.as_mut()).await;
+            }
+            tokio::time::advance(GRACE).await;
+            tokio::time::resume();
+            let reply = tokio::time::timeout(Duration::from_secs(20), &mut command)
+                .await
+                .unwrap();
+            match reason {
+                None => {
+                    assert_eq!(reply["ok"], true);
+                    assert_eq!(reply["exitCode"], Value::Null);
+                    assert_eq!(reply["signal"], "SIGKILL");
+                    assert_eq!(reply["timedOut"], true);
+                    assert_eq!(reply.get("outputUnfinished"), None);
+                }
+                Some(Cancel::Left) => {
+                    assert_eq!(reply, interrupted(Code::Transport, "The client went away"))
+                }
+                Some(Cancel::Stopping) => assert_eq!(
+                    reply,
+                    interrupted(Code::Restart, "The helper stopped while the command ran")
+                ),
+                Some(Cancel::OnConsole) => assert_eq!(
+                    reply,
+                    interrupted(
+                        Code::OnConsole,
+                        "The helper came on screen, so the command was stopped"
+                    )
+                ),
+            }
+            assert!(!group_alive(i64::from(leader.pid)));
+            assert!(
+                crate::process::info(leader.pid).unwrap().is_none(),
+                "leader reaped"
+            );
+            assert_eq!(
+                receiver.recv().await.unwrap(),
+                json!({"event": "started", "pid": leader.pid})
+            );
+            assert!(receiver.try_recv().is_err());
+        }
+    }
+
+    #[tokio::test]
+    async fn a_full_output_queue_is_not_a_cancelled_command() {
+        let mut child = Child::new();
+        let argv = child.argv("output");
+        let (sender, mut receiver) = mpsc::channel(1);
+        let observer = sender.clone();
+        let command = run(
+            &argv,
+            Duration::from_secs(60),
+            sender,
+            std::future::pending::<Cancel>(),
+        );
+        tokio::pin!(command);
+        let ready = async {
+            let leader = child.started(&mut receiver, observer).await;
+            child.message("ready").await;
+            child.permit("start");
+            child.permit("output");
+            child.message("output").await;
+            leader
+        };
+        let leader = tokio::select! {
+            reply = &mut command => panic!("command ended before readiness: {reply}"),
+            leader = ready => leader,
+        };
+        poll_pending(command.as_mut()).await;
+        tokio::time::pause();
+        tokio::time::advance(Duration::from_millis(50)).await;
+        poll_pending(command.as_mut()).await;
+        tokio::time::resume();
+        assert!(
+            crate::process::info(leader.pid)
+                .unwrap()
+                .is_some_and(|info| !info.zombie)
+        );
+        child.permit("exit");
+        child.message("exiting").await;
+        tokio::time::pause();
+        observe_exit(command.as_mut(), leader).await;
+        tokio::time::advance(FINISH).await;
+        let reply = command.await;
+        tokio::time::resume();
+        assert_eq!(reply["ok"], true);
+        assert_eq!(reply["exitCode"], 0);
+        assert_eq!(reply["timedOut"], false);
+        assert_eq!(reply["outputTruncated"], true);
+        assert!(crate::process::info(leader.pid).unwrap().is_none());
+        assert_eq!(receiver.recv().await.unwrap()["event"], "started");
+        assert!(receiver.try_recv().is_err());
+    }
+
     async fn time_out(child: &mut Child, mode: &str, capacity: usize) -> (Vec<Value>, Value) {
         let argv = child.argv(mode);
         let (sender, mut receiver) = mpsc::channel(capacity);
@@ -714,7 +946,7 @@ pub(super) mod tests {
     }
 
     #[tokio::test]
-    async fn something_left_running_does_not_hold_the_reply() {
+    async fn a_child_exit_does_not_imply_its_pipe_closed() {
         let mut child = Child::new();
         let argv = child.argv("pipe");
         let (sender, mut receiver) = mpsc::channel(EVENTS);
@@ -725,21 +957,28 @@ pub(super) mod tests {
             sender,
             std::future::pending::<Cancel>(),
         );
-        let control = async {
-            child.started(&mut receiver, observer).await;
+        tokio::pin!(command);
+        let ready = async {
+            let leader = child.started(&mut receiver, observer).await;
             child.message("ready").await;
             child.permit("start");
             let descendant = child.message("descendant").await;
-            child.permit("exit");
-            child.message("exiting").await;
-            descendant
+            (leader, descendant)
         };
-        let (reply, descendant) = tokio::time::timeout(Duration::from_secs(20), async {
-            tokio::join!(command, control)
-        })
-        .await
-        .unwrap();
+        let (leader, descendant) = tokio::select! {
+            reply = &mut command => panic!("command ended before readiness: {reply}"),
+            processes = ready => processes,
+        };
+        tokio::time::pause();
+        child.permit("exit");
+        observe_exit(command.as_mut(), leader).await;
+        child.message("exiting").await;
+        tokio::time::advance(LINGER).await;
+        let reply = command.await;
+        tokio::time::resume();
         assert_eq!(reply["exitCode"], 0);
+        assert_eq!(reply["timedOut"], false);
+        assert_eq!(reply.get("outputTruncated"), None);
         assert_eq!(
             reply["outputUnfinished"], true,
             "the descendant still holds the output pipe"
@@ -760,6 +999,114 @@ pub(super) mod tests {
                 .is_some_and(|info| !info.zombie),
             "closing the output pipe and exiting have separate permits"
         );
+        child.permit_descendant("exit");
+    }
+
+    #[tokio::test]
+    async fn cancellation_after_exit_leaves_the_descendant_running() {
+        for reason in [Cancel::Left, Cancel::Stopping, Cancel::OnConsole] {
+            let mut child = Child::new();
+            let argv = child.argv("pipe");
+            let (sender, mut receiver) = mpsc::channel(EVENTS);
+            let observer = sender.clone();
+            let (cancel, cancelled) = tokio::sync::oneshot::channel();
+            let command = run(&argv, Duration::from_secs(60), sender, async {
+                cancelled.await.unwrap()
+            });
+            tokio::pin!(command);
+            let ready = async {
+                let leader = child.started(&mut receiver, observer).await;
+                child.message("ready").await;
+                child.permit("start");
+                let descendant = child.message("descendant").await;
+                (leader, descendant)
+            };
+            let (leader, descendant) = tokio::select! {
+                reply = &mut command => panic!("command ended before readiness: {reply}"),
+                processes = ready => processes,
+            };
+            tokio::time::pause();
+            child.permit("exit");
+            observe_exit(command.as_mut(), leader).await;
+            child.message("exiting").await;
+            cancel.send(reason).unwrap();
+            poll_pending(command.as_mut()).await;
+            tokio::time::advance(LINGER).await;
+            let reply = command.await;
+            tokio::time::resume();
+            let expected = match reason {
+                Cancel::Left => interrupted(Code::Transport, "The client went away"),
+                Cancel::Stopping => {
+                    interrupted(Code::Restart, "The helper stopped while the command ran")
+                }
+                Cancel::OnConsole => interrupted(
+                    Code::OnConsole,
+                    "The helper came on screen, so the command was stopped",
+                ),
+            };
+            assert_eq!(reply, expected);
+            let info = crate::process::info(descendant.pid).unwrap().unwrap();
+            assert_eq!(info.instance, descendant);
+            assert!(!info.zombie);
+            // A signal handler would report `term` before accepting `close`.
+            child.permit_descendant("close");
+            child.message("closed").await;
+            child.permit_descendant("exit");
+        }
+    }
+
+    #[tokio::test]
+    async fn a_wait_failure_keeps_the_outcome_uncertain_and_the_descendant_alive() {
+        use nix::sys::wait::{WaitStatus, waitpid};
+
+        let mut child = Child::new();
+        let argv = child.argv("pipe");
+        let (sender, mut receiver) = mpsc::channel(EVENTS);
+        let observer = sender.clone();
+        let command = run(
+            &argv,
+            Duration::from_secs(60),
+            sender,
+            std::future::pending::<Cancel>(),
+        );
+        tokio::pin!(command);
+        let ready = async {
+            let leader = child.started(&mut receiver, observer).await;
+            child.message("ready").await;
+            child.permit("start");
+            let descendant = child.message("descendant").await;
+            (leader, descendant)
+        };
+        let (leader, descendant) = tokio::select! {
+            reply = &mut command => panic!("command ended before readiness: {reply}"),
+            processes = ready => processes,
+        };
+        // Reap the owned leader while supervision is unpolled, so its real
+        // wait returns ECHILD without a shipping fault hook.
+        child.permit("exit");
+        child.message("exiting").await;
+        let status = tokio::task::spawn_blocking(move || waitpid(Pid::from_raw(leader.pid), None))
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(status, WaitStatus::Exited(Pid::from_raw(leader.pid), 0));
+        tokio::time::pause();
+        poll_pending(command.as_mut()).await;
+        tokio::time::advance(LINGER).await;
+        let reply = command.await;
+        tokio::time::resume();
+        assert_eq!(
+            reply,
+            interrupted(
+                Code::WaitFailed,
+                "The command's exit status could not be read"
+            )
+        );
+        let info = crate::process::info(descendant.pid).unwrap().unwrap();
+        assert_eq!(info.instance, descendant);
+        assert!(!info.zombie);
+        child.permit_descendant("close");
+        child.message("closed").await;
         child.permit_descendant("exit");
     }
 
@@ -932,6 +1279,25 @@ pub(super) mod tests {
         assert_eq!(buffered.sent, 1);
     }
 
+    #[tokio::test]
+    async fn an_exhausted_event_budget_drops_output_without_reporting_a_disconnect() {
+        let (sender, mut receiver) = mpsc::channel(1);
+        let mut buffered = Output::new();
+        for _ in 0..MAX_EVENTS {
+            buffered.push(b"x");
+            assert!(buffered.flush(&sender).is_ok());
+            assert_eq!(output(&[receiver.recv().await.unwrap()]), "x");
+        }
+        buffered.push(b"still draining");
+        assert!(buffered.flush(&sender).is_ok());
+        assert!(buffered.truncated);
+        assert!(buffered.pending.is_empty());
+        assert_eq!(buffered.sent, MAX_EVENTS);
+        assert_eq!(buffered.forwarded, MAX_EVENTS);
+        assert!(buffered.finish(&sender).await.is_ok());
+        assert!(receiver.try_recv().is_err());
+    }
+
     /// The last output waits for a slow client instead of being dropped, and
     /// output that cannot be delivered is reported as truncated.
     #[tokio::test]
@@ -1058,6 +1424,9 @@ pub(super) mod tests {
         let (events, reply, _processes) =
             execute(&["/bin/sh", "-c", "head -c 17000000 /dev/zero"], 20000).await;
         assert_eq!(reply["outputTruncated"], true);
+        assert_eq!(reply["ok"], true);
+        assert_eq!(reply["exitCode"], 0);
+        assert_eq!(reply["timedOut"], false);
 
         let forwarded: usize = events
             .iter()
