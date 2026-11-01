@@ -553,15 +553,339 @@ pub async fn render(program: &Program, url: &str, path: &Path, dark: bool) -> Re
 #[cfg(test)]
 mod tests {
     use super::*;
+    use nix::{
+        errno::Errno,
+        sys::{
+            signal::{Signal, kill},
+            stat::Mode,
+            wait::{WaitPidFlag, WaitStatus, waitpid},
+        },
+        unistd::{Pid, mkfifo},
+    };
+    use std::{
+        cell::Cell,
+        io::Write,
+        os::unix::fs::{OpenOptionsExt, PermissionsExt},
+    };
 
-    #[test]
-    fn the_url_arrives_on_stdin_never_in_argv() {
-        let main = include_str!("../../app/Sources/AtlasApp/AtlasApp.swift");
+    struct Recording {
+        directory: tempfile::TempDir,
+        program: Program,
+        owned: Cell<Option<crate::process::Instance>>,
+    }
+
+    impl Recording {
+        fn new(body: &str) -> Self {
+            let directory = tempfile::tempdir().unwrap();
+            let executable = directory.path().join("recording child");
+            let config = directory.path().join("atlas config.toml");
+            fs::write(&config, b"").unwrap();
+            fs::write(
+                &executable,
+                format!(
+                    r#"#!/bin/sh
+set -eu
+umask 077
+directory=${{0%/*}}
+for arg do printf '%s\0' "$arg"; done > "$directory/argv"
+printf '%s' "$ATLAS_CLI" > "$directory/cli"
+printf '%s' "$ATLAS_CONFIG" > "$directory/config"
+printf '%s' "${{XPC_SERVICE_NAME+x}}" > "$directory/xpc"
+printf '%s' "$$" > "$directory/pid"
+: > "$directory/started"
+{body}
+"#
+                ),
+            )
+            .unwrap();
+            fs::set_permissions(&executable, fs::Permissions::from_mode(0o700)).unwrap();
+            for name in ["release", "hold"] {
+                mkfifo(&directory.path().join(name), Mode::S_IRUSR | Mode::S_IWUSR).unwrap();
+            }
+            Self {
+                directory,
+                program: Program {
+                    executable,
+                    config: fs::canonicalize(config).unwrap(),
+                },
+                owned: Cell::new(None),
+            }
+        }
+
+        fn reader() -> Self {
+            Self::new(
+                r#"IFS= read -r url
+printf '%s\n' "$url" > "$directory/url"
+: > "$directory/ready"
+while IFS= read -r line; do printf '%s\n' "$line"; done > "$directory/rest"
+: > "$directory/eof""#,
+            )
+        }
+
+        async fn wait_for(&self, name: &str) {
+            tokio::time::timeout(Duration::from_secs(10), async {
+                while !self.directory.path().join(name).exists() {
+                    // Poll a child's explicit signal, never infer readiness from a delay.
+                    tokio::time::sleep(Duration::from_millis(5)).await;
+                }
+            })
+            .await
+            .expect("the recording child must signal within the watchdog");
+        }
+
+        async fn started(&self) -> crate::process::Instance {
+            self.wait_for("started").await;
+            let pid = fs::read_to_string(self.directory.path().join("pid"))
+                .unwrap()
+                .parse()
+                .unwrap();
+            let info = crate::process::info(pid).unwrap().unwrap();
+            assert!(info.owned_by(nix::unistd::getuid().as_raw()));
+            assert_eq!(info.ppid, std::process::id() as i32);
+            self.owned.set(Some(info.instance));
+            fs::write(
+                self.directory.path().join("identity.json"),
+                serde_json::to_vec(&info.instance).unwrap(),
+            )
+            .unwrap();
+            info.instance
+        }
+
+        async fn release(&self) {
+            tokio::time::timeout(Duration::from_secs(10), async {
+                loop {
+                    match fs::OpenOptions::new()
+                        .write(true)
+                        .custom_flags(nix::fcntl::OFlag::O_NONBLOCK.bits())
+                        .open(self.directory.path().join("release"))
+                    {
+                        Ok(mut writer) => {
+                            writer.write_all(b"close\n").unwrap();
+                            break;
+                        }
+                        Err(error) if error.raw_os_error() == Some(Errno::ENXIO as i32) => {
+                            tokio::time::sleep(Duration::from_millis(5)).await;
+                        }
+                        Err(error) => panic!("cannot release the recording child: {error}"),
+                    }
+                }
+            })
+            .await
+            .expect("the child must open its release pipe within the watchdog");
+        }
+
+        async fn reaped(&self) {
+            let instance = self.owned.get().unwrap();
+            tokio::time::timeout(Duration::from_secs(10), async {
+                loop {
+                    match waitpid(Pid::from_raw(instance.pid), Some(WaitPidFlag::WNOHANG)) {
+                        Ok(WaitStatus::StillAlive) => {
+                            tokio::time::sleep(Duration::from_millis(5)).await;
+                        }
+                        Ok(WaitStatus::Exited(..) | WaitStatus::Signaled(..)) => break,
+                        // Tokio may reap its dropped child before this kernel wait.
+                        Err(Errno::ECHILD) => {
+                            assert!(
+                                crate::process::info(instance.pid)
+                                    .unwrap()
+                                    .is_none_or(|info| info.instance != instance)
+                            );
+                            break;
+                        }
+                        status => panic!("unexpected child wait: {status:?}"),
+                    }
+                }
+            })
+            .await
+            .expect("the owned child must be reaped within the watchdog");
+            self.owned.set(None);
+        }
+    }
+
+    impl Drop for Recording {
+        fn drop(&mut self) {
+            let Some(instance) = self.owned.get() else {
+                return;
+            };
+            // A failed assertion must not leave a stand-in running or signal a reused PID.
+            if crate::process::info(instance.pid)
+                .ok()
+                .flatten()
+                .is_some_and(|info| {
+                    info.instance == instance
+                        && info.ppid == std::process::id() as i32
+                        && info.owned_by(nix::unistd::getuid().as_raw())
+                })
+                && kill(Pid::from_raw(instance.pid), Signal::SIGKILL).is_ok()
+            {
+                // Tokio may already have reaped it; Drop cannot report that race.
+                let _ = waitpid(Pid::from_raw(instance.pid), None);
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn the_launcher_sends_its_private_url_only_through_stdin() {
+        let test = "menubar::tests::the_launcher_sends_its_private_url_only_through_stdin";
+        if std::env::var("ATLAS_LAUNCHER_TEST").as_deref() != Ok(test) {
+            let mut command = Command::from(crate::test_support::rerun(test));
+            let output = tokio::time::timeout(
+                Duration::from_secs(30),
+                command
+                    .env("ATLAS_LAUNCHER_TEST", test)
+                    .env("XPC_SERVICE_NAME", LOGIN_JOB)
+                    .env("ATLAS_CLI", "inherited-cli")
+                    .env("ATLAS_CONFIG", "inherited-config")
+                    .kill_on_drop(true)
+                    .output(),
+            )
+            .await
+            .unwrap()
+            .unwrap();
+            assert!(output.status.success(), "the isolated launcher test failed");
+            assert!(String::from_utf8_lossy(&output.stdout).contains("running 1 test"));
+            return;
+        }
+        assert_eq!(std::env::var("XPC_SERVICE_NAME").unwrap(), LOGIN_JOB);
+        assert_eq!(std::env::var("ATLAS_CLI").unwrap(), "inherited-cli");
+        assert_eq!(std::env::var("ATLAS_CONFIG").unwrap(), "inherited-config");
+        let recording = Recording::reader();
+        let url = format!("http://127.0.0.1:12345/{:032x}", rand::random::<u128>());
+        let args = ["--render", "a path with spaces.png", "--dark"];
+        let (mut child, stdin) = spawn(&recording.program, &url, &args).await.unwrap();
+        let instance = recording.started().await;
+        assert_eq!(child.id(), Some(instance.pid as u32));
+        recording.wait_for("ready").await;
+
+        let read = |name| fs::read(recording.directory.path().join(name)).unwrap();
         assert!(
-            main.contains("guard let line = readLine(), let service = ViewerClient(line)"),
-            "the URL arrives on stdin"
+            read("argv") == format!("{}\0", args.join("\0")).as_bytes(),
+            "the launcher must preserve its exact arguments"
         );
-        assert!(!main.contains("ViewerClient(arguments"), "never from argv");
+        assert!(
+            read("url") == format!("{url}\n").as_bytes(),
+            "the URL line must arrive while stdin stays open"
+        );
+        assert!(
+            read("cli")
+                == fs::canonicalize(std::env::current_exe().unwrap())
+                    .unwrap()
+                    .as_os_str()
+                    .as_encoded_bytes()
+        );
+        assert!(read("config") == recording.program.config.as_os_str().as_encoded_bytes());
+        assert!(read("xpc").is_empty());
+        assert!(!recording.directory.path().join("eof").exists());
+        assert!(child.try_wait().unwrap().is_none());
+        drop(stdin);
+        assert!(
+            tokio::time::timeout(Duration::from_secs(10), child.wait())
+                .await
+                .unwrap()
+                .unwrap()
+                .success()
+        );
+        recording.wait_for("eof").await;
+        recording.reaped().await;
+    }
+
+    #[tokio::test]
+    async fn closing_the_launcher_pipe_lets_the_child_exit() {
+        tokio::time::timeout(Duration::from_secs(30), async {
+            let recording = Recording::reader();
+            let (mut child, mut stdin) =
+                spawn(&recording.program, "private-url", &[]).await.unwrap();
+            recording.started().await;
+            recording.wait_for("ready").await;
+            assert!(
+                fs::read(recording.directory.path().join("argv"))
+                    .unwrap()
+                    .is_empty()
+            );
+            stdin
+                .write_all(Line::Viewer.text().as_bytes())
+                .await
+                .unwrap();
+            drop(stdin);
+            recording.wait_for("eof").await;
+            assert!(child.wait().await.unwrap().success());
+            assert_eq!(
+                fs::read(recording.directory.path().join("rest")).unwrap(),
+                b"viewer\n"
+            );
+            recording.reaped().await;
+        })
+        .await
+        .expect("the launcher pipe test must finish within the watchdog");
+    }
+
+    #[tokio::test]
+    async fn a_failed_launch_leaves_no_owned_child() {
+        tokio::time::timeout(Duration::from_secs(30), async {
+            for ending in ["exit 23", "IFS= read -r held < \"$directory/hold\""] {
+                let recording = Recording::new(&format!(
+                    "IFS= read -r release < \"$directory/release\"\nexec 0<&-\n{ending}"
+                ));
+                // Exceed pipe capacity so launch cannot finish before the child closes stdin.
+                let url = "private-launch-canary".repeat(65536);
+                let launching = spawn(&recording.program, &url, &[]);
+                tokio::pin!(launching);
+                tokio::select! {
+                    _ = &mut launching => panic!("launch finished before the child closed stdin"),
+                    _ = recording.started() => {}
+                }
+                recording.release().await;
+                let result = tokio::time::timeout(Duration::from_secs(10), launching)
+                    .await
+                    .unwrap();
+                assert!(result.is_err(), "a closed pipe must fail launch");
+                let error = result.err().unwrap();
+                assert_eq!(error.code, "io");
+                assert!(!error.to_string().contains("private-launch-canary"));
+                assert!(
+                    !serde_json::to_string(&error)
+                        .unwrap()
+                        .contains("private-launch-canary")
+                );
+                recording.reaped().await;
+            }
+        })
+        .await
+        .expect("the failed launch test must finish within the watchdog");
+    }
+
+    #[tokio::test]
+    async fn dropping_the_launcher_child_ends_only_its_own_process() {
+        tokio::time::timeout(Duration::from_secs(30), async {
+            let recording = Recording::reader();
+            let other = Recording::reader();
+            let (child, stdin) = spawn(&recording.program, "private-url", &[]).await.unwrap();
+            recording.started().await;
+            recording.wait_for("ready").await;
+            let (mut unrelated, unrelated_stdin) = spawn(&other.program, "other-private-url", &[])
+                .await
+                .unwrap();
+            let identity = other.started().await;
+            other.wait_for("ready").await;
+
+            drop(child);
+            recording.reaped().await;
+            assert_eq!(
+                crate::process::info(identity.pid)
+                    .unwrap()
+                    .unwrap()
+                    .instance,
+                identity
+            );
+            assert!(unrelated.try_wait().unwrap().is_none());
+            assert!(!recording.directory.path().join("eof").exists());
+            drop(stdin);
+            drop(unrelated_stdin);
+            assert!(unrelated.wait().await.unwrap().success());
+            other.reaped().await;
+        })
+        .await
+        .expect("the launcher child drop test must finish within the watchdog");
     }
 
     #[test]
