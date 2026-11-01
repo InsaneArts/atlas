@@ -270,9 +270,11 @@ async fn carry_out(
         Command::PermissionsInfo => Ok(atlas::daemon::facts::permissions_now()),
         Command::ElementsInfo { pid } => elements_info(pid),
         Command::HelperServe { .. } => {
+            // Main returns from serve_blocking before it can call carry_out.
             unreachable!("main serves the helper daemon on its own thread")
         }
         Command::JobLaunch { .. } => {
+            // Main returns from launch_job before creating the async runtime.
             unreachable!("main becomes a background job before anything else")
         }
         Command::InputService {

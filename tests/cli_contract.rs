@@ -131,6 +131,29 @@ fn usage_names_the_parsed_command_without_reading_command_shaped_settings() {
 }
 
 #[test]
+fn the_helper_mode_refuses_an_invalid_account_before_opening_its_socket() {
+    let fixture = Fixture::new();
+    let output = fixture.missing(&[
+        "helper-serve",
+        "--uid",
+        "0",
+        "--controller-uid",
+        "0",
+        "--socket",
+        "never-opened.sock",
+    ]);
+    assert_eq!(output.status.code(), Some(1));
+    assert!(output.stdout.is_empty());
+    let error: Value = serde_json::from_slice(&output.stderr).unwrap();
+    assert_eq!(error["code"], "identity");
+    assert_eq!(
+        error["error"],
+        "Target must be a distinct helper account with UID >= 501"
+    );
+    assert_eq!(error["uncertain"], false);
+}
+
+#[test]
 fn only_atlas_json_selects_json_usage_errors() {
     let fixture = Fixture::new();
     for command in [vec!["run"], vec!["environment", "run"]] {

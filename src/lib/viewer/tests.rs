@@ -118,7 +118,10 @@ async fn read_json(viewer: &Arc<Viewer>, route: &str) -> (u16, Value) {
 
 /// `body` posted to `route` of `viewer` as its app posts it.
 async fn posted(viewer: &Arc<Viewer>, route: &str, body: &Value) -> (u16, Value) {
-    let body = body.to_string();
+    posted_raw(viewer, route, &body.to_string()).await
+}
+
+async fn posted_raw(viewer: &Arc<Viewer>, route: &str, body: &str) -> (u16, Value) {
     let request = Request::builder()
         .method(Method::POST)
         .uri(format!("{}{route}", viewer.prefix))
@@ -126,7 +129,7 @@ async fn posted(viewer: &Arc<Viewer>, route: &str, body: &Value) -> (u16, Value)
         .header("origin", format!("http://{}", viewer.authority))
         .header("content-type", "application/json")
         .header("content-length", body.len())
-        .body(Body::from(body))
+        .body(Body::from(body.to_owned()))
         .unwrap();
     let reply = respond(viewer.clone(), request).await;
     let status = reply.status().as_u16();
@@ -244,7 +247,7 @@ async fn the_person_stops_and_resumes_agents_through_the_viewer() {
 }
 
 #[tokio::test]
-async fn hold_requires_a_boolean_before_changing_the_stop() {
+async fn repeated_stop_fields_never_change_the_stop() {
     let dir = tempfile::tempdir().unwrap();
     let viewer = http::configured(client(dir.path()), "127.0.0.1:0".into(), None);
     let client = viewer.client();
@@ -263,29 +266,72 @@ async fn hold_requires_a_boolean_before_changing_the_stop() {
             .unwrap();
         std::fs::write(&marker, b"stop").unwrap();
 
-        for body in [
-            json!({}),
-            json!({"on": null}),
-            json!({"on": "false"}),
-            json!({"on": 0}),
-            json!({"on": []}),
-            json!({"on": {}}),
-        ] {
-            let (status, reply) = posted(&viewer, "control/hold", &body).await;
-            assert_eq!(status, 400, "{body}: {reply}");
-            assert_eq!(reply["code"], "input");
-            assert!(client.controller.stop_noted(), "{body}");
-            assert_eq!(std::fs::read(&marker).unwrap(), b"stop", "{body}");
+        for stopped in [true, false] {
+            let body = format!(r#"{{"on":{stopped},"other":1,"other":2}}"#);
+            let (status, reply) = posted_raw(&viewer, "control/hold", &body).await;
+            assert_eq!(status, 200, "{reply}");
+            assert_eq!(reply["held"], stopped);
+            if stopped {
+                std::fs::write(&marker, b"stop").unwrap();
+            }
+            for body in [
+                r#"{"on":true,"on":false}"#,
+                r#"{"on":false,"on":true}"#,
+                r#"{"on":true,"on":true}"#,
+                r#"{"on":false,"on":false}"#,
+                r#"{"on":true,"\u006fn":false}"#,
+                r#"{"\u006f\u006e":false,"on":true}"#,
+                r#"{"on":null,"on":true}"#,
+                r#"{"on":false,"on":null}"#,
+                r#"{}"#,
+                r#"{"on":null}"#,
+                r#"{"on":"false"}"#,
+                r#"{"on":0}"#,
+                r#"{"on":[]}"#,
+                r#"{"on":{}}"#,
+            ] {
+                let (status, reply) = posted_raw(&viewer, "control/hold", body).await;
+                assert_eq!(status, 400, "{body}: {reply}");
+                assert_eq!(reply["code"], "input");
+                assert_eq!(reply["error"], "Hold requires a boolean on");
+                assert_eq!(reply["uncertain"], false);
+                assert_eq!(client.controller.stop_noted(), stopped, "{body}");
+                if stopped {
+                    assert_eq!(std::fs::read(&marker).unwrap(), b"stop", "{body}");
+                } else {
+                    assert!(!marker.exists(), "{body}");
+                }
+            }
         }
-
-        let (status, reply) = posted(&viewer, "control/hold", &json!({"on": false})).await;
-        assert_eq!(status, 200, "{reply}");
-        assert_eq!(reply["held"], false);
-        assert!(!client.controller.stop_noted());
-        assert!(!marker.exists());
     })
     .await
     .expect("hold requests finish within five seconds");
+}
+
+#[tokio::test]
+async fn stop_validation_preserves_other_body_errors_and_routes() {
+    let dir = tempfile::tempdir().unwrap();
+    let viewer = http::configured(client(dir.path()), "127.0.0.1:0".into(), None);
+    for body in ["null", "[]", r#"{"on":true"#] {
+        let (status, reply) = posted_raw(&viewer, "control/hold", body).await;
+        assert_eq!(status, 400);
+        assert_eq!(
+            reply,
+            json!({"ok":false,"error":"Request must be a JSON object"})
+        );
+        assert!(!viewer.client().controller.stop_noted());
+    }
+
+    let (lines, mut received) = tokio::sync::mpsc::unbounded_channel();
+    *viewer.app.lock().unwrap() = Some(lines);
+    let (status, reply) = posted_raw(&viewer, "app/viewer", r#"{"on":true,"on":false}"#).await;
+    assert_eq!(status, 200);
+    assert_eq!(reply, json!({"ok":true,"viewer":"open"}));
+    assert!(matches!(
+        received.try_recv().unwrap(),
+        crate::menubar::Line::Viewer
+    ));
+    assert!(!viewer.client().controller.stop_noted());
 }
 
 #[tokio::test]

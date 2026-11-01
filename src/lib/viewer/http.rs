@@ -400,7 +400,8 @@ pub(super) async fn respond(viewer: Arc<Viewer>, request: Request) -> Response {
         }
     };
 
-    let body: Value = match serde_json::from_slice(&body) {
+    let raw_body = body;
+    let body: Value = match serde_json::from_slice(&raw_body) {
         Ok(value @ Value::Object(_)) => value,
         _ => {
             return json_response(
@@ -427,10 +428,17 @@ pub(super) async fn respond(viewer: Arc<Viewer>, request: Request) -> Response {
         Change::Recover => viewer.recover().await,
         Change::Cleanup => viewer.clean_up(&body).await,
         // Control a viewer holds is left alone either way.
-        Change::Hold => match body["on"].as_bool() {
-            Some(on) => viewer.client().hold(on).await,
-            None => Err(Error::new(Code::Input, "Hold requires a boolean on")),
-        },
+        Change::Hold => {
+            #[derive(serde::Deserialize)]
+            struct Hold {
+                on: bool,
+            }
+
+            match serde_json::from_slice(&raw_body) {
+                Ok(Hold { on }) => viewer.client().hold(on).await,
+                Err(_) => Err(Error::new(Code::Input, "Hold requires a boolean on")),
+            }
+        }
         Change::Control(control) => viewer.control(control, &body).await,
     };
 

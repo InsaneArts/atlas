@@ -517,7 +517,10 @@ impl Service {
         // A stop is the person's: it works whatever the session or
         // permission, and resuming only lets agents ask again.
         if operation == Operation::Hold {
-            let reply = hold(&self.gate, &self.stop_marker, request, phase)?;
+            let on = request["on"]
+                .as_bool()
+                .ok_or_else(|| Error::new(Code::Input, "Hold requires a boolean on"))?;
+            let reply = hold(&self.gate, &self.stop_marker, on, phase)?;
             self.cleanup().await?;
             return Ok(reply);
         }
@@ -694,12 +697,9 @@ impl Service {
 fn hold(
     gate: &Gate,
     stop_marker: &Path,
-    request: &Value,
+    on: bool,
     phase: &watch::Sender<ConnectionPhase>,
 ) -> Result<Value> {
-    let on = request["on"]
-        .as_bool()
-        .ok_or_else(|| Error::new(Code::Input, "Hold requires a boolean on"))?;
     phase.send_replace(ConnectionPhase::Mutation("hold"));
     let kept = if on {
         use std::os::unix::fs::OpenOptionsExt;
@@ -1114,7 +1114,19 @@ fn admitted(stream: &UnixStream, controller_uid: u32) -> bool {
 /// One JSON request of at most `MAX_REQUEST` bytes.
 async fn read_request<R: AsyncRead + Unpin>(stream: &mut R) -> Result<Value> {
     let line = super::endpoint::read_line(stream, MAX_REQUEST).await?;
-    Ok(serde_json::from_slice(&line)?)
+    let request = serde_json::from_slice(&line)?;
+    if Operation::of(&request) == Operation::Hold {
+        // Value merges repeated keys; validate the original bytes before effects.
+        #[derive(serde::Deserialize)]
+        struct Hold {
+            #[serde(rename = "on")]
+            _on: bool,
+        }
+
+        serde_json::from_slice::<Hold>(&line)
+            .map_err(|_| Error::new(Code::Input, "Hold requires a boolean on"))?;
+    }
+    Ok(request)
 }
 
 async fn handle(
@@ -1232,8 +1244,6 @@ mod tests {
         let gate = Arc::new(Gate::default());
         let directory = tempfile::tempdir().unwrap();
         let marker = directory.path().join("stopped");
-        let checked = marker.clone();
-        let holding = gate.clone();
         let (mut client, mut server) = UnixStream::pair().unwrap();
         client
             .write_all(b"{\"op\":\"hold\",\"on\":null}\n")
@@ -1243,8 +1253,8 @@ mod tests {
         let (phase, observed) = super::watch::channel(super::ConnectionPhase::Refusal);
         let mut tasks = super::JoinSet::new();
         let task = tasks.spawn(async move {
-            let request = read_request(&mut server).await?;
-            let refusal = hold(&holding, &checked, &request, &phase).unwrap_err();
+            let _phase = phase;
+            let refusal = read_request(&mut server).await.unwrap_err();
             assert_eq!(refusal.code, Code::Input);
             assert_eq!(refusal.error, "Hold requires a boolean on");
             assert!(!refusal.uncertain);
@@ -1459,43 +1469,66 @@ mod tests {
         }
     }
 
-    #[test]
-    fn hold_requires_a_boolean_before_changing_the_stop() {
+    #[tokio::test]
+    async fn repeated_stop_fields_never_change_the_stop() {
         let dir = tempfile::tempdir().unwrap();
         let marker = dir.path().join("stopped");
         let gate = Gate::default();
         let (phase, observed) = super::watch::channel(super::ConnectionPhase::Refusal);
 
-        let reply = hold(&gate, &marker, &json!({"on": true}), &phase).unwrap();
-        assert_eq!(reply["held"], true);
-        assert!(gate.held().unwrap());
-        assert!(marker.exists());
-        std::fs::write(&marker, b"stop").unwrap();
-
-        for request in [
-            json!({}),
-            json!({"on": null}),
-            json!({"on": "false"}),
-            json!({"on": 0}),
-            json!({"on": []}),
-            json!({"on": {}}),
-        ] {
-            phase.send_replace(super::ConnectionPhase::Refusal);
-            let error = hold(&gate, &marker, &request, &phase).unwrap_err();
-            assert_eq!(error.code, Code::Input, "{request}");
-            assert!(!error.uncertain, "{request}");
-            assert!(matches!(
-                *observed.borrow(),
-                super::ConnectionPhase::Refusal
-            ));
-            assert!(gate.held().unwrap(), "{request}");
-            assert_eq!(std::fs::read(&marker).unwrap(), b"stop", "{request}");
+        for stopped in [true, false] {
+            let reply = hold(&gate, &marker, stopped, &phase).unwrap();
+            assert_eq!(reply, json!({"ok": true, "held": stopped, "kept": true}));
+            if stopped {
+                std::fs::write(&marker, b"stop").unwrap();
+            }
+            for fields in [
+                r#", "on": true, "on": false"#,
+                r#", "on": false, "on": true"#,
+                r#", "on": true, "on": true"#,
+                r#", "on": false, "on": false"#,
+                r#", "on": true, "\u006fn": false"#,
+                r#", "\u006f\u006e": false, "on": true"#,
+                r#", "on": null, "on": true"#,
+                r#", "on": false, "on": null"#,
+                "",
+                r#", "on": null"#,
+                r#", "on": "false""#,
+                r#", "on": 0"#,
+                r#", "on": []"#,
+                r#", "on": {}"#,
+            ] {
+                let body = format!("{{\"op\":\"hold\"{fields}}}\n");
+                phase.send_replace(super::ConnectionPhase::Refusal);
+                let result = match deliver(body.clone().into_bytes(), 64).await {
+                    Ok(request) => hold(&gate, &marker, request["on"].as_bool().unwrap(), &phase),
+                    Err(error) => Err(error),
+                };
+                let error = result.unwrap_err();
+                assert_eq!(error.code, Code::Input, "{body}");
+                assert_eq!(error.error, "Hold requires a boolean on");
+                assert!(!error.uncertain, "{body}");
+                assert!(matches!(
+                    *observed.borrow(),
+                    super::ConnectionPhase::Refusal
+                ));
+                assert_eq!(gate.held().unwrap(), stopped, "{body}");
+                if stopped {
+                    assert_eq!(std::fs::read(&marker).unwrap(), b"stop", "{body}");
+                } else {
+                    assert!(!marker.exists(), "{body}");
+                }
+            }
         }
 
-        let reply = hold(&gate, &marker, &json!({"on": false}), &phase).unwrap();
-        assert_eq!(reply["held"], false);
-        assert!(!gate.held().unwrap());
-        assert!(!marker.exists());
+        for on in [true, false] {
+            let body = format!("{{\"op\":\"hold\",\"on\":{on},\"other\":1,\"other\":2}}\n");
+            let request = deliver(body.into_bytes(), 64).await.unwrap();
+            let reply = hold(&gate, &marker, request["on"].as_bool().unwrap(), &phase).unwrap();
+            assert_eq!(reply, json!({"ok": true, "held": on, "kept": true}));
+            assert_eq!(gate.held().unwrap(), on);
+            assert_eq!(marker.exists(), on);
+        }
     }
 
     /// What a stand-in engine does at one action.
@@ -1988,6 +2021,18 @@ mod tests {
             let error = deliver(padded(MAX_REQUEST + 1), chunk).await.unwrap_err();
             assert_eq!(error.code, "protocol");
         }
+    }
+
+    #[tokio::test]
+    async fn the_other_routes_still_ignore_stop_fields() {
+        let request = deliver(
+            b"{\"op\":\"hello\",\"on\":true,\"on\":false}\n".to_vec(),
+            64,
+        )
+        .await
+        .unwrap();
+        assert_eq!(request, json!({"op":"hello","on":false}));
+        assert_eq!(deliver(b"[]\n".to_vec(), 64).await.unwrap(), json!([]));
     }
 
     #[tokio::test]

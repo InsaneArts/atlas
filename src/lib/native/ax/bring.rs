@@ -995,15 +995,15 @@ fn settle<A: Backend>(
         }
         // A refused destination never authorizes input. Keep its actual reason
         // if waiting for a focus request to take effect exhausts the deadline.
-        last_refusal = Some(error);
         target.reader.ask.pause(
             Duration::from_millis(10)
                 .min(deadline.saturating_duration_since(target.reader.ask.now())),
         );
         if target.reader.ask.now() >= deadline || Instant::now() >= deadline {
             guard()?;
-            return Err(last_refusal.unwrap());
+            return Err(error);
         }
+        last_refusal = Some(error);
     }
 }
 

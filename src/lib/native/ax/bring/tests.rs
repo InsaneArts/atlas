@@ -1846,6 +1846,82 @@ fn a_point_three_pixels_outside_the_named_document_refuses_before_readiness_or_w
 }
 
 #[test]
+fn the_actual_focus_refusal_survives_the_final_pause() {
+    for (cancel, later) in [
+        (false, None),
+        (true, None),
+        (false, Some(Code::FocusChanged)),
+        (false, Some(Code::Native)),
+    ] {
+        let mut fake = Fake::new();
+        let deadline = fake.now.get() + Duration::from_millis(450);
+        let expect = named();
+        let target = prepare(
+            &mut fake,
+            &expect,
+            Need::Keys,
+            deadline,
+            &|| Ok(()),
+            &mut |_| false,
+        )
+        .unwrap();
+        let now = target.reader.ask.now.clone();
+        let writes = target.reader.ask.writes.clone();
+        let guard = || {
+            if cancel && now.get() >= deadline {
+                Err(Error::new(Code::Cancelled, "Control was released"))
+            } else {
+                Ok(())
+            }
+        };
+        let mut reads = 0;
+        let error = settle(target, &expect, deadline, &guard, |_, _| {
+            reads += 1;
+            if reads == 1 {
+                now.set(deadline - Duration::from_millis(if later.is_some() { 11 } else { 1 }));
+                Err(refused(
+                    "window",
+                    "Window 43 has keyboard focus, not window 42",
+                ))
+            } else {
+                assert_eq!(reads, 2);
+                match later.unwrap() {
+                    Code::Native => {
+                        Err(Error::new(Code::Native, "The native write failed").uncertain())
+                    }
+                    _ => {
+                        now.set(deadline);
+                        Err(Error::new(Code::FocusChanged, "The focus read was slow")
+                            .with("unread", serde_json::json!("slow")))
+                    }
+                }
+            }
+        })
+        .unwrap_err();
+        assert_eq!(fake.writes, writes, "settling never repeats a native write");
+        assert_eq!(reads, if later.is_some() { 2 } else { 1 });
+        assert_eq!(fake.pauses.len(), 1);
+        if cancel {
+            assert_eq!(error.code, Code::Cancelled);
+            assert_eq!(error.error, "Control was released");
+        } else if later == Some(Code::Native) {
+            assert_eq!(error.code, Code::Native);
+            assert_eq!(error.error, "The native write failed");
+            assert!(error.uncertain);
+        } else {
+            assert_eq!(error.code, Code::FocusChanged);
+            assert_eq!(
+                error.error,
+                "Window 43 has keyboard focus, not window 42, so this action and the rest were not sent"
+            );
+            assert_eq!(error.details["reason"], "window");
+            assert!(!error.details.contains_key("unread"));
+            assert!(!error.uncertain);
+        }
+    }
+}
+
+#[test]
 fn a_window_refusal_is_preserved_when_the_next_admission_scan_runs_out_of_time() {
     let mut fake = Fake::new();
     let deadline = fake.now.get() + Duration::from_millis(450);

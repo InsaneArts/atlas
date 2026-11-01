@@ -21,37 +21,47 @@ use serde_json::Value;
 /// the app's own window, or the named one, is the top one.
 pub async fn act(client: &Client, expected: Option<&Expected>, actions: &Value) -> Result<Value> {
     let remembered = Expected::remembered(client, expected, actions)?;
-    if expected.is_none() && remembered.is_none() {
-        return client.input(actions, None, None).await;
-    }
+    let inferred;
+    let expected = match (&remembered, expected) {
+        (None, None) => return client.input(actions, None, None).await,
+        (Some((window, _)), _) => {
+            inferred = Expected {
+                place: Place::Window {
+                    number: window.number,
+                    app: None,
+                },
+                field: None,
+            };
+            &inferred
+        }
+        (None, Some(expected)) => expected,
+    };
     let ownership = client.controller.acquire_beside_commands()?;
     let verified = client.verify().await?;
-    let expect = if let Some((window, epoch)) = remembered {
-        if epoch != recorded_epoch(&verified.session().epoch) {
-            return Err(Error::new(
-                Code::SessionChanged,
-                "Helper changed; look again",
-            ));
-        }
-        let expect = Expected::new(None, Some(window.number), None)?
-            .unwrap()
-            .resolve(client, &verified)
-            .await
-            .map_err(|mut error| {
-                if matches!(error.code, Code::Elements | Code::Usage) {
-                    error.code = Code::Windows;
-                }
-                error
-            })?;
-        if expect.instance().is_none_or(|instance| {
+    if let Some((_, epoch)) = &remembered
+        && *epoch != recorded_epoch(&verified.session().epoch)
+    {
+        return Err(Error::new(
+            Code::SessionChanged,
+            "Helper changed; look again",
+        ));
+    }
+    let expect = expected
+        .resolve(client, &verified)
+        .await
+        .map_err(|mut error| {
+            if remembered.is_some() && matches!(error.code, Code::Elements | Code::Usage) {
+                error.code = Code::Windows;
+            }
+            error
+        })?;
+    if let Some((window, _)) = remembered
+        && expect.instance().is_none_or(|instance| {
             i64::from(instance.pid) != window.pid || Some(instance.start) != window.start
-        }) {
-            return Err(Error::new(Code::Windows, "Window changed; look again"));
-        }
-        expect
-    } else {
-        expected.unwrap().resolve(client, &verified).await?
-    };
+        })
+    {
+        return Err(Error::new(Code::Windows, "Window changed; look again"));
+    }
     client
         .input_owned(
             &ownership,
@@ -350,7 +360,7 @@ mod tests {
                         })
                     }).await.unwrap_err();
                     assert_eq!(error.code, Code::Startup);
-                    let observed = (helper.proofs() - before, reads);
+                    let observed = (helper.proofs() - before, reads, json!(error));
                     if direct {
                         original = Some(observed);
                     } else {
@@ -429,14 +439,25 @@ mod tests {
                     if accepts {
                         result.unwrap();
                     } else {
+                        let error = result.unwrap_err();
                         assert_eq!(
-                            result.unwrap_err().code,
+                            error.code,
                             if (3..=10).contains(&change) {
                                 Code::SessionChanged
                             } else {
                                 Code::Windows
                             }
                         );
+                        assert_eq!(
+                            error.error,
+                            match change {
+                                1 => "The app's process changed while it was being resolved; look again",
+                                2 => "No window 42 is on screen; run atlas windows to see their numbers",
+                                3..=10 => "Helper changed; look again",
+                                _ => "Window changed; look again",
+                            }
+                        );
+                        assert!(!error.uncertain);
                     }
                 },
                 |request| {
