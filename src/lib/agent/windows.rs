@@ -201,14 +201,10 @@ impl Client {
         if self.host_session.is_none() {
             return look.await;
         }
-        let before = window_snapshot(self, verified, DockRead::Read).await.ok();
+        let before = window_snapshot(self, verified, DockRead::Read).await?;
         let result = look.await?;
-        let after = window_snapshot(self, verified, DockRead::Skip).await.ok();
-        let unchanged = before.as_ref().filter(|before| {
-            after
-                .as_ref()
-                .is_some_and(|after| same_routing(&before.windows, &after.windows))
-        });
+        let after = window_snapshot(self, verified, DockRead::Skip).await?;
+        let unchanged = same_routing(&before.windows, &after.windows).then_some(&before);
         self.remember_look(verified, unchanged)?;
         Ok(result)
     }

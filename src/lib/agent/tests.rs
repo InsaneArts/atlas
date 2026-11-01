@@ -3166,10 +3166,19 @@ async fn pictures_compare_two_readings_and_window_lists_remember_their_own_readi
                     Some(json!({"ok": true, "windows": windows,
                         "starts": {"812": [123,456]}, "dock": "unread"}))
                 }).await;
-                if named && command == 2 && change == 6 {
+                if named && (change == 6 || (change == 3 && command != 2)) {
                     assert!(reply.is_err());
-                    assert_eq!(*reads.borrow(), vec![true]);
-                    assert_eq!(helper.proofs(), 1);
+                    assert_eq!(
+                        *reads.borrow(),
+                        if change == 6 {
+                            vec![true]
+                        } else {
+                            vec![true, false]
+                        }
+                    );
+                    if command == 2 {
+                        assert_eq!(helper.proofs(), 1);
+                    }
                     assert!(client.remembered_windows().is_none());
                     continue;
                 }
@@ -3200,6 +3209,64 @@ async fn pictures_compare_two_readings_and_window_lists_remember_their_own_readi
                     assert!(client.remembered_windows().is_none());
                 }
             }
+        }
+    }
+}
+
+#[tokio::test]
+async fn a_failed_window_read_preserves_memory_and_stops_the_look() {
+    use crate::{
+        host_session::{Host, HostSession},
+        native::windows::HitWindow,
+        test_support::{Helper, UID},
+    };
+    use std::cell::Cell;
+
+    for failed_read in [1, 2] {
+        for refused in [false, true] {
+            let directory = tempfile::tempdir().unwrap();
+            let (mut client, helper) = Helper::client(directory.path(), UID);
+            client.host_session = Some(HostSession::new(Host::Named, "one").unwrap());
+            let verified = helper
+                .serve(client.verify(), |_| {
+                    panic!("only identity reads are needed")
+                })
+                .await
+                .unwrap();
+            client.remember_windows(
+                &[HitWindow {
+                    number: 42,
+                    pid: 812,
+                    start: Some([123, 456]),
+                    layer: 0,
+                    bounds: Bounds::display(100.0, 100.0),
+                }],
+                &verified.session().epoch,
+            );
+            let looked = Cell::new(false);
+            let mut reads = 0;
+            let result = helper
+                .serve(
+                    client.look(&verified, async {
+                        looked.set(true);
+                        Ok(())
+                    }),
+                    |request| {
+                        assert_eq!(request["op"], "windows");
+                        reads += 1;
+                        if reads == failed_read {
+                            return refused.then(
+                                || json!({"ok": false, "code": "windows", "error": "Unavailable"}),
+                            );
+                        }
+                        Some(json!({"ok": true, "windows": [], "dock": "unread"}))
+                    },
+                )
+                .await;
+            assert!(result.is_err());
+            assert_eq!(reads, failed_read);
+            assert_eq!(looked.get(), failed_read == 2);
+            assert_eq!(client.remembered_windows().unwrap().windows[0].number, 42);
         }
     }
 }

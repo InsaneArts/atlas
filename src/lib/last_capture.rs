@@ -116,8 +116,30 @@ pub(crate) fn remember_windows(
     Ok(())
 }
 
-pub(crate) fn remembered_windows(output: &Path, key: &Key) -> Option<Observation> {
-    RecordFolder::at(output, &WINDOWS).read_json(key)
+pub(crate) fn remembered_windows(output: &Path, key: &Key) -> Result<Option<Observation>> {
+    let folder = RecordFolder::at(output, &WINDOWS);
+    match fs::symlink_metadata(folder.directory()) {
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(error) => return Err(error.into()),
+        Ok(_) => {}
+    }
+    if !folder.exists() {
+        return Err(Error::new(
+            Code::Windows,
+            "Cannot read the window observations folder; look again",
+        ));
+    }
+    match fs::symlink_metadata(folder.path(key)) {
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(error) => return Err(error.into()),
+        Ok(_) => {}
+    }
+    folder.read_json(key).map(Some).ok_or_else(|| {
+        Error::new(
+            Code::Windows,
+            "Cannot read the last window observation; look again",
+        )
+    })
 }
 
 pub(crate) fn forget_windows(output: &Path, key: &Key) {
@@ -334,7 +356,7 @@ mod tests {
     }
 
     fn remembered_windows(output: &Path, name: &str) -> Option<Observation> {
-        super::remembered_windows(output, &window_key(name))
+        super::remembered_windows(output, &window_key(name)).unwrap()
     }
 
     fn epoch() -> Epoch {
@@ -719,7 +741,7 @@ mod tests {
     }
 
     #[test]
-    fn malformed_window_memory_is_ignored() {
+    fn malformed_window_memory_is_refused() {
         let dir = tempfile::tempdir().unwrap();
         RecordFolder::<Key>::at(dir.path(), &WINDOWS)
             .make()
@@ -733,7 +755,7 @@ mod tests {
             json!({"windows": false, "epoch": {}}),
         ] {
             fs::write(window_record(dir.path(), "one"), entry.to_string()).unwrap();
-            assert!(remembered_windows(dir.path(), "one").is_none());
+            assert!(super::remembered_windows(dir.path(), &window_key("one")).is_err());
         }
     }
 

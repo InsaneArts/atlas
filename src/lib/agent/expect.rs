@@ -20,7 +20,7 @@ use serde_json::Value;
 /// window and field when named, have keyboard focus, pointer actions where
 /// the app's own window, or the named one, is the top one.
 pub async fn act(client: &Client, expected: Option<&Expected>, actions: &Value) -> Result<Value> {
-    let remembered = Expected::remembered(client, expected, actions);
+    let remembered = Expected::remembered(client, expected, actions)?;
     if expected.is_none() && remembered.is_none() {
         return client.input(actions, None, None).await;
     }
@@ -85,28 +85,36 @@ impl Expected {
         client: &Client,
         expected: Option<&Self>,
         actions: &Value,
-    ) -> Option<(HitWindow, Value)> {
+    ) -> Result<Option<(HitWindow, Value)>> {
         if expected.is_some() {
-            return None;
+            return Ok(None);
         }
-        let [action] = actions.as_array()?.as_slice() else {
-            return None;
+        let point = || {
+            let [action] = actions.as_array()?.as_slice() else {
+                return None;
+            };
+            match action["type"].as_str()? {
+                "click" | "scroll" | "move" => Some((action["x"].as_f64()?, action["y"].as_f64()?)),
+                "drag" => Some((action["fromX"].as_f64()?, action["fromY"].as_f64()?)),
+                _ => None,
+            }
         };
-        let (x, y) = match action["type"].as_str()? {
-            "click" | "scroll" | "move" => (action["x"].as_f64()?, action["y"].as_f64()?),
-            "drag" => (action["fromX"].as_f64()?, action["fromY"].as_f64()?),
-            _ => return None,
+        let Some((x, y)) = point() else {
+            return Ok(None);
         };
-        let Observation { windows, epoch } = crate::last_capture::remembered_windows(
-            &client.config.output_dir,
-            client.host_session.as_ref()?.key(),
-        )?;
-        let window = windows
+        let Some(session) = client.host_session.as_ref() else {
+            return Ok(None);
+        };
+        let Some(Observation { windows, epoch }) =
+            crate::last_capture::remembered_windows(&client.config.output_dir, session.key())?
+        else {
+            return Ok(None);
+        };
+        Ok(windows
             .into_iter()
-            .find(|window| window.bounds.contains(x, y))?;
-        (0..DOCK_LAYER)
-            .contains(&window.layer)
-            .then_some((window, epoch))
+            .find(|window| window.bounds.contains(x, y))
+            .filter(|window| (0..DOCK_LAYER).contains(&window.layer))
+            .map(|window| (window, epoch)))
     }
 
     /// The expectation of `app`, `window` and `field`, as many as are
@@ -260,6 +268,7 @@ mod tests {
 
     fn number(client: &Client, expected: Option<&Expected>, actions: &Value) -> Option<i64> {
         Expected::remembered(client, expected, actions)
+            .unwrap()
             .map(|(window, _)| window.number)
             .or_else(|| match &expected?.place {
                 Place::Window { number, .. } => Some(*number),
@@ -515,14 +524,89 @@ mod tests {
             Some(99)
         );
         let app = Expected::new(Some(Target::Pid(812)), None, None).unwrap();
-        assert!(Expected::remembered(&client, app.as_ref(), &move_to(30.0, 40.0)).is_none());
+        assert!(
+            Expected::remembered(&client, app.as_ref(), &move_to(30.0, 40.0))
+                .unwrap()
+                .is_none()
+        );
         let field = Expected::new(Some(Target::Pid(812)), None, Some("Search".into())).unwrap();
-        assert!(Expected::remembered(&client, field.as_ref(), &move_to(30.0, 40.0)).is_none());
+        assert!(
+            Expected::remembered(&client, field.as_ref(), &move_to(30.0, 40.0))
+                .unwrap()
+                .is_none()
+        );
         for action in [
             keys(&["a".into()]).unwrap(),
             json!([{"type":"type","text":"a"}]),
         ] {
-            assert!(Expected::remembered(&client, None, &action).is_none());
+            assert!(
+                Expected::remembered(&client, None, &action)
+                    .unwrap()
+                    .is_none()
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn unreadable_window_memory_refuses_point_actions_before_control_is_acquired() {
+        use std::os::unix::fs::{PermissionsExt, symlink};
+
+        for damage in 0..7 {
+            let directory = tempfile::tempdir().unwrap();
+            let client = session(&crate::test_support::client(directory.path()), "one");
+            remember(&client, &[window(42, 10.0)]);
+            let folder = client.config.output_dir.join("last-windows");
+            let path = folder.join(format!(
+                "{}.json",
+                client.host_session.as_ref().unwrap().key()
+            ));
+            match damage {
+                0 => std::fs::write(&path, "unreadable json").unwrap(),
+                1 => std::fs::write(&path, r#"{"windows":false,"epoch":{}}"#).unwrap(),
+                2 => std::fs::write(&path, vec![b' '; 65537]).unwrap(),
+                3 => std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o0)).unwrap(),
+                4 => {
+                    std::fs::set_permissions(&folder, std::fs::Permissions::from_mode(0o0)).unwrap()
+                }
+                5 => {
+                    std::fs::remove_file(&path).unwrap();
+                    std::fs::create_dir(&path).unwrap();
+                }
+                _ => {
+                    std::fs::remove_file(&path).unwrap();
+                    symlink(directory.path().join("missing"), &path).unwrap();
+                }
+            }
+            for actions in [
+                click(30.0, 40.0, Button::Left, 1, &[]),
+                scroll((30.0, 40.0), (0, 1)),
+                drag((30.0, 40.0), (500.0, 500.0), Button::Left),
+                move_to(30.0, 40.0),
+            ] {
+                assert!(Expected::remembered(&client, None, &actions).is_err());
+                let error = tokio::time::timeout(
+                    std::time::Duration::from_secs(1),
+                    act(&client, None, &actions),
+                )
+                .await
+                .expect("unreadable memory is refused without waiting for control")
+                .unwrap_err();
+                assert!(matches!(error.code, Code::Windows | Code::Io));
+                let explicit = Expected::new(None, Some(99), None).unwrap();
+                assert!(
+                    Expected::remembered(&client, explicit.as_ref(), &actions)
+                        .unwrap()
+                        .is_none()
+                );
+            }
+            assert!(
+                Expected::remembered(&client, None, &keys(&["a".into()]).unwrap())
+                    .unwrap()
+                    .is_none()
+            );
+            if damage == 4 {
+                std::fs::set_permissions(&folder, std::fs::Permissions::from_mode(0o700)).unwrap();
+            }
         }
     }
 
@@ -535,6 +619,11 @@ mod tests {
         assert!(!anonymous.config.output_dir.exists());
         let client = session(&anonymous, "one");
         assert!(client.remembered_windows().is_none());
+        assert!(
+            Expected::remembered(&client, None, &move_to(30.0, 40.0))
+                .unwrap()
+                .is_none()
+        );
     }
 
     #[test]
@@ -561,7 +650,11 @@ mod tests {
             front.layer = layer;
             remember(&client, &[front, window(42, 10.0)]);
             for expected in [None, app.as_ref()] {
-                assert!(Expected::remembered(&client, expected, &move_to(30.0, 40.0)).is_none());
+                assert!(
+                    Expected::remembered(&client, expected, &move_to(30.0, 40.0))
+                        .unwrap()
+                        .is_none()
+                );
             }
         }
         remember(&client, &[window(42, 10.0)]);
@@ -570,8 +663,16 @@ mod tests {
             json!([{"type":"click","x":30,"y":40}, {"type":"click","x":500,"y":40}]),
             json!([{"type":"wait","ms":1}, {"type":"click","x":30,"y":40}]),
         ] {
-            assert!(Expected::remembered(&client, app.as_ref(), &actions).is_none());
-            assert!(Expected::remembered(&client, None, &actions).is_none());
+            assert!(
+                Expected::remembered(&client, app.as_ref(), &actions)
+                    .unwrap()
+                    .is_none()
+            );
+            assert!(
+                Expected::remembered(&client, None, &actions)
+                    .unwrap()
+                    .is_none()
+            );
         }
     }
 
@@ -641,6 +742,12 @@ mod tests {
             "unchanged"
         );
         std::fs::write(path, "unreadable json").unwrap();
-        assert!(client.remembered_windows().is_none());
+        assert!(
+            crate::last_capture::remembered_windows(
+                &client.config.output_dir,
+                client.host_session.as_ref().unwrap().key(),
+            )
+            .is_err()
+        );
     }
 }

@@ -662,11 +662,14 @@ fn records_idle_a_week_go_unless_they_list_leftovers() {
     for record in [&copied, &planned, &recent] {
         assert!(
             crate::last_capture::remembered_windows(&client.config.output_dir, &record.key)
+                .unwrap()
                 .is_some()
         );
     }
     assert!(
-        crate::last_capture::remembered_windows(&client.config.output_dir, &idle.key).is_none()
+        crate::last_capture::remembered_windows(&client.config.output_dir, &idle.key)
+            .unwrap()
+            .is_none()
     );
 }
 
@@ -712,6 +715,7 @@ fn at_most_sixty_four_records_stay_and_those_with_leftovers_go_last() {
     for record in with_leftovers.iter().chain(&others) {
         assert_eq!(
             crate::last_capture::remembered_windows(&client.config.output_dir, &record.key)
+                .unwrap()
                 .is_some(),
             store.read(&record.key).is_some(),
         );
