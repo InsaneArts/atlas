@@ -3,7 +3,7 @@ use super::{
     *,
 };
 use crate::{
-    files::Lock,
+    files::{Lock, Token},
     test_support::{Helper, UID},
 };
 use base64::{Engine, engine::general_purpose::STANDARD};
@@ -1566,6 +1566,298 @@ async fn an_undo_preview_takes_no_control() {
     assert_eq!(value["pendingTargets"], json!(["file"]), "{value}");
     assert_eq!(fs::read(sandbox.home.join("file")).unwrap(), b"copied");
     assert!(client.controller.pending().unwrap().is_empty());
+}
+
+fn rollback_request(request: &Value, id: &Token) -> bool {
+    let argv = request["argv"].as_array().unwrap();
+    let packet: Packet = decode(&fs::read(argv[2].as_str().unwrap()).unwrap()).unwrap();
+    let Request::Rollback { id: asked, apply } = packet.request else {
+        panic!("only this plan's rollback is requested");
+    };
+    assert_eq!(asked, id.as_str());
+    assert_eq!(argv.len(), if apply { 4 } else { 3 });
+    apply
+}
+
+#[tokio::test]
+async fn an_already_rolled_back_preview_is_reused_without_another_mutation() {
+    for (fields, expected) in [
+        (json!({}), Undone::RolledBack),
+        (
+            json!({"keptTargets": ["changed", null, 7, "other"],
+                "retainedDirectories": ["nested", null]}),
+            Undone::Kept {
+                targets: vec!["changed".into(), "other".into()],
+                directories: 2,
+            },
+        ),
+        (
+            json!({"keptTargets": false, "retainedDirectories": {}, "resumeRequired": true}),
+            Undone::RolledBack,
+        ),
+    ] {
+        let sandbox = Sandbox::new();
+        let (client, helper) = Helper::client(&sandbox.root, UID);
+        let account = account();
+        let held = client.controller.acquire(false).unwrap();
+        let id = Token::new();
+        let stage = stage_in(&sandbox.root, id.as_str());
+        let _lock = lock_stage(&stage).unwrap();
+        let mut preview = json!({"ok": true, "phase": "rolledBack"});
+        preview
+            .as_object_mut()
+            .unwrap()
+            .extend(fields.as_object().unwrap().clone());
+        let mut requests = 0;
+
+        let result = helper
+            .serve(
+                undo::undo_locked(&client, &held, &account, &stage, &id, false),
+                |request| {
+                    requests += 1;
+                    assert!(!rollback_request(request, &id));
+                    Some(worker_reply(0, &preview))
+                },
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(result, expected);
+        assert_eq!(requests, 1);
+        assert!(!stage.exists());
+        assert!(client.controller.pending().unwrap().is_empty());
+    }
+}
+
+#[tokio::test]
+async fn an_unknown_preview_phase_never_starts_rollback() {
+    for fields in [
+        json!({"phase": "future"}),
+        json!({}),
+        json!({"phase": null}),
+        json!({"phase": 7}),
+        json!({"phase": true}),
+        json!({"phase": []}),
+        json!({"phase": {}}),
+    ] {
+        let sandbox = Sandbox::new();
+        let (client, helper) = Helper::client(&sandbox.root, UID);
+        let account = account();
+        let held = client.controller.acquire(false).unwrap();
+        let id = Token::new();
+        let stage = stage_in(&sandbox.root, id.as_str());
+        let _lock = lock_stage(&stage).unwrap();
+        write_plan(&stage, id.as_str(), UID);
+        let plan = fs::read(stage.join("plan.json")).unwrap();
+        let pending = stage.join("request-pending");
+        fs::create_dir(&pending).unwrap();
+        fs::write(pending.join("packet.json"), b"unacknowledged request").unwrap();
+        let inode = fs::metadata(&stage).unwrap().ino();
+        let foreign = sandbox.home.join("foreign");
+        fs::write(&foreign, b"foreign bytes").unwrap();
+        let mut preview = json!({"ok": true});
+        preview
+            .as_object_mut()
+            .unwrap()
+            .extend(fields.as_object().unwrap().clone());
+        let mut requests = 0;
+
+        let result = helper
+            .serve(
+                undo::undo_locked(&client, &held, &account, &stage, &id, false),
+                |request| {
+                    requests += 1;
+                    assert!(!rollback_request(request, &id), "{preview}");
+                    Some(worker_reply(0, &preview))
+                },
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(
+            result,
+            Undone::Unfinished(
+                "The helper reported an unknown transaction phase; no rollback was sent".into()
+            )
+        );
+        assert_eq!(requests, 1);
+        assert_eq!(fs::metadata(&stage).unwrap().ino(), inode);
+        assert_eq!(fs::read(stage.join("plan.json")).unwrap(), plan);
+        assert_eq!(
+            fs::read(pending.join("packet.json")).unwrap(),
+            b"unacknowledged request"
+        );
+        assert_eq!(fs::read(&foreign).unwrap(), b"foreign bytes");
+    }
+}
+
+#[tokio::test]
+async fn a_known_partially_applied_plan_still_rolls_back() {
+    let sandbox = Sandbox::new();
+    let plan = sandbox.plan(vec![
+        sandbox.payload("first", b"one"),
+        sandbox.payload("second", b"two"),
+    ]);
+    let state = sandbox.home.join(STATE);
+    let stopped = stop_apply(&sandbox, &plan, || {
+        fs::read_to_string(state.join("files.json")).is_ok_and(|ledger| ledger.contains("first"))
+    });
+    assert_eq!(stopped["completedTargets"], json!(["first"]));
+    assert_eq!(stopped["phase"], "applying");
+    fs::write(sandbox.home.join("first"), b"helper edit").unwrap();
+    let (client, helper) = Helper::client(&sandbox.root, UID);
+    let account = account();
+    let held = client.controller.acquire(false).unwrap();
+    let id = Token::parse(&plan.id).unwrap();
+    let stage = stage_in(&sandbox.root, &plan.id);
+    let _lock = lock_stage(&stage).unwrap();
+    let mut applied = Vec::new();
+
+    let result = helper
+        .serve(
+            undo::undo_locked(&client, &held, &account, &stage, &id, false),
+            |request| {
+                let apply = rollback_request(request, &id);
+                applied.push(apply);
+                Some(worker_reply(0, &sandbox.rollback(&plan, apply)))
+            },
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(applied, [false, true]);
+    assert_eq!(
+        result,
+        Undone::Kept {
+            targets: vec!["first".into()],
+            directories: 0
+        }
+    );
+    assert_eq!(
+        fs::read(sandbox.home.join("first")).unwrap(),
+        b"helper edit"
+    );
+    assert!(!sandbox.home.join("second").exists());
+    assert!(!stage.exists());
+    assert!(client.controller.pending().unwrap().is_empty());
+}
+
+#[tokio::test]
+async fn a_real_rollback_requires_explicit_settlement() {
+    for fields in [
+        json!({"phase": "rolledBack", "resumeRequired": false}),
+        json!({"phase": "rolledBack"}),
+        json!({"phase": "rolledBack", "resumeRequired": null}),
+        json!({"phase": "rolledBack", "resumeRequired": "false"}),
+        json!({"phase": "rolledBack", "resumeRequired": true}),
+        json!({"phase": "rollingBack", "resumeRequired": false}),
+        json!({"phase": "future", "resumeRequired": false}),
+        json!({"resumeRequired": false}),
+    ] {
+        let sandbox = Sandbox::new();
+        let (client, helper) = Helper::client(&sandbox.root, UID);
+        let account = account();
+        let held = client.controller.acquire(false).unwrap();
+        let id = Token::new();
+        let stage = stage_in(&sandbox.root, id.as_str());
+        let _lock = lock_stage(&stage).unwrap();
+        write_plan(&stage, id.as_str(), UID);
+        let mut reply = json!({"ok": true});
+        reply
+            .as_object_mut()
+            .unwrap()
+            .extend(fields.as_object().unwrap().clone());
+        let mut applied = Vec::new();
+
+        let result = helper
+            .serve(
+                undo::undo_locked(&client, &held, &account, &stage, &id, false),
+                |request| {
+                    let apply = rollback_request(request, &id);
+                    applied.push(apply);
+                    Some(worker_reply(
+                        0,
+                        &if apply {
+                            reply.clone()
+                        } else {
+                            json!({"ok": true, "phase": "applied"})
+                        },
+                    ))
+                },
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(applied, [false, true]);
+        if fields["phase"] == "rolledBack" && fields["resumeRequired"] == false {
+            assert_eq!(result, Undone::RolledBack);
+            assert!(!stage.exists());
+        } else {
+            assert_eq!(
+                result,
+                Undone::Unfinished("The helper did not finish undoing this copy".into())
+            );
+            assert!(stage.join("plan.json").exists());
+        }
+    }
+}
+
+#[tokio::test]
+async fn an_unfinished_rollback_retains_its_request_across_restart() {
+    let sandbox = Sandbox::new();
+    let id = Token::new();
+    let stage = stage_in(&sandbox.root, id.as_str());
+    write_plan(&stage, id.as_str(), UID);
+    let plan = fs::read(stage.join("plan.json")).unwrap();
+    let kept = sandbox.home.join("changed");
+    fs::write(&kept, b"helper edit").unwrap();
+    let mut pending: Option<(PathBuf, Vec<u8>)> = None;
+
+    for phase in ["applied", "rollingBack"] {
+        let (client, helper) = Helper::client(&sandbox.root, UID);
+        let account = account();
+        let (held, unknown) = client.controller.acquire_for_cleanup().unwrap();
+        assert_eq!(unknown, pending.is_some());
+        let lock = lock_stage(&stage).unwrap();
+        let mut applied = Vec::new();
+        let result = helper
+            .serve(
+                undo::undo_locked(&client, &held, &account, &stage, &id, false),
+                |request| {
+                    let apply = rollback_request(request, &id);
+                    applied.push(apply);
+                    if apply && phase == "applied" {
+                        let path = PathBuf::from(request["argv"][2].as_str().unwrap());
+                        pending = Some((path.clone(), fs::read(&path).unwrap()));
+                        return None;
+                    }
+                    let reply = if apply {
+                        json!({"ok": false, "phase": "rollingBack", "resumeRequired": true,
+                            "error": "Interrupted rollback", "keptTargets": ["changed"]})
+                    } else {
+                        json!({"ok": true, "phase": phase})
+                    };
+                    Some(worker_reply(0, &reply))
+                },
+            )
+            .await;
+        drop(lock);
+        if phase == "applied" {
+            assert!(result.unwrap_err().uncertain);
+        } else {
+            assert_eq!(
+                result.unwrap(),
+                Undone::Unfinished("Interrupted rollback".into())
+            );
+        }
+        assert_eq!(applied, [false, true]);
+        assert_eq!(fs::read(stage.join("plan.json")).unwrap(), plan);
+        let (path, bytes) = pending.as_ref().unwrap();
+        assert_eq!(&fs::read(path).unwrap(), bytes);
+        assert_eq!(fs::read(&kept).unwrap(), b"helper edit");
+        drop(helper);
+        fs::remove_file(&client.transport.path).unwrap();
+    }
 }
 
 #[tokio::test]

@@ -289,6 +289,37 @@ async fn kept_and_failed_are_reported_apart() {
 }
 
 #[tokio::test]
+async fn an_unknown_transaction_phase_keeps_the_plan_claim_and_cleanup_receipt() {
+    let place = Place::new();
+    let key = session("unknown-phase");
+    let task = default_task(&key);
+    let plan = plan_claimed(&place, &task);
+    let fake = Fake::at(&place.root);
+    let message = "The helper reported an unknown transaction phase; no rollback was sent";
+    fake.undo
+        .borrow_mut()
+        .insert(plan.clone(), Ok(Undone::Unfinished(message.into())));
+    let scope = own(&key);
+
+    let reply = place.apply(&fake, &scope).await;
+
+    assert_eq!(reply["state"], "incomplete");
+    assert_eq!(states(&reply), ["failed"]);
+    assert_eq!(reply["steps"][0]["reason"], "helper");
+    assert_eq!(reply["steps"][0]["error"], message);
+    assert_ne!(reply["steps"][0]["alreadyGone"], true);
+    let record = Tasks::at(&place.output).load(task.key()).unwrap();
+    assert!(record.claims().any(|(owned, state)| {
+        owned.same(&Owned::Plan { id: plan.clone() }) && state == State::Made
+    }));
+    assert!(record.unfinished_cleanup().is_some());
+
+    let resumed = place.apply(&Fake::at(&place.root), &scope).await;
+    assert_eq!(resumed["receipt"], reply["receipt"]);
+    assert_eq!(resumed["state"], "complete");
+}
+
+#[tokio::test]
 async fn new_work_after_an_unfinished_cleanup_is_added_to_the_same_receipt() {
     let place = Place::new();
     let key = session("more");

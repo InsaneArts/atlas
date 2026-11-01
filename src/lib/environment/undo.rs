@@ -162,7 +162,7 @@ pub(crate) async fn undo_plan(
     undone
 }
 
-async fn undo_locked(
+pub(super) async fn undo_locked(
     client: &Client,
     ownership: &Ownership,
     helper: &str,
@@ -175,8 +175,9 @@ async fn undo_locked(
         apply,
     };
     let preview = dispatch_owned(client, ownership, helper, stage, ask(false)).await?;
+    let preview = RollbackReply::read(&preview);
 
-    if preview["ok"] == false && preview["error"] == worker::MISSING {
+    if preview.ok == Some(false) && preview.error == worker::MISSING {
         if requests(stage) {
             return Ok(Undone::Unfinished(
                 "A step of this copy into the helper has an outcome Atlas does not know".into(),
@@ -192,22 +193,32 @@ async fn undo_locked(
             Undone::AlreadyGone
         });
     }
-    if preview["ok"] != true {
-        return Ok(Undone::Unfinished(said(&preview)));
+    if preview.ok != Some(true) {
+        return Ok(Undone::Unfinished(preview.error));
     }
-    let reply = if preview["phase"] == "rolledBack" {
-        preview
-    } else {
-        let reply = dispatch_owned(client, ownership, helper, stage, ask(true)).await?;
-        if !settled(&Ok(reply.clone()), "rolledBack") {
-            return Ok(Undone::Unfinished(said(&reply)));
+    let reply = match preview.phase {
+        Some(PlanPhase::RolledBack) => preview,
+        Some(PlanPhase::Applying | PlanPhase::Applied | PlanPhase::RollingBack) => {
+            let reply = dispatch_owned(client, ownership, helper, stage, ask(true)).await?;
+            let reply = RollbackReply::read(&reply);
+            if reply.ok != Some(true)
+                || reply.phase != Some(PlanPhase::RolledBack)
+                || reply.resume_required != Some(false)
+            {
+                return Ok(Undone::Unfinished(reply.error));
+            }
+            reply
         }
-        reply
+        _ => {
+            return Ok(Undone::Unfinished(
+                "The helper reported an unknown transaction phase; no rollback was sent".into(),
+            ));
+        }
     };
     if !requests(stage) && !discarded(stage) {
         return Ok(Undone::Unfinished(UNREMOVED.into()));
     }
-    Ok(rolled_back(&reply))
+    Ok(rolled_back(reply))
 }
 
 /// Why undoing a plan is not finished when what Atlas kept for it would
@@ -221,23 +232,49 @@ fn discarded(stage: &Path) -> bool {
     fs::symlink_metadata(stage).is_err_and(|error| error.kind() == std::io::ErrorKind::NotFound)
 }
 
+/// The facts undo uses from a helper reply. Optional booleans retain the
+/// difference between explicit proof and a missing or malformed field.
+struct RollbackReply {
+    ok: Option<bool>,
+    phase: Option<PlanPhase>,
+    error: String,
+    resume_required: Option<bool>,
+    kept_targets: Vec<String>,
+    retained_directories: usize,
+}
+
+impl RollbackReply {
+    fn read(reply: &Value) -> Self {
+        let phase = Lenient::<Phase>::deserialize(&reply["phase"])
+            .ok()
+            .as_ref()
+            .and_then(PlanPhase::started);
+        Self {
+            ok: reply["ok"].as_bool(),
+            phase,
+            error: said(reply),
+            resume_required: reply["resumeRequired"].as_bool(),
+            kept_targets: reply["keptTargets"]
+                .as_array()
+                .into_iter()
+                .flatten()
+                .filter_map(|target| target.as_str().map(str::to_owned))
+                .collect(),
+            retained_directories: reply["retainedDirectories"].as_array().map_or(0, Vec::len),
+        }
+    }
+}
+
 /// What a rollback `reply` that reached rolledBack left: nothing, or the
 /// files the helper changed since and the folders it could not remove. One
 /// rolled back before says the same as one rolled back now.
-fn rolled_back(reply: &Value) -> Undone {
-    let kept: Vec<String> = reply["keptTargets"]
-        .as_array()
-        .into_iter()
-        .flatten()
-        .filter_map(|target| target.as_str().map(str::to_owned))
-        .collect();
-    let directories = reply["retainedDirectories"].as_array().map_or(0, Vec::len);
-    if kept.is_empty() && directories == 0 {
+fn rolled_back(reply: RollbackReply) -> Undone {
+    if reply.kept_targets.is_empty() && reply.retained_directories == 0 {
         Undone::RolledBack
     } else {
         Undone::Kept {
-            targets: kept,
-            directories,
+            targets: reply.kept_targets,
+            directories: reply.retained_directories,
         }
     }
 }
@@ -248,4 +285,58 @@ fn said(reply: &Value) -> String {
         .as_str()
         .unwrap_or("The helper did not finish undoing this copy")
         .to_owned()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn reply_observations_keep_known_phases_and_leave_other_values_unknown() {
+        for (phase, expected) in [
+            (json!("applying"), Some(PlanPhase::Applying)),
+            (json!("applied"), Some(PlanPhase::Applied)),
+            (json!("rollingBack"), Some(PlanPhase::RollingBack)),
+            (json!("rolledBack"), Some(PlanPhase::RolledBack)),
+            (json!("future"), None),
+            (Value::Null, None),
+            (json!(false), None),
+            (json!(7), None),
+            (json!([]), None),
+            (json!({}), None),
+        ] {
+            assert_eq!(
+                RollbackReply::read(&json!({"phase": phase})).phase,
+                expected
+            );
+        }
+        assert_eq!(RollbackReply::read(&json!({})).phase, None);
+    }
+
+    #[test]
+    fn reply_observations_preserve_explicit_proof_and_error_defaults() {
+        let fallback = "The helper did not finish undoing this copy";
+        for (value, error) in [
+            (Value::Null, fallback),
+            (json!("false"), "false"),
+            (json!(7), fallback),
+            (json!([]), fallback),
+            (json!({}), fallback),
+        ] {
+            let reply = RollbackReply::read(&json!({
+                "ok": value, "resumeRequired": value, "error": value
+            }));
+            assert_eq!(reply.ok, None);
+            assert_eq!(reply.resume_required, None);
+            assert_eq!(reply.error, error);
+        }
+        for value in [false, true] {
+            let reply = RollbackReply::read(&json!({
+                "ok": value, "resumeRequired": value, "error": worker::MISSING
+            }));
+            assert_eq!(reply.ok, Some(value));
+            assert_eq!(reply.resume_required, Some(value));
+            assert_eq!(reply.error, worker::MISSING);
+        }
+    }
 }
