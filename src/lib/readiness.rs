@@ -10,14 +10,34 @@
 //! are not verified: credentials are never copied, so only the app can tell.
 use crate::{
     client::{Client, Run},
-    environment::{discovery::discover, run as environment_run},
+    environment::{
+        discovery::{Kind, PathObservation, inspect},
+        run as environment_run,
+    },
     error::{Code, Error, Result},
     transport::run_output,
 };
+use serde::Serialize;
 use serde_json::{Value, json};
 
 /// What the aggregate `ready` does not cover.
 const NOT_VERIFIED: [&str; 2] = ["application launch", "application sign-in"];
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "lowercase")]
+pub(crate) enum ItemState {
+    Ready,
+    Installed,
+    Missing,
+    Failing,
+    Unknown,
+}
+
+impl ItemState {
+    fn ready(self) -> bool {
+        matches!(self, Self::Ready | Self::Installed)
+    }
+}
 
 /// The PATH tools resolve from inside the helper when no environment is
 /// selected: the same places, in the same order, as the runner.
@@ -37,39 +57,45 @@ fn first_line(output: &[u8]) -> String {
 /// Classify a present tool from its `--version` invocation. Completion is
 /// judged before the exit status; a probe the tool does not understand
 /// still shows the tool runs, which is what matters.
-pub(crate) fn tool_status(reply: &Value, output: &[u8]) -> (&'static str, String) {
+pub(crate) fn tool_status(reply: &Value, output: &[u8]) -> (ItemState, String) {
     let text = String::from_utf8_lossy(output).to_lowercase();
 
     if reply["timedOut"] == true || !reply["signal"].is_null() {
-        return ("unknown", "The --version probe did not complete".into());
+        return (
+            ItemState::Unknown,
+            "The --version probe did not complete".into(),
+        );
     }
 
     if reply["exitCode"] == 0 {
-        return ("ready", first_line(output));
+        return (ItemState::Ready, first_line(output));
     }
 
     if text.contains("library not loaded") || text.contains("image not found") {
         (
-            "failing",
+            ItemState::Failing,
             "A required library is missing in the helper account".into(),
         )
     } else if text.contains("bad cpu type") {
         (
-            "failing",
+            ItemState::Failing,
             "The binary is built for another architecture".into(),
         )
     } else if reply["exitCode"] == 127 || reply["exitCode"] == 126 {
         (
-            "failing",
+            ItemState::Failing,
             format!("It could not run: {}", first_line(output)),
         )
     } else if ["unknown option", "unrecognized", "invalid option", "usage:"]
         .iter()
         .any(|hint| text.contains(hint))
     {
-        ("ready", "Runs, though it does not answer --version".into())
+        (
+            ItemState::Ready,
+            "Runs, though it does not answer --version".into(),
+        )
     } else {
-        ("failing", first_line(output))
+        (ItemState::Failing, first_line(output))
     }
 }
 
@@ -114,24 +140,27 @@ async fn probe_using(
     }
 }
 
-async fn tool(client: &Client, home: &str, name: &str) -> Result<Value> {
+async fn tool(client: &Client, home: &str, name: &str) -> Result<(ItemState, Value)> {
     let (reply, context) = probe(client, home, name).await?;
     let (status, detail) = match run_output(&reply, 16384) {
         Ok(output) => tool_status(&reply, &output),
         Err(_) => (
-            "unknown",
+            ItemState::Unknown,
             "The --version output was malformed or too long".into(),
         ),
     };
 
-    Ok(json!({
-        "kind": "tool",
-        "name": name,
-        "status": status,
-        "detail": detail,
-        "context": context,
-        "exitCode": reply["exitCode"],
-    }))
+    Ok((
+        status,
+        json!({
+            "kind": "tool",
+            "name": name,
+            "status": status,
+            "detail": detail,
+            "context": context,
+            "exitCode": reply["exitCode"],
+        }),
+    ))
 }
 
 /// A plausible bundle identifier (reverse-DNS characters only).
@@ -163,7 +192,7 @@ pub(crate) fn app_facts(output: &str) -> Option<(String, Vec<String>)> {
 
 /// Helper-side facts about an app bundle: its identifier and whether the
 /// helper account has preferences or a container for it.
-async fn app(client: &Client, name: &str, bundle: &str) -> Result<Value> {
+async fn app(client: &Client, name: &str, bundle: &str) -> Result<(ItemState, Value)> {
     let script = concat!(
         "id=$(/usr/bin/plutil -extract CFBundleIdentifier raw -o - \"$1/Contents/Info.plist\") ",
         "|| exit 3; ",
@@ -193,42 +222,45 @@ async fn app(client: &Client, name: &str, bundle: &str) -> Result<Value> {
         .flatten()
         .and_then(|output| app_facts(&String::from_utf8_lossy(&output)));
     let Some((identifier, state)) = facts else {
-        return Ok(json!({
-            "kind": "application",
-            "name": name,
-            "status": "unknown",
-            "bundle": bundle,
-            "detail": "The bundle could not be inspected in the helper",
-        }));
+        return Ok((
+            ItemState::Unknown,
+            json!({
+                "kind": "application",
+                "name": name,
+                "status": ItemState::Unknown,
+                "bundle": bundle,
+                "detail": "The bundle could not be inspected in the helper",
+            }),
+        ));
     };
 
-    Ok(json!({
-        "kind": "application",
-        "name": name,
-        "status": "installed",
-        "bundle": bundle,
-        "bundleIdentifier": identifier,
-        "helperState": if state.is_empty() { "none" } else { "present" },
-        "helperStateKinds": state,
-        "signIn": "unknown",
-        "detail": "Account data and sign-ins belong to the helper; check the app itself.",
-    }))
+    Ok((
+        ItemState::Installed,
+        json!({
+            "kind": "application",
+            "name": name,
+            "status": ItemState::Installed,
+            "bundle": bundle,
+            "bundleIdentifier": identifier,
+            "helperState": if state.is_empty() { "none" } else { "present" },
+            "helperStateKinds": state,
+            "signIn": "unknown",
+            "detail": "Account data and sign-ins belong to the helper; check the app itself.",
+        }),
+    ))
 }
 
 /// The first helper candidate discovery found usable: a readable,
 /// traversable bundle directory.
-fn usable_bundle(item: &Value) -> Option<&str> {
-    item["helperCandidates"]
-        .as_array()?
+fn usable_bundle(candidates: &[PathObservation]) -> Option<&str> {
+    candidates
         .iter()
         .find(|candidate| {
-            let access = &candidate["access"];
-            access["directory"] == true
-                && access["readable"] == true
-                && access["executable"] == true
+            let access = &candidate.access;
+            access.directory && access.readable && access.executable
         })?
-        .get("path")?
-        .as_str()
+        .path
+        .to_str()
 }
 
 /// Report readiness for the selected tools and apps. `ready` means every
@@ -242,37 +274,43 @@ pub async fn readiness(client: &Client, tools: &[String], apps: &[String]) -> Re
         ));
     }
 
-    let found = discover(client, tools, apps, &[], &[]).await?;
-    let home = client.status().await["user"]["home"]
-        .as_str()
-        .map(str::to_owned)
+    let found = inspect(client, tools, apps, &[], &[]).await?;
+    let home = found
+        .helper_home
+        .to_str()
         .ok_or_else(|| Error::new(Code::Identity, "The helper home is unknown"))?;
     let mut reports = Vec::new();
+    let mut ready = true;
 
-    for item in found["selections"].as_array().into_iter().flatten() {
-        let name = item["name"].as_str().unwrap_or_default();
-        let kind = item["kind"].as_str();
-        let report = match (kind, item["available"] == true) {
-            (Some("tool"), true) => tool(client, &home, name).await?,
-            (Some("application"), true) => match usable_bundle(item) {
+    for item in &found.selections {
+        let name = &item.name;
+        let kind = match item.kind {
+            Kind::Tool => "tool",
+            Kind::Application => "application",
+        };
+        let (state, report) = match (item.kind, item.available()) {
+            (Kind::Tool, true) => tool(client, home, name).await?,
+            (Kind::Application, true) => match usable_bundle(&item.helper_candidates) {
                 Some(bundle) => app(client, name, bundle).await?,
-                None => json!({ "kind": kind, "name": name, "status": "unknown" }),
+                None => (
+                    ItemState::Unknown,
+                    json!({ "kind": kind, "name": name, "status": ItemState::Unknown }),
+                ),
             },
-            (_, false) => json!({
-                "kind": kind,
-                "name": name,
-                "status": "missing",
-                "detail": "Not found where the helper looks; copy it in with atlas environment, or install it for every account",
-            }),
-            _ => json!({ "kind": kind, "name": name, "status": "unknown" }),
+            (_, false) => (
+                ItemState::Missing,
+                json!({
+                    "kind": kind,
+                    "name": name,
+                    "status": ItemState::Missing,
+                    "detail": "Not found where the helper looks; copy it in with atlas environment, or install it for every account",
+                }),
+            ),
         };
 
+        ready &= state.ready();
         reports.push(report);
     }
-
-    let ready = reports
-        .iter()
-        .all(|report| matches!(report["status"].as_str(), Some("ready" | "installed")));
 
     Ok(json!({
         "ok": true,
@@ -285,7 +323,26 @@ pub async fn readiness(client: &Client, tools: &[String], apps: &[String]) -> Re
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::test_support::{Helper, UID, completed};
+    use crate::test_support::{Helper, UID, completed, exited};
+
+    #[test]
+    fn only_ready_tools_and_installed_apps_make_the_aggregate_ready() {
+        for (state, expected) in [
+            (ItemState::Ready, true),
+            (ItemState::Installed, true),
+            (ItemState::Missing, false),
+            (ItemState::Failing, false),
+            (ItemState::Unknown, false),
+        ] {
+            assert_eq!(state.ready(), expected);
+            assert_eq!(
+                [ItemState::Ready, state, ItemState::Installed]
+                    .into_iter()
+                    .all(ItemState::ready),
+                expected
+            );
+        }
+    }
 
     fn reply(exit: i64) -> Value {
         json!({"exitCode": exit, "timedOut": false, "signal": null})
@@ -295,13 +352,13 @@ mod tests {
     fn tools_are_classified_by_a_completed_invocation() {
         assert_eq!(
             tool_status(&reply(0), b"\nmarkdown2pdf 1.6.1\nmore"),
-            ("ready", "markdown2pdf 1.6.1".into())
+            (ItemState::Ready, "markdown2pdf 1.6.1".into())
         );
 
         let timed_out = json!({"exitCode": 0, "timedOut": true, "signal": "SIGKILL"});
         assert_eq!(
             tool_status(&timed_out, b"x").0,
-            "unknown",
+            ItemState::Unknown,
             "never ready on a timeout"
         );
         assert_eq!(
@@ -310,15 +367,21 @@ mod tests {
         );
         assert_eq!(
             tool_status(&reply(126), b"Bad CPU type in executable").0,
-            "failing"
+            ItemState::Failing
         );
         assert_eq!(
             tool_status(&reply(127), b"env: python3: No such file").0,
-            "failing",
+            ItemState::Failing,
             "present but broken, not missing"
         );
-        assert_eq!(tool_status(&reply(2), b"usage: tool [-x]").0, "ready");
-        assert_eq!(tool_status(&reply(1), b"error: no config").0, "failing");
+        assert_eq!(
+            tool_status(&reply(2), b"usage: tool [-x]").0,
+            ItemState::Ready
+        );
+        assert_eq!(
+            tool_status(&reply(1), b"error: no config").0,
+            ItemState::Failing
+        );
         assert_eq!(first_line(&[b'x'; 500]).len(), 200);
     }
 
@@ -349,15 +412,28 @@ mod tests {
     }
 
     #[test]
-    fn only_usable_bundle_candidates_are_inspected() {
-        let item = json!({"helperCandidates": [
-            {"path": "/Applications/A.app",
-             "access": {"directory": true, "readable": false, "executable": true}},
-            {"path": "/Users/h/Applications/A.app",
-             "access": {"directory": true, "readable": true, "executable": true}},
-        ]});
-        assert_eq!(usable_bundle(&item), Some("/Users/h/Applications/A.app"));
-        assert_eq!(usable_bundle(&json!({"helperCandidates": []})), None);
+    fn only_the_first_usable_bundle_candidate_is_inspected() {
+        let candidates = [
+            ("/Applications/A.app", false),
+            ("/Users/h/Applications/A.app", true),
+            ("/System/Applications/A.app", true),
+        ]
+        .map(|(path, readable)| {
+            let mut access = crate::environment::discovery::Access::default();
+            access.directory = true;
+            access.readable = readable;
+            access.executable = true;
+            PathObservation {
+                path: path.into(),
+                access,
+            }
+        });
+        assert_eq!(
+            usable_bundle(&candidates),
+            Some("/Users/h/Applications/A.app")
+        );
+        assert_eq!(usable_bundle(&candidates[..1]), None);
+        assert_eq!(usable_bundle(&[]), None);
     }
 
     /// A client of a stand-in helper, both kept in `directory`. The helper
@@ -437,7 +513,7 @@ mod tests {
         assert_eq!(context, "path");
         assert_eq!(
             tool_status(&reply, &run_output(&reply, 16384).unwrap()).0,
-            "ready"
+            ItemState::Ready
         );
         assert!(client.controller.pending().unwrap().is_empty());
     }
@@ -473,13 +549,235 @@ mod tests {
         let (client, helper) = helped(directory.path());
         let _held = client.controller.acquire(false).unwrap();
 
+        let mut probes = 0;
         let report = helper
-            .serve(readiness(&client, &[], &["Finder".into()]), found)
+            .serve(readiness(&client, &[], &["Finder".into()]), |request| {
+                probes += 1;
+                found(request)
+            })
             .await
             .unwrap();
-        assert_eq!(report["ok"], true);
-        assert_eq!(report["items"][0]["status"], "installed", "{report}");
-        assert_eq!(report["items"][0]["bundleIdentifier"], "com.apple.finder");
+        assert_eq!(
+            report,
+            json!({
+                "ok": true,
+                "ready": true,
+                "notVerified": ["application launch", "application sign-in"],
+                "items": [{
+                    "kind": "application", "name": "Finder", "status": "installed",
+                    "bundle": "/Applications/Finder.app", "bundleIdentifier": "com.apple.finder",
+                    "helperState": "none", "helperStateKinds": [], "signIn": "unknown",
+                    "detail": "Account data and sign-ins belong to the helper; check the app itself.",
+                }],
+            })
+        );
+        assert_eq!(probes, 2, "one discovery and one bundle inspection");
+        assert_eq!(helper.requests(), 10);
+        assert_eq!(helper.proofs(), 4);
+        assert!(client.controller.pending().unwrap().is_empty());
+    }
+
+    #[tokio::test]
+    async fn a_present_tool_with_a_failed_probe_is_not_ready() {
+        let directory = tempfile::tempdir().unwrap();
+        let (client, helper) = helped(directory.path());
+        let mut probes = 0;
+        let report = helper
+            .serve(readiness(&client, &["broken".into()], &[]), |request| {
+                probes += 1;
+                if request["argv"][1] == "environment-worker" {
+                    Some(exited(127, "env: broken: No such file\n"))
+                } else {
+                    found(request)
+                }
+            })
+            .await
+            .unwrap();
+        assert_eq!(
+            report,
+            json!({
+                "ok": true, "ready": false, "notVerified": [],
+                "items": [{
+                    "kind": "tool", "name": "broken", "status": "failing",
+                    "detail": "It could not run: env: broken: No such file",
+                    "context": "environment", "exitCode": 127,
+                }],
+            })
+        );
+        assert_eq!(probes, 2, "presence does not replace the version probe");
+        assert!(client.controller.pending().unwrap().is_empty());
+    }
+
+    #[tokio::test]
+    async fn tool_reports_preserve_version_usage_and_malformed_output_results() {
+        for (reply, status, detail, exit, ready) in [
+            (completed("tool 1.0\nmore"), "ready", "tool 1.0", 0, true),
+            (
+                exited(2, "usage: tool [-x]\n"),
+                "ready",
+                "Runs, though it does not answer --version",
+                2,
+                true,
+            ),
+            (
+                json!({"ok": true, "exitCode": 0, "timedOut": false, "signal": null,
+                "events": [{"event": "output", "data": "invalid base64"}]}),
+                "unknown",
+                "The --version output was malformed or too long",
+                0,
+                false,
+            ),
+            (
+                completed(&"x".repeat(16385)),
+                "unknown",
+                "The --version output was malformed or too long",
+                0,
+                false,
+            ),
+        ] {
+            let directory = tempfile::tempdir().unwrap();
+            let (client, helper) = helped(directory.path());
+            let mut probes = 0;
+            let report = helper
+                .serve(readiness(&client, &["tool".into()], &[]), |request| {
+                    probes += 1;
+                    if request["argv"][1] == "environment-worker" {
+                        Some(reply.clone())
+                    } else {
+                        found(request)
+                    }
+                })
+                .await
+                .unwrap();
+            assert_eq!(
+                report,
+                json!({
+                    "ok": true, "ready": ready, "notVerified": [],
+                    "items": [{
+                        "kind": "tool", "name": "tool", "status": status,
+                        "detail": detail, "context": "environment", "exitCode": exit,
+                    }],
+                })
+            );
+            assert_eq!(probes, 2);
+            assert!(client.controller.pending().unwrap().is_empty());
+        }
+    }
+
+    #[tokio::test]
+    async fn missing_selections_keep_their_order_without_execution() {
+        let directory = tempfile::tempdir().unwrap();
+        let (client, helper) = helped(directory.path());
+        let _held = client.controller.acquire(false).unwrap();
+        let mut probes = 0;
+        let report = helper
+            .serve(
+                readiness(&client, &["absent".into()], &["Absent".into()]),
+                |request| {
+                    probes += 1;
+                    let paths = request["argv"].as_array().unwrap().len() - 4;
+                    Some(completed(&"-\n".repeat(paths)))
+                },
+            )
+            .await
+            .unwrap();
+        assert_eq!(
+            report,
+            json!({
+                "ok": true, "ready": false,
+                "notVerified": ["application launch", "application sign-in"],
+                "items": [
+                    {"kind": "tool", "name": "absent", "status": "missing",
+                     "detail": "Not found where the helper looks; copy it in with atlas environment, or install it for every account"},
+                    {"kind": "application", "name": "Absent", "status": "missing",
+                     "detail": "Not found where the helper looks; copy it in with atlas environment, or install it for every account"},
+                ],
+            })
+        );
+        assert_eq!(probes, 1);
+        assert_eq!(helper.requests(), 7);
+        assert!(client.controller.pending().unwrap().is_empty());
+    }
+
+    #[tokio::test]
+    async fn an_unknown_bundle_observation_stays_unknown() {
+        for reply in [exited(3, ""), completed("not bundle facts\n"), Value::Null] {
+            let directory = tempfile::tempdir().unwrap();
+            let (client, helper) = helped(directory.path());
+            let mut probes = 0;
+            let report = helper
+                .serve(readiness(&client, &[], &["Finder".into()]), |request| {
+                    probes += 1;
+                    if request["argv"][2].as_str().unwrap().contains("plutil") {
+                        Some(reply.clone())
+                    } else {
+                        found(request)
+                    }
+                })
+                .await
+                .unwrap();
+            assert_eq!(
+                report,
+                json!({
+                    "ok": true, "ready": false,
+                    "notVerified": ["application launch", "application sign-in"],
+                    "items": [{
+                        "kind": "application", "name": "Finder", "status": "unknown",
+                        "bundle": "/Applications/Finder.app",
+                        "detail": "The bundle could not be inspected in the helper",
+                    }],
+                })
+            );
+            assert_eq!(probes, 2);
+            assert_eq!(helper.requests(), 10);
+            assert!(client.controller.pending().unwrap().is_empty());
+        }
+    }
+
+    #[tokio::test]
+    async fn an_unknown_app_does_not_hide_another_apps_account_facts() {
+        let directory = tempfile::tempdir().unwrap();
+        let (client, helper) = helped(directory.path());
+        let mut probes = 0;
+        let report = helper
+            .serve(
+                readiness(&client, &[], &["Broken".into(), "Finder".into()]),
+                |request| {
+                    probes += 1;
+                    if request["argv"][2].as_str().unwrap().contains("plutil") {
+                        if request["argv"][4] == "/Applications/Broken.app" {
+                            Some(exited(3, ""))
+                        } else {
+                            Some(completed(
+                                "id=com.apple.finder\nstate=preferences\nstate=container\n",
+                            ))
+                        }
+                    } else {
+                        found(request)
+                    }
+                },
+            )
+            .await
+            .unwrap();
+        assert_eq!(
+            report,
+            json!({
+                "ok": true, "ready": false,
+                "notVerified": ["application launch", "application sign-in"],
+                "items": [
+                    {"kind": "application", "name": "Broken", "status": "unknown",
+                     "bundle": "/Applications/Broken.app",
+                     "detail": "The bundle could not be inspected in the helper"},
+                    {"kind": "application", "name": "Finder", "status": "installed",
+                     "bundle": "/Applications/Finder.app", "bundleIdentifier": "com.apple.finder",
+                     "helperState": "present", "helperStateKinds": ["preferences", "container"],
+                     "signIn": "unknown",
+                     "detail": "Account data and sign-ins belong to the helper; check the app itself."},
+                ],
+            })
+        );
+        assert_eq!(probes, 3);
+        assert_eq!(helper.requests(), 13);
         assert!(client.controller.pending().unwrap().is_empty());
     }
 
