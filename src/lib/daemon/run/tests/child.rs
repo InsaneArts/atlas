@@ -110,10 +110,10 @@ impl Child {
 }
 
 #[derive(Default)]
-pub(super) struct Processes(Vec<Instance>);
+pub(in crate::daemon) struct Processes(Vec<Instance>);
 
 impl Processes {
-    pub(super) fn started(&mut self, event: &serde_json::Value) {
+    pub(in crate::daemon) fn started(&mut self, event: &serde_json::Value) {
         if event["event"] == "started" {
             let pid = i32::try_from(event["pid"].as_i64().unwrap()).unwrap();
             if let Some(info) = process::info(pid).unwrap() {

@@ -532,9 +532,9 @@ async fn run_at(
 }
 
 #[cfg(test)]
-mod tests {
+pub(super) mod tests {
     use super::*;
-    mod child;
+    pub(in crate::daemon) mod child;
     use child::{Child, Processes};
     use tokio::sync::mpsc;
 
