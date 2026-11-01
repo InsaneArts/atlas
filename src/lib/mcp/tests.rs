@@ -1344,7 +1344,10 @@ async fn reply_cost_includes_the_private_frame_in_the_outgoing_envelope() {
     server.client = client;
     let png = crate::native::capture::sample_png(640, 360);
     *server.framed.lock().await = Some((Sha256::digest(&png).into(), fixture["frame"].clone()));
-    *server.last.lock().await = Some((Instant::now(), fixture["status"].clone()));
+    *server.last.lock().await = Some((
+        Instant::now() + Duration::from_secs(60),
+        fixture["status"].clone(),
+    ));
     let mut operations = Vec::new();
     let mut reply = helper
         .serve(
