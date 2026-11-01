@@ -275,9 +275,9 @@ pub async fn readiness(client: &Client, tools: &[String], apps: &[String]) -> Re
     }
 
     let found = inspect(client, tools, apps, &[], &[]).await?;
-    let home = found
-        .helper_home
-        .to_str()
+    let home = client.status().await["user"]["home"]
+        .as_str()
+        .map(str::to_owned)
         .ok_or_else(|| Error::new(Code::Identity, "The helper home is unknown"))?;
     let mut reports = Vec::new();
     let mut ready = true;
@@ -289,7 +289,7 @@ pub async fn readiness(client: &Client, tools: &[String], apps: &[String]) -> Re
             Kind::Application => "application",
         };
         let (state, report) = match (item.kind, item.available()) {
-            (Kind::Tool, true) => tool(client, home, name).await?,
+            (Kind::Tool, true) => tool(client, &home, name).await?,
             (Kind::Application, true) => match usable_bundle(&item.helper_candidates) {
                 Some(bundle) => app(client, name, bundle).await?,
                 None => (
@@ -572,8 +572,8 @@ mod tests {
             })
         );
         assert_eq!(probes, 2, "one discovery and one bundle inspection");
-        assert_eq!(helper.requests(), 10);
-        assert_eq!(helper.proofs(), 4);
+        assert_eq!(helper.requests(), 12);
+        assert_eq!(helper.proofs(), 5);
         assert!(client.controller.pending().unwrap().is_empty());
     }
 
@@ -695,7 +695,34 @@ mod tests {
             })
         );
         assert_eq!(probes, 1);
-        assert_eq!(helper.requests(), 7);
+        assert_eq!(helper.requests(), 9);
+        assert!(client.controller.pending().unwrap().is_empty());
+    }
+
+    #[tokio::test]
+    async fn a_failed_status_after_discovery_leaves_the_helper_home_unknown() {
+        let directory = tempfile::tempdir().unwrap();
+        let (client, helper) = helped(directory.path());
+        let helper = helper.unavailable_after(7);
+        let mut probes = 0;
+        let error = helper
+            .serve(readiness(&client, &["absent".into()], &[]), |request| {
+                probes += 1;
+                let paths = request["argv"].as_array().unwrap().len() - 4;
+                Some(completed(&"-\n".repeat(paths)))
+            })
+            .await
+            .unwrap_err();
+        assert_eq!(
+            json!(error),
+            json!({
+                "ok": false, "code": "identity", "uncertain": false,
+                "error": "The helper home is unknown",
+            })
+        );
+        assert_eq!(probes, 1);
+        assert_eq!(helper.requests(), 8);
+        assert_eq!(helper.proofs(), 3);
         assert!(client.controller.pending().unwrap().is_empty());
     }
 
@@ -729,7 +756,7 @@ mod tests {
                 })
             );
             assert_eq!(probes, 2);
-            assert_eq!(helper.requests(), 10);
+            assert_eq!(helper.requests(), 12);
             assert!(client.controller.pending().unwrap().is_empty());
         }
     }
@@ -777,7 +804,7 @@ mod tests {
             })
         );
         assert_eq!(probes, 3);
-        assert_eq!(helper.requests(), 13);
+        assert_eq!(helper.requests(), 15);
         assert!(client.controller.pending().unwrap().is_empty());
     }
 

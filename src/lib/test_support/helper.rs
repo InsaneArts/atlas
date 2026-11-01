@@ -45,6 +45,7 @@ pub(crate) struct Helper {
     /// How many identity proofs it gave.
     proofs: AtomicUsize,
     requests: AtomicUsize,
+    unavailable_after: Option<usize>,
     /// Whether it refuses a read meant for another session, as a current
     /// daemon does; an older one cannot be told the session.
     pins: bool,
@@ -67,6 +68,7 @@ impl Helper {
             moves_after: None,
             proofs: AtomicUsize::new(0),
             requests: AtomicUsize::new(0),
+            unavailable_after: None,
             pins: true,
         };
 
@@ -93,6 +95,12 @@ impl Helper {
     /// identity proofs.
     pub(crate) fn moving_after(mut self, proofs: usize) -> Self {
         self.moves_after = Some(proofs);
+        self
+    }
+
+    /// This helper closes connections after answering `requests` requests.
+    pub(crate) fn unavailable_after(mut self, requests: usize) -> Self {
+        self.unavailable_after = Some(requests);
         self
     }
 
@@ -138,9 +146,11 @@ impl Helper {
                 let mut line = String::new();
                 peer.read_line(&mut line).await.unwrap();
                 let request: Value = serde_json::from_str(&line).unwrap();
-                self.requests.fetch_add(1, Ordering::Relaxed);
+                let requests = self.requests.fetch_add(1, Ordering::Relaxed) + 1;
 
-                let reply = if request["op"] == "hello" {
+                let reply = if self.unavailable_after.is_some_and(|limit| requests > limit) {
+                    None
+                } else if request["op"] == "hello" {
                     Some(self.hello())
                 } else if request["argv"][1] == "session-info" {
                     let proofs = self.proofs.fetch_add(1, Ordering::Relaxed) + 1;
