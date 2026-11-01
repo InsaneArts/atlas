@@ -843,8 +843,10 @@ pub(super) mod tests {
         tokio::time::pause();
         observe_exit(command.as_mut(), leader).await;
         tokio::time::advance(FINISH).await;
-        let reply = command.await;
         tokio::time::resume();
+        let reply = tokio::time::timeout(Duration::from_secs(20), command)
+            .await
+            .unwrap();
         assert_eq!(reply["ok"], true);
         assert_eq!(reply["exitCode"], 0);
         assert_eq!(reply["timedOut"], false);
@@ -974,8 +976,10 @@ pub(super) mod tests {
         observe_exit(command.as_mut(), leader).await;
         child.message("exiting").await;
         tokio::time::advance(LINGER).await;
-        let reply = command.await;
         tokio::time::resume();
+        let reply = tokio::time::timeout(Duration::from_secs(20), command)
+            .await
+            .unwrap();
         assert_eq!(reply["exitCode"], 0);
         assert_eq!(reply["timedOut"], false);
         assert_eq!(reply.get("outputTruncated"), None);
@@ -1032,8 +1036,10 @@ pub(super) mod tests {
             cancel.send(reason).unwrap();
             poll_pending(command.as_mut()).await;
             tokio::time::advance(LINGER).await;
-            let reply = command.await;
             tokio::time::resume();
+            let reply = tokio::time::timeout(Duration::from_secs(20), command)
+                .await
+                .unwrap();
             let expected = match reason {
                 Cancel::Left => interrupted(Code::Transport, "The client went away"),
                 Cancel::Stopping => {
@@ -1057,7 +1063,7 @@ pub(super) mod tests {
 
     #[tokio::test]
     async fn a_wait_failure_keeps_the_outcome_uncertain_and_the_descendant_alive() {
-        use nix::sys::wait::{WaitStatus, waitpid};
+        use nix::sys::wait::{WaitPidFlag, WaitStatus, waitpid};
 
         let mut child = Child::new();
         let argv = child.argv("pipe");
@@ -1085,16 +1091,24 @@ pub(super) mod tests {
         // wait returns ECHILD without a shipping fault hook.
         child.permit("exit");
         child.message("exiting").await;
-        let status = tokio::task::spawn_blocking(move || waitpid(Pid::from_raw(leader.pid), None))
-            .await
-            .unwrap()
-            .unwrap();
+        let until = Instant::now() + Duration::from_secs(20);
+        let status = loop {
+            assert!(Instant::now() < until, "leader did not exit");
+            match waitpid(Pid::from_raw(leader.pid), Some(WaitPidFlag::WNOHANG)) {
+                Ok(WaitStatus::StillAlive) | Err(nix::errno::Errno::EINTR) => {
+                    tokio::time::sleep(Duration::from_millis(10)).await;
+                }
+                status => break status.unwrap(),
+            }
+        };
         assert_eq!(status, WaitStatus::Exited(Pid::from_raw(leader.pid), 0));
         tokio::time::pause();
         poll_pending(command.as_mut()).await;
         tokio::time::advance(LINGER).await;
-        let reply = command.await;
         tokio::time::resume();
+        let reply = tokio::time::timeout(Duration::from_secs(20), command)
+            .await
+            .unwrap();
         assert_eq!(
             reply,
             interrupted(
