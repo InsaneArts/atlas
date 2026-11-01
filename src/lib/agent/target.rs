@@ -163,6 +163,7 @@ pub(super) async fn target_among(
                 "The helper's process identities were malformed",
             )
         })?;
+    // apps_in returns only replies whose apps field passed array validation.
     let rows = apps["apps"].as_array().expect("validated app list");
     let name = match target {
         Target::Pid(pid) => {

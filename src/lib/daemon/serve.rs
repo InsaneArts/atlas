@@ -676,10 +676,7 @@ async fn handle(stream: UnixStream, daemon: Arc<Daemon>, controller: bool) -> Re
             daemon.hello()
         }
         Ok(Request::Apps { .. }) => match tokio::task::spawn_blocking(|| {
-            crate::native::processes::snapshot(
-                || Ok(apps::running()),
-                |app| app["pid"].as_i64().expect("running apps have process IDs"),
-            )
+            crate::native::processes::snapshot(|| Ok(apps::running()), |app| i64::from(app.pid))
         })
         .await
         {
