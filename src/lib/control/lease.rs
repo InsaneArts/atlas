@@ -63,7 +63,11 @@ impl Lease {
     /// let go of the controller lock once nothing keeps it: no token, no
     /// input in flight and no release under way.
     pub fn expire(&mut self) {
-        if self.owner.is_some() && Instant::now() >= self.expires {
+        self.expire_at(Instant::now());
+    }
+
+    fn expire_at(&mut self, now: Instant) {
+        if self.owner.is_some() && now >= self.expires {
             self.retired = self.owner.take();
             self.cleaning = true;
         }
@@ -77,7 +81,11 @@ impl Lease {
     /// lock is still kept for another viewer or for one still settling. The
     /// token, which the viewer presents to act, renew and release.
     pub fn acquire(&mut self, controller: &Controller) -> Result<String> {
-        self.expire();
+        self.acquire_at(controller, Instant::now())
+    }
+
+    fn acquire_at(&mut self, controller: &Controller, now: Instant) -> Result<String> {
+        self.expire_at(now);
 
         if self.descriptor.is_some() {
             return Err(Error::new(Code::Busy, "Another viewer has control"));
@@ -86,7 +94,7 @@ impl Lease {
         self.descriptor = Some(controller.acquire_for_person()?);
         let token = token();
         self.owner = Some(token.clone());
-        self.expires = Instant::now() + self.ttl;
+        self.expires = now + self.ttl;
 
         Ok(token)
     }
@@ -94,7 +102,11 @@ impl Lease {
     /// Refuse with `lease-lost` unless `token` is the live token: one that
     /// was released or ran out never acts again.
     pub fn require(&mut self, token: &str) -> Result<()> {
-        self.expire();
+        self.require_at(token, Instant::now())
+    }
+
+    fn require_at(&mut self, token: &str, now: Instant) -> Result<()> {
+        self.expire_at(now);
 
         // Tokens are fixed-length random strings; compare without an early byte exit.
         let matches = self.owner.as_ref().is_some_and(|owner| {
@@ -117,8 +129,12 @@ impl Lease {
 
     /// [`Lease::require`] `token`, then give it its full time to live again.
     pub fn renew(&mut self, token: &str) -> Result<()> {
-        self.require(token)?;
-        self.expires = Instant::now() + self.ttl;
+        self.renew_at(token, Instant::now())
+    }
+
+    fn renew_at(&mut self, token: &str, now: Instant) -> Result<()> {
+        self.require_at(token, now)?;
+        self.expires = now + self.ttl;
         Ok(())
     }
 
@@ -126,18 +142,26 @@ impl Lease {
     /// no release left to clean up: the lock goes unless an input is still
     /// in flight, and then goes with it.
     pub fn release(&mut self) {
+        self.release_at(Instant::now());
+    }
+
+    fn release_at(&mut self, now: Instant) {
         self.owner = None;
         self.retired = None;
         self.cleaning = false;
-        self.expire();
+        self.expire_at(now);
     }
 
     /// Undo an acquire for `owner` that did not go through, unless `owner`
     /// is no longer the live token, an input is in flight or a release has
     /// begun: a late failure never ends a later viewer's control.
     pub fn abandon_acquire(&mut self, owner: &str) {
-        if self.require(owner).is_ok() && !self.inflight && !self.cleaning {
-            self.release();
+        self.abandon_acquire_at(owner, Instant::now());
+    }
+
+    fn abandon_acquire_at(&mut self, owner: &str, now: Instant) {
+        if self.require_at(owner, now).is_ok() && !self.inflight && !self.cleaning {
+            self.release_at(now);
         }
     }
 
@@ -146,7 +170,15 @@ impl Lease {
     /// held until [`Lease::end_release`]. None when there is nothing left
     /// to release.
     pub fn begin_release(&mut self, requested: Option<&str>) -> Result<Option<String>> {
-        self.expire();
+        self.begin_release_at(requested, Instant::now())
+    }
+
+    fn begin_release_at(
+        &mut self,
+        requested: Option<&str>,
+        now: Instant,
+    ) -> Result<Option<String>> {
+        self.expire_at(now);
         let current = self.owner.as_ref().or(self.retired.as_ref());
 
         // Releasing a lease that already ended is a no-op; a token can
@@ -175,19 +207,32 @@ impl Lease {
     /// The release [`Lease::begin_release`] began has cleaned up: the lock
     /// goes unless an input in flight still keeps it.
     pub fn end_release(&mut self) {
+        self.end_release_at(Instant::now());
+    }
+
+    fn end_release_at(&mut self, now: Instant) {
         self.cleaning = false;
-        self.expire();
+        self.expire_at(now);
     }
 
     /// Whether the controller lock is still kept for this lease.
     pub fn active(&mut self) -> bool {
-        self.expire();
+        self.active_at(Instant::now())
+    }
+
+    fn active_at(&mut self, now: Instant) -> bool {
+        self.expire_at(now);
         self.descriptor.is_some()
     }
 
     /// Whether a token ran out and its release has not begun yet.
     pub fn expired(&self) -> bool {
         self.retired.is_some()
+    }
+
+    #[cfg(test)]
+    pub(crate) fn expire_for_test(&mut self) {
+        self.expire_at(self.expires);
     }
 }
 
@@ -236,7 +281,12 @@ impl Drop for ActionPermit {
             runtime.spawn(async move { finish(&mut *lease.lock().await) });
         } else {
             // Outside any runtime, waiting here blocks no async task.
+            #[cfg(test)]
+            tests::blocking_drop_started();
             finish(&mut self.lease.blocking_lock());
         }
     }
 }
+
+#[cfg(test)]
+mod tests;

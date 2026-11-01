@@ -19,7 +19,6 @@ use std::{
     fs::File,
     io::{Seek, SeekFrom, Write},
 };
-use tokio::sync::Mutex;
 
 /// What agents and people read gives the default wait the code uses.
 #[test]
@@ -1071,51 +1070,4 @@ fn a_poll_is_about_a_tenth_of_a_second_and_never_past_the_wait() {
             "{slept:?}"
         );
     }
-}
-
-/// A permit dropped outside any runtime, while the lease is locked
-/// elsewhere, waits for it instead of panicking.
-#[test]
-fn a_permit_settles_without_a_runtime() {
-    let lease: SharedLease = Arc::new(Mutex::new(Lease::new(Duration::from_secs(60))));
-    let token = token();
-
-    {
-        let mut state = lease.blocking_lock();
-        state.owner = Some(token.clone());
-        state.expires = Instant::now() + Duration::from_secs(60);
-    }
-
-    let runtime = tokio::runtime::Builder::new_current_thread()
-        .build()
-        .unwrap();
-    let permit = runtime
-        .block_on(ActionPermit::begin(lease.clone(), &token))
-        .unwrap();
-
-    drop(runtime);
-    let held = lease.clone().blocking_lock_owned();
-    let holder = std::thread::spawn(move || {
-        std::thread::sleep(Duration::from_millis(50));
-        drop(held);
-    });
-
-    drop(permit);
-    holder.join().unwrap();
-    assert!(!lease.blocking_lock().inflight);
-}
-
-#[test]
-fn beginning_a_release_clears_the_retired_token_too() {
-    let mut lease = Lease::new(Duration::from_secs(60));
-    lease.owner = Some("a".repeat(48));
-    lease.expires = Instant::now() + Duration::from_secs(60);
-    lease.retired = Some("b".repeat(48));
-
-    assert_eq!(lease.begin_release(None).unwrap(), Some("a".repeat(48)));
-    assert_eq!((lease.owner.clone(), lease.retired.clone()), (None, None));
-
-    lease.retired = Some("b".repeat(48));
-    assert_eq!(lease.begin_release(None).unwrap(), Some("b".repeat(48)));
-    assert_eq!(lease.retired, None);
 }

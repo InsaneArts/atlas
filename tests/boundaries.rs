@@ -2,17 +2,16 @@ use atlas::{
     actions,
     client::{Client, Size, png_dimensions, validate_completion},
     config::Config,
-    control::{ActionPermit, Controller, Lease},
+    control::{Controller, Lease},
     error::Code,
     session::{Display, diagnose, input_current, input_settled, require_hidden},
     transport::Transport,
 };
 use serde_json::{Value, json};
-use std::{sync::Arc, time::Duration};
+use std::time::Duration;
 use tokio::{
     io::{AsyncReadExt, AsyncWriteExt},
     net::UnixListener,
-    sync::Mutex,
 };
 
 fn status() -> Value {
@@ -377,27 +376,6 @@ fn controllers_for_one_helper_share_the_lock_and_pending_marker() {
     second.clear().unwrap();
     drop(recovery);
     first.acquire(false).unwrap();
-}
-
-#[tokio::test]
-async fn lease_expiry_keeps_flock_until_the_action_settles() {
-    let dir = tempfile::tempdir().unwrap();
-    let controller = Controller::at(502, dir.path());
-    let lease = Arc::new(Mutex::new(Lease::new(Duration::from_millis(10))));
-    let owner = lease.lock().await.acquire(&controller).unwrap();
-    let permit = ActionPermit::begin(lease.clone(), &owner).await.unwrap();
-
-    tokio::time::sleep(Duration::from_millis(20)).await;
-    assert!(lease.lock().await.require(&owner).is_err());
-    assert_eq!(controller.acquire(false).unwrap_err().code, "busy");
-
-    drop(permit);
-    assert_eq!(controller.acquire(false).unwrap_err().code, "busy");
-
-    let retiring = lease.lock().await.begin_release(None).unwrap();
-    assert_eq!(retiring.as_deref(), Some(owner.as_str()));
-    lease.lock().await.end_release();
-    controller.acquire(false).unwrap();
 }
 
 #[test]

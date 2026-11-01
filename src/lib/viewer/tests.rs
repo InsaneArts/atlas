@@ -840,6 +840,99 @@ fn epoch() -> Epoch {
     }
 }
 
+#[tokio::test]
+async fn expiry_during_acquire_keeps_the_descriptor_until_cleanup_completes() {
+    let dir = tempfile::tempdir().unwrap();
+    let socket = dir.path().join("a.sock");
+    let (mut asked, answer) = input_service(&socket, "acquire");
+    let viewer = Arc::new(http::configured(
+        client_with_input(dir.path(), &socket),
+        "127.0.0.1:1".into(),
+        None,
+    ));
+    let client = viewer.client();
+    let taking = tokio::spawn({
+        let viewer = viewer.clone();
+        let client = client.clone();
+        async move { viewer.take_control(&client, &epoch()).await }
+    });
+    assert_eq!(asked.recv().await.as_deref(), Some("acquire"));
+    viewer.lease.lock().await.expire_for_test();
+    assert!(viewer.lease.lock().await.expired());
+    assert!(viewer.lease.lock().await.active());
+    assert_eq!(client.controller.acquire(false).unwrap_err().code, "busy");
+    assert!(!taking.is_finished());
+
+    answer.notify_one();
+    let lost = taking.await.unwrap().unwrap_err();
+    assert_eq!(lost.code, "lease-lost");
+    assert_eq!(asked.recv().await.as_deref(), Some("release"));
+    assert!(client.controller.pending().unwrap().is_empty());
+    assert!(!viewer.lease.lock().await.active());
+    assert!(client.controller.acquire(false).is_ok());
+}
+
+#[tokio::test]
+async fn expiry_while_release_awaits_keeps_a_successor_excluded() {
+    let dir = tempfile::tempdir().unwrap();
+    let socket = dir.path().join("a.sock");
+    let (mut asked, answer) = input_service(&socket, "release");
+    let viewer = Arc::new(http::configured(
+        client_with_input(dir.path(), &socket),
+        "127.0.0.1:1".into(),
+        None,
+    ));
+    let client = viewer.client();
+    let owner = viewer.take_control(&client, &epoch()).await.unwrap();
+    assert_eq!(asked.recv().await.as_deref(), Some("acquire"));
+    let releasing = tokio::spawn({
+        let viewer = viewer.clone();
+        let owner = owner.clone();
+        async move { viewer.release(Some(&owner)).await }
+    });
+    assert_eq!(asked.recv().await.as_deref(), Some("release"));
+    viewer.lease.lock().await.expire_for_test();
+    assert!(viewer.lease.lock().await.active());
+    assert_eq!(
+        viewer.lease.lock().await.renew(&owner).unwrap_err().code,
+        "lease-lost"
+    );
+    assert_eq!(client.controller.acquire(false).unwrap_err().code, "busy");
+    assert_eq!(client.controller.pending().unwrap().len(), 1);
+    assert!(!releasing.is_finished());
+
+    answer.notify_one();
+    releasing.await.unwrap().unwrap();
+    assert!(!viewer.lease.lock().await.active());
+    assert!(client.controller.pending().unwrap().is_empty());
+    assert!(client.controller.acquire(false).is_ok());
+}
+
+#[tokio::test]
+async fn expiry_with_unconfirmed_cleanup_keeps_recovery_pending() {
+    let dir = tempfile::tempdir().unwrap();
+    let viewer = http::configured(client(dir.path()), "127.0.0.1:1".into(), None);
+    let client = viewer.client();
+    let owner = viewer
+        .lease
+        .lock()
+        .await
+        .acquire(&client.controller)
+        .unwrap();
+    viewer.lease.lock().await.expire_for_test();
+    assert!(viewer.lease.lock().await.active());
+    assert_eq!(client.controller.acquire(false).unwrap_err().code, "busy");
+
+    let error = viewer.release(Some(&owner)).await.unwrap_err();
+    assert!(error.uncertain);
+    assert!(!viewer.lease.lock().await.active());
+    assert_eq!(client.controller.unresolved().unwrap().len(), 1);
+    assert_eq!(
+        client.controller.acquire(false).unwrap_err().code,
+        "uncertain"
+    );
+}
+
 /// Control ends in the helper it was taken on, though the viewer
 /// serves another one now.
 #[tokio::test]
@@ -1082,16 +1175,17 @@ async fn shutdown_waits_for_changes_in_progress() {
     });
     assert_eq!(asked.recv().await.as_deref(), Some("acquire"));
 
-    let closing = tokio::spawn({
-        let viewer = viewer.clone();
-        async move { viewer.close().await }
-    });
-    tokio::time::sleep(Duration::from_millis(200)).await;
-    assert!(!closing.is_finished(), "it waits for the acquire");
+    let closing = viewer.close();
+    tokio::pin!(closing);
+    std::future::poll_fn(|cx| {
+        assert!(std::future::Future::poll(closing.as_mut(), cx).is_pending());
+        std::task::Poll::Ready(())
+    })
+    .await;
 
     answer.notify_one();
     taking.await.unwrap().unwrap();
-    closing.await.unwrap();
+    closing.await;
     viewer.release(None).await.unwrap();
     assert_eq!(asked.recv().await.as_deref(), Some("release"));
     assert!(viewer.client().controller.pending().unwrap().is_empty());
