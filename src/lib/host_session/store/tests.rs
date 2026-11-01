@@ -18,6 +18,22 @@ fn session(id: &str) -> HostSession {
     HostSession::new(Host::Claude, id).unwrap()
 }
 
+fn remember_windows(client: &Client, key: &Key) {
+    let epoch = crate::session::Epoch {
+        uid: crate::test_support::UID,
+        capture_pid: 123,
+        input_pid: 456,
+        security_session_id: 42,
+        display_id: 7,
+        display: crate::session::Display {
+            width: 1000.0,
+            height: 800.0,
+            scale: 1.0,
+        },
+    };
+    crate::last_capture::remember_windows(&client.config.output_dir, key, &[], &epoch).unwrap();
+}
+
 fn store(client: &Client) -> Store {
     Store::at(client.output_dir().unwrap())
 }
@@ -628,6 +644,9 @@ fn records_idle_a_week_go_unless_they_list_leftovers() {
     let planned = aged(&store, "planned", 8, 1);
     let idle = aged(&store, "idle", 8, 0);
     let recent = aged(&store, "recent", 1, 0);
+    for record in [&copied, &planned, &idle, &recent] {
+        remember_windows(&client, &record.key);
+    }
 
     store
         .update(&session("new"), now_ms(), &client.controller, |_| {})
@@ -640,6 +659,15 @@ fn records_idle_a_week_go_unless_they_list_leftovers() {
     );
     assert!(store.read(&recent.key).is_some());
     assert_eq!(store.read(&idle.key), None);
+    for record in [&copied, &planned, &recent] {
+        assert!(
+            crate::last_capture::remembered_windows(&client.config.output_dir, &record.key)
+                .is_some()
+        );
+    }
+    assert!(
+        crate::last_capture::remembered_windows(&client.config.output_dir, &idle.key).is_none()
+    );
 }
 
 #[test]
@@ -656,6 +684,9 @@ fn at_most_sixty_four_records_stay_and_those_with_leftovers_go_last() {
         .map(|n| aged(&store, &format!("other-{n}"), 5 - (n as u64 % 5), 0))
         .collect();
 
+    for record in with_leftovers.iter().chain(&others) {
+        remember_windows(&client, &record.key);
+    }
     let new = session("newest");
     store
         .update(&new, now_ms(), &client.controller, |_| {})
@@ -678,6 +709,13 @@ fn at_most_sixty_four_records_stay_and_those_with_leftovers_go_last() {
         .filter(|record| store.read(&record.key).is_none())
         .count();
     assert_eq!(gone, 3 + 1);
+    for record in with_leftovers.iter().chain(&others) {
+        assert_eq!(
+            crate::last_capture::remembered_windows(&client.config.output_dir, &record.key)
+                .is_some(),
+            store.read(&record.key).is_some(),
+        );
+    }
 }
 
 #[test]

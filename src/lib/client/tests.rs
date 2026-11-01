@@ -3647,15 +3647,14 @@ impl Client {
         if let Some(session) = &self.host_session
             && let Ok(output) = self.output_dir()
         {
-            crate::last_capture::remember_windows(output, session.key().as_str(), windows, epoch)
-                .unwrap();
+            crate::last_capture::remember_windows(output, session.key(), windows, epoch).unwrap();
         }
     }
 
     pub(crate) fn remembered_windows(&self) -> Option<crate::last_capture::Observation> {
         crate::last_capture::remembered_windows(
             &self.config.output_dir,
-            self.host_session.as_ref()?.key().as_str(),
+            self.host_session.as_ref()?.key(),
         )
     }
 }

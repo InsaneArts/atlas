@@ -227,6 +227,6 @@ impl Client {
                 snapshot.starts.as_ref(),
             )
         });
-        last_capture::remember_windows(self.output_dir()?, session.key().as_str(), &windows, epoch)
+        last_capture::remember_windows(self.output_dir()?, session.key(), &windows, epoch)
     }
 }

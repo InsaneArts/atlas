@@ -3224,7 +3224,8 @@ async fn looks_and_window_lists_fail_when_window_memory_cannot_be_replaced() {
             .unwrap();
         let output = client.output_dir().unwrap();
         client.remember_windows(&[], &verified.session().epoch);
-        std::fs::set_permissions(output, std::fs::Permissions::from_mode(0o500)).unwrap();
+        let observations = output.join("last-windows");
+        std::fs::set_permissions(&observations, std::fs::Permissions::from_mode(0o500)).unwrap();
         let result = helper
             .serve(
                 async {
@@ -3240,7 +3241,7 @@ async fn looks_and_window_lists_fail_when_window_memory_cannot_be_replaced() {
                 },
             )
             .await;
-        std::fs::set_permissions(output, std::fs::Permissions::from_mode(0o700)).unwrap();
+        std::fs::set_permissions(&observations, std::fs::Permissions::from_mode(0o700)).unwrap();
         assert!(result.is_err(), "listing: {listing}");
     }
 }

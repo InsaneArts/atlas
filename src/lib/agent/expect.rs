@@ -99,7 +99,7 @@ impl Expected {
         };
         let Observation { windows, epoch } = crate::last_capture::remembered_windows(
             &client.config.output_dir,
-            client.host_session.as_ref()?.key().as_str(),
+            client.host_session.as_ref()?.key(),
         )?;
         let window = windows
             .into_iter()
@@ -461,6 +461,50 @@ mod tests {
     }
 
     #[test]
+    fn point_admission_keeps_a_window_expectation_during_replacement() {
+        let directory = tempfile::tempdir().unwrap();
+        let client = session(&crate::test_support::client(directory.path()), "one");
+        remember(&client, &[window(42, 10.0)]);
+        let start = std::sync::Barrier::new(2);
+        std::thread::scope(|scope| {
+            let writer = scope.spawn(|| {
+                start.wait();
+                for turn in 0..256 {
+                    remember(&client, &[window(42 + turn % 2, 10.0)]);
+                }
+            });
+            start.wait();
+            let actions = move_to(30.0, 40.0);
+            for _ in 0..4096 {
+                assert!(matches!(number(&client, None, &actions), Some(42 | 43)));
+            }
+            writer.join().unwrap();
+        });
+    }
+
+    #[test]
+    fn a_failed_replacement_keeps_the_previous_point_expectation() {
+        let directory = tempfile::tempdir().unwrap();
+        let client = session(&crate::test_support::client(directory.path()), "one");
+        remember(&client, &[window(42, 10.0)]);
+        let partial = client.config.output_dir.join("last-windows").join(format!(
+            "{}.json.partial",
+            client.host_session.as_ref().unwrap().key()
+        ));
+        std::fs::create_dir(partial).unwrap();
+        assert!(
+            crate::last_capture::remember_windows(
+                &client.config.output_dir,
+                client.host_session.as_ref().unwrap().key(),
+                &[],
+                &epoch(),
+            )
+            .is_err()
+        );
+        assert_eq!(number(&client, None, &move_to(30.0, 40.0)), Some(42));
+    }
+
+    #[test]
     fn remembered_points_leave_explicit_targets_and_keys_unchanged() {
         let directory = tempfile::tempdir().unwrap();
         let client = session(&crate::test_support::client(directory.path()), "one");
@@ -575,16 +619,10 @@ mod tests {
         let mut observed = window(42, 10.0);
         observed.title = Some("private document".into());
         remember(&client, &[observed]);
-        let path = std::fs::read_dir(&client.config.output_dir)
-            .unwrap()
-            .map(|entry| entry.unwrap().path())
-            .find(|path| {
-                path.file_name()
-                    .unwrap()
-                    .to_string_lossy()
-                    .starts_with("last-windows-")
-            })
-            .unwrap();
+        let path = client.config.output_dir.join("last-windows").join(format!(
+            "{}.json",
+            client.host_session.as_ref().unwrap().key()
+        ));
         let bytes = std::fs::read(&path).unwrap();
         let text = String::from_utf8(bytes.clone()).unwrap();
         assert!(!text.contains("private document") && !text.contains("Editor"));

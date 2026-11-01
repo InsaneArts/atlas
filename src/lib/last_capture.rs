@@ -13,9 +13,11 @@ use crate::{
     daemon::protocol::{Crop, Region},
     digest,
     error::{Code, Error, Result},
-    files::write_private,
+    files::{Durability, write_private},
     helper_info::capture_time,
+    host_session::Key,
     native::windows::HitWindow,
+    record_folder::{RecordFolder, Records},
     session::Epoch,
 };
 use fs2::FileExt;
@@ -34,6 +36,13 @@ use std::{
 const RECORD: &str = "last-captures.json";
 const LOCK: &str = "last-captures.lock";
 const VERSION: u64 = 1;
+static WINDOWS: Records = Records {
+    folder: "last-windows",
+    noun: "window observation",
+    lock_wait: Duration::from_millis(250),
+    durability: Durability::Kernel,
+    bytes: RECORD_LIMIT,
+};
 /// How many targets the record remembers, newest first.
 const TARGETS: usize = 32;
 /// A record larger than this is not read.
@@ -52,8 +61,14 @@ pub(crate) struct Kept {
     pub written: bool,
 }
 
+#[derive(Deserialize, Serialize)]
+struct Captures<T> {
+    version: u64,
+    targets: T,
+}
+
 /// The last capture of one target.
-#[derive(Clone, Debug, Deserialize, Serialize)]
+#[derive(Debug, Deserialize, Serialize)]
 struct Entry {
     sha256: String,
     file: String,
@@ -74,46 +89,39 @@ pub(crate) struct Observation {
 
 pub(crate) fn remember_windows(
     output: &Path,
-    key: &str,
+    key: &Key,
     windows: &[HitWindow],
     epoch: &Epoch,
 ) -> Result<()> {
-    let path = window_record(output, key);
-    match fs::remove_file(&path) {
-        Ok(()) => {}
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
-        Err(error) => return Err(Error::writing(&path, error)),
-    }
-    let bytes = serde_json::to_vec(&Observation {
+    let folder = RecordFolder::at(output, &WINDOWS);
+    let mut observation = Observation {
         windows: windows.to_vec(),
         epoch: recorded_epoch(epoch),
-    })?;
-    if bytes.len() as u64 > RECORD_LIMIT {
+    };
+    let mut bytes = serde_json::to_vec(&observation)?;
+    let oversized = bytes.len() as u64 > RECORD_LIMIT;
+    if oversized {
+        observation.windows.clear();
+        bytes = serde_json::to_vec(&observation)?;
+    }
+    folder.make()?;
+    let _lock = folder.lock()?;
+    folder.write(key, &bytes)?;
+    if oversized {
         return Err(Error::new(
             Code::Io,
             "Too many window regions to remember; look again",
         ));
     }
-    write_atomic(&path, &bytes, 0o600)
+    Ok(())
 }
 
-pub(crate) fn remembered_windows(output: &Path, key: &str) -> Option<Observation> {
-    let mut bytes = Vec::new();
-    crate::files::open_plain(&window_record(output, key))?
-        .take(RECORD_LIMIT + 1)
-        .read_to_end(&mut bytes)
-        .ok()?;
-    if bytes.len() as u64 > RECORD_LIMIT {
-        return None;
-    }
-    serde_json::from_slice(&bytes).ok()
+pub(crate) fn remembered_windows(output: &Path, key: &Key) -> Option<Observation> {
+    RecordFolder::at(output, &WINDOWS).read_json(key)
 }
 
-fn window_record(output: &Path, key: &str) -> PathBuf {
-    output.join(format!(
-        "last-windows-{:x}.json",
-        Sha256::digest(key.as_bytes())
-    ))
+pub(crate) fn forget_windows(output: &Path, key: &Key) {
+    RecordFolder::at(output, &WINDOWS).remove(key);
 }
 
 /// What a capture shows and at what size: captures compare only with the
@@ -165,7 +173,6 @@ pub(crate) fn keep(
     let epoch = recorded_epoch(&frame.epoch);
     let earlier = targets
         .get(key)
-        .and_then(|entry| serde_json::from_value::<Entry>(entry.clone()).ok())
         .filter(|entry| {
             entry.sha256 == hash
                 && entry.epoch == epoch
@@ -194,7 +201,7 @@ pub(crate) fn keep(
         epoch,
         at: timestamp().to_string(),
     };
-    targets.insert(key.to_owned(), serde_json::to_value(entry)?);
+    targets.insert(key.to_owned(), entry);
     // A record that cannot be written only costs the next match.
     let _ = write(output, targets);
 
@@ -265,37 +272,33 @@ fn verified(output: &Path, file: &str, hash: &str) -> Option<PathBuf> {
 }
 
 /// A missing, oversized, unreadable or unknown record counts as empty.
-fn read(output: &Path) -> BTreeMap<String, Value> {
+fn read(output: &Path) -> BTreeMap<String, Entry> {
     let read = || {
         let mut bytes = Vec::new();
         crate::files::open_plain(&output.join(RECORD))?
             .take(RECORD_LIMIT + 1)
             .read_to_end(&mut bytes)
             .ok()?;
-        let mut record: Value = serde_json::from_slice(&bytes).ok()?;
-        if bytes.len() as u64 > RECORD_LIMIT || record["version"].as_u64() != Some(VERSION) {
+        if bytes.len() as u64 > RECORD_LIMIT {
             return None;
         }
-        serde_json::from_value(record["targets"].take()).ok()
+        let record: Captures<BTreeMap<String, Entry>> = serde_json::from_slice(&bytes).ok()?;
+        (record.version == VERSION).then_some(record.targets)
     };
     read().unwrap_or_default()
 }
 
 /// Write the newest targets within the record's count and byte limits.
-fn write(output: &Path, targets: BTreeMap<String, Value>) -> Result<()> {
+fn write(output: &Path, targets: BTreeMap<String, Entry>) -> Result<()> {
     let mut entries: Vec<_> = targets.into_iter().collect();
-    entries.sort_by_key(|(_, entry)| {
-        std::cmp::Reverse(
-            entry["at"]
-                .as_str()
-                .and_then(|at| at.parse::<u128>().ok())
-                .unwrap_or(0),
-        )
-    });
+    entries.sort_by_key(|(_, entry)| std::cmp::Reverse(entry.at.parse::<u128>().ok().unwrap_or(0)));
     entries.truncate(TARGETS);
     loop {
         let targets: BTreeMap<_, _> = entries.iter().map(|(key, entry)| (key, entry)).collect();
-        let bytes = serde_json::to_vec(&json!({"version": VERSION, "targets": targets}))?;
+        let bytes = serde_json::to_vec(&Captures {
+            version: VERSION,
+            targets,
+        })?;
         if bytes.len() as u64 <= RECORD_LIMIT {
             return write_atomic(&output.join(RECORD), &bytes, 0o600);
         }
@@ -312,6 +315,27 @@ mod tests {
         session::Display,
     };
     use std::{sync::Arc, time::Instant};
+
+    fn window_key(name: &str) -> Key {
+        Key::of(crate::host_session::Host::Named, name)
+    }
+
+    fn window_record(output: &Path, name: &str) -> PathBuf {
+        RecordFolder::at(output, &WINDOWS).path(&window_key(name))
+    }
+
+    fn remember_windows(
+        output: &Path,
+        name: &str,
+        windows: &[HitWindow],
+        epoch: &Epoch,
+    ) -> Result<()> {
+        super::remember_windows(output, &window_key(name), windows, epoch)
+    }
+
+    fn remembered_windows(output: &Path, name: &str) -> Option<Observation> {
+        super::remembered_windows(output, &window_key(name))
+    }
 
     fn epoch() -> Epoch {
         Epoch {
@@ -626,6 +650,36 @@ mod tests {
     }
 
     #[test]
+    fn capture_targets_are_read_as_entries_and_written_at_the_file_boundary() {
+        let dir = tempfile::tempdir().unwrap();
+        let kept = keep(dir.path(), "screen full", &screen(), None, false).unwrap();
+        let targets: BTreeMap<String, Entry> = read(dir.path());
+        assert_eq!(
+            targets["screen full"].file,
+            kept.path.file_name().unwrap().to_str().unwrap()
+        );
+        write(dir.path(), targets).unwrap();
+        assert_eq!(
+            read(dir.path())["screen full"].file,
+            record(dir.path())["targets"]["screen full"]["file"]
+        );
+    }
+
+    #[test]
+    fn window_memory_uses_kernel_durability_outside_the_screenshot_directory() {
+        assert!(WINDOWS.durability == Durability::Kernel);
+        let dir = tempfile::tempdir().unwrap();
+        remember_windows(dir.path(), "one", &[], &epoch()).unwrap();
+        let entries: Vec<_> = fs::read_dir(dir.path())
+            .unwrap()
+            .map(|entry| entry.unwrap().path())
+            .collect();
+        assert_eq!(entries.len(), 1);
+        assert!(entries[0].is_dir());
+        assert!(remembered_windows(dir.path(), "one").is_some());
+    }
+
+    #[test]
     fn window_memory_replaces_an_existing_observation_while_the_capture_lock_is_busy() {
         let dir = tempfile::tempdir().unwrap();
         let window = HitWindow {
@@ -653,9 +707,9 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         remember_windows(dir.path(), "one", &[], &epoch()).unwrap();
         let path = window_record(dir.path(), "one");
-        fs::set_permissions(dir.path(), fs::Permissions::from_mode(0o500)).unwrap();
+        fs::set_permissions(path.parent().unwrap(), fs::Permissions::from_mode(0o500)).unwrap();
         let denied = remember_windows(dir.path(), "one", &[], &epoch());
-        fs::set_permissions(dir.path(), fs::Permissions::from_mode(0o700)).unwrap();
+        fs::set_permissions(path.parent().unwrap(), fs::Permissions::from_mode(0o700)).unwrap();
         assert!(denied.is_err());
         assert!(path.is_file());
 
@@ -667,6 +721,9 @@ mod tests {
     #[test]
     fn malformed_window_memory_is_ignored() {
         let dir = tempfile::tempdir().unwrap();
+        RecordFolder::<Key>::at(dir.path(), &WINDOWS)
+            .make()
+            .unwrap();
         for entry in [
             json!(false),
             json!(1),
@@ -710,7 +767,12 @@ mod tests {
         };
         remember_windows(dir.path(), "large", &[], &epoch()).unwrap();
         assert!(remember_windows(dir.path(), "large", &vec![large; 1024], &epoch()).is_err());
-        assert!(remembered_windows(dir.path(), "large").is_none());
+        assert!(
+            remembered_windows(dir.path(), "large")
+                .unwrap()
+                .windows
+                .is_empty()
+        );
         assert!(fs::metadata(dir.path().join(RECORD)).unwrap().len() <= RECORD_LIMIT);
     }
 
