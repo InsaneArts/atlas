@@ -450,12 +450,20 @@ mod tests {
         assert!(future.poll(&mut context).is_pending());
     }
 
+    fn ready<F: Future>(future: std::pin::Pin<&mut F>) -> F::Output {
+        let mut context = std::task::Context::from_waker(std::task::Waker::noop());
+        match future.poll(&mut context) {
+            std::task::Poll::Ready(output) => output,
+            std::task::Poll::Pending => panic!("the future must be ready without advancing time"),
+        }
+    }
+
     #[tokio::test(start_paused = true)]
     async fn a_stop_with_nothing_under_way_settles_at_once() {
         let interrupt = Interrupt::new(LONG);
         interrupt.ask(Signal::SIGTERM);
 
-        let stopped = interrupt.settled().await;
+        let stopped = ready(std::pin::pin!(interrupt.settled()));
         assert_eq!(
             stopped,
             Stopped {
@@ -479,7 +487,7 @@ mod tests {
         pending(settlement.as_mut());
         release.send(()).unwrap();
         worker.await.unwrap();
-        let stopped = settlement.await;
+        let stopped = ready(settlement.as_mut());
         assert!(!stopped.cut, "the change finished");
     }
 
@@ -497,12 +505,12 @@ mod tests {
         pending(cut.as_mut());
         pending(settlement.as_mut());
         tokio::time::advance(tick).await;
-        assert_eq!(cut.await, Signal::SIGTERM);
+        assert_eq!(ready(cut.as_mut()), Signal::SIGTERM);
         pending(settlement.as_mut());
         tokio::time::advance(SETTLE - tick).await;
         pending(settlement.as_mut());
         tokio::time::advance(tick).await;
-        assert!(settlement.await.cut, "its outcome is unknown");
+        assert!(ready(settlement.as_mut()).cut, "its outcome is unknown");
     }
 
     #[tokio::test(start_paused = true)]
@@ -516,11 +524,11 @@ mod tests {
         pending(settlement.as_mut());
         interrupt.ask(Signal::SIGINT);
         assert_eq!(
-            cut.await,
+            ready(cut.as_mut()),
             Signal::SIGTERM,
             "the first signal names the stop"
         );
-        assert!(settlement.await.cut);
+        assert!(ready(settlement.as_mut()).cut);
     }
 
     #[tokio::test(start_paused = true)]
@@ -528,11 +536,14 @@ mod tests {
         let interrupt = Interrupt::new(SHORT);
         let step = interrupt.step();
         interrupt.ask(Signal::SIGTERM);
-        let error = interrupt.cut_short(interrupt.cut().await);
+        let mut cut = std::pin::pin!(interrupt.cut());
+        pending(cut.as_mut());
+        tokio::time::advance(SHORT).await;
+        let error = interrupt.cut_short(ready(cut.as_mut()));
         assert!(error.uncertain);
         drop(step);
 
-        let stopped = interrupt.settled().await;
+        let stopped = ready(std::pin::pin!(interrupt.settled()));
         assert!(stopped.cut, "what was cut stays unknown");
         assert!(stopped.error().uncertain);
     }
@@ -549,7 +560,7 @@ mod tests {
         pending(settlement.as_mut());
         drop(sending);
         assert!(
-            !settlement.await.cut,
+            !ready(settlement.as_mut()).cut,
             "a request not all sent changed nothing"
         );
     }
