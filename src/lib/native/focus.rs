@@ -59,43 +59,13 @@ const CONTAINERS: [&str; 9] = [
 /// How every refusal ends: nothing of the refused action was posted.
 const NOT_SENT: &str = "so this action and the rest were not sent";
 
-/// What an action needs of its app before its first event.
-#[derive(Debug, Clone, Copy, PartialEq)]
-pub(crate) enum Need {
-    /// Keyboard focus.
-    Keys,
-    /// The app's own window on top at this point.
-    Point(f64, f64),
-    /// The app's own window on top where a drag starts and where it drops,
-    /// so nothing is dropped on another app or the Dock.
-    Drag { from: (f64, f64), to: (f64, f64) },
-    /// Nothing: the action sends nothing an app acts on.
-    Nothing,
-}
+/// The neutral action destination, used here for focus admission.
+pub(crate) use crate::actions::Target as Need;
 
 impl Need {
-    /// Type and Key need keys; Click, Scroll, Move and each pointer phase
-    /// their point, since a move may carry what a press holds and a release
-    /// drops it; Drag its start and its drop; Wait nothing.
+    /// Every pointer phase checks its point; a drag checks both endpoints.
     pub(super) fn of(action: &Action) -> Self {
-        match action {
-            Action::Type { .. } | Action::Key { .. } => Self::Keys,
-            Action::Click { x, y, .. }
-            | Action::Scroll { x, y, .. }
-            | Action::Move { x, y }
-            | Action::Pointer { x, y, .. } => Self::Point(*x, *y),
-            Action::Drag {
-                from_x,
-                from_y,
-                to_x,
-                to_y,
-                ..
-            } => Self::Drag {
-                from: (*from_x, *from_y),
-                to: (*to_x, *to_y),
-            },
-            Action::Wait { .. } => Self::Nothing,
-        }
+        action.target()
     }
 }
 

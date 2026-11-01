@@ -140,7 +140,7 @@ async fn standalone_input(client: &Client, session: &Session) -> Result<Value> {
     ]);
     actions::validate(&actions, &session.epoch.display)?;
     client
-        .input_in_session(&actions, None, None, None, session)
+        .input_in_session(actions::Batch::decode(&actions)?, None, None, None, session)
         .await
 }
 
@@ -154,7 +154,13 @@ async fn checked_input(
     let _ownership = client.controller.acquire(false)?;
     let actions = json!([{"type": "key", "key": "a"}]);
     client
-        .input_in_session(&actions, None, None, expect, session)
+        .input_in_session(
+            actions::Batch::decode(&actions)?,
+            None,
+            None,
+            expect,
+            session,
+        )
         .await
 }
 
@@ -466,7 +472,7 @@ async fn connected(status: &Value, check: Option<Check>) -> (Result<Value>, bool
     let actions = json!([{"type": "key", "key": "a"}]);
     let _ownership = client.controller.acquire(false).unwrap();
     let (outcome, accepted) = tokio::join!(
-        client.input_with_status(status, &actions, None, None, check),
+        client.input_with_status(status, actions::Batch::decode(&actions), None, None, check),
         tokio::time::timeout(Duration::from_millis(500), listener.accept()),
     );
     assert!(
@@ -746,7 +752,13 @@ async fn a_stop_before_native_acquisition_starts_nothing() {
 
     let actions = json!([{"type": "key", "key": "a"}]);
     let error = client
-        .input_in_session(&actions, None, None, None, &session)
+        .input_in_session(
+            actions::Batch::decode(&actions).unwrap(),
+            None,
+            None,
+            None,
+            &session,
+        )
         .await
         .unwrap_err();
     assert_eq!(error.code, "interrupted");
@@ -3695,7 +3707,13 @@ async fn a_named_click_sends_its_window_and_keeps_a_native_dock_refusal() {
         let actions = json!([{"type":"click","x":20,"y":80}]);
         let expect = Expect::new(812)?.in_window(42)?;
         client
-            .input_in_session(&actions, None, None, Some(expect), &session)
+            .input_in_session(
+                actions::Batch::decode(&actions)?,
+                None,
+                None,
+                Some(expect),
+                &session,
+            )
             .await
     });
     let mut acquire = dispatched(&mut caller, &listener, "acquire").await;

@@ -355,6 +355,93 @@ fn connection_outcome(
     }
 }
 
+/// Buffer one wire value without losing duplicate-member evidence. Input
+/// fields still decode from a sorted JSON object, preserving refusal order.
+struct Members {
+    value: Value,
+    duplicate: Option<String>,
+}
+
+impl<'de> Deserialize<'de> for Members {
+    fn deserialize<D: serde::Deserializer<'de>>(
+        deserializer: D,
+    ) -> std::result::Result<Self, D::Error> {
+        struct Read;
+        impl Read {
+            fn value(value: impl Into<Value>) -> Members {
+                Members {
+                    value: value.into(),
+                    duplicate: None,
+                }
+            }
+        }
+        impl<'de> serde::de::Visitor<'de> for Read {
+            type Value = Members;
+
+            fn expecting(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+                formatter.write_str("a JSON value")
+            }
+
+            fn visit_unit<E: serde::de::Error>(self) -> std::result::Result<Members, E> {
+                Ok(Self::value(Value::Null))
+            }
+
+            fn visit_bool<E: serde::de::Error>(
+                self,
+                value: bool,
+            ) -> std::result::Result<Members, E> {
+                Ok(Self::value(value))
+            }
+
+            fn visit_i64<E: serde::de::Error>(self, value: i64) -> std::result::Result<Members, E> {
+                Ok(Self::value(value))
+            }
+
+            fn visit_u64<E: serde::de::Error>(self, value: u64) -> std::result::Result<Members, E> {
+                Ok(Self::value(value))
+            }
+
+            fn visit_f64<E: serde::de::Error>(self, value: f64) -> std::result::Result<Members, E> {
+                Ok(Self::value(value))
+            }
+
+            fn visit_str<E: serde::de::Error>(
+                self,
+                value: &str,
+            ) -> std::result::Result<Members, E> {
+                Ok(Self::value(value))
+            }
+
+            fn visit_seq<S: serde::de::SeqAccess<'de>>(
+                self,
+                seq: S,
+            ) -> std::result::Result<Members, S::Error> {
+                Value::deserialize(serde::de::value::SeqAccessDeserializer::new(seq))
+                    .map(Self::value)
+            }
+
+            fn visit_map<M: serde::de::MapAccess<'de>>(
+                self,
+                mut map: M,
+            ) -> std::result::Result<Members, M::Error> {
+                let mut value = serde_json::Map::new();
+                let mut duplicate = None;
+                while let Some(key) = map.next_key::<String>()? {
+                    if value.contains_key(&key) && duplicate.is_none() {
+                        duplicate = Some(key.clone());
+                    }
+                    value.insert(key, map.next_value()?);
+                }
+                Ok(Members {
+                    value: Value::Object(value),
+                    duplicate,
+                })
+            }
+        }
+        deserializer.deserialize_any(Read)
+    }
+}
+
 #[derive(Debug, Deserialize)]
 #[serde(tag = "op", rename_all = "lowercase")]
 enum Request {
@@ -391,23 +478,100 @@ enum Request {
     // Keep that precedence without retaining untyped or authorized input.
     #[serde(skip)]
     RefusedAcquire(Arc<Error>),
-    // Only input and unknown operations retain raw fields.
-    #[serde(skip)]
-    TemporaryRaw {
-        operation: RawOperation,
-        request: Value,
+    Input {
+        #[serde(default, deserialize_with = "Request::owner")]
+        owner: String,
+        #[serde(
+            default = "Request::missing_epoch",
+            deserialize_with = "Request::input_epoch"
+        )]
+        epoch: std::result::Result<InputEpoch, Arc<Error>>,
+        #[serde(
+            default = "Request::missing_actions",
+            deserialize_with = "Request::actions"
+        )]
+        actions: std::result::Result<Vec<Action>, Arc<Error>>,
+        #[serde(default = "Request::no_expect", deserialize_with = "Request::expect")]
+        expect: std::result::Result<Option<Expect>, Arc<Error>>,
+        #[serde(default = "Request::no_app", deserialize_with = "Request::app")]
+        app: std::result::Result<bool, Arc<Error>>,
     },
 }
 
-#[derive(Clone, Copy, Debug, Deserialize, PartialEq, Eq)]
-#[serde(rename_all = "lowercase")]
-enum RawOperation {
-    Input,
-    #[serde(other)]
-    Unknown,
-}
-
 impl Request {
+    fn app<'de, D: serde::Deserializer<'de>>(
+        deserializer: D,
+    ) -> std::result::Result<std::result::Result<bool, Arc<Error>>, D::Error> {
+        use serde::de::Error as _;
+        Ok(bool::deserialize(deserializer)
+            .map_err(|error| Arc::new(Error::from(serde_json::Error::custom(error)))))
+    }
+
+    fn input_epoch<'de, D: serde::Deserializer<'de>>(
+        deserializer: D,
+    ) -> std::result::Result<std::result::Result<InputEpoch, Arc<Error>>, D::Error> {
+        let members = Members::deserialize(deserializer)?;
+        Ok(InputEpoch::deserialize(members.value)
+            .map_err(Error::from)
+            .and_then(|epoch| {
+                Self::unique(members.duplicate)?;
+                Ok(epoch)
+            })
+            .map_err(Arc::new))
+    }
+
+    fn unique(duplicate: Option<String>) -> Result<()> {
+        use serde::de::Error as _;
+        match duplicate {
+            Some(key) => Err(serde_json::Error::custom(format!("duplicate field `{key}`")).into()),
+            None => Ok(()),
+        }
+    }
+
+    fn actions<'de, D: serde::Deserializer<'de>>(
+        deserializer: D,
+    ) -> std::result::Result<std::result::Result<Vec<Action>, Arc<Error>>, D::Error> {
+        use serde::de::Error as _;
+        let result = Vec::<Members>::deserialize(deserializer)
+            .map_err(|error| Error::from(serde_json::Error::custom(error)))
+            .and_then(|members| {
+                let duplicate = members.iter().find_map(|member| member.duplicate.clone());
+                let wire = Value::Array(members.into_iter().map(|member| member.value).collect());
+                let actions = actions::decode(&wire)?;
+                Self::unique(duplicate)?;
+                Ok(actions)
+            });
+        Ok(result.map_err(Arc::new))
+    }
+
+    fn missing_epoch() -> std::result::Result<InputEpoch, Arc<Error>> {
+        InputEpoch::deserialize(Value::Null).map_err(|error| Arc::new(error.into()))
+    }
+
+    fn missing_actions() -> std::result::Result<Vec<Action>, Arc<Error>> {
+        Vec::<Action>::deserialize(Value::Null).map_err(|error| Arc::new(error.into()))
+    }
+
+    fn no_expect() -> std::result::Result<Option<Expect>, Arc<Error>> {
+        Ok(None)
+    }
+
+    fn no_app() -> std::result::Result<bool, Arc<Error>> {
+        Ok(false)
+    }
+
+    fn expect<'de, D: serde::Deserializer<'de>>(
+        deserializer: D,
+    ) -> std::result::Result<std::result::Result<Option<Expect>, Arc<Error>>, D::Error> {
+        let members = Members::deserialize(deserializer)?;
+        Ok(Expect::from_request(&members.value)
+            .and_then(|expect| {
+                Self::unique(members.duplicate)?;
+                Ok(expect)
+            })
+            .map_err(Arc::new))
+    }
+
     fn agent() -> Who {
         Who::Agent
     }
@@ -445,34 +609,33 @@ impl Request {
         };
 
         #[derive(Deserialize)]
-        struct Raw {
+        struct Tag {
             op: String,
             #[serde(flatten)]
             fields: serde_json::Map<String, Value>,
         }
 
-        // The temporary routes and operation-specific refusals still need
-        // their original admission rules. Read the original tag again so a
-        // duplicate op cannot enter the raw adapter through last-wins Value.
-        let mut raw: Raw = serde_json::from_slice(bytes).map_err(|error| {
+        // Preserve lifecycle-specific refusals, including duplicate-tag
+        // rejection, without admitting any untyped request to execution.
+        let tag: Tag = serde_json::from_slice(bytes).map_err(|error| {
             if error.is_data() {
                 Error::new(Code::Input, "Native operation requires a string op")
             } else {
                 error.into()
             }
         })?;
-        match raw.op.as_str() {
+        match tag.op.as_str() {
             "hello" => Err(refusal.into()),
             "acquire" | "reset" => {
                 // Preserve sorted-key precedence and Value's epoch errors.
                 // If the old decoder accepts it, keep the typed refusal,
                 // including duplicates that Value would otherwise discard.
                 let error = Error::from(
-                    InputEpoch::deserialize(raw.fields.get("epoch").unwrap_or(&Value::Null))
+                    InputEpoch::deserialize(tag.fields.get("epoch").unwrap_or(&Value::Null))
                         .err()
                         .unwrap_or(refusal),
                 );
-                if raw.op == "acquire" {
+                if tag.op == "acquire" {
                     Ok(Self::RefusedAcquire(Arc::new(error)))
                 } else {
                     Err(error)
@@ -486,14 +649,8 @@ impl Request {
             "release" | "renew" => {
                 Err(Error::new(Code::Input, "Native owner must not be repeated"))
             }
-            _ => {
-                let operation = RawOperation::deserialize(Value::String(raw.op.clone()))?;
-                raw.fields.insert("op".into(), Value::String(raw.op));
-                Ok(Self::TemporaryRaw {
-                    operation,
-                    request: Value::Object(raw.fields),
-                })
-            }
+            "input" => Err(refusal.into()),
+            _ => Err(Error::new(Code::Input, "Unknown native operation")),
         }
     }
 }
@@ -561,10 +718,10 @@ impl Service {
 
     async fn dispatch(
         &self,
-        request: &Request,
+        request: Request,
         phase: &watch::Sender<ConnectionPhase>,
     ) -> Result<Value> {
-        let (operation, request) = match request {
+        match request {
             Request::Hello => {
                 self.operations.reap().await?;
                 let held_input = self
@@ -573,7 +730,7 @@ impl Service {
                     .ok()
                     .map(|engine| engine.held_input());
 
-                return Ok(json!({
+                Ok(json!({
                     "ok": true,
                     "protocolVersion": 1,
                     "pid": std::process::id(),
@@ -589,12 +746,12 @@ impl Service {
                     "held": self.gate.held()?,
                     "heldInput": held_input,
                     "streaming": true,
-                }));
+                }))
             }
             Request::Shutdown { pid } => {
                 // Bound to this process: a replacement that has since bound the same
                 // socket never honours a request meant for its predecessor.
-                if *pid != u64::from(std::process::id()) {
+                if pid != u64::from(std::process::id()) {
                     return Err(Error::new(
                         Code::Identity,
                         "Shutdown names a different input service process",
@@ -631,35 +788,35 @@ impl Service {
                 }
 
                 self.gate.close()?;
-                return Ok(json!({ "ok": true, "stopping": true, "pid": std::process::id() }));
+                Ok(json!({ "ok": true, "stopping": true, "pid": std::process::id() }))
             }
             // A stop is the person's: it works whatever the session or
             // permission, and resuming only lets agents ask again.
             Request::Hold { on } => {
-                let reply = hold(&self.gate, &self.stop_marker, *on, phase)?;
+                let reply = hold(&self.gate, &self.stop_marker, on, phase)?;
                 self.cleanup().await?;
-                return Ok(reply);
+                Ok(reply)
             }
 
             Request::Release { owner } => {
-                self.gate.cancel(Some(owner))?;
+                self.gate.cancel(Some(&owner))?;
                 phase.send_replace(ConnectionPhase::Mutation("release"));
                 self.cleanup().await?;
-                return Ok(json!({ "ok": true, "released": true }));
+                Ok(json!({ "ok": true, "released": true }))
             }
             Request::Renew { owner } => {
                 self.check()?;
-                self.gate.renew(owner)?;
+                self.gate.renew(&owner)?;
                 phase.send_replace(ConnectionPhase::Mutation("renew"));
-                return Ok(json!({ "ok": true }));
+                Ok(json!({ "ok": true }))
             }
             Request::RefusedAcquire(error) => {
                 self.check()?;
-                return Err(Error::new(error.code, &error.error).with_source(error.clone()));
+                Err(Error::new(error.code, &error.error).with_source(error))
             }
             Request::Reset { epoch: expected } => {
                 let current = InputEpoch::from_proof(&session_info()?, std::process::id())?;
-                if *expected != current || !Engine::trusted() {
+                if expected != current || !Engine::trusted() {
                     return Err(Error::new(
                         Code::Identity,
                         "Recovery requires the current hidden session and permission",
@@ -682,7 +839,7 @@ impl Service {
                     rebound
                 })
                 .await?;
-                return Ok(json!({ "ok": true, "released": true }));
+                Ok(json!({ "ok": true, "released": true }))
             }
             Request::Acquire {
                 owner,
@@ -692,7 +849,7 @@ impl Service {
                 self.check()?;
 
                 let epoch = self.epoch()?;
-                if *expected != epoch {
+                if expected != epoch {
                     return Err(Error::new(
                         Code::SessionChanged,
                         "Input coordinates belong to a different session or display",
@@ -705,7 +862,7 @@ impl Service {
                     // An agent finding the person in control is told to wait.
                     let error = Error::new(
                         Code::Busy,
-                        if *who == Who::Agent && holder == Holder::Person {
+                        if who == Who::Agent && holder == Holder::Person {
                             crate::error::PERSON_HAS_CONTROL
                         } else {
                             "The native input service already has a controller"
@@ -717,107 +874,111 @@ impl Service {
                 engine.check()?;
                 phase.send_replace(ConnectionPhase::Mutation("acquire"));
                 engine.release()?;
-                engine.grant = Some(self.gate.acquire(owner, *who)?);
+                engine.grant = Some(self.gate.acquire(&owner, who)?);
 
-                return Ok(json!({ "ok": true }));
+                Ok(json!({ "ok": true }))
             }
-            Request::TemporaryRaw { operation, request } => (*operation, request),
-        };
-        let owner = request["owner"].as_str().unwrap_or_default();
+            Request::Input {
+                owner,
+                epoch: expected,
+                actions,
+                expect,
+                app: report_app,
+            } => {
+                self.check()?;
+                let expected = expected
+                    .map_err(|error| Error::new(error.code, &error.error).with_source(error))?;
+                let epoch = self.epoch()?;
+                if expected != epoch {
+                    return Err(Error::new(
+                        Code::SessionChanged,
+                        "Input coordinates belong to a different session or display",
+                    ));
+                }
+                let grant = self.gate.grant(&owner)?;
+                let actions = actions
+                    .map_err(|error| Error::new(error.code, &error.error).with_source(error))?;
+                actions::check(
+                    &actions,
+                    &Display {
+                        width: epoch.width,
+                        height: epoch.height,
+                        scale: 1.0,
+                    },
+                )?;
+                let count = actions.len();
+                let expect = expect
+                    .map_err(|error| Error::new(error.code, &error.error).with_source(error))?;
+                let report_app = report_app
+                    .map_err(|error| Error::new(error.code, &error.error).with_source(error))?;
+                agent_target(&self.gate, expect.as_ref())?;
+                phase.send_replace(ConnectionPhase::Mutation("input"));
+                let mut cancellation = Cancellation {
+                    gate: self.gate.clone(),
+                    owner,
+                    armed: true,
+                };
+                let mut engine = self.engine.clone().lock_owned().await;
+                let gate = self.gate.clone();
+                let expected = expect.clone();
+                let outcome = self
+                    .operations
+                    .start(async move {
+                        drop(grant.authorize()?);
+                        engine.grant = Some(grant);
+                        engine.target = expected
+                            .as_ref()
+                            .map(super::ax::target_application)
+                            .transpose()?;
+                        engine.dock_pressed = false;
+                        let result = run(&mut *engine, &gate, actions, expected.as_ref()).await;
+                        engine.target = None;
+                        Ok::<_, Error>(result.map(|field| (field, engine.dock_pressed)))
+                    })
+                    .await?;
+                let result = outcome.await.map_err(|_| worker_failed())?;
+                let (field, dock_pressed) = match result? {
+                    Ok(field) => field,
+                    Err(reply) => return Ok(reply),
+                };
 
-        self.check()?;
+                // The recipient for the agent's activity log, only when asked:
+                // Dock after AXPress, otherwise the owner of the frontmost ordinary
+                // window and its bundle identifier, read once the engine is free.
+                let landed = if report_app && dock_pressed {
+                    Some(("Dock".to_owned(), Some("com.apple.dock".to_owned())))
+                } else if report_app {
+                    tokio::task::spawn_blocking(|| {
+                        frontmost_app().map(|(app, pid)| (app, super::apps::bundle_id(pid)))
+                    })
+                    .await
+                    .ok()
+                    .flatten()
+                } else {
+                    None
+                };
+                let (app, bundle_id) = landed.map_or((None, None), |(app, id)| (Some(app), id));
 
-        let expected = InputEpoch::deserialize(&request["epoch"])?;
-        let epoch = self.epoch()?;
-        if expected != epoch {
-            return Err(Error::new(
-                Code::SessionChanged,
-                "Input coordinates belong to a different session or display",
-            ));
+                let mut reply = json!({
+                    "ok": true,
+                    "performed": count,
+                    "app": app,
+                    "bundleId": bundle_id,
+                });
+                // Echoed, so the controller knows each action was checked.
+                if let Some(expect) = expect {
+                    reply["expect"] = json!(expect);
+                }
+                // The role of the field it named, so an agent's activity may name
+                // the field by the name it gave: never the field's own text.
+                if let Some(role) = field {
+                    reply["field"] = json!({ "role": role });
+                }
+
+                cancellation.armed = false;
+                Ok(reply)
+            }
         }
-
-        if operation != RawOperation::Input {
-            return Err(Error::new(Code::Input, "Unknown native operation"));
-        }
-
-        let grant = self.gate.grant(owner)?;
-        let actions = actions::parse(
-            &request["actions"],
-            &Display {
-                width: epoch.width,
-                height: epoch.height,
-                scale: 1.0,
-            },
-        )?;
-        // Refused before anything is sent: an expectation this build cannot
-        // check is never ignored.
-        let expect = Expect::from_request(&request["expect"])?;
-        agent_target(&self.gate, expect.as_ref())?;
-        phase.send_replace(ConnectionPhase::Mutation("input"));
-        let mut cancellation = Cancellation {
-            gate: self.gate.clone(),
-            owner: owner.to_owned(),
-            armed: true,
-        };
-        let mut engine = self.engine.clone().lock_owned().await;
-        let gate = self.gate.clone();
-        let expected = expect.clone();
-        let outcome = self
-            .operations
-            .start(async move {
-                drop(grant.authorize()?);
-                engine.grant = Some(grant);
-                engine.target = expected
-                    .as_ref()
-                    .map(super::ax::target_application)
-                    .transpose()?;
-                engine.dock_pressed = false;
-                let result = run(&mut *engine, &gate, actions, expected.as_ref()).await;
-                engine.target = None;
-                Ok::<_, Error>(result.map(|field| (field, engine.dock_pressed)))
-            })
-            .await?;
-        let result = outcome.await.map_err(|_| worker_failed())?;
-        let (field, dock_pressed) = match result? {
-            Ok(field) => field,
-            Err(reply) => return Ok(reply),
-        };
-
-        // The recipient for the agent's activity log, only when asked:
-        // Dock after AXPress, otherwise the owner of the frontmost ordinary
-        // window and its bundle identifier, read once the engine is free.
-        let landed = if request["app"] == true && dock_pressed {
-            Some(("Dock".to_owned(), Some("com.apple.dock".to_owned())))
-        } else if request["app"] == true {
-            tokio::task::spawn_blocking(|| {
-                frontmost_app().map(|(app, pid)| (app, super::apps::bundle_id(pid)))
-            })
-            .await
-            .ok()
-            .flatten()
-        } else {
-            None
-        };
-        let (app, bundle_id) = landed.map_or((None, None), |(app, id)| (Some(app), id));
-
-        let mut reply = json!({
-            "ok": true,
-            "performed": request["actions"].as_array().map(Vec::len),
-            "app": app,
-            "bundleId": bundle_id,
-        });
-        // Echoed, so the controller knows each action was checked.
-        if let Some(expect) = expect {
-            reply["expect"] = json!(expect);
-        }
-        // The role of the field it named, so an agent's activity may name
-        // the field by the name it gave: never the field's own text.
-        if let Some(role) = field {
-            reply["field"] = json!({ "role": role });
-        }
-
-        cancellation.armed = false;
-        Ok(reply)
     }
 }
 
@@ -989,7 +1150,16 @@ async fn run(
 
     for (performed, action) in actions.into_iter().enumerate() {
         let before = engine.posted();
-        let key = matches!(action, Action::Key { .. });
+        let key = match action {
+            Action::Key { .. } => true,
+            Action::Pointer { .. }
+            | Action::Move { .. }
+            | Action::Click { .. }
+            | Action::Drag { .. }
+            | Action::Scroll { .. }
+            | Action::Type { .. }
+            | Action::Wait { .. } => false,
+        };
         let continuation = key && pressed;
         let expected = if continuation { later.as_ref() } else { expect };
         pressed |= key;
@@ -1262,29 +1432,28 @@ async fn handle(
         Request::Hello => ConnectionPhase::Read,
         _ => ConnectionPhase::Refusal,
     });
-    let result = if let Request::TemporaryRaw {
-        operation: RawOperation::Input,
-        request: raw,
-    } = &request
-    {
-        let mut dispatch = std::pin::pin!(service.dispatch(&request, &phase));
+    let shutdown = matches!(request, Request::Shutdown { .. });
+    let owner = match &request {
+        Request::Input { owner, .. } => Some(owner.clone()),
+        _ => None,
+    };
+    let result = if let Some(owner) = owner {
+        let mut dispatch = std::pin::pin!(service.dispatch(request, &phase));
         let mut extra = [0; 1];
         tokio::select! {
             reply = &mut dispatch => reply,
             _ = stream.read(&mut extra) => {
-                if let Some(owner) = raw["owner"].as_str()
-                    && service.gate.cancel(Some(owner)).is_ok()
-                {
+                if service.gate.cancel(Some(&owner)).is_ok() {
                     phase.send_replace(ConnectionPhase::Mutation("input"));
                 }
                 dispatch.await
             }
         }
     } else {
-        service.dispatch(&request, &phase).await
+        service.dispatch(request, &phase).await
     };
 
-    let stopping = matches!(request, Request::Shutdown { .. }) && result.is_ok();
+    let stopping = shutdown && result.is_ok();
     let written = reply(&mut stream, result).await;
 
     if stopping {
@@ -1308,8 +1477,8 @@ async fn reply(stream: &mut UnixStream, result: Result<Value>) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::{
-        Action, CAPABILITIES, Duration, Error, Expect, Gate, MAX_REQUEST, Need, Perform,
-        RawOperation, Request, Result, admitted, hold, read_request, run,
+        Action, CAPABILITIES, Duration, Error, Expect, Gate, MAX_REQUEST, Need, Perform, Request,
+        Result, admitted, hold, read_request, run,
     };
     use crate::error::Code;
     use serde::Deserialize;
@@ -1335,6 +1504,355 @@ mod tests {
             executable: None,
             stopping: tokio::sync::Notify::new(),
             stop_marker: marker.to_owned(),
+        }
+    }
+
+    fn input_body(fields: &str) -> String {
+        format!(
+            r#"{{"op":"input","owner":"{}","epoch":{{"uid":501,"securitySessionId":1,"displayId":2,"width":800,"height":600,"processId":1}},{fields}}}"#,
+            "a".repeat(48)
+        )
+    }
+
+    #[test]
+    fn input_decoding_keeps_optional_compatibility_and_legacy_refusal_words() {
+        let display = crate::session::Display {
+            width: 800.0,
+            height: 600.0,
+            scale: 1.0,
+        };
+        for options in [
+            "",
+            r#", "app":false"#,
+            r#", "app":true"#,
+            r#", "expect":null"#,
+            r#", "expect":{"pid":812,"window":42,"field":"Search"}"#,
+        ] {
+            let body = input_body(&format!(
+                r#""actions":[{{"type":"move","x":10,"y":20}}]{options},"other":1,"other":2,"person":null,"person":false"#
+            ));
+            let Request::Input {
+                owner,
+                epoch,
+                actions,
+                expect,
+                app,
+            } = Request::decode(body.as_bytes()).unwrap()
+            else {
+                panic!("expected typed input");
+            };
+            assert_eq!(owner, "a".repeat(48));
+            assert_eq!(epoch.unwrap().width, display.width);
+            assert_eq!(actions.unwrap().len(), 1);
+            assert_eq!(app.unwrap(), options.contains("true"));
+            assert_eq!(expect.unwrap().is_some(), options.contains("812"));
+        }
+        for actions in [
+            "null",
+            "false",
+            "1",
+            r#""actions""#,
+            "{}",
+            "[]",
+            r#"[{"type":"move","x":1}]"#,
+            r#"[{"type":"move","x":null,"y":20}]"#,
+            r#"[{"type":"click","x":null,"y":20,"count":null}]"#,
+            r#"[{"type":"click","count":null,"y":20,"x":null}]"#,
+            r#"[{"type":"click","x":10,"y":20,"count":0}]"#,
+            r#"[{"type":"key","key":"unknown"}]"#,
+            r#"[{"type":"wait","ms":251}]"#,
+            r#"[{"type":"move","x":800,"y":20}]"#,
+            r#"[{"type":"unknown"}]"#,
+        ] {
+            let body = input_body(&format!(r#""actions":{actions}"#));
+            let wire: Value = serde_json::from_str(&body).unwrap();
+            let old = crate::actions::parse(&wire["actions"], &display).unwrap_err();
+            let Request::Input { actions, .. } = Request::decode(body.as_bytes()).unwrap() else {
+                panic!("expected typed input");
+            };
+            let error = match actions {
+                Ok(actions) => crate::actions::check(&actions, &display).unwrap_err(),
+                Err(error) => Error::new(error.code, &error.error),
+            };
+            assert_eq!(json!(error), json!(old), "{body}");
+        }
+        for expect in [
+            "false",
+            "0",
+            r#""expect""#,
+            "[]",
+            "{}",
+            r#"{"pid":null}"#,
+            r#"{"pid":812,"window":0}"#,
+            r#"{"pid":812,"field":""}"#,
+            r#"{"pid":812,"other":true}"#,
+            r#"{"pid":812,"start":false}"#,
+        ] {
+            let body = input_body(&format!(
+                r#""actions":[{{"type":"key","key":"a"}}],"expect":{expect}"#
+            ));
+            let wire: Value = serde_json::from_str(&body).unwrap();
+            let old = Expect::from_request(&wire["expect"]).unwrap_err();
+            let Request::Input { expect, .. } = Request::decode(body.as_bytes()).unwrap() else {
+                panic!("expected typed input");
+            };
+            let error = expect.unwrap_err();
+            assert_eq!(json!(*error), json!(old), "{body}");
+        }
+    }
+
+    #[tokio::test]
+    async fn a_malformed_final_action_rejects_the_complete_batch_before_its_first_event() {
+        let display = crate::session::Display {
+            width: 800.0,
+            height: 600.0,
+            scale: 1.0,
+        };
+        let mut cases = Vec::new();
+        let alternatives = [
+            json!({"type":"pointer","phase":"down","x":10,"y":20}),
+            json!({"type":"move","x":10,"y":20}),
+            json!({"type":"click","x":10,"y":20}),
+            json!({"type":"drag","fromX":10,"fromY":20,"toX":30,"toY":40}),
+            json!({"type":"scroll","x":10,"y":20}),
+            json!({"type":"type","text":"a"}),
+            json!({"type":"key","key":"a"}),
+            json!({"type":"wait","ms":0}),
+        ];
+        for action in alternatives {
+            let fields = action.as_object().unwrap();
+            for (name, value) in fields {
+                let mut missing = fields.clone();
+                missing.remove(name);
+                cases.push(input_body(&format!(
+                    r#""actions":[{{"type":"key","key":"a"}},{missing}]"#,
+                    missing = json!(missing)
+                )));
+                for wrong in [Value::Null, json!(false), json!({}), json!([])] {
+                    let mut malformed = fields.clone();
+                    malformed.insert(name.clone(), wrong);
+                    cases.push(input_body(&format!(
+                        r#""actions":[{{"type":"key","key":"a"}},{malformed}]"#,
+                        malformed = json!(malformed)
+                    )));
+                }
+                let rest = json!(missing).to_string();
+                for (first, second) in [
+                    (value.to_string(), value.to_string()),
+                    ("null".into(), value.to_string()),
+                    (value.to_string(), "null".into()),
+                ] {
+                    cases.push(input_body(&format!(r#""actions":[{{"type":"key","key":"a"}},{{"{name}":{first},"{name}":{second},{rest}}}]"#, rest=rest.trim_start_matches('{').trim_end_matches('}'))));
+                }
+            }
+            for (name, value) in [
+                ("button", json!("left")),
+                ("count", json!(1)),
+                ("modifiers", json!([])),
+                ("dx", json!(0)),
+                ("dy", json!(1)),
+            ] {
+                let applies = match fields["type"].as_str().unwrap() {
+                    "pointer" | "click" => ["button", "count", "modifiers"].contains(&name),
+                    "drag" => name == "button",
+                    "scroll" => ["dx", "dy"].contains(&name),
+                    _ => false,
+                };
+                if applies {
+                    for wrong in [
+                        Value::Null,
+                        json!(false),
+                        json!({}),
+                        json!([]),
+                        json!("invalid"),
+                    ] {
+                        if wrong == value {
+                            continue;
+                        }
+                        let mut malformed = fields.clone();
+                        malformed.insert(name.into(), wrong);
+                        cases.push(input_body(&format!(
+                            r#""actions":[{{"type":"key","key":"a"}},{malformed}]"#,
+                            malformed = json!(malformed)
+                        )));
+                    }
+                    cases.push(input_body(&format!(r#""actions":[{{"type":"key","key":"a"}},{{{rest},"{name}":{value},"{name}":{value}}}]"#, rest=action.to_string().trim_start_matches('{').trim_end_matches('}'))));
+                }
+            }
+        }
+        for actions in [
+            "null".to_owned(),
+            "[]".into(),
+            serde_json::to_string(&vec![json!({"type":"key","key":"a"}); 33]).unwrap(),
+            serde_json::to_string(&vec![json!({"type":"wait","ms":250}); 9]).unwrap(),
+        ] {
+            cases.push(input_body(&format!(r#""actions":{actions}"#)));
+        }
+        for action in [
+            json!({"type":"pointer","phase":"down","x":800,"y":20}),
+            json!({"type":"click","x":10,"y":20,"count":0}),
+            json!({"type":"click","x":10,"y":20,"count":6}),
+            json!({"type":"click","x":10,"y":20,"modifiers":["invalid"]}),
+            json!({"type":"drag","fromX":10,"fromY":20,"toX":800,"toY":40}),
+            json!({"type":"scroll","x":10,"y":20,"dx":101}),
+            json!({"type":"scroll","x":10,"y":20,"dy":-101}),
+            json!({"type":"type","text":""}),
+            json!({"type":"type","text":"x".repeat(257)}),
+            json!({"type":"key","key":"invalid"}),
+            json!({"type":"wait","ms":251}),
+        ] {
+            cases.push(input_body(&format!(
+                r#""actions":[{{"type":"key","key":"a"}},{action}]"#
+            )));
+        }
+        let base: Value =
+            serde_json::from_str(&input_body(r#""actions":[{"type":"key","key":"a"}]"#)).unwrap();
+        for (field, value) in base["epoch"].as_object().unwrap() {
+            let mut members = base["epoch"].as_object().unwrap().clone();
+            members.remove(field);
+            let rest = json!(members).to_string();
+            let rest = rest.trim_start_matches('{').trim_end_matches('}');
+            let mut missing = base.clone();
+            missing["epoch"].as_object_mut().unwrap().remove(field);
+            cases.push(missing.to_string());
+            for wrong in [
+                Value::Null,
+                json!(false),
+                json!("invalid"),
+                json!([]),
+                json!({}),
+            ] {
+                let mut malformed = base.clone();
+                malformed["epoch"][field] = wrong;
+                cases.push(malformed.to_string());
+            }
+            for (first, second) in [
+                (value.to_string(), value.to_string()),
+                ("null".into(), value.to_string()),
+                (value.to_string(), "null".into()),
+            ] {
+                cases.push(format!(r#"{{"op":"input","actions":[{{"type":"key","key":"a"}}],"epoch":{{{rest},"{field}":{first},"{field}":{second}}}}}"#));
+            }
+        }
+        for field in ["op", "owner", "epoch", "actions", "expect", "app"] {
+            let base: Value = serde_json::from_str(&input_body(
+                r#""actions":[{"type":"key","key":"a"}],"expect":{"pid":812},"app":false"#,
+            ))
+            .unwrap();
+            let value = &base[field];
+            for (first, second) in [
+                (value.to_string(), value.to_string()),
+                ("null".into(), value.to_string()),
+                (value.to_string(), "null".into()),
+            ] {
+                let mut members = base.as_object().unwrap().clone();
+                members.remove(field);
+                let rest = json!(members).to_string();
+                cases.push(format!(
+                    r#"{{{rest},"{field}":{first},"{field}":{second}}}"#,
+                    rest = rest.trim_start_matches('{').trim_end_matches('}')
+                ));
+            }
+        }
+        for field in ["pid", "start", "window", "field"] {
+            let values = json!({"pid":812,"start":[1,0],"window":42,"field":"Search"});
+            let value = &values[field];
+            let mut rest = values.as_object().unwrap().clone();
+            rest.remove(field);
+            let rest = json!(rest).to_string();
+            cases.push(input_body(&format!(r#""actions":[{{"type":"key","key":"a"}}],"expect":{{{rest},"{field}":{value},"{field}":{value}}}"#, rest=rest.trim_start_matches('{').trim_end_matches('}'))));
+        }
+        for app in ["null", "0", r#""false""#, "[]", "{}"] {
+            cases.push(input_body(&format!(
+                r#""actions":[{{"type":"key","key":"a"}}],"app":{app}"#
+            )));
+        }
+        for body in cases {
+            let stand = Stand::locked(&[]);
+            let result = (|| -> Result<Vec<Action>> {
+                let Request::Input {
+                    epoch,
+                    actions,
+                    expect,
+                    app,
+                    ..
+                } = Request::decode(body.as_bytes())?
+                else {
+                    panic!("expected input");
+                };
+                if let Some(error) = [epoch.err(), expect.err(), app.err()]
+                    .into_iter()
+                    .flatten()
+                    .next()
+                {
+                    return Err(Error::new(error.code, &error.error));
+                }
+                let actions = actions.map_err(|error| Error::new(error.code, &error.error))?;
+                crate::actions::check(&actions, &display)?;
+                Ok(actions)
+            })();
+            let mut engine = stand.lock().await;
+            if let Ok(actions) = result {
+                run(&mut *engine, &Gate::default(), actions, None)
+                    .await
+                    .unwrap();
+                panic!("malformed input reached execution: {body}");
+            }
+            assert_eq!(engine.posted, 0, "{body}");
+            assert!(engine.log.is_empty(), "{body}");
+            assert_eq!(engine.releases, 0, "{body}");
+        }
+    }
+
+    #[tokio::test]
+    async fn input_availability_still_precedes_deferred_field_refusals() {
+        let directory = tempfile::tempdir().unwrap();
+        let service = service(&directory.path().join("stopped"));
+        let owner = "a".repeat(48);
+        let grant = service.gate.acquire(&owner, super::Who::Agent).unwrap();
+        service
+            .operations
+            .failed
+            .store(true, std::sync::atomic::Ordering::Relaxed);
+        for fields in [
+            r#""actions":null"#,
+            r#""actions":[{"type":"click","x":null,"y":20}]"#,
+            r#""actions":[{"type":"key","key":"a"}],"expect":false"#,
+        ] {
+            let mut wire: Value = serde_json::from_str(&input_body(fields)).unwrap();
+            for epoch in [wire["epoch"].clone(), Value::Null, json!({"uid":false})] {
+                wire["epoch"] = epoch;
+                let request = Request::decode(wire.to_string().as_bytes()).unwrap();
+                let (phase, observed) = super::watch::channel(super::ConnectionPhase::Refusal);
+                let error = service.dispatch(request, &phase).await.unwrap_err();
+                assert_eq!(json!(error), json!(super::worker_failed()));
+                assert!(matches!(
+                    *observed.borrow(),
+                    super::ConnectionPhase::Refusal
+                ));
+                assert!(grant.authorize().is_ok());
+                assert!(service.operations.tasks.lock().unwrap().is_empty());
+                let engine = service.engine.lock().await;
+                assert_eq!(engine.posted, 0);
+                assert!(!engine.held_input());
+            }
+        }
+    }
+
+    #[test]
+    fn unknown_operations_are_refused_before_epoch_execution_checks() {
+        for fields in [
+            "",
+            r#", "epoch":null"#,
+            r#", "epoch":false, "owner":null, "actions":null"#,
+            r#", "epoch":{}, "epoch":false"#,
+        ] {
+            let body = format!(r#"{{"op":"unknown"{fields}}}"#);
+            let error = Request::decode(body.as_bytes()).unwrap_err();
+            assert_eq!(
+                json!(error),
+                json!({"ok":false,"code":"input","error":"Unknown native operation","uncertain":false})
+            );
         }
     }
 
@@ -1517,7 +2035,7 @@ mod tests {
                     },
                     Request::Reset { epoch: stale },
                 ] {
-                    let error = service.dispatch(&request, &phase).await.unwrap_err();
+                    let error = service.dispatch(request, &phase).await.unwrap_err();
                     assert_eq!(error.code, Code::Identity);
                     assert!(!error.uncertain);
                     assert!(grant.authorize().is_ok());
@@ -1536,7 +2054,7 @@ mod tests {
             .failed
             .store(true, super::Ordering::Relaxed);
         let request = Request::decode(br#"{"op":"acquire","epoch":null}"#).unwrap();
-        let error = service.dispatch(&request, &phase).await.unwrap_err();
+        let error = service.dispatch(request, &phase).await.unwrap_err();
         assert_eq!(json!(error), json!(super::worker_failed()));
     }
 
@@ -1731,7 +2249,7 @@ mod tests {
                 for body in malformed_acquire_and_reset_requests() {
                     match Request::decode(body.as_bytes()) {
                         Ok(request @ Request::RefusedAcquire(_)) => {
-                            let error = service.dispatch(&request, &phase).await.unwrap_err();
+                            let error = service.dispatch(request, &phase).await.unwrap_err();
                             assert_eq!(json!(error), json!(service.check().unwrap_err()), "{body}");
                         }
                         Err(error) => {
@@ -1867,7 +2385,7 @@ mod tests {
             }
             for (body, code, message) in &cases {
                 let result = match deliver(format!("{body}\n").into_bytes(), 64).await {
-                    Ok(request) => service.dispatch(&request, &phase).await,
+                    Ok(request) => service.dispatch(request, &phase).await,
                     Err(error) => Err(error),
                 };
                 let error = result.unwrap_err();
@@ -1916,7 +2434,7 @@ mod tests {
                 let (phase, observed) = super::watch::channel(super::ConnectionPhase::Refusal);
                 for body in &cases {
                     let result = match deliver(format!(" \t{body}\n").into_bytes(), 1).await {
-                        Ok(request) => service.dispatch(&request, &phase).await,
+                        Ok(request) => service.dispatch(request, &phase).await,
                         Err(error) => Err(error),
                     };
                     let error = result.unwrap_err();
@@ -1970,7 +2488,7 @@ mod tests {
             for op in ["release", "renew"] {
                 let request =
                     Request::decode(format!(r#"{{"op":"{op}"{fields}}}"#).as_bytes()).unwrap();
-                let error = service.dispatch(&request, &phase).await.unwrap_err();
+                let error = service.dispatch(request, &phase).await.unwrap_err();
                 if op == "release" {
                     assert_eq!(error.code, Code::LeaseLost);
                     assert_eq!(error.error, "This token cannot release another controller");
@@ -1986,7 +2504,7 @@ mod tests {
             }
         }
         let request = Request::decode(br#"{"op":"shutdown","pid":0}"#).unwrap();
-        let error = service.dispatch(&request, &phase).await.unwrap_err();
+        let error = service.dispatch(request, &phase).await.unwrap_err();
         assert_eq!(error.code, Code::Identity);
         assert_eq!(
             error.error,
@@ -1995,7 +2513,7 @@ mod tests {
         let request = Request::Shutdown {
             pid: std::process::id().into(),
         };
-        let error = service.dispatch(&request, &phase).await.unwrap_err();
+        let error = service.dispatch(request, &phase).await.unwrap_err();
         assert_eq!(error.code, Code::Busy);
         assert!(grant.authorize().is_ok());
     }
@@ -2025,24 +2543,6 @@ mod tests {
             };
             assert_eq!(owner, "unvalidated-token", "the gate owns token identity");
         }
-        for (op, operation) in [
-            ("input", RawOperation::Input),
-            ("unknown", RawOperation::Unknown),
-        ] {
-            let body = format!(
-                r#"{{"op":"{op}","on":null,"on":false,"epoch":{{"extra":1}},"owner":1,"owner":"last"}}"#
-            );
-            let Request::TemporaryRaw {
-                operation: actual,
-                request: raw,
-            } = Request::decode(body.as_bytes()).unwrap()
-            else {
-                panic!("expected a raw adapter");
-            };
-            assert_eq!(actual, operation);
-            assert_eq!(raw, serde_json::from_str::<Value>(&body).unwrap());
-            assert!(crate::session::InputEpoch::deserialize(&raw["epoch"]).is_err());
-        }
     }
 
     #[tokio::test]
@@ -2060,7 +2560,7 @@ mod tests {
 
         let request = Request::decode(br#"{"op":"hold","on":true}"#).unwrap();
         assert_eq!(
-            service.dispatch(&request, &phase).await.unwrap(),
+            service.dispatch(request, &phase).await.unwrap(),
             json!({"ok": true, "held": true, "kept": true})
         );
         assert!(marker.exists());
@@ -2072,12 +2572,12 @@ mod tests {
         ));
 
         let request = Request::decode(br#"{"op":"hold","on":false}"#).unwrap();
-        service.dispatch(&request, &phase).await.unwrap();
+        service.dispatch(request, &phase).await.unwrap();
         let grant = service.gate.acquire(&owner, super::Who::Agent).unwrap();
         let request =
             Request::decode(format!(r#"{{"op":"release","owner":"{owner}"}}"#).as_bytes()).unwrap();
         assert_eq!(
-            service.dispatch(&request, &phase).await.unwrap(),
+            service.dispatch(request, &phase).await.unwrap(),
             json!({"ok": true, "released": true})
         );
         assert!(grant.authorize().is_err());
@@ -2087,7 +2587,7 @@ mod tests {
         ));
 
         let error = service
-            .dispatch(&Request::Renew { owner }, &phase)
+            .dispatch(Request::Renew { owner }, &phase)
             .await
             .unwrap_err();
         assert_eq!(error.code, service.check().unwrap_err().code);
@@ -2114,7 +2614,7 @@ mod tests {
             format!(r#"{{"op":"shutdown","pid":{}}}"#, std::process::id()).as_bytes(),
         )
         .unwrap();
-        let dispatch = service.dispatch(&request, &phase);
+        let dispatch = service.dispatch(request, &phase);
         tokio::pin!(dispatch);
         std::future::poll_fn(|cx| {
             assert!(std::future::Future::poll(dispatch.as_mut(), cx).is_pending());
@@ -2148,7 +2648,7 @@ mod tests {
         let grant = service.gate.acquire(&owner, super::Who::Agent).unwrap();
         let engine = service.engine.lock().await;
         let request = Request::Release { owner };
-        let dispatch = service.dispatch(&request, &phase);
+        let dispatch = service.dispatch(request, &phase);
         tokio::pin!(dispatch);
         std::future::poll_fn(|cx| {
             assert!(std::future::Future::poll(dispatch.as_mut(), cx).is_pending());
@@ -2175,11 +2675,11 @@ mod tests {
         let (phase, _) = super::watch::channel(super::ConnectionPhase::Refusal);
         let request = Request::decode(br#"{"op":"hold","on":true}"#).unwrap();
         assert_eq!(
-            service.dispatch(&request, &phase).await.unwrap(),
+            service.dispatch(request, &phase).await.unwrap(),
             json!({"ok": true, "held": true, "kept": false})
         );
         let request = Request::decode(br#"{"op":"hold","on":false}"#).unwrap();
-        let error = service.dispatch(&request, &phase).await.unwrap_err();
+        let error = service.dispatch(request, &phase).await.unwrap_err();
         assert_eq!(error.code, Code::Native);
         assert_eq!(
             error.error,
@@ -2311,10 +2811,7 @@ mod tests {
                 let refusal = match request {
                     Request::Renew { owner } => refused.renew(&owner).unwrap_err(),
                     Request::Release { owner } => refused.cancel(Some(&owner)).unwrap_err(),
-                    Request::TemporaryRaw {
-                        operation: RawOperation::Input,
-                        request,
-                    } => refused.cancel(request["owner"].as_str()).unwrap_err(),
+                    Request::Input { owner, .. } => refused.cancel(Some(&owner)).unwrap_err(),
                     _ => panic!("expected an ownership request"),
                 };
                 assert_eq!(refusal.code, Code::LeaseLost);
@@ -2385,13 +2882,7 @@ mod tests {
         let working = operations.clone();
         let task = tasks.spawn(async move {
             let request = read_request(&mut server).await?;
-            assert!(matches!(
-                request,
-                Request::TemporaryRaw {
-                    operation: RawOperation::Input,
-                    ..
-                }
-            ));
+            assert!(matches!(request, Request::Input { .. }));
             phase.send_replace(super::ConnectionPhase::Mutation("input"));
             let work = working
                 .start(async move {
@@ -3041,6 +3532,44 @@ mod tests {
             "the app before every key, the window and field before the first"
         );
         assert!(stand.asked.iter().all(|asked| asked.pid() == 812));
+    }
+
+    #[tokio::test]
+    async fn later_keys_keep_app_only_checks_while_pointer_and_text_keep_their_own_targets() {
+        let expect = Expect::new(812)
+            .unwrap()
+            .in_window(42)
+            .unwrap()
+            .in_field("Search")
+            .unwrap();
+        let stand = ran_actions(
+            vec![
+                json!({"type":"key","key":"tab"}),
+                json!({"type":"pointer","phase":"down","x":10,"y":20}),
+                json!({"type":"pointer","phase":"move","x":30,"y":40}),
+                json!({"type":"pointer","phase":"up","x":30,"y":40}),
+                json!({"type":"wait","ms":0}),
+                json!({"type":"key","key":"return"}),
+                json!({"type":"type","text":"a"}),
+            ],
+            &expect,
+        )
+        .await;
+        let engine = stand.lock().await;
+        assert_eq!(engine.posted, 7);
+        let full = (Some(42), Some("Search".to_owned()));
+        assert_eq!(
+            asked_for(&engine),
+            [
+                full.clone(),
+                full.clone(),
+                full.clone(),
+                full.clone(),
+                (None, None),
+                full
+            ]
+        );
+        assert!(engine.asked.iter().all(|asked| asked.pid() == 812));
     }
 
     #[tokio::test]

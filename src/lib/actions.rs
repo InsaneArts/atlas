@@ -69,6 +69,78 @@ pub enum Action {
     },
 }
 
+/// The destination an action must reach before it can send input.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub(crate) enum Target {
+    Keys,
+    Point(f64, f64),
+    Drag { from: (f64, f64), to: (f64, f64) },
+    Nothing,
+}
+
+impl Action {
+    pub(crate) fn target(&self) -> Target {
+        match self {
+            Self::Type { .. } | Self::Key { .. } => Target::Keys,
+            Self::Click { x, y, .. }
+            | Self::Scroll { x, y, .. }
+            | Self::Move { x, y }
+            | Self::Pointer { x, y, .. } => Target::Point(*x, *y),
+            Self::Drag {
+                from_x,
+                from_y,
+                to_x,
+                to_y,
+                ..
+            } => Target::Drag {
+                from: (*from_x, *from_y),
+                to: (*to_x, *to_y),
+            },
+            Self::Wait { .. } => Target::Nothing,
+        }
+    }
+
+    pub(crate) fn remembers_target(&self) -> bool {
+        match self {
+            Self::Click { .. } | Self::Scroll { .. } | Self::Move { .. } | Self::Drag { .. } => {
+                true
+            }
+            Self::Pointer { .. } | Self::Type { .. } | Self::Key { .. } | Self::Wait { .. } => {
+                false
+            }
+        }
+    }
+}
+
+/// Decoded actions and their original wire projection. Only the projection
+/// retains optional-field presence; decisions use the decoded actions.
+#[derive(Debug)]
+pub(crate) struct Batch<'a> {
+    actions: Vec<Action>,
+    wire: &'a Value,
+}
+
+impl<'a> Batch<'a> {
+    pub(crate) fn decode(value: &'a Value) -> Result<Self> {
+        Ok(Self {
+            actions: decode(value)?,
+            wire: value,
+        })
+    }
+
+    pub(crate) fn actions(&self) -> &[Action] {
+        &self.actions
+    }
+
+    pub(crate) fn check(&self, display: &Display) -> Result<()> {
+        check(&self.actions, display)
+    }
+
+    pub(crate) fn into_wire(self) -> &'a Value {
+        self.wire
+    }
+}
+
 #[derive(Clone, Copy, PartialEq, Debug, Default, Deserialize, Serialize)]
 #[serde(rename_all = "lowercase")]
 pub enum Button {
@@ -455,7 +527,16 @@ pub fn validate(value: &Value, display: &Display) -> Result<()> {
 
 /// Parse the whole batch and validate every action before returning it for execution.
 pub(crate) fn parse(value: &Value, display: &Display) -> Result<Vec<Action>> {
-    let actions = Vec::<Action>::deserialize(value)?;
+    let actions = decode(value)?;
+    check(&actions, display)?;
+    Ok(actions)
+}
+
+pub(crate) fn decode(value: &Value) -> Result<Vec<Action>> {
+    Ok(Vec::<Action>::deserialize(value)?)
+}
+
+pub(crate) fn check(actions: &[Action], display: &Display) -> Result<()> {
     if actions.is_empty() || actions.len() > 32 {
         return Err(Error::new(Code::Input, "Send between 1 and 32 actions"));
     }
@@ -559,12 +640,54 @@ pub(crate) fn parse(value: &Value, display: &Display) -> Result<Vec<Action>> {
         }
     }
 
-    Ok(actions)
+    Ok(())
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn decoded_batches_keep_optional_wire_members_exactly_as_supplied() {
+        use serde_json::json;
+        let display = Display {
+            width: 800.0,
+            height: 600.0,
+            scale: 1.0,
+        };
+        for action in [
+            json!({"type":"click","x":10,"y":20}),
+            json!({"type":"click","x":10,"y":20,"button":"left","count":1,"modifiers":[]}),
+            json!({"type":"pointer","phase":"down","x":10,"y":20}),
+            json!({"type":"pointer","phase":"move","x":10,"y":20,"button":"right","count":2,"modifiers":["shift"]}),
+            json!({"type":"move","x":10,"y":20}),
+            json!({"type":"drag","fromX":10,"fromY":20,"toX":30,"toY":40}),
+            json!({"type":"scroll","x":10,"y":20}),
+            json!({"type":"scroll","x":10,"y":20,"dx":0,"dy":1}),
+            json!({"type":"type","text":"a"}),
+            json!({"type":"key","key":"return"}),
+            json!({"type":"wait","ms":0}),
+        ] {
+            let wire = json!([action]);
+            let batch = Batch::decode(&wire).unwrap();
+            batch.check(&display).unwrap();
+            assert_eq!(batch.actions().len(), 1);
+            assert_eq!(batch.into_wire(), &wire);
+        }
+        let wire = json!([{"type":"move","x":700,"y":20}]);
+        let batch = Batch::decode(&wire).unwrap();
+        batch.check(&display).unwrap();
+        let error = batch
+            .check(&Display {
+                width: 600.0,
+                ..display
+            })
+            .unwrap_err();
+        assert_eq!(
+            error.error,
+            "Action 1 was refused and nothing was sent: its point is off the display"
+        );
+    }
 
     #[test]
     fn an_expectation_must_be_a_process_id() {

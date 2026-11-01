@@ -189,7 +189,8 @@ impl Client {
             None
         };
 
-        self.input_inner(actions, expected, lease, None).await
+        self.input_inner(actions::Batch::decode(actions), expected, lease, None)
+            .await
     }
 
     /// Send one validated batch under controller ownership the caller already
@@ -203,8 +204,23 @@ impl Client {
         epoch: &Epoch,
         check: Option<Check>,
     ) -> Result<Value> {
-        self.input_inner(actions, Some((epoch, Instant::now())), None, check)
-            .await
+        self.input_inner(
+            actions::Batch::decode(actions),
+            Some((epoch, Instant::now())),
+            None,
+            check,
+        )
+        .await
+    }
+
+    pub(crate) async fn input_decoded(
+        &self,
+        _ownership: &Ownership,
+        actions: Result<actions::Batch<'_>>,
+        expected: Option<(&Epoch, Instant)>,
+        check: Option<Check>,
+    ) -> Result<Value> {
+        self.input_inner(actions, expected, None, check).await
     }
 
     /// The input service, still running in this same session, was pinned
@@ -254,7 +270,7 @@ impl Client {
 
     async fn input_inner(
         &self,
-        actions: &Value,
+        actions: Result<actions::Batch<'_>>,
         expected: Option<(&Epoch, Instant)>,
         lease: Option<(&SharedLease, &str)>,
         check: Option<Check>,
@@ -273,7 +289,8 @@ impl Client {
                 capture: true,
                 input: true,
             };
-            actions::validate(actions, &session.epoch.display)?;
+            let actions = actions?;
+            actions.check(&session.epoch.display)?;
             return self
                 .input_in_session(actions, expected, lease, None, &session)
                 .await;
@@ -290,7 +307,7 @@ impl Client {
     pub(super) async fn input_with_status(
         &self,
         status: &Value,
-        actions: &Value,
+        actions: Result<actions::Batch<'_>>,
         expected: Option<(&Epoch, Instant)>,
         lease: Option<(&SharedLease, &str)>,
         check: Option<Check>,
@@ -320,7 +337,8 @@ impl Client {
             ));
         }
 
-        actions::validate(actions, &session.epoch.display)?;
+        let actions = actions?;
+        actions.check(&session.epoch.display)?;
 
         self.input_in_session(actions, expected, lease, expect, &session)
             .await
@@ -330,7 +348,7 @@ impl Client {
     /// standalone action's claim until native cleanup is acknowledged.
     pub(super) async fn input_in_session(
         &self,
-        actions: &Value,
+        actions: actions::Batch<'_>,
         expected: Option<(&Epoch, Instant)>,
         lease: Option<(&SharedLease, &str)>,
         expect: Option<Expect>,
@@ -360,7 +378,7 @@ impl Client {
             .transpose()?;
         let mut request = json!({
             "op": "input",
-            "actions": actions,
+            "actions": actions.into_wire(),
             "owner": owner,
             "epoch": session.epoch.input_epoch(),
             // An agent's command names the app it acted in.

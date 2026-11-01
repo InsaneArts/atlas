@@ -177,6 +177,59 @@ fn point_with(look: &mut Seen, x: f64, y: f64) -> Result<Option<&'static str>> {
 }
 
 #[test]
+fn remembered_targeting_uses_the_same_point_as_focus_admission() {
+    let cases = [
+        (
+            json!({"type":"move","x":10,"y":20}),
+            Need::Point(10.0, 20.0),
+            true,
+        ),
+        (
+            json!({"type":"click","x":10,"y":20}),
+            Need::Point(10.0, 20.0),
+            true,
+        ),
+        (
+            json!({"type":"scroll","x":10,"y":20}),
+            Need::Point(10.0, 20.0),
+            true,
+        ),
+        (
+            json!({"type":"drag","fromX":10,"fromY":20,"toX":30,"toY":40}),
+            Need::Drag {
+                from: (10.0, 20.0),
+                to: (30.0, 40.0),
+            },
+            true,
+        ),
+        (json!({"type":"type","text":"a"}), Need::Keys, false),
+        (json!({"type":"key","key":"a"}), Need::Keys, false),
+        (json!({"type":"wait","ms":0}), Need::Nothing, false),
+        (
+            json!({"type":"pointer","phase":"down","x":10,"y":20}),
+            Need::Point(10.0, 20.0),
+            false,
+        ),
+        (
+            json!({"type":"pointer","phase":"move","x":10,"y":20}),
+            Need::Point(10.0, 20.0),
+            false,
+        ),
+        (
+            json!({"type":"pointer","phase":"up","x":10,"y":20}),
+            Need::Point(10.0, 20.0),
+            false,
+        ),
+    ];
+    for (wire, expected, remembered) in cases {
+        let action: Action = serde_json::from_value(wire).unwrap();
+        assert_eq!(Need::of(&action), expected);
+        assert_eq!(action.remembers_target(), remembered);
+        assert_eq!(action.target(), expected);
+    }
+}
+
+#[test]
 fn keys_go_ahead_only_while_the_app_has_keyboard_focus() {
     assert!(keys_with(&mut Seen::focused(Some(APP))).is_ok());
 

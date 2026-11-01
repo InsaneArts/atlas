@@ -6,7 +6,7 @@ use super::{
     windows::{DockRead, window_snapshot},
 };
 use crate::{
-    actions::Expect,
+    actions::{self, Action, Expect, Target as ActionTarget},
     client::{Check, Client, Verified},
     error::{Code, Error, Result},
     last_capture::{Observation, recorded_epoch},
@@ -20,10 +20,23 @@ use serde_json::Value;
 /// window and field when named, have keyboard focus, pointer actions where
 /// the app's own window, or the named one, is the top one.
 pub async fn act(client: &Client, expected: Option<&Expected>, actions: &Value) -> Result<Value> {
-    let remembered = Expected::remembered(client, expected, actions)?;
+    let actions = actions::Batch::decode(actions);
+    // Explicit targets and anonymous input never consult window memory.
+    // Keep their action refusals behind the existing client guards.
+    let (actions, remembered) = match actions {
+        Ok(actions) => {
+            let remembered = Expected::remembered(client, expected, actions.actions())?;
+            (Ok(actions), remembered)
+        }
+        Err(error) if expected.is_some() || client.host_session.is_none() => (Err(error), None),
+        Err(error) => return Err(error),
+    };
     let inferred;
     let expected = match (&remembered, expected) {
-        (None, None) => return client.input(actions, None, None).await,
+        (None, None) => {
+            let ownership = client.controller.acquire_beside_commands()?;
+            return client.input_decoded(&ownership, actions, None, None).await;
+        }
         (Some((window, _)), _) => {
             inferred = Expected {
                 place: Place::Window {
@@ -63,10 +76,10 @@ pub async fn act(client: &Client, expected: Option<&Expected>, actions: &Value) 
         return Err(Error::new(Code::Windows, "Window changed; look again"));
     }
     client
-        .input_owned(
+        .input_decoded(
             &ownership,
             actions,
-            &verified.session().epoch,
+            Some((&verified.session().epoch, std::time::Instant::now())),
             Some(Check::Required(expect)),
         )
         .await
@@ -94,23 +107,21 @@ impl Expected {
     fn remembered(
         client: &Client,
         expected: Option<&Self>,
-        actions: &Value,
+        actions: &[Action],
     ) -> Result<Option<(HitWindow, Value)>> {
         if expected.is_some() {
             return Ok(None);
         }
-        let point = || {
-            let [action] = actions.as_array()?.as_slice() else {
-                return None;
-            };
-            match action["type"].as_str()? {
-                "click" | "scroll" | "move" => Some((action["x"].as_f64()?, action["y"].as_f64()?)),
-                "drag" => Some((action["fromX"].as_f64()?, action["fromY"].as_f64()?)),
-                _ => None,
-            }
-        };
-        let Some((x, y)) = point() else {
+        let [action] = actions else {
             return Ok(None);
+        };
+        if !action.remembers_target() {
+            return Ok(None);
+        }
+        let (x, y) = match action.target() {
+            ActionTarget::Point(x, y) => (x, y),
+            ActionTarget::Drag { from, .. } => from,
+            ActionTarget::Keys | ActionTarget::Nothing => return Ok(None),
         };
         let Some(session) = client.host_session.as_ref() else {
             return Ok(None);
@@ -282,14 +293,103 @@ mod tests {
         );
     }
 
+    fn remembered(
+        client: &Client,
+        expected: Option<&Expected>,
+        actions: &Value,
+    ) -> Result<Option<(HitWindow, Value)>> {
+        Expected::remembered(client, expected, &actions::decode(actions)?)
+    }
+
     fn number(client: &Client, expected: Option<&Expected>, actions: &Value) -> Option<i64> {
-        Expected::remembered(client, expected, actions)
+        remembered(client, expected, actions)
             .unwrap()
             .map(|(window, _)| window.number)
             .or_else(|| match &expected?.place {
                 Place::Window { number, .. } => Some(*number),
                 Place::App(_) => None,
             })
+    }
+
+    #[test]
+    fn pointer_phases_do_not_acquire_new_remembered_targets() {
+        let directory = tempfile::tempdir().unwrap();
+        let client = session(&crate::test_support::client(directory.path()), "one");
+        remember(&client, &[window(42, 10.0)]);
+        for phase in ["down", "move", "up"] {
+            assert_eq!(
+                number(
+                    &client,
+                    None,
+                    &json!([{"type":"pointer","phase":phase,"x":30,"y":40}])
+                ),
+                None
+            );
+        }
+        assert_eq!(
+            number(&client, None, &json!([{"type":"wait","ms":0}])),
+            None
+        );
+        assert_eq!(
+            number(
+                &client,
+                None,
+                &json!([{"type":"move","x":30,"y":40},{"type":"move","x":30,"y":40}])
+            ),
+            None
+        );
+        assert_eq!(
+            number(
+                &client,
+                None,
+                &drag((30.0, 40.0), (500.0, 500.0), Button::Left)
+            ),
+            Some(42)
+        );
+        assert_eq!(
+            number(
+                &client,
+                None,
+                &drag((500.0, 500.0), (30.0, 40.0), Button::Left)
+            ),
+            None
+        );
+    }
+
+    #[tokio::test]
+    async fn a_malformed_action_is_refused_before_unreadable_window_memory() {
+        let directory = tempfile::tempdir().unwrap();
+        let client = session(&crate::test_support::client(directory.path()), "one");
+        remember(&client, &[window(42, 10.0)]);
+        let path = client.config.output_dir.join("last-windows").join(format!(
+            "{}.json",
+            client.host_session.as_ref().unwrap().key()
+        ));
+        std::fs::write(path, "unreadable json").unwrap();
+        let actions = json!([{"type":"click","x":30,"y":40,"count":"two"}]);
+        let expected = actions::decode(&actions).unwrap_err();
+        let error = act(&client, None, &actions).await.unwrap_err();
+        assert_eq!(json!(error), json!(expected));
+        assert!(!error.uncertain);
+        assert!(client.controller.pending().unwrap().is_empty());
+    }
+
+    #[tokio::test]
+    async fn malformed_actions_keep_controller_refusals_when_window_memory_is_not_used() {
+        let directory = tempfile::tempdir().unwrap();
+        let anonymous = crate::test_support::client(directory.path());
+        let named = session(&anonymous, "one");
+        let explicit = Expected::new(None, Some(42), None).unwrap();
+        let claim = anonymous.controller.quarantine().unwrap();
+        let pending = anonymous.controller.pending().unwrap();
+        let actions = json!([{"type":"click","x":30,"y":40,"count":"two"}]);
+        for (client, target) in [(&anonymous, None), (&named, explicit.as_ref())] {
+            let expected = client.controller.acquire_beside_commands().unwrap_err();
+            let error = act(client, target, &actions).await.unwrap_err();
+            assert_eq!(json!(error), json!(expected));
+            assert_eq!(client.controller.pending().unwrap(), pending);
+        }
+        drop(claim);
     }
 
     #[test]
@@ -552,13 +652,13 @@ mod tests {
         );
         let app = Expected::new(Some(Target::Pid(812)), None, None).unwrap();
         assert!(
-            Expected::remembered(&client, app.as_ref(), &move_to(30.0, 40.0))
+            remembered(&client, app.as_ref(), &move_to(30.0, 40.0))
                 .unwrap()
                 .is_none()
         );
         let field = Expected::new(Some(Target::Pid(812)), None, Some("Search".into())).unwrap();
         assert!(
-            Expected::remembered(&client, field.as_ref(), &move_to(30.0, 40.0))
+            remembered(&client, field.as_ref(), &move_to(30.0, 40.0))
                 .unwrap()
                 .is_none()
         );
@@ -566,11 +666,7 @@ mod tests {
             keys(&["a".into()]).unwrap(),
             json!([{"type":"type","text":"a"}]),
         ] {
-            assert!(
-                Expected::remembered(&client, None, &action)
-                    .unwrap()
-                    .is_none()
-            );
+            assert!(remembered(&client, None, &action).unwrap().is_none());
         }
     }
 
@@ -622,14 +718,14 @@ mod tests {
                 Expected::new(Some(Target::Pid(812)), None, Some("Search".into())).unwrap(),
             ] {
                 assert!(
-                    Expected::remembered(&client, expected.as_ref(), &actions)
+                    remembered(&client, expected.as_ref(), &actions)
                         .unwrap()
                         .is_none()
                 );
             }
         }
         assert!(
-            Expected::remembered(&client, None, &keys(&["a".into()]).unwrap())
+            remembered(&client, None, &keys(&["a".into()]).unwrap())
                 .unwrap()
                 .is_none()
         );
@@ -673,7 +769,7 @@ mod tests {
                 drag((30.0, 40.0), (500.0, 500.0), Button::Left),
                 move_to(30.0, 40.0),
             ] {
-                assert!(Expected::remembered(&client, None, &actions).is_err());
+                assert!(remembered(&client, None, &actions).is_err());
                 let error = tokio::time::timeout(
                     std::time::Duration::from_secs(1),
                     act(&client, None, &actions),
@@ -684,13 +780,13 @@ mod tests {
                 assert!(matches!(error.code, Code::Windows | Code::Io));
                 let explicit = Expected::new(None, Some(99), None).unwrap();
                 assert!(
-                    Expected::remembered(&client, explicit.as_ref(), &actions)
+                    remembered(&client, explicit.as_ref(), &actions)
                         .unwrap()
                         .is_none()
                 );
             }
             assert!(
-                Expected::remembered(&client, None, &keys(&["a".into()]).unwrap())
+                remembered(&client, None, &keys(&["a".into()]).unwrap())
                     .unwrap()
                     .is_none()
             );
@@ -710,7 +806,7 @@ mod tests {
         let client = session(&anonymous, "one");
         assert!(client.remembered_windows().is_none());
         assert!(
-            Expected::remembered(&client, None, &move_to(30.0, 40.0))
+            remembered(&client, None, &move_to(30.0, 40.0))
                 .unwrap()
                 .is_none()
         );
@@ -754,7 +850,7 @@ mod tests {
             remember(&client, &[front, window(42, 10.0)]);
             for expected in [None, app.as_ref()] {
                 assert!(
-                    Expected::remembered(&client, expected, &move_to(30.0, 40.0))
+                    remembered(&client, expected, &move_to(30.0, 40.0))
                         .unwrap()
                         .is_none()
                 );
@@ -767,15 +863,11 @@ mod tests {
             json!([{"type":"wait","ms":1}, {"type":"click","x":30,"y":40}]),
         ] {
             assert!(
-                Expected::remembered(&client, app.as_ref(), &actions)
+                remembered(&client, app.as_ref(), &actions)
                     .unwrap()
                     .is_none()
             );
-            assert!(
-                Expected::remembered(&client, None, &actions)
-                    .unwrap()
-                    .is_none()
-            );
+            assert!(remembered(&client, None, &actions).unwrap().is_none());
         }
     }
 
