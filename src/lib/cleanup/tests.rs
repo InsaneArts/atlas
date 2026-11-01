@@ -28,6 +28,7 @@ mod jobs;
 mod order;
 mod quit;
 mod sessions;
+mod settlement;
 
 /// A stand-in for the helper that logs every call. It has no way to list a
 /// folder: a cleanup is given none.

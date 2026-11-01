@@ -104,6 +104,10 @@ impl Receipt {
 
 /// One step of a receipt, as it was planned, how far it got and what it
 /// came to.
+/// Done/Kept describe the effect independently of `settled`: acknowledgement
+/// may still need retry after either outcome. `already_gone` is a known Done
+/// outcome; it never stands for uncertainty. `set` resets acknowledgement and
+/// derives retry from the reason, while legacy missing fields keep their defaults.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub(super) struct Entry {

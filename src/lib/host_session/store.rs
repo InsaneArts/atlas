@@ -391,6 +391,44 @@ impl Store {
         Ok(())
     }
 
+    /// Cleanup acknowledgement requires a complete supported scan, successful
+    /// writes and a complete read-back under the same session-store lock.
+    pub(crate) fn forget_plan_checked(&self, plan_id: &Token) -> Result<()> {
+        let checked = || {
+            let (records, complete) = self.scanned(LISTED);
+            if complete {
+                Ok(records)
+            } else {
+                Err(Error::new(
+                    Code::State,
+                    "Session records could not be read completely to confirm cleanup",
+                ))
+            }
+        };
+        checked()?;
+        if fs::symlink_metadata(self.folder.directory())
+            .is_err_and(|error| error.kind() == std::io::ErrorKind::NotFound)
+        {
+            return Ok(());
+        }
+        let _lock = self.folder.lock()?;
+        for mut record in checked()? {
+            if record.forget_plan(plan_id) {
+                self.write(&record)?;
+            }
+        }
+        if checked()?
+            .iter()
+            .any(|record| record.plans.iter().any(|plan| plan.plan_id == *plan_id))
+        {
+            return Err(Error::new(
+                Code::State,
+                "Session records still name the plan after cleanup",
+            ));
+        }
+        Ok(())
+    }
+
     /// What `record` left in the helper: its copy folders still there, its
     /// applied plans and the pending changes `causes` say it claimed.
     pub(crate) fn leftovers(&self, record: &Record, causes: &[Cause]) -> Leftovers {

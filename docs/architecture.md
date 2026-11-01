@@ -35,22 +35,26 @@ The Unix transport checks the kernel-reported peer UID. The helper servers also 
 
 The library entry point is [`src/lib/lib.rs`](../src/lib/lib.rs). The binary keeps argument parsing, presentation and dispatch separate so library behavior does not depend on terminal formatting.
 
-| Area                                                    | Responsibility                                                                                          |
-| ------------------------------------------------------- | ------------------------------------------------------------------------------------------------------- |
-| `src/bin/cli.rs`, `help.rs`, `output.rs`, `dispatch.rs` | CLI grammar, grouped help, output/exit behavior and routing into library operations.                    |
-| `client`, `transport`, `session`                        | Helper requests, bounded transport and validation of account/session/display evidence.                  |
-| `control`                                               | Controller exclusion, viewer leases and persistent unknown-action records.                              |
-| `host_session`                                          | Which agent session a command comes from, its records, and naming sessions in replies.                  |
-| `daemon`                                                | The signed helper daemon, protocol, session facts and bounded child-command execution.                  |
-| `native`                                                | macOS capture, accessibility and input bindings, event execution, cancellation and held-input recovery. |
-| `agent`, `handoff`, `readiness`                         | User-facing app operations, staged app copies and dependency checks.                                    |
-| `viewer`, `menubar`, `overview`                         | Local viewing/control service, native app launch and shared status/activity views.                      |
-| `mcp`, `agents`, `claude_app`                           | Embedded host views and installation of supported agent connections.                                    |
-| `environment`                                           | Explicit file snapshots, environment profiles and resumable apply/rollback transactions.                |
-| `init`, `onboarding`, `setup`                           | Guided setup, setup facts, account identity and managed helper installation or repair.                  |
-| `update`, `uninstall`                                   | Verified app replacement, helper handover and ordered removal.                                          |
+| Area                                                                 | Responsibility                                                                                                        |
+| -------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------- |
+| `src/bin/cli.rs`, `help.rs`, `policy.rs`, `output.rs`, `dispatch.rs` | CLI grammar, grouped help, command policy, output/exit behavior and routing into library operations.                  |
+| `client`, `transport`, `session`                                     | Helper requests, bounded transport and validation of account/session/display evidence.                                |
+| `control`                                                            | Controller exclusion, viewer leases and persistent unknown-action records.                                            |
+| `host_session`                                                       | Which agent session a command comes from, its records, and naming sessions in replies.                                |
+| `task`, `cleanup`, `collect`                                         | Durable task claims, resumable cleanup receipts and verified copies collected from the helper.                        |
+| `daemon`                                                             | The signed helper daemon, protocol, session facts and bounded child-command execution.                                |
+| `native`                                                             | macOS capture, accessibility and input bindings, event execution, cancellation and held-input recovery.               |
+| `screen`                                                             | Portable observed geometry, windows, elements and selection, without native effects.                                  |
+| `agent`, `handoff`, `readiness`                                      | User-facing app operations, staged app copies and dependency checks.                                                  |
+| `viewer`, `menubar`, `overview`                                      | Local viewing/control service, native app launch and shared status/activity views.                                    |
+| `mcp`, `agents`, `claude_app`                                        | Embedded host views and installation of supported agent connections.                                                  |
+| `environment`                                                        | Explicit file snapshots, environment profiles and resumable apply/rollback transactions.                              |
+| `onboarding`, `setup`; `src/bin/init.rs`                             | Setup rules, account identity and managed helper installation or repair; attended terminal setup stays in the binary. |
+| `update`, `uninstall`                                                | Verified app replacement, helper handover and ordered removal.                                                        |
 
 Paths without a directory prefix in this table are under `src/lib`. Prefer the owner of the behavior over another layer that happens to call it. For example, an input cancellation rule belongs in control/native code; a button label belongs in the app's presentation code.
+
+The [Rust contributor instructions](../src/AGENTS.md) describe extension paths and the compiler-enforced decisions for commands, input actions, requests, tools, settings and records. A new operation follows its existing owner and exhaustive policy matches; it does not need a new service layer. Observation models, wire replies and durable recovery records have different compatibility and privacy obligations.
 
 ## Ownership, cancellation and uncertain results
 

@@ -378,11 +378,19 @@ async fn apply(
     let tasks = Tasks::at(output);
     let sessions = Sessions::at(output);
     let covered = loaded.covered(scope);
-    reconcile(&receipts, &tasks, &sessions, loaded);
+    reconcile(&receipts, &tasks, &sessions, loaded)?;
 
-    let mut receipt = loaded
-        .unfinished(scope)
-        .unwrap_or_else(|| Receipt::new(scope.session.clone(), scope.task.clone(), actor));
+    let mut receipt = match loaded.unfinished(scope) {
+        // Reconciliation can acknowledge finished steps in this receipt. Read
+        // those writes back instead of saving the caller's stale snapshot.
+        Some(previous) => receipts.load(&previous.id).ok_or_else(|| {
+            crate::error::Error::new(
+                crate::error::Code::State,
+                "The cleanup receipt could not be read after reconciliation",
+            )
+        })?,
+        None => Receipt::new(scope.session.clone(), scope.task.clone(), actor),
+    };
     merge_with(
         &mut receipt.steps,
         &loaded.undoable(),
@@ -480,7 +488,12 @@ async fn others(hands: &impl Hands, scope: &Scope, loaded: &Loaded) -> plan::Oth
 /// in the records of its own receipt's scope: what a receipt says was
 /// moved aside, removed, undone or kept is never planned again, and its
 /// claims say so too.
-fn reconcile(receipts: &Receipts, tasks: &Tasks, sessions: &Sessions, loaded: &Loaded) {
+fn reconcile(
+    receipts: &Receipts,
+    tasks: &Tasks,
+    sessions: &Sessions,
+    loaded: &Loaded,
+) -> Result<()> {
     for receipt in &loaded.receipts {
         let mut receipt = receipt.clone();
         let mut changed = false;
@@ -494,9 +507,10 @@ fn reconcile(receipts: &Receipts, tasks: &Tasks, sessions: &Sessions, loaded: &L
             changed |= entry.settled;
         }
         if changed {
-            let _ = receipts.save(&mut receipt);
+            receipts.save(&mut receipt)?;
         }
     }
+    Ok(())
 }
 
 /// Note what a step that ended `state` did to its thing, in the records of
@@ -521,6 +535,7 @@ fn settle(
     let claiming = |records: Vec<TaskRecord>| -> Vec<TaskRecord> {
         records
             .into_iter()
+            .filter(|record| record.session == *session)
             .filter(|record| task.as_ref().is_none_or(|task| record.key == *task))
             .filter(|record| record.claims().any(|(claimed, _)| claimed.same(&owned)))
             .collect()
@@ -533,30 +548,35 @@ fn settle(
     };
 
     let acknowledged = match state {
-        StepState::Done => {
-            tasks
-                .settle_everywhere(std::slice::from_ref(&owned), State::Gone, now)
-                .is_ok()
-                && tasks
-                    .all()
-                    .iter()
-                    .all(|record| !state_of(record).is_some_and(State::live))
-        }
+        StepState::Done => tasks
+            .settle_everywhere_checked(&owned, State::Gone, now)
+            .is_ok(),
         StepState::Kept => {
-            for record in claiming(tasks.of_session(session)) {
-                let _ = tasks.update(&Task::recorded(&record), now, |record| {
-                    record.settle(&owned, State::Kept, now);
-                    Ok(())
-                });
+            let Ok(records) = tasks.checked_all() else {
+                return false;
+            };
+            for record in claiming(records) {
+                if tasks
+                    .update(&Task::recorded(&record), now, |record| {
+                        record.settle(&owned, State::Kept, now);
+                        Ok(())
+                    })
+                    .is_err()
+                {
+                    return false;
+                }
             }
-            claiming(tasks.of_session(session))
+            let Ok(records) = tasks.checked_all() else {
+                return false;
+            };
+            claiming(records)
                 .iter()
                 .all(|record| state_of(record) == Some(State::Kept))
         }
         _ => return false,
     };
     let forgotten = match &owned {
-        Owned::Plan { id } => sessions.forget_plan(id).is_ok(),
+        Owned::Plan { id } => sessions.forget_plan_checked(id).is_ok(),
         _ => true,
     };
     acknowledged && forgotten

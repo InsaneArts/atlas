@@ -14,6 +14,7 @@ use crate::{
     record_folder::{Cached, LISTED, RecordFolder, Records},
 };
 use std::{
+    fs,
     path::Path,
     sync::{Arc, Mutex},
     time::Duration,
@@ -127,6 +128,37 @@ impl Store {
         Ok(())
     }
 
+    /// Settle cleanup claims only when a complete uncached read can prove the
+    /// resulting state. Ordinary attribution keeps its best-effort path above.
+    pub(crate) fn settle_everywhere_checked(
+        &self,
+        owned: &Owned,
+        state: State,
+        now: u64,
+    ) -> Result<()> {
+        self.checked_all()?;
+        if fs::symlink_metadata(self.folder.directory())
+            .is_err_and(|error| error.kind() == std::io::ErrorKind::NotFound)
+        {
+            return Ok(());
+        }
+        let _lock = self.folder.lock()?;
+        for mut record in self.checked_all()? {
+            if record.settle(owned, state, now) {
+                record.updated = now;
+                self.write(&record)?;
+            }
+        }
+        if self.checked_all()?.iter().any(|record| {
+            record
+                .claims()
+                .any(|(claimed, found)| claimed.same(owned) && found != state)
+        }) {
+            return Err(incomplete_settlement());
+        }
+        Ok(())
+    }
+
     /// Remove the records [`super::prune::finished`] says may go. The
     /// record `keep` stays.
     fn prune(&self, keep: &Key) {
@@ -154,6 +186,25 @@ impl Store {
             .collect()
     }
 
+    /// No skipped record or bounded scan can establish cleanup acknowledgement.
+    pub(crate) fn checked_all(&self) -> Result<Vec<Record>> {
+        let listing = self.folder.listing(LISTED);
+        if !listing.complete {
+            return Err(incomplete_settlement());
+        }
+        listing
+            .keys
+            .iter()
+            .map(|key| {
+                self.load(key)
+                    // A supported record may still contain a future or malformed
+                    // ownership entry. Its omitted claim cannot prove absence.
+                    .filter(|record| record.claims().count() == record.owned.len())
+                    .ok_or_else(incomplete_settlement)
+            })
+            .collect()
+    }
+
     fn read(&self, key: &Key) -> Read {
         if !self.folder.holds(key) {
             return Read::Missing;
@@ -172,4 +223,11 @@ impl Store {
     fn write(&self, record: &Record) -> Result<()> {
         self.folder.write_json(&record.key, record)
     }
+}
+
+fn incomplete_settlement() -> Error {
+    Error::new(
+        Code::State,
+        "Task records could not be read completely to confirm cleanup",
+    )
 }

@@ -46,7 +46,7 @@ const PREDICATE: &str = "(subsystem == \"com.insanearts.atlas\" AND category == 
 ///
 /// # Errors
 ///
-/// Returns failures invoking or decoding the operating system's bounded login-log query.
+/// Returns failures invoking or decoding the operating system's login-log query.
 pub fn timing() -> Result<Value> {
     let output = Command::new("/usr/bin/log")
         .args([

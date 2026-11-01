@@ -18,7 +18,7 @@ use std::{
     time::{Duration, Instant},
 };
 
-pub struct Frame {
+pub(crate) struct Frame {
     pub(crate) png: Arc<[u8]>,
     pub(crate) width: u32,
     pub(crate) height: u32,
