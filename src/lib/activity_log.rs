@@ -52,11 +52,11 @@ pub enum Op {
 
 impl Op {
     /// The op `request` names, when it names one.
-    pub fn of(request: &Value) -> Option<Self> {
+    pub(crate) fn of(request: &Value) -> Option<Self> {
         request["op"].as_str().map(Self::from)
     }
 
-    pub fn as_str(&self) -> &str {
+    pub(crate) fn as_str(&self) -> &str {
         match self {
             Self::Apps => "apps",
             Self::Collect => "collect",
@@ -115,7 +115,7 @@ pub enum Failure {
 
 impl Failure {
     /// The failure a row's word names.
-    pub fn parse(word: &str) -> Self {
+    pub(crate) fn parse(word: &str) -> Self {
         match word {
             "timeout" => Self::Timeout,
             "exit" => Self::Exit,
@@ -124,7 +124,7 @@ impl Failure {
     }
 
     /// The word a row keeps for it.
-    pub fn as_str(&self) -> &str {
+    pub(crate) fn as_str(&self) -> &str {
         match self {
             Self::Code(code) => code.as_str(),
             Self::Timeout => "timeout",
@@ -151,7 +151,7 @@ impl<'de> Deserialize<'de> for Failure {
 
 /// Which step of a request a row stands for.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum Step {
+pub(crate) enum Step {
     /// A command began: what it does shows while it runs.
     Start,
     /// The request ended, as its reply says.
@@ -162,120 +162,64 @@ pub enum Step {
 /// read as missing, as is one the row lacks, so a row any build wrote
 /// still reads.
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
+#[serde(rename_all = "camelCase", default)]
 pub struct Row {
     /// When the action was recorded, in nanoseconds since 1970, as text.
-    #[serde(default, deserialize_with = "lenient")]
+    #[serde(deserialize_with = "lenient")]
     pub at: Option<String>,
-    #[serde(default, deserialize_with = "lenient")]
+    #[serde(deserialize_with = "lenient")]
     pub operation: Option<Op>,
     /// Whether it worked; none while a command it began runs.
-    #[serde(default, deserialize_with = "lenient")]
+    #[serde(deserialize_with = "lenient")]
     pub ok: Option<bool>,
-    #[serde(default, deserialize_with = "lenient")]
+    #[serde(deserialize_with = "lenient")]
     pub elapsed_ms: Option<f64>,
     /// How many input actions it sent; none for other requests.
-    #[serde(default, deserialize_with = "lenient")]
+    #[serde(deserialize_with = "lenient")]
     pub action_count: Option<u64>,
     /// Who asked: an agent, or the person through a viewer.
-    #[serde(default, deserialize_with = "lenient")]
+    #[serde(deserialize_with = "lenient")]
     pub actor: Option<String>,
     /// Why it failed, as a fixed code: never its message.
-    #[serde(
-        default,
-        deserialize_with = "lenient",
-        skip_serializing_if = "Option::is_none"
-    )]
+    #[serde(deserialize_with = "lenient", skip_serializing_if = "Option::is_none")]
     pub code: Option<Failure>,
     /// Why another app in front refused it, as the input service's word.
-    #[serde(
-        default,
-        deserialize_with = "lenient",
-        skip_serializing_if = "Option::is_none"
-    )]
+    #[serde(deserialize_with = "lenient", skip_serializing_if = "Option::is_none")]
     pub reason: Option<String>,
     /// Whether such a refusal came after some of it was sent.
-    #[serde(
-        default,
-        deserialize_with = "lenient",
-        skip_serializing_if = "Option::is_none"
-    )]
+    #[serde(deserialize_with = "lenient", skip_serializing_if = "Option::is_none")]
     pub partial: Option<bool>,
     /// The agent's host session's key.
-    #[serde(
-        default,
-        deserialize_with = "lenient",
-        skip_serializing_if = "Option::is_none"
-    )]
+    #[serde(deserialize_with = "lenient", skip_serializing_if = "Option::is_none")]
     pub session: Option<String>,
     /// The key of a task split from its session.
-    #[serde(
-        default,
-        deserialize_with = "lenient",
-        skip_serializing_if = "Option::is_none"
-    )]
+    #[serde(deserialize_with = "lenient", skip_serializing_if = "Option::is_none")]
     pub task: Option<String>,
     /// How many files and bytes a collection kept.
-    #[serde(
-        default,
-        deserialize_with = "lenient",
-        skip_serializing_if = "Option::is_none"
-    )]
+    #[serde(deserialize_with = "lenient", skip_serializing_if = "Option::is_none")]
     pub count: Option<u64>,
-    #[serde(
-        default,
-        deserialize_with = "lenient",
-        skip_serializing_if = "Option::is_none"
-    )]
+    #[serde(deserialize_with = "lenient", skip_serializing_if = "Option::is_none")]
     pub bytes: Option<u64>,
     /// The file name a screenshot gave.
-    #[serde(
-        default,
-        deserialize_with = "lenient",
-        skip_serializing_if = "Option::is_none"
-    )]
+    #[serde(deserialize_with = "lenient", skip_serializing_if = "Option::is_none")]
     pub capture: Option<String>,
     /// What the agent's command did, as [`crate::doing::Doing`] names it.
-    #[serde(
-        default,
-        deserialize_with = "lenient",
-        skip_serializing_if = "Option::is_none"
-    )]
+    #[serde(deserialize_with = "lenient", skip_serializing_if = "Option::is_none")]
     pub verb: Option<String>,
     /// The command's own token, the same on each of its rows.
-    #[serde(
-        default,
-        deserialize_with = "lenient",
-        skip_serializing_if = "Option::is_none"
-    )]
+    #[serde(deserialize_with = "lenient", skip_serializing_if = "Option::is_none")]
     pub command: Option<String>,
-    #[serde(
-        default,
-        deserialize_with = "lenient",
-        skip_serializing_if = "Option::is_none"
-    )]
+    #[serde(deserialize_with = "lenient", skip_serializing_if = "Option::is_none")]
     pub app: Option<String>,
     /// The bundle identifier of the app it acted in, such as
     /// `com.apple.TextEdit`, as [`crate::doing::bundle_id`] keeps it: never
     /// a path.
-    #[serde(
-        default,
-        deserialize_with = "lenient",
-        skip_serializing_if = "Option::is_none"
-    )]
+    #[serde(deserialize_with = "lenient", skip_serializing_if = "Option::is_none")]
     pub bundle_id: Option<String>,
-    #[serde(
-        default,
-        deserialize_with = "lenient",
-        skip_serializing_if = "Option::is_none"
-    )]
+    #[serde(deserialize_with = "lenient", skip_serializing_if = "Option::is_none")]
     pub label: Option<String>,
     /// Whether it is a command's first step.
-    #[serde(
-        default,
-        deserialize_with = "lenient",
-        skip_serializing_if = "Option::is_none"
-    )]
+    #[serde(deserialize_with = "lenient", skip_serializing_if = "Option::is_none")]
     pub started: Option<bool>,
     /// The row's id, from what it holds as the log keeps it: never written.
     #[serde(skip)]
@@ -287,7 +231,7 @@ pub struct Row {
 
 impl Row {
     /// `value` as a row, with its id, when it names its operation.
-    pub fn parse(value: &Value) -> Option<Self> {
+    pub(crate) fn parse(value: &Value) -> Option<Self> {
         let mut row: Self = serde_json::from_value(value.clone()).ok()?;
         row.operation.as_ref()?;
         row.id = id(value);
@@ -304,12 +248,12 @@ impl Row {
     }
 
     /// Nanoseconds since it was recorded, at `now`, when its time reads.
-    pub fn age(&self, now: u128) -> Option<u128> {
+    pub(crate) fn age(&self, now: u128) -> Option<u128> {
         self.at_nanos().map(|at| now.saturating_sub(at))
     }
 
     /// When it was recorded, in milliseconds since 1970.
-    pub fn at_ms(&self) -> Option<u64> {
+    pub(crate) fn at_ms(&self) -> Option<u64> {
         u64::try_from(self.at_nanos()? / 1_000_000).ok()
     }
 
@@ -318,32 +262,32 @@ impl Row {
     }
 
     /// Whether it worked.
-    pub fn worked(&self) -> bool {
+    pub(crate) fn worked(&self) -> bool {
         self.ok == Some(true)
     }
 
     /// Whether it failed: not under way, and not of no outcome.
-    pub fn failed(&self) -> bool {
+    pub(crate) fn failed(&self) -> bool {
         self.ok == Some(false)
     }
 
     /// Whether it is a command's step still under way.
-    pub fn under_way(&self) -> bool {
+    pub(crate) fn under_way(&self) -> bool {
         self.started == Some(true) && self.ok.is_none()
     }
 
     /// Whether it failed with `code`.
-    pub fn coded(&self, code: Code) -> bool {
+    pub(crate) fn coded(&self, code: Code) -> bool {
         self.code == Some(Failure::Code(code))
     }
 
     /// Who asked, as the row says, an agent unless it says otherwise.
-    pub fn actor(&self) -> &str {
+    pub(crate) fn actor(&self) -> &str {
         self.actor.as_deref().unwrap_or("agent")
     }
 
     /// Whether `op` is what it did.
-    pub fn is(&self, op: &Op) -> bool {
+    pub(crate) fn is(&self, op: &Op) -> bool {
         self.operation.as_ref() == Some(op)
     }
 
@@ -490,14 +434,14 @@ fn repair_tail(file: &mut fs::File) -> std::io::Result<()> {
 /// input can be appended after a newer action,
 /// including across rotation. Equal or missing times keep reverse append
 /// order; rows without a readable time follow those with one.
-pub fn recent(directory: &Path, limit: usize) -> Vec<Row> {
+pub(crate) fn recent(directory: &Path, limit: usize) -> Vec<Row> {
     snapshot::recent(directory, limit)
 }
 
 /// Like [`recent`], but reports an unreadable or refused log instead of
 /// returning only the rows that could be read. Missing logs are empty;
 /// malformed rows are still skipped within the same byte budget.
-pub fn try_recent(directory: &Path, limit: usize) -> std::io::Result<Vec<Row>> {
+pub(crate) fn try_recent(directory: &Path, limit: usize) -> std::io::Result<Vec<Row>> {
     snapshot::try_recent(directory, limit)
 }
 

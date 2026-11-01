@@ -135,22 +135,19 @@ fn selection(
         ));
     }
 
-    if let Some((name, problem)) = tools
-        .iter()
-        .find_map(|name| Some((name, name_problem(name)?)))
-    {
-        return refuse(format!(
-            "A tool is named by its bare command name such as cat; this one {problem}: {name:?}"
-        ));
-    }
-
-    if let Some((name, problem)) = apps
-        .iter()
-        .find_map(|name| Some((name, name_problem(name)?)))
-    {
-        return refuse(format!(
-            "An app is named by its name such as Safari; this one {problem}: {name:?}"
-        ));
+    for (names, expected) in [
+        (
+            tools,
+            "A tool is named by its bare command name such as cat",
+        ),
+        (apps, "An app is named by its name such as Safari"),
+    ] {
+        if let Some((name, problem)) = names
+            .iter()
+            .find_map(|name| Some((name, name_problem(name)?)))
+        {
+            return refuse(format!("{expected}; this one {problem}: {name:?}"));
+        }
     }
 
     if let Some(name) = environment.iter().find(|name| !variable(name)) {
@@ -183,22 +180,16 @@ fn name_problem(name: &str) -> Option<&'static str> {
         Some("is longer than 128 bytes")
     } else if name.chars().any(char::is_control) {
         Some("contains a control character")
-    } else if !component(name) {
+    } else if Path::new(name).components().count() != 1
+        || !matches!(
+            Path::new(name).components().next(),
+            Some(Component::Normal(_))
+        )
+    {
         Some("is a path")
     } else {
         None
     }
-}
-
-fn component(name: &str) -> bool {
-    !name.is_empty()
-        && name.len() <= 128
-        && !name.chars().any(char::is_control)
-        && Path::new(name).components().count() == 1
-        && matches!(
-            Path::new(name).components().next(),
-            Some(Component::Normal(_))
-        )
 }
 
 #[derive(Debug, Default, Serialize)]
@@ -212,6 +203,13 @@ pub(crate) struct Access {
 }
 
 impl Access {
+    pub(super) fn permits_reference(&self, writable: bool) -> bool {
+        (self.file || self.directory)
+            && self.readable
+            && (!self.directory || self.executable)
+            && (!writable || self.writable)
+    }
+
     fn from_flags(flags: &str) -> Result<Self> {
         if !flags.starts_with('-') || flags.bytes().skip(1).any(|c| !b"fdrwx".contains(&c)) {
             return Err(Error::new(
@@ -317,10 +315,10 @@ struct Variable {
 }
 
 #[derive(Serialize)]
-struct Reference {
+pub(super) struct Reference {
     path: PathBuf,
     host: Access,
-    helper: Access,
+    pub(super) helper: Access,
 }
 
 pub(crate) struct Discovery {
@@ -328,11 +326,11 @@ pub(crate) struct Discovery {
     pub(crate) helper_home: PathBuf,
     helper_uid: u32,
     environment: Vec<Variable>,
-    references: Vec<Reference>,
+    pub(super) references: Vec<Reference>,
 }
 
 impl Discovery {
-    fn report(&self) -> Value {
+    pub(super) fn report(&self) -> Value {
         let selections: Vec<_> = self.selections.iter().map(Candidate::report).collect();
         json!({
             "ok": true,
@@ -396,25 +394,21 @@ fn application(name: &str, home: &Path, helper_home: &Path) -> Candidate {
 
     // Where apps live: the usual folders, and macOS's own in
     // CoreServices (Finder among them).
-    let host = [
-        PathBuf::from("/Applications"),
-        PathBuf::from("/System/Applications"),
-        PathBuf::from(CORE_SERVICES),
-        home.join("Applications"),
-    ]
-    .iter()
-    .map(|dir| dir.join(&bundle))
-    .find(|path| path.is_dir());
+    let shared = ["/Applications", "/System/Applications", CORE_SERVICES]
+        .map(|directory| Path::new(directory).join(&bundle));
+    let host = shared
+        .iter()
+        .cloned()
+        .chain([home.join("Applications").join(&bundle)])
+        .find(|path| path.is_dir());
     Candidate::new(
         Kind::Application,
         name,
         host,
-        vec![
-            PathBuf::from("/Applications").join(&bundle),
-            PathBuf::from("/System/Applications").join(&bundle),
-            PathBuf::from(CORE_SERVICES).join(&bundle),
-            helper_home.join("Applications").join(&bundle),
-        ],
+        shared
+            .into_iter()
+            .chain([helper_home.join("Applications").join(&bundle)])
+            .collect(),
     )
 }
 
@@ -437,24 +431,21 @@ fn associate(
         return Err(incomplete());
     }
     let mut observed = observed.into_iter();
-    for candidate in candidates {
-        for path in &mut candidate.helper_candidates {
-            path.access = observed.next().ok_or_else(incomplete)?;
-        }
+    for (path, access) in candidates
+        .iter_mut()
+        .flat_map(|candidate| &mut candidate.helper_candidates)
+        .zip(observed.by_ref())
+    {
+        path.access = access;
     }
-    let references = references
+    Ok(references
         .iter()
-        .map(|path| {
-            Ok(PathObservation {
-                path: path.clone(),
-                access: observed.next().ok_or_else(incomplete)?,
-            })
+        .zip(observed)
+        .map(|(path, access)| PathObservation {
+            path: path.clone(),
+            access,
         })
-        .collect::<Result<Vec<_>>>()?;
-    if observed.next().is_some() {
-        return Err(incomplete());
-    }
-    Ok(references)
+        .collect())
 }
 
 pub(crate) async fn inspect(
@@ -505,18 +496,15 @@ pub(crate) async fn inspect(
     }
 
     // Probe::run has checked exact cardinality before any association.
-    let mut defined = defined.into_iter();
     discovery.environment = environment
         .iter()
-        .map(|name| {
-            let value = defined.next().ok_or_else(incomplete)?;
-            Ok(Variable {
-                name: name.clone(),
-                host_defined: std::env::var_os(name).is_some(),
-                helper_inherited_defined: value == "defined",
-            })
+        .zip(defined)
+        .map(|(name, value)| Variable {
+            name: name.clone(),
+            host_defined: std::env::var_os(name).is_some(),
+            helper_inherited_defined: value == "defined",
         })
-        .collect::<Result<Vec<_>>>()?;
+        .collect();
     discovery.references = references
         .into_iter()
         .map(|observed| Reference {
@@ -1009,14 +997,32 @@ mod tests {
 
     #[test]
     fn selections_and_probe_results_are_bounded() {
-        assert!(component("Google Chrome"));
-        assert!(!component("../other"));
-        assert!(!component("tool\nname"));
+        assert!(name_problem("Google Chrome").is_none());
+        assert!(name_problem("../other").is_some());
+        assert!(name_problem("tool\nname").is_some());
         assert!(!variable("KEY=value"));
         assert!(!variable("-PATH"));
         assert!(variable("OLLAMA_MODELS"));
         assert!(Access::from_flags("-frx").unwrap().executable);
         assert!(Access::from_flags("unexpected content").is_err());
+    }
+
+    #[test]
+    fn a_reference_requires_read_access_and_directory_search_before_optional_writes() {
+        for (flags, readable, writable) in [
+            ("-", false, false),
+            ("-rwx", false, false),
+            ("-fr", true, false),
+            ("-frw", true, true),
+            ("-dr", false, false),
+            ("-drx", true, false),
+            ("-drwx", true, true),
+            ("-fdrw", false, false),
+        ] {
+            let access = Access::from_flags(flags).unwrap();
+            assert_eq!(access.permits_reference(false), readable, "{flags}");
+            assert_eq!(access.permits_reference(true), writable, "{flags}");
+        }
     }
 
     /// A refused selection names the item at fault and what was expected.

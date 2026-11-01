@@ -25,23 +25,23 @@ use std::path::Path;
 
 /// What one cleanup covers: one session's work, or one task's of it.
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub(crate) struct Scope {
+pub(super) struct Scope {
     /// The session whose work it is.
-    pub session: Key,
+    pub(super) session: Key,
     /// The one task it covers; none for every task of the session.
-    pub task: Option<Key>,
+    pub(super) task: Option<Key>,
     /// Whether the work is another session's than the one cleaning up.
-    pub adopting: bool,
+    pub(super) adopting: bool,
     /// Whether the session or task was named by its key, so a key that
     /// names nothing is said, never taken for nothing to clean up.
-    pub named: bool,
+    pub(super) named: bool,
 }
 
 impl Scope {
     /// What a command of `client` covers: the session `session` names, or
     /// its own; the task `task` names, or the one ATLAS_TASK names for its
     /// own session, or every task.
-    pub(crate) fn of(client: &Client, session: Option<&Key>, task: Option<&Key>) -> Result<Self> {
+    pub(super) fn of(client: &Client, session: Option<&Key>, task: Option<&Key>) -> Result<Self> {
         let own = client.host_session.as_ref().map(|host| host.key());
         let session = session.or(own).cloned().ok_or_else(|| {
             Error::new(
@@ -65,7 +65,7 @@ impl Scope {
     }
 
     /// The person's cleanup of `session`'s work, through Atlas.app.
-    pub(crate) fn for_person(session: &Key) -> Self {
+    pub(super) fn for_person(session: &Key) -> Self {
         Self {
             session: session.clone(),
             task: None,
@@ -78,14 +78,14 @@ impl Scope {
 /// Who takes over another session's work: an agent's session, or the
 /// person through Atlas.app.
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub(crate) enum Adopter {
+pub(super) enum Adopter {
     Session(Key),
     Person,
 }
 
 impl Adopter {
     /// The adopting session's key; none for the person.
-    pub(crate) fn key(&self) -> Option<Key> {
+    pub(super) fn key(&self) -> Option<Key> {
         match self {
             Self::Session(key) => Some(key.clone()),
             Self::Person => None,
@@ -95,20 +95,20 @@ impl Adopter {
 
 /// What a scope's records say: the session's record, its tasks' records,
 /// the work in scope, and the receipts of earlier cleanups of the session.
-pub(crate) struct Loaded {
-    pub record: SessionRead,
-    pub tasks: Vec<TaskRecord>,
-    pub work: Vec<task::Work>,
-    pub receipts: Vec<Receipt>,
+pub(super) struct Loaded {
+    pub(super) record: SessionRead,
+    pub(super) tasks: Vec<TaskRecord>,
+    pub(super) work: Vec<task::Work>,
+    pub(super) receipts: Vec<Receipt>,
     /// The one task in scope; none for every task of the session.
-    pub task: Option<Key>,
+    pub(super) task: Option<Key>,
 }
 
 impl Loaded {
     /// The records of `scope`'s session in `output`; a key the command
     /// named that names no record is said. A task named by ATLAS_TASK with
     /// no record yet has nothing to clean up.
-    pub(crate) fn of(output: &Path, scope: &Scope) -> Result<Self> {
+    pub(super) fn of(output: &Path, scope: &Scope) -> Result<Self> {
         let record = Sessions::at(output).read_file(&scope.session);
         let tasks = Tasks::at(output).of_session(&scope.session);
         let nothing = || {
@@ -143,7 +143,7 @@ impl Loaded {
 
     /// The background jobs the tasks in scope started that may still run,
     /// and the collections they made.
-    pub(crate) fn others(&self) -> Others {
+    pub(super) fn others(&self) -> Others {
         let tasks = || {
             self.tasks
                 .iter()
@@ -179,7 +179,7 @@ impl Loaded {
     /// helper, with when it was claimed. A thing a step of an earlier
     /// cleanup already removed, undid or kept is not planned again, even
     /// while its claim is not yet settled.
-    pub(crate) fn undoable(&self) -> Vec<Undoable> {
+    pub(super) fn undoable(&self) -> Vec<Undoable> {
         self.work
             .iter()
             .filter(|work| work.state.live())
@@ -223,7 +223,7 @@ impl Loaded {
     }
 
     /// The apps the scope's tasks opened by name, each once.
-    pub(crate) fn opened_by_name(&self) -> Vec<&str> {
+    pub(super) fn opened_by_name(&self) -> Vec<&str> {
         let mut apps: Vec<&str> = Vec::new();
         for work in &self.work {
             if let Owned::Launch { app } = &work.owned
@@ -239,7 +239,7 @@ impl Loaded {
     /// The apps the scope's tasks opened by name that still run, by the
     /// helper's app list `running`: listed, never quit. With no list, each
     /// is listed, as it may still run.
-    pub(crate) fn left(&self, running: Option<&AppList>) -> Vec<Value> {
+    pub(super) fn left(&self, running: Option<&AppList>) -> Vec<Value> {
         let runs = |app: &str| {
             running.is_none_or(|listed| {
                 listed
@@ -258,7 +258,7 @@ impl Loaded {
 
     /// The newest receipt of `scope` that has not finished: one its tasks'
     /// records name, or one a run cut short before it named it.
-    pub(crate) fn unfinished(&self, scope: &Scope) -> Option<Receipt> {
+    pub(super) fn unfinished(&self, scope: &Scope) -> Option<Receipt> {
         self.receipts
             .iter()
             .filter(|receipt| receipt.task == scope.task && receipt.state != CleanupState::Complete)
@@ -269,7 +269,7 @@ impl Loaded {
     /// The tasks whose records a cleanup of `scope` notes itself in: each
     /// task its work belongs to, else the task it names or the session's
     /// default task.
-    pub(crate) fn covered(&self, scope: &Scope) -> Vec<Task> {
+    pub(super) fn covered(&self, scope: &Scope) -> Vec<Task> {
         let mut keys: Vec<&Key> = Vec::new();
         for work in &self.work {
             if !keys.contains(&&work.task) {
@@ -293,7 +293,7 @@ impl Loaded {
 
 /// Whether the session of `record` may still be working: it acted within
 /// the last minutes, or the host process it names still runs.
-pub(crate) fn alive(record: &SessionRecord) -> bool {
+pub(super) fn alive(record: &SessionRecord) -> bool {
     record.active(now_ms()) || record.host_process.is_some_and(|process| process.running())
 }
 
@@ -308,7 +308,7 @@ fn task_alive(task: &TaskRecord, now: u64) -> bool {
 
 /// Refuse an agent's cleanup of another session's work while that session
 /// may still be working, by its record or its tasks' records.
-pub(crate) fn may_adopt(record: &SessionRead, tasks: &[TaskRecord]) -> Result<()> {
+pub(super) fn may_adopt(record: &SessionRead, tasks: &[TaskRecord]) -> Result<()> {
     if matches!(record, SessionRead::Kept) {
         return Err(Error::new(
             Code::Input,

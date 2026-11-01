@@ -66,7 +66,7 @@ impl Recovery {
     }
 
     /// Whether the asking session recovers them itself.
-    pub fn own(self) -> bool {
+    pub(crate) fn own(self) -> bool {
         matches!(self, Self::Own | Self::OwnOnceCommandEnds)
     }
 

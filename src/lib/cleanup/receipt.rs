@@ -7,7 +7,7 @@
 //! keeps tokens, IDs, app names and paths inside the helper's home, never
 //! the name or path of a file on this Mac.
 use super::plan::Step;
-pub(crate) use crate::environment::SideEffect;
+pub(super) use crate::environment::SideEffect;
 use crate::{
     client::Actor,
     error::Result,
@@ -39,28 +39,28 @@ static RECEIPTS: Records = Records {
 /// One cleanup of a session's work, or of one task's.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub(crate) struct Receipt {
-    pub version: u32,
-    pub id: Token,
+pub(super) struct Receipt {
+    pub(super) version: u32,
+    pub(super) id: Token,
     /// The session whose work it cleans up.
-    pub session: Key,
+    pub(super) session: Key,
     /// The one task it covers; none for the whole session.
-    pub task: Option<Key>,
+    pub(super) task: Option<Key>,
     /// The session that took the work over, when it was another session's
     /// that had ended; none when the session cleans up its own, or when
     /// the person did through Atlas.app.
-    pub adopted_by: Option<Key>,
+    pub(super) adopted_by: Option<Key>,
     /// Who ran it last.
-    pub actor: Actor,
-    pub started: u64,
-    pub updated: u64,
-    pub state: CleanupState,
-    pub steps: Vec<Entry>,
+    pub(super) actor: Actor,
+    pub(super) started: u64,
+    pub(super) updated: u64,
+    pub(super) state: CleanupState,
+    pub(super) steps: Vec<Entry>,
 }
 
 impl Receipt {
     /// A new, empty receipt of `session`'s work (or `task`'s), started now.
-    pub(crate) fn new(session: Key, task: Option<Key>, actor: Actor) -> Self {
+    pub(super) fn new(session: Key, task: Option<Key>, actor: Actor) -> Self {
         let now = now_ms();
         Self {
             version: VERSION,
@@ -79,7 +79,7 @@ impl Receipt {
     /// The overall state its steps add up to, worst first: uncertain when
     /// any step is, blocked when any is, incomplete while any has not been
     /// done or kept, complete otherwise.
-    pub(crate) fn summed(&self) -> CleanupState {
+    pub(super) fn summed(&self) -> CleanupState {
         let any = |state: StepState| self.steps.iter().any(|step| step.state == state);
         if any(StepState::Uncertain) {
             CleanupState::Uncertain
@@ -97,7 +97,7 @@ impl Receipt {
     }
 
     /// The step numbered `n`.
-    pub(crate) fn step(&self, n: u32) -> Option<&Entry> {
+    pub(super) fn step(&self, n: u32) -> Option<&Entry> {
         self.steps.iter().find(|step| step.n == n)
     }
 }
@@ -106,40 +106,40 @@ impl Receipt {
 /// came to.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
-pub(crate) struct Entry {
-    pub n: u32,
+pub(super) struct Entry {
+    pub(super) n: u32,
     #[serde(flatten)]
-    pub step: Step,
+    pub(super) step: Step,
     /// The steps that must be done or kept before this one runs.
-    pub after: Vec<u32>,
-    pub state: StepState,
+    pub(super) after: Vec<u32>,
+    pub(super) state: StepState,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub reason: Option<Reason>,
+    pub(super) reason: Option<Reason>,
     /// Whether running the cleanup again may finish it.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
-    pub retry: bool,
+    pub(super) retry: bool,
     /// Whether it was done because the thing was already gone.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
-    pub already_gone: bool,
+    pub(super) already_gone: bool,
     /// Whether the task records that claim its thing were told what became
     /// of it. A step done or kept but not yet settled is settled before
     /// anything is planned again.
     #[serde(default)]
-    pub settled: bool,
+    pub(super) settled: bool,
     /// What it came to, beyond its state.
     #[serde(flatten)]
-    pub came_to: CameTo,
+    pub(super) came_to: CameTo,
     /// When it last changed, in milliseconds since 1970; 0 before it ran.
     #[serde(default)]
-    pub at: u64,
+    pub(super) at: u64,
 }
 
 impl Entry {
-    pub(crate) fn new(n: u32, step: Step, after: Vec<u32>) -> Self {
+    pub(super) fn new(n: u32, step: Step) -> Self {
         Self {
             n,
             step,
-            after,
+            after: Vec::new(),
             state: StepState::Pending,
             reason: None,
             retry: false,
@@ -152,7 +152,7 @@ impl Entry {
 
     /// Note that it got to `state` now, for `reason`, with nothing else
     /// known of it yet.
-    pub(crate) fn set(&mut self, state: StepState, reason: Option<Reason>) {
+    pub(super) fn set(&mut self, state: StepState, reason: Option<Reason>) {
         self.state = state;
         self.retry = reason.is_some_and(Reason::retried) && state == StepState::Failed;
         self.reason = reason;
@@ -166,54 +166,54 @@ impl Entry {
 /// What one step came to, beyond its state.
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
-pub(crate) struct CameTo {
+pub(super) struct CameTo {
     /// The files undoing a copy into the helper left as the helper changed
     /// them, by their path in its home.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub targets: Vec<String>,
+    pub(super) targets: Vec<String>,
     /// How many folders that copy made it left, as something else uses
     /// them.
     #[serde(default, skip_serializing_if = "is_zero")]
-    pub retained_directories: usize,
+    pub(super) retained_directories: usize,
     /// The files an installed app keeps outside its bundle that exist now,
     /// which are never removed.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub side_effects: Vec<SideEffect>,
+    pub(super) side_effects: Vec<SideEffect>,
     /// Where in the helper an install was moved aside to, which keeps it
     /// for a while before deleting it.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub held: Option<String>,
+    pub(super) held: Option<String>,
     /// The apps that may run from a copy macOS moved them to (App
     /// Translocation), which are never quit.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub untraced: Vec<String>,
+    pub(super) untraced: Vec<String>,
     /// Why it failed, in the helper's words.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub error: Option<String>,
+    pub(super) error: Option<String>,
     /// The files whose collected copies are missing or changed, by where
     /// they are in the helper: their sources are never removed.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub not_kept: Vec<NotKept>,
+    pub(super) not_kept: Vec<NotKept>,
     /// The processes that left a stopped job's group and still ran, which
     /// were never signalled.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub left: Vec<crate::daemon::protocol::Left>,
+    pub(super) left: Vec<crate::daemon::protocol::Left>,
 }
 
 /// A file in the helper whose collected copy is missing or changed.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
-pub(crate) struct NotKept {
+pub(super) struct NotKept {
     /// Where it is in the helper.
-    pub source: String,
+    pub(super) source: String,
     /// Where it is relative to the helper's home, when it is in it.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub in_home: Option<String>,
+    pub(super) in_home: Option<String>,
 }
 
 impl CameTo {
     /// A failure said in `words`, bounded.
-    pub(crate) fn failed(words: &str) -> Self {
+    pub(super) fn failed(words: &str) -> Self {
         Self {
             error: Some(words.chars().take(SAID).collect()),
             ..Self::default()
@@ -228,7 +228,7 @@ fn is_zero(count: &usize) -> bool {
 /// How far one step got.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
-pub(crate) enum StepState {
+pub(super) enum StepState {
     Pending,
     /// Written before it acts: a run cut short here runs it again, checking
     /// first.
@@ -246,7 +246,7 @@ pub(crate) enum StepState {
 
 impl StepState {
     /// Whether nothing is left to do for it.
-    pub(crate) fn finished(self) -> bool {
+    pub(super) fn finished(self) -> bool {
         matches!(self, Self::Done | Self::Kept)
     }
 }
@@ -254,7 +254,7 @@ impl StepState {
 /// Why a step was kept, failed or blocked.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
-pub(crate) enum Reason {
+pub(super) enum Reason {
     /// Kept: it changed since Atlas made it.
     Changed,
     /// Kept: something else is where Atlas put it.
@@ -314,35 +314,10 @@ impl Reason {
                 | Self::Uncertain
         )
     }
-
-    /// The reason's name, as replies and receipts give it.
-    pub(crate) fn as_str(self) -> &'static str {
-        match self {
-            Self::Changed => "changed",
-            Self::Replaced => "replaced",
-            Self::AnotherSession => "another-session",
-            Self::LabelUnreadable => "label-unreadable",
-            Self::KeptTargets => "kept-targets",
-            Self::OtherVolume => "other-volume",
-            Self::Unreadable => "unreadable",
-            Self::Timeout => "timeout",
-            Self::InUse => "in-use",
-            Self::Io => "io",
-            Self::Helper => "helper",
-            Self::NeedsStep => "needs-step",
-            Self::Stopped => "stopped",
-            Self::OutputNotKept => "output-not-kept",
-            Self::StillStopping => "still-stopping",
-            Self::Identity => "identity",
-            Self::OtherAccount => "other-account",
-            Self::Daemon => "daemon",
-            Self::Uncertain => "uncertain",
-        }
-    }
 }
 
 /// The receipts of one output folder.
-pub(crate) struct Receipts {
+pub(super) struct Receipts {
     folder: RecordFolder<Token>,
 }
 
@@ -356,8 +331,7 @@ impl Receipts {
     /// One receipt, when it is there and reads.
     pub(super) fn load(&self, id: &Token) -> Option<Receipt> {
         self.folder
-            .read(id)
-            .and_then(|bytes| serde_json::from_slice::<Receipt>(&bytes).ok())
+            .read_json::<Receipt>(id)
             .filter(|receipt| receipt.id == *id && receipt.version <= VERSION)
     }
 
@@ -379,8 +353,7 @@ impl Receipts {
         receipt.state = receipt.summed();
         self.folder.make()?;
         let _lock = self.folder.lock()?;
-        self.folder
-            .write(&receipt.id, &serde_json::to_vec(receipt)?)
+        self.folder.write_json(&receipt.id, receipt)
     }
 
     /// Remove the receipts older than a week that are finished, or that

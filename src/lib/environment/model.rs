@@ -4,12 +4,12 @@ use super::{reply::FileReport, *};
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub(super) struct Identity {
-    pub uid: u32,
-    pub capture_pid: u32,
-    pub security_session_id: u64,
-    pub display_id: u64,
-    pub width: f64,
-    pub height: f64,
+    pub(super) uid: u32,
+    pub(super) capture_pid: u32,
+    pub(super) security_session_id: u64,
+    pub(super) display_id: u64,
+    pub(super) width: f64,
+    pub(super) height: f64,
 }
 
 impl Identity {
@@ -44,9 +44,9 @@ impl Identity {
 #[derive(Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub(super) struct Packet {
-    pub version: u32,
-    pub expected: Identity,
-    pub request: Request,
+    pub(super) version: u32,
+    pub(super) expected: Identity,
+    pub(super) request: Request,
 }
 
 #[derive(Serialize, Deserialize)]
@@ -104,32 +104,32 @@ impl Request {
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
 pub(super) struct Payload {
-    pub source: PathBuf,
-    pub target: PathBuf,
-    pub sha256: String,
-    pub executable: bool,
+    pub(super) source: PathBuf,
+    pub(super) target: PathBuf,
+    pub(super) sha256: String,
+    pub(super) executable: bool,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct Node {
-    pub device: u64,
-    pub inode: u64,
+    pub(crate) device: u64,
+    pub(crate) inode: u64,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, Eq)]
 #[serde(deny_unknown_fields)]
 pub(super) struct Fingerprint {
-    pub node: Node,
-    pub sha256: String,
-    pub size: u64,
-    pub mode: u32,
-    pub uid: u32,
-    pub gid: u32,
+    pub(super) node: Node,
+    pub(super) sha256: String,
+    pub(super) size: u64,
+    pub(super) mode: u32,
+    pub(super) uid: u32,
+    pub(super) gid: u32,
     // Unsupported metadata is refused, not omitted from comparisons.
-    pub acl: bool,
-    pub xattrs: BTreeMap<String, String>,
-    pub flags: u32,
+    pub(super) acl: bool,
+    pub(super) xattrs: BTreeMap<String, String>,
+    pub(super) flags: u32,
 }
 
 /// Two fingerprints of one file match whatever macOS's own attributes say:
@@ -179,27 +179,27 @@ pub(super) enum Entry {
 #[serde(deny_unknown_fields)]
 pub(super) struct Ledger {
     #[serde(default)]
-    pub version: u32,
-    pub files: BTreeMap<PathBuf, Entry>,
+    pub(super) version: u32,
+    pub(super) files: BTreeMap<PathBuf, Entry>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub(super) struct Plan {
-    pub version: u32,
-    pub id: String,
-    pub uid: u32,
-    pub home: PathBuf,
-    pub files: Vec<PlannedFile>,
+    pub(super) version: u32,
+    pub(super) id: String,
+    pub(super) uid: u32,
+    pub(super) home: PathBuf,
+    pub(super) files: Vec<PlannedFile>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub(super) struct PlannedFile {
-    pub payload: Payload,
-    pub before: Option<Fingerprint>,
-    pub previous: Option<Entry>,
-    pub operation: Operation,
+    pub(super) payload: Payload,
+    pub(super) before: Option<Fingerprint>,
+    pub(super) previous: Option<Entry>,
+    pub(super) operation: Operation,
 }
 
 /// What a plan does to one destination, stored by its lowercase name.
@@ -216,9 +216,9 @@ pub(crate) enum Operation {
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub(super) struct Directory {
-    pub target: PathBuf,
+    pub(super) target: PathBuf,
     // None is a write-ahead intent. After a crash it does not prove ownership.
-    pub node: Option<Node>,
+    pub(super) node: Option<Node>,
 }
 
 /// Write-ahead evidence can outlive an interrupted effect or acknowledgement.
@@ -328,13 +328,13 @@ pub(crate) enum Phase {
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub(super) struct Transaction {
-    pub version: u32,
-    pub plan: Plan,
-    pub phase: Phase,
-    pub progress: Vec<Progress>,
-    pub directories: Vec<Directory>,
+    pub(super) version: u32,
+    pub(super) plan: Plan,
+    pub(super) phase: Phase,
+    pub(super) progress: Vec<Progress>,
+    pub(super) directories: Vec<Directory>,
     #[serde(default)]
-    pub retained_directories: Vec<PathBuf>,
+    pub(super) retained_directories: Vec<PathBuf>,
 }
 
 impl Transaction {

@@ -69,7 +69,7 @@ pub async fn cleanup(
 /// preview, with whether that session may still be working, or the
 /// cleanup itself, which passes every proof an agent's does and is not
 /// held back by the session looking alive.
-pub async fn for_person(client: &Client, session: &Key, mode: Mode) -> Result<Value> {
+pub(crate) async fn for_person(client: &Client, session: &Key, mode: Mode) -> Result<Value> {
     let scope = Scope::for_person(session);
     if mode == Mode::Apply {
         return apply_scope(client, &scope).await;
@@ -90,7 +90,7 @@ async fn preview_scope(client: &Client, scope: &Scope) -> Result<Value> {
 /// The preview of `scope`'s cleanup: the steps a run would take now, those
 /// an unfinished receipt already took with how far each got, and what each
 /// would act on. It reads only, takes no control and writes nothing.
-pub(crate) async fn preview(
+async fn preview(
     hands: &impl Hands,
     output: &Path,
     scope: &Scope,
@@ -117,6 +117,58 @@ pub(crate) async fn preview(
         ));
     }
 
+    let observed = observe(hands, &steps).await?;
+    let descriptions: Vec<_> = steps
+        .iter()
+        .map(|entry| observed.step(hands, scope, entry))
+        .collect();
+    let running = running_named(hands, loaded, observed.apps.as_ref()).await;
+    let mut left = reply::left(loaded, receipt.as_ref(), running.as_ref());
+    let mut shown = Vec::new();
+    for observation in descriptions {
+        if let Observation::Quit(targets) = &observation.fact {
+            reply::add_untraced(&mut left, &targets.untraced);
+        }
+        shown.push(observation.describe(hands.copies()));
+    }
+    Ok(json!({
+        "ok": true,
+        "preview": true,
+        "session": reply::session_named(output, &scope.session),
+        "task": reply::task_named(loaded, scope),
+        "steps": shown,
+        "left": left,
+        "receipt": receipt.map(|receipt| receipt.id),
+    }))
+}
+
+/// The helper and local observations for one preview, taken before describing it.
+struct Preview {
+    apps: Option<AppList>,
+    plans: Vec<Token>,
+    states: Vec<PlanState>,
+    installs: Vec<crate::environment::InstallState>,
+    jobs: Vec<(crate::daemon::protocol::JobId, Value)>,
+}
+
+struct Observed<'a> {
+    entry: &'a Entry,
+    copied_app: Option<String>,
+    fact: Observation<'a>,
+}
+
+enum Observation<'a> {
+    None,
+    Quit(targets::Targets),
+    Install(Option<&'a crate::environment::InstallState>),
+    Plan(Option<&'a PlanState>),
+    CopyPresent,
+    CopyAbsent,
+    Outputs(Vec<crate::collect::Intact>),
+    Job(Option<&'a Value>),
+}
+
+async fn observe(hands: &impl Hands, steps: &[Entry]) -> Result<Preview> {
     let to_run: Vec<&Entry> = steps
         .iter()
         .filter(|entry| !entry.state.finished())
@@ -125,9 +177,9 @@ pub(crate) async fn preview(
         .iter()
         .any(|entry| matches!(entry.step, Step::Quit { .. } | Step::RemoveCopy { .. }));
     let apps = if looks_at_apps {
-        hands.apps().await?
+        Some(hands.apps().await?)
     } else {
-        AppList::empty()
+        None
     };
     let plans: Vec<Token> = to_run
         .iter()
@@ -160,82 +212,115 @@ pub(crate) async fn preview(
         }
     }
 
-    let mut untraced: Vec<String> = Vec::new();
-    let shown: Vec<Value> = steps
-        .iter()
-        .map(|entry| {
-            let mut value = described(hands.copies(), entry);
-            if entry.state != StepState::Pending {
-                said_state(&mut value, entry);
-            }
-            if entry.state.finished() {
-                return value;
-            }
+    Ok(Preview {
+        apps,
+        plans,
+        states,
+        installs,
+        jobs,
+    })
+}
+
+impl Preview {
+    fn step<'a>(&'a self, hands: &impl Hands, scope: &Scope, entry: &'a Entry) -> Observed<'a> {
+        let copied_app = match &entry.step {
+            Step::RemoveCopy { copy } => handoff::copy_app(hands.copies(), copy),
+            _ => None,
+        };
+        let fact = if entry.state.finished() {
+            Observation::None
+        } else {
             match &entry.step {
                 Step::Quit { bundles } => {
-                    let found = targets(hands.copies(), &scope.session, bundles, &installs, &apps);
-                    untraced.extend(found.untraced);
-                    value["apps"] = found
-                        .processes
-                        .iter()
-                        .map(|process| json!({"app": process.name, "pid": process.pid}))
-                        .collect();
+                    let empty = AppList::empty();
+                    let apps = match &self.apps {
+                        Some(apps) => apps,
+                        None => &empty,
+                    };
+                    Observation::Quit(targets(
+                        hands.copies(),
+                        &scope.session,
+                        bundles,
+                        &self.installs,
+                        apps,
+                    ))
                 }
                 Step::RemoveInstall { install, .. } => {
-                    if let Some(found) = install_in(&installs, install) {
-                        let placed = found.placed.as_ref();
-                        value["installPhase"] = json!(found.phase);
-                        value["present"] = json!(found.verified());
-                        value["unchanged"] = json!(placed.and_then(|placed| placed.unchanged));
-                        if let Some(placed) = placed {
-                            value["path"] = json!(placed.path);
-                        }
-                    }
+                    Observation::Install(install_in(&self.installs, install))
                 }
-                Step::UndoPlan { plan } => {
-                    let state = plans
+                Step::UndoPlan { plan } => Observation::Plan(
+                    self.plans
                         .iter()
                         .position(|id| id == plan)
-                        .and_then(|place| states.get(place));
-                    if let Some(PlanState { phase, targets }) = state {
-                        value["planState"] = json!(phase);
-                        value["targets"] = json!(targets);
-                    }
-                }
+                        .and_then(|place| self.states.get(place)),
+                ),
                 Step::RemoveCopy { copy } => {
-                    value["present"] = json!(handoff::copy_exists(hands.copies(), copy));
-                }
-                Step::CheckOutputs { outputs } => {
-                    let found: Vec<_> = outputs.iter().map(|output| hands.intact(output)).collect();
-                    value["intact"] = json!(found.iter().all(crate::collect::Intact::whole));
-                }
-                Step::StopJob { job, .. } => {
-                    if let Some((_, state)) = jobs.iter().find(|(known, _)| known == job) {
-                        value["jobState"] = state.clone();
+                    if handoff::copy_exists(hands.copies(), copy) {
+                        Observation::CopyPresent
+                    } else {
+                        Observation::CopyAbsent
                     }
                 }
-                Step::FindJobs => {}
+                Step::CheckOutputs { outputs } => Observation::Outputs(
+                    outputs.iter().map(|output| hands.intact(output)).collect(),
+                ),
+                Step::StopJob { job, .. } => Observation::Job(
+                    self.jobs
+                        .iter()
+                        .find(|(known, _)| known == job)
+                        .map(|(_, state)| state),
+                ),
+                Step::FindJobs => Observation::None,
             }
-            value
-        })
-        .collect();
-
-    let running = running_named(hands, loaded, looks_at_apps.then_some(&apps)).await;
-    let mut left = reply::left(loaded, receipt.as_ref(), running.as_ref());
-    for app in untraced {
-        if !left.iter().any(|known| known["app"] == app.as_str()) {
-            left.push(json!({"app": app, "why": "runs from a copy macOS moved it to"}));
+        };
+        Observed {
+            entry,
+            copied_app,
+            fact,
         }
     }
-    Ok(json!({
-        "ok": true,
-        "preview": true,
-        "session": reply::session_named(output, &scope.session),
-        "task": reply::task_named(loaded, scope),
-        "steps": shown,
-        "left": left,
-        "receipt": receipt.map(|receipt| receipt.id),
-    }))
+}
+
+impl Observed<'_> {
+    fn describe(self, copies: &Path) -> Value {
+        let mut value = described(copies, self.entry, self.copied_app);
+        if self.entry.state != StepState::Pending {
+            said_state(&mut value, self.entry);
+        }
+        match self.fact {
+            Observation::None
+            | Observation::Job(None)
+            | Observation::Plan(None)
+            | Observation::Install(None) => {}
+            Observation::Quit(found) => {
+                value["apps"] = found
+                    .processes
+                    .iter()
+                    .map(|process| json!({"app": process.name, "pid": process.pid}))
+                    .collect()
+            }
+            Observation::Install(Some(found)) => {
+                let placed = found.placed.as_ref();
+                value["installPhase"] = json!(found.phase);
+                value["present"] = json!(found.verified());
+                value["unchanged"] = json!(placed.and_then(|placed| placed.unchanged));
+                if let Some(placed) = placed {
+                    value["path"] = json!(placed.path);
+                }
+            }
+            Observation::Plan(Some(PlanState { phase, targets })) => {
+                value["planState"] = json!(phase);
+                value["targets"] = json!(targets);
+            }
+            Observation::CopyPresent => value["present"] = json!(true),
+            Observation::CopyAbsent => value["present"] = json!(false),
+            Observation::Outputs(found) => {
+                value["intact"] = json!(found.iter().all(crate::collect::Intact::whole))
+            }
+            Observation::Job(Some(state)) => value["jobState"] = state.clone(),
+        }
+        value
+    }
 }
 
 async fn apply_scope(client: &Client, scope: &Scope) -> Result<Value> {
@@ -275,7 +360,7 @@ async fn apply_scope(client: &Client, scope: &Scope) -> Result<Value> {
 /// everything in scope no step covers yet, and run the steps not yet done
 /// or kept. `adopter` is who takes another session's work over; none when
 /// the session cleans up its own. The caller holds control.
-pub(crate) async fn apply(
+async fn apply(
     hands: &impl Hands,
     output: &Path,
     scope: &Scope,

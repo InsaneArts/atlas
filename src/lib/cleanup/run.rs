@@ -25,14 +25,14 @@ use std::path::Path;
 
 /// How waiting for a quit step's processes ended.
 #[derive(Debug, PartialEq, Eq)]
-pub(crate) enum Quitted {
+pub(super) enum Quitted {
     Gone,
     /// Some were still running when the wait ran out, as said.
     TimedOut(String),
 }
 
 /// What a cleanup needs of the helper; tests stand in for it.
-pub(crate) trait Hands {
+pub(super) trait Hands {
     /// Where `open`'s copy folders are.
     fn copies(&self) -> &Path;
     /// The helper's running apps, from a list it gave.
@@ -85,7 +85,7 @@ pub(crate) trait Hands {
 /// its thing, which says whether its task records took it. A Stop between
 /// steps blocks the rest; a signal leaves them pending; a step whose
 /// outcome is not known ends the run.
-pub(crate) async fn run(
+pub(super) async fn run(
     hands: &impl Hands,
     receipt: &mut Receipt,
     session: &Key,
@@ -554,7 +554,7 @@ fn job_failed(error: &Error) -> Outcome {
 
 /// What the helper says of the installs among `bundles`; nothing to ask
 /// when there are none.
-pub(crate) async fn installs_answer(
+pub(super) async fn installs_answer(
     hands: &impl Hands,
     bundles: &[Bundle],
 ) -> Result<Vec<InstallState>> {

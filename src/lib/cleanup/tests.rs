@@ -34,6 +34,10 @@ mod sessions;
 #[derive(Default)]
 struct Fake {
     root: PathBuf,
+    app_reads: Cell<usize>,
+    plan_reads: Cell<usize>,
+    install_reads: Cell<usize>,
+    job_reads: Cell<usize>,
     /// The apps it lists, each `(pid, name, executable)`.
     apps: RefCell<Vec<(u64, String, String)>>,
     /// What undoing each plan answers; a plan not here is rolled back.
@@ -90,6 +94,7 @@ impl Hands for Fake {
     }
 
     async fn apps(&self) -> Result<AppList> {
+        self.app_reads.set(self.app_reads.get() + 1);
         let apps: Vec<Value> = self
             .apps
             .borrow()
@@ -102,6 +107,7 @@ impl Hands for Fake {
     }
 
     async fn plan_states(&self, ids: &[Token]) -> Result<Vec<PlanState>> {
+        self.plan_reads.set(self.plan_reads.get() + 1);
         self.log.borrow_mut().push("plan-states".into());
         Ok(ids
             .iter()
@@ -113,6 +119,7 @@ impl Hands for Fake {
     }
 
     async fn installs(&self, ids: &[Token]) -> Result<Vec<InstallState>> {
+        self.install_reads.set(self.install_reads.get() + 1);
         Ok(ids
             .iter()
             .map(|id| {
@@ -182,6 +189,7 @@ impl Hands for Fake {
         &self,
         id: &crate::daemon::protocol::JobId,
     ) -> Result<crate::daemon::protocol::Shown> {
+        self.job_reads.set(self.job_reads.get() + 1);
         let shown = self
             .jobs
             .borrow()

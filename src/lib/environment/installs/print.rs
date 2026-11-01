@@ -28,32 +28,32 @@ pub(super) const MAX_BYTES: u64 = 8 * 1024 * 1024 * 1024;
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub(in crate::environment) struct BundlePrint {
     /// The bundle folder itself.
-    pub root: Node,
+    pub(crate) root: Node,
     /// The bundle folder's own permissions and owner.
-    pub mode: u32,
-    pub uid: u32,
-    pub gid: u32,
+    pub(crate) mode: u32,
+    pub(crate) uid: u32,
+    pub(crate) gid: u32,
     /// SHA-256 over every entry inside, sorted by path: its path, type,
     /// permissions, owner and inode, and for files and links their size,
     /// modification time and a link's target. Directory times and extended
     /// attributes are left out: macOS changes those itself when an app is
     /// opened.
-    pub tree: String,
-    pub entries: u64,
-    pub bytes: u64,
+    pub(crate) tree: String,
+    pub(crate) entries: u64,
+    pub(crate) bytes: u64,
     /// SHA-256 of Contents/Info.plist and of the main executable.
-    pub info: String,
-    pub executable: Option<String>,
+    pub(crate) info: String,
+    pub(crate) executable: Option<String>,
 }
 
 /// How large a bundle may be, and how long printing it may take, and still
 /// be printed.
 #[derive(Clone, Copy)]
 pub(in crate::environment) struct Limits {
-    pub entries: u64,
-    pub bytes: u64,
+    pub(crate) entries: u64,
+    pub(crate) bytes: u64,
     /// When printing must have finished by; none for no deadline.
-    pub until: Option<Instant>,
+    pub(crate) until: Option<Instant>,
 }
 
 impl Default for Limits {

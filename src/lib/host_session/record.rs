@@ -23,43 +23,43 @@ const COUNTS: usize = 32;
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub(crate) struct Record {
-    pub version: u32,
-    pub key: Key,
-    pub host: Host,
+    pub(crate) version: u32,
+    pub(crate) key: Key,
+    pub(crate) host: Host,
     /// The host's own id, so the person can find the conversation.
-    pub host_session: HostId,
+    pub(crate) host_session: HostId,
     /// The root host's verified process identity.
     #[serde(default)]
-    pub host_process: Option<Instance>,
+    pub(crate) host_process: Option<Instance>,
     /// The project folder's name, never its path.
     #[serde(default)]
-    pub folder: Option<String>,
+    pub(crate) folder: Option<String>,
     #[serde(default)]
-    pub folder_from_host: bool,
+    pub(crate) folder_from_host: bool,
     /// The session's first recorded Atlas command, in milliseconds since
     /// 1970; not when the host started it.
-    pub started: u64,
+    pub(crate) started: u64,
     /// Its last Atlas command, in milliseconds since 1970: within
     /// [`SEEN_WITHIN`] for one that only looked.
-    pub last_seen: u64,
+    pub(crate) last_seen: u64,
     #[serde(default)]
-    pub ended: Option<u64>,
+    pub(crate) ended: Option<u64>,
     /// The session this one followed in the same host process (Claude
     /// Code's `/clear`).
     #[serde(default)]
-    pub previous: Option<Key>,
+    pub(crate) previous: Option<Key>,
     /// How many of each action it did.
     #[serde(default)]
-    pub counts: BTreeMap<String, u64>,
+    pub(crate) counts: BTreeMap<String, u64>,
     /// Its screenshots' file names, newest first.
     #[serde(default)]
-    pub screenshots: Vec<Capture>,
+    pub(crate) screenshots: Vec<Capture>,
     /// The tokens of the copy folders `open` made for it.
     #[serde(default)]
-    pub copies: Vec<Token>,
+    pub(crate) copies: Vec<Token>,
     /// The environment plans it applied and nobody has rolled back.
     #[serde(default)]
-    pub plans: Vec<PlanNote>,
+    pub(crate) plans: Vec<PlanNote>,
 }
 
 impl Record {
@@ -214,10 +214,10 @@ impl Record {
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub(crate) struct PlanNote {
-    pub plan_id: Token,
-    pub phase: Phase,
+    pub(crate) plan_id: Token,
+    pub(crate) phase: Phase,
     /// When a reply said so, in milliseconds since 1970.
-    pub at: u64,
+    pub(crate) at: u64,
 }
 
 /// What a session left in the helper, worked out when read: nothing of it
@@ -225,13 +225,13 @@ pub(crate) struct PlanNote {
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub(crate) struct Leftovers {
     /// The tokens of its copy folders still there.
-    pub copies: Vec<Token>,
+    pub(crate) copies: Vec<Token>,
     /// Its applied plans not yet rolled back.
-    pub plans: usize,
+    pub(crate) plans: usize,
     /// Its pending changes no live process is carrying out.
-    pub uncertain: usize,
+    pub(crate) uncertain: usize,
     /// Its pending changes a live process is still carrying out.
-    pub running: usize,
+    pub(crate) running: usize,
 }
 
 impl Leftovers {
@@ -244,6 +244,6 @@ impl Leftovers {
 /// were still there when it was read.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct Seen {
-    pub record: Record,
-    pub copies_left: usize,
+    pub(crate) record: Record,
+    pub(crate) copies_left: usize,
 }

@@ -113,33 +113,24 @@ pub async fn sync(client: &Client, path: &Path, apply: bool) -> Result<Value> {
     {
         json!({"ok":true,"readOnly":true,"selections":[],"environment":[],"references":[]})
     } else {
-        discovery::discover(
+        let discovery = discovery::inspect(
             client,
             &profile.tools,
             &profile.applications,
             &profile.environment,
             &references,
         )
-        .await?
-    };
-
-    for (reference, observed) in profile
-        .references
-        .iter()
-        .zip(readiness["references"].as_array().into_iter().flatten())
-    {
-        let access = &observed["helper"];
-        if (access["file"] != true && access["directory"] != true)
-            || access["readable"] != true
-            || (access["directory"] == true && access["executable"] != true)
-            || (reference.writable && access["writable"] != true)
-        {
-            return Err(problem(format!(
-                "Selected reference is not accessible to the helper with the requested permissions: {}",
-                reference.path.display()
-            )));
+        .await?;
+        for (reference, observed) in profile.references.iter().zip(&discovery.references) {
+            if !observed.helper.permits_reference(reference.writable) {
+                return Err(problem(format!(
+                    "Selected reference is not accessible to the helper with the requested permissions: {}",
+                    reference.path.display()
+                )));
+            }
         }
-    }
+        discovery.report()
+    };
 
     let temporary = fs::canonicalize(client.output_dir()?)?
         .join(format!("environment-profile-{}", crate::files::token()));

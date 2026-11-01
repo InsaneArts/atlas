@@ -19,6 +19,7 @@ use crate::{
     handoff,
     helper_info::Capture,
     record_folder::{Cached, LISTED, RecordFolder, Records},
+    task::State,
 };
 use serde::Deserialize;
 use serde_json::Value;
@@ -30,10 +31,10 @@ use std::{
 };
 
 /// The most records kept; those with nothing left in the helper go first.
-pub const MAX_RECORDS: usize = 64;
+pub(crate) const MAX_RECORDS: usize = 64;
 /// How long a record with nothing left in the helper is kept after its
 /// session's last recorded action.
-pub const IDLE_FOR: Duration = Duration::from_secs(7 * 24 * 60 * 60);
+pub(crate) const IDLE_FOR: Duration = Duration::from_secs(7 * 24 * 60 * 60);
 
 /// The most folders looked at, from the working directory up, for the
 /// project a session works in.
@@ -69,74 +70,81 @@ impl Kind {
 /// task settlement. These are labels, never mutation acknowledgements.
 pub struct ReplyFacts {
     kind: Kind,
-    success: bool,
-    uncertain: bool,
     refusal: bool,
-    preview: bool,
-    capture: Option<Capture>,
-    copied: Option<Vec<Token>>,
-    removed: Vec<Token>,
-    plan: Option<(Token, Phase)>,
-    kept: bool,
+    left: Left,
+}
+
+/// Attribution observed in one reply, separate from command admission.
+/// A plan's global settlement is present only for a successful rollback.
+enum Left {
+    None,
+    Capture(Capture),
+    Copied(Vec<Token>),
+    Removed(Vec<Token>),
+    Plan {
+        id: Token,
+        phase: Phase,
+        settlement: Option<State>,
+    },
 }
 
 impl ReplyFacts {
     /// Decode only Atlas names and settlement facts, never private reply text.
     pub fn new(kind: Kind, result: &Result<Value>) -> Self {
-        let mut facts = Self {
-            kind,
-            success: false,
-            uncertain: false,
-            refusal: false,
-            preview: false,
-            capture: None,
-            copied: None,
-            removed: Vec::new(),
-            plan: None,
-            kept: false,
-        };
         let refused_code = |code: &str| matches!(code, "busy" | "stopped" | "uncertain");
         let reply = match result {
             Err(error) => {
-                facts.uncertain = error.uncertain;
-                facts.refusal = refused_code(error.code.as_str());
-                return facts;
+                return Self {
+                    kind,
+                    refusal: !error.uncertain && refused_code(error.code.as_str()),
+                    left: Left::None,
+                };
             }
             Ok(reply) => reply,
         };
-        facts.success = reply["ok"] == true;
-        facts.uncertain = reply["uncertain"] == true;
-        facts.refusal = reply["ok"] == false && reply["code"].as_str().is_some_and(refused_code);
-        facts.preview = reply["preview"] == true;
-        match kind {
-            Kind::Screenshot => facts.capture = capture_named(&reply["path"]),
-            Kind::Open => facts.copied = Some(tokens(&reply["copied"], "to").collect()),
-            Kind::Close => facts.removed = tokens(&reply["removed"], "").collect(),
-            Kind::Environment { changes: true } => {
-                facts.plan = reply["planId"]
+        let success = reply["ok"] == true;
+        let left = match kind {
+            Kind::Screenshot if success => {
+                capture_named(&reply["path"]).map_or(Left::None, Left::Capture)
+            }
+            Kind::Open => Left::Copied(tokens(&reply["copied"], "to").collect()),
+            Kind::Close if success => Left::Removed(tokens(&reply["removed"], "").collect()),
+            Kind::Environment { changes: true } if reply["preview"] != true => {
+                let plan = reply["planId"]
                     .as_str()
                     .and_then(Token::parse)
                     .zip(Phase::deserialize(&reply["phase"]).ok());
-                let kept =
-                    |field: &str| reply[field].as_array().is_some_and(|kept| !kept.is_empty());
-                facts.kept = kept("keptTargets") || kept("retainedDirectories");
+                plan.map_or(Left::None, |(id, phase)| {
+                    let kept =
+                        |field: &str| reply[field].as_array().is_some_and(|kept| !kept.is_empty());
+                    let state = if kept("keptTargets") || kept("retainedDirectories") {
+                        State::Kept
+                    } else {
+                        State::Gone
+                    };
+                    Left::Plan {
+                        id,
+                        phase,
+                        settlement: (success && phase == Phase::RolledBack).then_some(state),
+                    }
+                })
             }
-            _ => {}
+            Kind::Screenshot | Kind::Close | Kind::Environment { .. } | Kind::Other => Left::None,
+        };
+        Self {
+            kind,
+            refusal: reply["ok"] == false
+                && reply["uncertain"] != true
+                && reply["code"].as_str().is_some_and(refused_code),
+            left,
         }
-        facts
     }
 
-    fn refused(&self) -> bool {
-        self.refusal && !self.uncertain
-    }
-
-    pub(crate) fn rolled_back(&self) -> Option<&Token> {
-        let (plan, phase) = self.plan.as_ref()?;
-        (self.success && !self.preview && *phase == Phase::RolledBack).then_some(plan)
-    }
-
-    pub(crate) fn kept(&self) -> bool {
-        self.kept
+    pub(crate) fn rolled_back(&self) -> Option<(&Token, State)> {
+        match &self.left {
+            Left::Plan { id, settlement, .. } => settlement.map(|state| (id, state)),
+            Left::None | Left::Capture(_) | Left::Copied(_) | Left::Removed(_) => None,
+        }
     }
 }
 
@@ -145,7 +153,7 @@ impl ReplyFacts {
 static RECENT: Mutex<Option<Cached<Seen>>> = Mutex::new(None);
 
 /// The records of one output folder.
-pub struct Store {
+pub(crate) struct Store {
     folder: RecordFolder<Key>,
     /// Where `open`'s copy folders are.
     copies: PathBuf,
@@ -186,7 +194,7 @@ static SESSIONS: Records = Records {
 };
 
 impl Store {
-    pub fn at(output: &Path) -> Self {
+    pub(crate) fn at(output: &Path) -> Self {
         Self {
             folder: RecordFolder::at(output, &SESSIONS),
             copies: PathBuf::from(handoff::ROOT),
@@ -524,13 +532,19 @@ fn note_at(
         return Ok(());
     }
     let verb = doing.map_or("environment", Doing::verb);
-    let verb = (!facts.refused()).then_some(verb);
+    let verb = (!facts.refusal).then_some(verb);
     let store = Store::at(client.output_dir()?);
     let now = now();
 
     store.update(session, now, &client.controller, |record| {
         record.seen(session, now, verb);
-        keep_what_was_left(record, facts, now);
+        match &facts.left {
+            Left::None => {}
+            Left::Capture(capture) => record.took(capture.clone()),
+            Left::Copied(copied) => record.copied(copied.iter().cloned()),
+            Left::Removed(removed) => record.removed(removed),
+            Left::Plan { id, phase, .. } => record.planned(id.clone(), *phase, now),
+        }
     })
 }
 
@@ -545,43 +559,16 @@ pub fn touch(client: &Client, session: &HostSession) -> Result<()> {
 /// Forget, in every session's record, the plan a successful rollback in
 /// `result` undid, whoever ran it: the person at a terminal, another
 /// session or this one. It decides nothing about the rollback itself.
-/// Retained for `store::tests::a_plan_rolled_back_by_anyone_leaves_every_record`.
-pub fn forget_rolled_back(client: &Client, kind: Kind, result: &Result<Value>) -> Result<()> {
+#[cfg(test)]
+fn forget_rolled_back(client: &Client, kind: Kind, result: &Result<Value>) -> Result<()> {
     forget_rolled_back_facts(client, &ReplyFacts::new(kind, result))
 }
 
 /// Forget the rollback decoded by `dispatch::note_outcome`.
 pub fn forget_rolled_back_facts(client: &Client, facts: &ReplyFacts) -> Result<()> {
     match facts.rolled_back() {
-        Some(plan) => Store::at(client.output_dir()?).forget_plan(plan),
+        Some((plan, _)) => Store::at(client.output_dir()?).forget_plan(plan),
         None => Ok(()),
-    }
-}
-
-/// Note in `record` what the decoded reply says it left:
-/// the screenshot it saved, the copies it made or removed, and the plan it
-/// applied. A preview only looks, so it names no plan as this session's.
-fn keep_what_was_left(record: &mut Record, facts: &ReplyFacts, now: u64) {
-    match facts.kind {
-        Kind::Screenshot if facts.success => {
-            if let Some(capture) = &facts.capture {
-                record.took(capture.clone());
-            }
-        }
-        Kind::Open => {
-            if let Some(copied) = &facts.copied {
-                record.copied(copied.iter().cloned());
-            }
-        }
-        Kind::Close if facts.success => {
-            record.removed(&facts.removed);
-        }
-        Kind::Environment { changes: true } if !facts.preview => {
-            if let Some((plan, phase)) = &facts.plan {
-                record.planned(plan.clone(), *phase, now);
-            }
-        }
-        _ => {}
     }
 }
 

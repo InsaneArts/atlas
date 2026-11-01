@@ -10,14 +10,14 @@ use std::collections::BTreeMap;
 /// first command, which has no record yet.
 #[derive(Clone, Copy, Debug)]
 pub(crate) struct Naming<'a> {
-    pub key: &'a Key,
-    pub host: Host,
+    pub(crate) key: &'a Key,
+    pub(crate) host: Host,
     /// A named session's own label, which names it.
-    pub named: Option<&'a str>,
+    pub(crate) named: Option<&'a str>,
     /// The project folder's name.
-    pub folder: Option<&'a str>,
+    pub(crate) folder: Option<&'a str>,
     /// When it started, in milliseconds since 1970.
-    pub started: u64,
+    pub(crate) started: u64,
 }
 
 impl<'a> From<&'a Record> for Naming<'a> {

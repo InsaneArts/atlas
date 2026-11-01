@@ -54,11 +54,11 @@ const FRESH: Duration = Duration::from_secs(6 * 24 * 60 * 60);
 /// Where a capture's picture is, and whether it repeats the last one.
 #[derive(Debug, PartialEq)]
 pub(crate) struct Kept {
-    pub path: PathBuf,
+    pub(crate) path: PathBuf,
     /// The pixels are identical to the last capture of the same target.
-    pub unchanged: bool,
+    pub(crate) unchanged: bool,
     /// A new file was saved.
-    pub written: bool,
+    pub(crate) written: bool,
 }
 
 #[derive(Deserialize, Serialize)]
@@ -84,8 +84,8 @@ struct Entry {
 #[derive(Debug, Deserialize, Serialize)]
 pub(crate) struct Observation {
     #[serde(deserialize_with = "Option::deserialize")]
-    pub windows: Option<Vec<HitWindow>>,
-    pub epoch: Value,
+    pub(crate) windows: Option<Vec<HitWindow>>,
+    pub(crate) epoch: Value,
 }
 
 pub(crate) fn remember_windows(

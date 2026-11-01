@@ -18,17 +18,17 @@ use std::path::Path;
 
 /// What the quit step signals and waits for, and what it leaves.
 #[derive(Debug, Default)]
-pub(crate) struct Targets {
-    pub processes: Vec<Process>,
+pub(super) struct Targets {
+    pub(super) processes: Vec<Process>,
     /// The proven bundles' folders, which nothing must run from once done.
-    pub folders: Vec<String>,
+    pub(super) folders: Vec<String>,
     /// The apps that may run from an install through a copy macOS moved
     /// them to that cannot be traced to it: never signalled.
-    pub untraced: Vec<String>,
+    pub(super) untraced: Vec<String>,
 }
 
 /// The installs among `bundles`, by their IDs, each once.
-pub(crate) fn installs_of(bundles: &[Bundle]) -> Vec<Token> {
+pub(super) fn installs_of(bundles: &[Bundle]) -> Vec<Token> {
     let mut ids: Vec<Token> = Vec::new();
     for bundle in bundles {
         if let Bundle::Install(id) = bundle
@@ -41,7 +41,7 @@ pub(crate) fn installs_of(bundles: &[Bundle]) -> Vec<Token> {
 }
 
 /// What the helper said of install `id` in `installs`, its answer.
-pub(crate) fn install_in<'a>(installs: &'a [InstallState], id: &Token) -> Option<&'a InstallState> {
+pub(super) fn install_in<'a>(installs: &'a [InstallState], id: &Token) -> Option<&'a InstallState> {
     installs
         .iter()
         .find(|install| install.install_id == id.as_str())
@@ -51,7 +51,7 @@ pub(crate) fn install_in<'a>(installs: &'a [InstallState], id: &Token) -> Option
 /// in `apps` (a list the helper gave) running from a proven bundle, and
 /// the other processes `installs` (the helper's word on them) says run
 /// from a proven install.
-pub(crate) fn targets(
+pub(super) fn targets(
     copies: &Path,
     session: &Key,
     bundles: &[Bundle],
@@ -150,7 +150,7 @@ fn helper_process(process: &RunningFrom, within: &Within) -> Option<Process> {
 
 /// The app processes in `apps` (a list the helper gave) that still run
 /// from one of `folders`.
-pub(crate) fn still_running<'a>(
+pub(super) fn still_running<'a>(
     apps: &'a AppList,
     folders: &[String],
 ) -> Vec<&'a crate::client::AppRow> {
@@ -168,7 +168,7 @@ pub(crate) fn still_running<'a>(
 
 /// The processes `installs` (the helper's word on them) says still run
 /// from a verified install.
-pub(crate) fn still_in_installs(installs: &[InstallState]) -> usize {
+pub(super) fn still_in_installs(installs: &[InstallState]) -> usize {
     installs
         .iter()
         .filter(|install| install.verified())

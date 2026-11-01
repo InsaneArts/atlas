@@ -89,7 +89,7 @@ pub(crate) fn service_blocker_with(
         );
     };
     let rows = activity_log::recent(output, SESSION_ROWS);
-    let reading = SessionReading {
+    let mut reading = SessionReading {
         seen: seen.into(),
         rows,
         causes,
@@ -98,7 +98,13 @@ pub(crate) fn service_blocker_with(
         running: client.controller.running_candidates(),
         processes: Snapshot::default(),
     }
-    .sampled_for_service_change(output, sample);
+    .sample(output, sample);
+    let remains = |note: &crate::control::Note| {
+        reading.processes.state(note.process) != crate::process::State::Gone
+    };
+    reading.holder = reading.holder.filter(remains);
+    reading.waiting.retain(remains);
+    reading.running.retain(remains);
     blocker(&reading, facts, own, recovering_own, &activity)
 }
 

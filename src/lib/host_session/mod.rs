@@ -66,7 +66,7 @@ impl Host {
 
     /// The host as people know it: "Claude Code", "Codex", "opencode", "Pi",
     /// "Cursor"; empty for a named session, whose name is its label.
-    pub fn label(self) -> &'static str {
+    pub(crate) fn label(self) -> &'static str {
         match self {
             Self::Claude => "Claude Code",
             Self::Codex => "Codex",
@@ -78,7 +78,7 @@ impl Host {
     }
 
     /// The host's word in records and keys: "claude", "codex" and so on.
-    pub fn as_str(self) -> &'static str {
+    pub(crate) fn as_str(self) -> &'static str {
         match self {
             Self::Claude => "claude",
             Self::Codex => "codex",
@@ -146,7 +146,7 @@ name_type! {
 
 impl HostId {
     /// `value` as a host id, when it is a plain one.
-    pub fn parse(value: &str) -> Option<Self> {
+    pub(crate) fn parse(value: &str) -> Option<Self> {
         plain(value).then(|| Self(value.to_owned()))
     }
 }
@@ -154,14 +154,14 @@ impl HostId {
 /// What other sessions may know of a host session: its key, its host and
 /// what it is named by, never a host's own id.
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub struct Label {
-    pub key: Key,
-    pub host: Host,
+pub(crate) struct Label {
+    pub(crate) key: Key,
+    pub(crate) host: Host,
     /// The project folder's name, never its path.
-    pub folder: Option<String>,
+    pub(crate) folder: Option<String>,
     /// A named session's own label, its ATLAS_SESSION value, which names
     /// it; none for a host's session.
-    pub named: Option<HostId>,
+    pub(crate) named: Option<HostId>,
 }
 
 /// The host session one command comes from.
@@ -231,7 +231,7 @@ impl HostSession {
         &self.key
     }
 
-    pub fn host(&self) -> Host {
+    pub(crate) fn host(&self) -> Host {
         self.host
     }
 
@@ -241,7 +241,7 @@ impl HostSession {
     }
 
     /// The verified root host's exact process instance.
-    pub fn process(&self) -> Option<Instance> {
+    pub(crate) fn process(&self) -> Option<Instance> {
         self.process
     }
 
@@ -259,13 +259,13 @@ impl HostSession {
     }
 
     /// The root host's project folder basename, or the legacy fallback.
-    pub fn folder(&self) -> Option<&str> {
+    pub(crate) fn folder(&self) -> Option<&str> {
         self.folder.as_deref()
     }
 
     /// When its command started, in milliseconds since 1970: as its notes
     /// say, by this process's start.
-    pub fn began(&self) -> Option<u64> {
+    pub(crate) fn began(&self) -> Option<u64> {
         self.began
     }
 
@@ -363,7 +363,7 @@ impl HostSession {
     }
 
     /// What other sessions may know of this one.
-    pub fn label(&self) -> Label {
+    pub(crate) fn label(&self) -> Label {
         Label {
             key: self.key.clone(),
             host: self.host,
@@ -383,22 +383,18 @@ fn nearest(
     hint: &impl Fn(Host) -> Option<i32>,
     uid: u32,
 ) -> Option<(Host, HostId)> {
-    let found = |host: &Host| {
-        ancestors
-            .iter()
-            .position(|ancestor| host.runs_as(ancestor, hint(*host), uid))
-    };
-    let places: Vec<usize> = candidates
-        .iter()
-        .map(|(host, _)| found(host))
-        .collect::<Option<_>>()?;
-    let chosen = places
-        .iter()
-        .enumerate()
-        .min_by_key(|(_, place)| **place)
-        .map(|(index, _)| index)?;
-
-    candidates.into_iter().nth(chosen)
+    candidates
+        .into_iter()
+        .map(|candidate| {
+            let place = ancestors
+                .iter()
+                .position(|ancestor| candidate.0.runs_as(ancestor, hint(candidate.0), uid))?;
+            Some((place, candidate))
+        })
+        .collect::<Option<Vec<_>>>()?
+        .into_iter()
+        .min_by_key(|(place, _)| *place)
+        .map(|(_, candidate)| candidate)
 }
 
 /// Whether `value` may be a host id: 1 to [`ID_MAX`] bytes of ASCII

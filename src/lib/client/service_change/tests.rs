@@ -335,20 +335,15 @@ async fn recovery_can_take_control_after_the_callers_screenshot_with_an_unknown_
             },
         )
         .unwrap();
-        let listed = client
-            .output_dir()
-            .map(|output| {
-                crate::host_session::reading::SessionReading::collect(
-                    output,
-                    &client.controller,
-                    crate::host_session::liveness::Snapshot::polled,
-                )
-            })
-            .unwrap()
-            .entries(crate::host_session::reading::SessionFacts::local(
-                &client.controller,
-                u128::from(now) * 1_000_000,
-            ));
+        let listed = crate::host_session::reading::SessionReading::collect(
+            client.output_dir().ok(),
+            &client.controller,
+        )
+        .unwrap()
+        .entries(crate::host_session::reading::SessionFacts::local(
+            &client.controller,
+            u128::from(now) * 1_000_000,
+        ));
         assert_eq!(listed.len(), 1);
         if client.host_session.is_some() {
             assert_eq!(listed[0]["state"], "needsYou");
@@ -755,20 +750,15 @@ async fn a_named_updater_defers_for_terminal_work_before_its_own_screenshot() {
         )
         .unwrap();
     }
-    let listed = client
-        .output_dir()
-        .map(|output| {
-            crate::host_session::reading::SessionReading::collect(
-                output,
-                &client.controller,
-                crate::host_session::liveness::Snapshot::polled,
-            )
-        })
-        .unwrap()
-        .entries(crate::host_session::reading::SessionFacts::local(
-            &client.controller,
-            u128::from(now) * 1_000_000,
-        ));
+    let listed = crate::host_session::reading::SessionReading::collect(
+        client.output_dir().ok(),
+        &client.controller,
+    )
+    .unwrap()
+    .entries(crate::host_session::reading::SessionFacts::local(
+        &client.controller,
+        u128::from(now) * 1_000_000,
+    ));
     assert_eq!(listed.len(), 1);
     assert_eq!(listed[0]["key"], own.key().as_str());
 

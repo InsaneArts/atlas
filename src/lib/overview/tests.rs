@@ -5,17 +5,15 @@ use crate::host_session::reading::{SessionReading, first_command_running};
 use std::{collections::BTreeMap, fs};
 
 fn host_sessions(client: &Client, facts: SessionFacts) -> HostSessions {
-    client
-        .output_dir()
-        .map(|output| {
-            SessionReading::collect(output, &client.controller, |_, instances| {
-                crate::host_session::liveness::Snapshot::sample(instances, |instance| {
-                    instance.state()
-                })
-            })
-        })
-        .unwrap()
-        .summary(facts)
+    SessionReading::collect_with(
+        client.output_dir().ok(),
+        &client.controller,
+        |_, instances| {
+            crate::host_session::liveness::Snapshot::sample(instances, |instance| instance.state())
+        },
+    )
+    .unwrap()
+    .summary(facts)
 }
 
 /// The facts of a status with `pending` whether an outcome is unknown,
@@ -438,12 +436,11 @@ fn a_session_running_its_first_command_is_listed_acting_by_its_name() {
     assert_eq!(entry["state"], "acting");
     assert_eq!(entry["ended"], Value::Null);
     assert_eq!(pending(&client.controller).0.commands, 1);
-    assert!(
-        client
-            .output_dir()
-            .ok()
-            .is_some_and(|output| first_command_running(output, &client.controller, &[]))
-    );
+    assert!(first_command_running(
+        client.output_dir().ok(),
+        &client.controller,
+        &[]
+    ));
 
     client.controller.clear_if(&command).unwrap();
     drop(command);
@@ -1136,16 +1133,16 @@ fn candidate_collection_and_projection_share_one_bounded_process_batch() {
     let controller = client.controller.clone().labelled(Some(&own));
     let hold = controller.acquire(true).unwrap();
     let ((reading, entries), samples) = crate::process::measure_states(|| {
-        let reading = client
-            .output_dir()
-            .map(|output| {
-                SessionReading::collect(output, &client.controller, |_, instances| {
-                    crate::host_session::liveness::Snapshot::sample(instances, |instance| {
-                        instance.state()
-                    })
+        let reading = SessionReading::collect_with(
+            client.output_dir().ok(),
+            &client.controller,
+            |_, instances| {
+                crate::host_session::liveness::Snapshot::sample(instances, |instance| {
+                    instance.state()
                 })
-            })
-            .unwrap();
+            },
+        )
+        .unwrap();
         let entries = reading.entries(facts(false, crate::time::timestamp()));
         (reading, entries)
     });
@@ -1222,16 +1219,16 @@ fn surviving_work(explicit: bool) {
     let controller = client.controller.clone().labelled(Some(&own));
     let claim = controller.quarantine_command().unwrap();
     let read = || {
-        client
-            .output_dir()
-            .map(|output| {
-                SessionReading::collect(output, &client.controller, |_, instances| {
-                    crate::host_session::liveness::Snapshot::sample(instances, |instance| {
-                        instance.state()
-                    })
+        SessionReading::collect_with(
+            client.output_dir().ok(),
+            &client.controller,
+            |_, instances| {
+                crate::host_session::liveness::Snapshot::sample(instances, |instance| {
+                    instance.state()
                 })
-            })
-            .unwrap()
+            },
+        )
+        .unwrap()
     };
     let reading = read();
     let facts = facts(false, crate::time::timestamp());
@@ -1368,20 +1365,20 @@ fn marker_contention_preserves_a_gone_hosts_verified_running_work() {
     crate::files::lock_within(&lock, crate::files::Lock::Exclusive, Duration::ZERO)
         .expect("the marker lock is available");
     let read = || {
-        client
-            .output_dir()
-            .map(|output| {
-                SessionReading::collect(output, &client.controller, |_, instances| {
-                    Snapshot::sample(instances, |instance| {
-                        if instance == old {
-                            crate::process::State::Gone
-                        } else {
-                            crate::process::State::Running
-                        }
-                    })
+        SessionReading::collect_with(
+            client.output_dir().ok(),
+            &client.controller,
+            |_, instances| {
+                Snapshot::sample(instances, |instance| {
+                    if instance == old {
+                        crate::process::State::Gone
+                    } else {
+                        crate::process::State::Running
+                    }
                 })
-            })
-            .unwrap()
+            },
+        )
+        .unwrap()
     };
     let reading = read();
     let now = crate::time::timestamp();

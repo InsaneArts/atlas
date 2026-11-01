@@ -140,9 +140,9 @@ fn bounded(instances: impl IntoIterator<Item = Instance>) -> Vec<Instance> {
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) struct Lifetime {
-    pub ended: Option<u64>,
-    pub live: bool,
-    pub active: bool,
+    pub(crate) ended: Option<u64>,
+    pub(crate) live: bool,
+    pub(crate) active: bool,
 }
 
 #[cfg(test)]

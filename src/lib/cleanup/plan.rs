@@ -13,7 +13,7 @@ use serde::{Deserialize, Serialize};
 /// One step of a cleanup: what it does, and to which recorded thing.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "do", rename_all = "kebab-case")]
-pub(crate) enum Step {
+pub(super) enum Step {
     /// Check that every copy these collections kept still has its size and
     /// digest. It is checked again whenever the cleanup runs, and a step
     /// that would remove the source of a copy that is not kept is blocked.
@@ -59,7 +59,7 @@ impl Step {
     }
 
     /// The thing this step removes or undoes, when it is one.
-    pub(crate) fn owned(&self) -> Option<Owned> {
+    pub(super) fn owned(&self) -> Option<Owned> {
         match self {
             Self::CheckOutputs { .. }
             | Self::Quit { .. }
@@ -80,34 +80,34 @@ const PLANS: u8 = 3;
 
 /// A collection one of the tasks made: whose, and its receipt.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-pub(crate) struct Collection {
-    pub task: Key,
-    pub receipt: ReceiptId,
+pub(super) struct Collection {
+    pub(super) task: Key,
+    pub(super) receipt: ReceiptId,
 }
 
 /// A background job one of the tasks started and that may still run.
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub(crate) struct Job {
-    pub id: JobId,
-    pub task: Key,
-    pub name: String,
+pub(super) struct Job {
+    pub(super) id: JobId,
+    pub(super) task: Key,
+    pub(super) name: String,
 }
 
 /// What a cleanup covers beside the things the tasks claim: the jobs they
 /// started and the collections they made.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
-pub(crate) struct Others {
-    pub jobs: Vec<Job>,
-    pub outputs: Vec<Collection>,
+pub(super) struct Others {
+    pub(super) jobs: Vec<Job>,
+    pub(super) outputs: Vec<Collection>,
     /// Why the helper's own list of the tasks' jobs could not be read, when
     /// it could not: jobs it alone knows of are not known yet.
-    pub unlisted: Option<String>,
+    pub(super) unlisted: Option<String>,
 }
 
 /// A bundle the task owns, which processes may run from.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
-pub(crate) enum Bundle {
+pub(super) enum Bundle {
     /// An app installed into the helper's Applications, by its install ID.
     Install(Token),
     /// A copy folder, by its token.
@@ -116,16 +116,16 @@ pub(crate) enum Bundle {
 
 /// Something a task made that a cleanup undoes, and when it was claimed.
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub(crate) struct Undoable {
-    pub owned: Owned,
+pub(super) struct Undoable {
+    pub(super) owned: Owned,
     /// When its claim was made or last settled, in milliseconds since 1970:
     /// plans are undone newest first by it.
-    pub claimed: u64,
+    pub(super) claimed: u64,
 }
 
 /// [`merge_with`] for `work` alone, with no other jobs or collections.
 #[cfg(test)]
-pub(crate) fn merge(steps: &mut Vec<Entry>, work: &[Undoable]) {
+pub(super) fn merge(steps: &mut Vec<Entry>, work: &[Undoable]) {
     merge_with(steps, work, &Others::default());
 }
 
@@ -140,7 +140,7 @@ pub(crate) fn merge(steps: &mut Vec<Entry>, work: &[Undoable]) {
 /// Then every step not yet done or kept waits for what its kind waits for
 /// among all the steps, old and new. Pure: it decides from what it is given
 /// only.
-pub(crate) fn merge_with(steps: &mut Vec<Entry>, work: &[Undoable], others: &Others) {
+pub(super) fn merge_with(steps: &mut Vec<Entry>, work: &[Undoable], others: &Others) {
     add(steps, work);
     add_others(steps, others);
     rewire(steps);
@@ -206,7 +206,7 @@ fn add_others(steps: &mut Vec<Entry>, others: &Others) {
                 let step = Step::CheckOutputs {
                     outputs: others.outputs.clone(),
                 };
-                steps.insert(0, Entry::new(number(), step, Vec::new()));
+                steps.insert(0, Entry::new(number(), step));
             }
         }
     }
@@ -230,7 +230,7 @@ fn add_others(steps: &mut Vec<Entry>, others: &Others) {
                 entry.set(super::receipt::StepState::Pending, None);
             }
             Some(_) => {}
-            None => place(steps, Entry::new(number(), Step::FindJobs, Vec::new())),
+            None => place(steps, Entry::new(number(), Step::FindJobs)),
         }
     }
 
@@ -244,7 +244,7 @@ fn add_others(steps: &mut Vec<Entry>, others: &Others) {
                 task: job.task.clone(),
                 name: job.name.clone(),
             };
-            place(steps, Entry::new(number(), step, Vec::new()));
+            place(steps, Entry::new(number(), step));
         }
     }
 }
@@ -255,12 +255,23 @@ fn add(steps: &mut Vec<Entry>, work: &[Undoable]) {
             .iter()
             .any(|entry| entry.step.owned().is_some_and(|known| known.same(owned)))
     };
-    let mut new: Vec<&Undoable> = Vec::new();
+    let mut new: Vec<(&Undoable, Step)> = Vec::new();
     for undoable in work {
-        let undone = !matches!(undoable.owned, Owned::Launch { .. });
-        let twice = new.iter().any(|known| known.owned.same(&undoable.owned));
-        if undone && !twice && !covered(&undoable.owned, steps) {
-            new.push(undoable);
+        let step = match &undoable.owned {
+            Owned::Plan { id } => Step::UndoPlan { plan: id.clone() },
+            Owned::Install { id, app } => Step::RemoveInstall {
+                install: id.clone(),
+                app: app.clone(),
+            },
+            Owned::Copy { id } => Step::RemoveCopy { copy: id.clone() },
+            Owned::Launch { .. } => continue,
+        };
+        if !new
+            .iter()
+            .any(|(known, _)| known.owned.same(&undoable.owned))
+            && !covered(&undoable.owned, steps)
+        {
+            new.push((undoable, step));
         }
     }
     if new.is_empty() {
@@ -276,56 +287,35 @@ fn add(steps: &mut Vec<Entry>, work: &[Undoable]) {
 
     let bundles: Vec<Bundle> = new
         .iter()
-        .filter_map(|undoable| match &undoable.owned {
+        .filter_map(|(undoable, _)| match &undoable.owned {
             Owned::Install { id, .. } => Some(Bundle::Install(id.clone())),
             Owned::Copy { id } => Some(Bundle::Copy(id.clone())),
             _ => None,
         })
         .collect();
     if !bundles.is_empty() {
-        place(
-            steps,
-            Entry::new(number(), Step::Quit { bundles }, Vec::new()),
-        );
+        place(steps, Entry::new(number(), Step::Quit { bundles }));
     }
-    let quits = numbers(steps, |step| matches!(step, Step::Quit { .. }));
-
-    let mut plans: Vec<&&Undoable> = new
-        .iter()
-        .filter(|undoable| matches!(undoable.owned, Owned::Plan { .. }))
-        .collect();
-    plans.sort_by_key(|undoable| std::cmp::Reverse(undoable.claimed));
+    new.sort_by_key(|(work, step)| {
+        let recency = if step.rank() == PLANS {
+            work.claimed
+        } else {
+            0
+        };
+        (step.rank(), std::cmp::Reverse(recency))
+    });
     let first_plan = steps
         .iter()
         .position(|entry| entry.step.rank() >= PLANS)
         .unwrap_or(steps.len());
-    for (offset, undoable) in plans.into_iter().enumerate() {
-        let Owned::Plan { id } = &undoable.owned else {
-            continue;
-        };
-        let entry = Entry::new(number(), Step::UndoPlan { plan: id.clone() }, quits.clone());
-        steps.insert(first_plan + offset, entry);
-    }
-
-    // An install waits for every plan too: a copy into the helper may have
-    // written inside it.
-    let before_installs = numbers(steps, |step| {
-        matches!(step, Step::Quit { .. } | Step::UndoPlan { .. })
-    });
-    for undoable in &new {
-        if let Owned::Install { id, app } = &undoable.owned {
-            let step = Step::RemoveInstall {
-                install: id.clone(),
-                app: app.clone(),
-            };
-            place(steps, Entry::new(number(), step, before_installs.clone()));
-        }
-    }
-
-    for undoable in &new {
-        if let Owned::Copy { id } = &undoable.owned {
-            let step = Step::RemoveCopy { copy: id.clone() };
-            place(steps, Entry::new(number(), step, quits.clone()));
+    let mut offset = 0;
+    for (_, step) in new {
+        let entry = Entry::new(number(), step);
+        if entry.step.rank() == PLANS {
+            steps.insert(first_plan + offset, entry);
+            offset += 1;
+        } else {
+            place(steps, entry);
         }
     }
 }

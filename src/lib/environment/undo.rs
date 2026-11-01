@@ -47,9 +47,9 @@ impl PlanPhase {
 /// How far a plan got, and what it copies.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct PlanState {
-    pub phase: PlanPhase,
+    pub(crate) phase: PlanPhase,
     /// The targets it copies into the helper, relative to its home.
-    pub targets: Vec<String>,
+    pub(crate) targets: Vec<String>,
 }
 
 /// How far each of `ids` got: the helper's word for those it started, and
@@ -174,7 +174,15 @@ pub(super) async fn undo_locked(
         id: id.as_str().to_owned(),
         apply,
     };
-    let preview = dispatch_owned(client, ownership, helper, stage, ask(false)).await?;
+    let preview = dispatch_as(
+        client,
+        Some(ownership),
+        helper,
+        stage,
+        ask(false),
+        crate::client::RUN_TIMEOUT,
+    )
+    .await?;
     let preview = RollbackReply::read(&preview);
 
     if preview.ok == Some(false) && preview.error == worker::MISSING {
@@ -199,7 +207,15 @@ pub(super) async fn undo_locked(
     let reply = match preview.phase {
         Some(PlanPhase::RolledBack) => preview,
         Some(PlanPhase::Applying | PlanPhase::Applied | PlanPhase::RollingBack) => {
-            let reply = dispatch_owned(client, ownership, helper, stage, ask(true)).await?;
+            let reply = dispatch_as(
+                client,
+                Some(ownership),
+                helper,
+                stage,
+                ask(true),
+                crate::client::RUN_TIMEOUT,
+            )
+            .await?;
             let reply = RollbackReply::read(&reply);
             if reply.ok != Some(true)
                 || reply.phase != Some(PlanPhase::RolledBack)

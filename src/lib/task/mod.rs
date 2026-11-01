@@ -15,13 +15,14 @@ use crate::{
     host_session::{
         HostSession, Key, now_ms,
         record::Record as SessionRecord,
-        store::{Kind, ReplyFacts, Store as Sessions},
+        store::{ReplyFacts, Store as Sessions},
     },
     name::name_type,
 };
-use serde_json::Value;
 use std::{ffi::OsStr, path::Path};
 use store::Store;
+#[cfg(test)]
+use {crate::host_session::store::Kind, serde_json::Value};
 
 /// The most bytes a task name keeps.
 const NAME_LIMIT: usize = 64;
@@ -40,7 +41,7 @@ name_type! {
 
 impl Name {
     /// `value` as a task name, when it is a plain one.
-    pub fn parse(value: &str) -> Option<Self> {
+    pub(crate) fn parse(value: &str) -> Option<Self> {
         crate::name::plain(value, NAME_LIMIT).then(|| Self(value.to_owned()))
     }
 }
@@ -63,7 +64,7 @@ impl Task {
     /// session's default task when it is unset or empty. A name that is not
     /// a plain [`Name`] is a usage error, so an agent that meant to split
     /// its work never finds it silently merged.
-    pub fn of(session: &Key, name: Option<&str>) -> Result<Self> {
+    pub(crate) fn of(session: &Key, name: Option<&str>) -> Result<Self> {
         let name = match name.filter(|name| !name.is_empty()) {
             None => None,
             Some(name) => Some(Name::parse(name).ok_or_else(not_plain)?),
@@ -78,12 +79,6 @@ impl Task {
             key,
             name,
         })
-    }
-
-    /// The task of a command from `session`, as this process's ATLAS_TASK
-    /// names it.
-    pub fn from_env(session: Option<&HostSession>) -> Result<Option<Self>> {
-        Self::resolve(session, std::env::var_os(VARIABLE).as_deref())
     }
 
     /// The task `name` names of a command from `session`; none without a
@@ -109,12 +104,12 @@ impl Task {
     }
 
     /// The key of the host session the task belongs to.
-    pub fn session(&self) -> &Key {
+    pub(crate) fn session(&self) -> &Key {
         &self.session
     }
 
     /// The task's own key: its session's for the default task.
-    pub fn key(&self) -> &Key {
+    pub(crate) fn key(&self) -> &Key {
         &self.key
     }
 
@@ -140,18 +135,17 @@ fn not_plain() -> Error {
 /// write, the session's record, `close` and the transaction list still
 /// find by their own means.
 pub(crate) struct Claims {
-    task: Option<(Store, Task)>,
+    task: Option<(Task, Store)>,
 }
 
 impl Claims {
     /// The claims of `client`'s command.
     pub(crate) fn of(client: &Client) -> Self {
-        let task = client
-            .task
-            .clone()
-            .zip(client.output_dir().ok().map(Store::at));
         Self {
-            task: task.map(|(task, store)| (store, task)),
+            task: client
+                .task
+                .clone()
+                .zip(client.output_dir().ok().map(Store::at)),
         }
     }
 
@@ -159,7 +153,7 @@ impl Claims {
     /// never dropped for want of a task.
     pub(crate) fn in_store(store: Store, task: Task) -> Self {
         Self {
-            task: Some((store, task)),
+            task: Some((task, store)),
         }
     }
 
@@ -173,7 +167,7 @@ impl Claims {
     /// [`Claims::claim`] for each of `owned`, in one write. When the record
     /// is full, the claims that fit are kept and the rest are refused.
     pub(crate) fn claim_all(&self, owned: &[Owned], state: State) -> Result<()> {
-        let Some((store, task)) = self.task.as_ref().filter(|_| !owned.is_empty()) else {
+        let Some((task, store)) = self.task.as_ref().filter(|_| !owned.is_empty()) else {
             return Ok(());
         };
         let now = now_ms();
@@ -193,7 +187,7 @@ impl Claims {
     /// Record what became of each of `settled`, which this task claimed, in
     /// one write.
     pub(crate) fn settle_all(&self, settled: &[(Owned, State)]) -> Result<()> {
-        let Some((store, task)) = self.task.as_ref().filter(|_| !settled.is_empty()) else {
+        let Some((task, store)) = self.task.as_ref().filter(|_| !settled.is_empty()) else {
             return Ok(());
         };
         let now = now_ms();
@@ -211,20 +205,19 @@ impl Claims {
 /// `kept` otherwise. Whoever rolled it back (the person at a terminal,
 /// another session or this one), the plan's own state is what changed. It
 /// decides nothing about the rollback itself.
-/// Retained for `task::tests::a_rolled_back_plan_is_settled_in_every_task_that_claimed_it`.
-pub fn settle_rolled_back(client: &Client, kind: Kind, result: &Result<Value>) -> Result<()> {
+#[cfg(test)]
+pub(crate) fn settle_rolled_back(
+    client: &Client,
+    kind: Kind,
+    result: &Result<Value>,
+) -> Result<()> {
     settle_rolled_back_facts(client, &ReplyFacts::new(kind, result))
 }
 
 /// Settle the plan and kept outcome decoded by `dispatch::note_outcome`.
 pub fn settle_rolled_back_facts(client: &Client, facts: &ReplyFacts) -> Result<()> {
-    let Some(plan_id) = facts.rolled_back() else {
+    let Some((plan_id, state)) = facts.rolled_back() else {
         return Ok(());
-    };
-    let state = if facts.kept() {
-        State::Kept
-    } else {
-        State::Gone
     };
     Store::at(client.output_dir()?).settle_everywhere(
         &[Owned::Plan {
@@ -256,10 +249,10 @@ pub(crate) fn settle_copies_gone(client: &Client, tokens: Vec<Token>) {
 /// to.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct Work {
-    pub session: Key,
-    pub task: Key,
-    pub owned: Owned,
-    pub state: State,
+    pub(crate) session: Key,
+    pub(crate) task: Key,
+    pub(crate) owned: Owned,
+    pub(crate) state: State,
 }
 
 /// A session's work: the claims of `tasks` (its tasks' records), and what

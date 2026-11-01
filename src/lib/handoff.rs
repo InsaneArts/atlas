@@ -211,8 +211,8 @@ pub(crate) fn resolve(target: &str) -> Target {
 
 /// A running app, as the helper lists it.
 pub(crate) struct Running {
-    pub name: String,
-    pub executable: String,
+    pub(crate) name: String,
+    pub(crate) executable: String,
 }
 
 impl Running {
@@ -239,19 +239,19 @@ const SESSION: &str = ".session";
 #[derive(Debug)]
 pub(crate) struct Handed {
     /// The targets as the helper can open them, in order.
-    pub paths: Vec<String>,
+    pub(crate) paths: Vec<String>,
     /// The copies made for it.
-    pub copied: Vec<Copied>,
+    pub(crate) copied: Vec<Copied>,
 }
 
 /// One copy made for the helper: what was copied, where to, and the token
 /// its folder is named with. Replies name only where from and to.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
 pub(crate) struct Copied {
-    pub from: PathBuf,
-    pub to: PathBuf,
+    pub(crate) from: PathBuf,
+    pub(crate) to: PathBuf,
     #[serde(skip)]
-    pub token: Token,
+    pub(crate) token: Token,
 }
 
 /// The paths among `targets` as the helper can open them: unchanged when it
@@ -405,33 +405,24 @@ fn handed_in(
 
     let mut made = Vec::new();
     let mut paths = Vec::new();
-    let mut failure = None;
-    for placed in placed {
+    let result = placed.into_iter().try_for_each(|placed| -> Result<()> {
         match placed {
             Placed::Given(given) => paths.push(given),
             Placed::Copy { path, token } => {
-                let copied = match copy(&path, root, &token) {
-                    Ok(copied) => copied,
-                    Err(error) => {
-                        failure = Some(error);
-                        break;
-                    }
-                };
+                let copied = copy(&path, root, &token)?;
                 made.push(Copied {
                     from: path.clone(),
                     to: copied.clone(),
                     token,
                 });
-                if let Err(error) = owner.mark(&path, &copied) {
-                    failure = Some(error);
-                    break;
-                }
+                owner.mark(&path, &copied)?;
                 paths.push(copied.to_string_lossy().into_owned());
             }
         }
-    }
+        Ok(())
+    });
 
-    if failure.is_some() {
+    if result.is_err() {
         // Nothing has opened these copies yet: they go with the failure.
         for folder in made.iter().filter_map(|copy| copy.to.parent()) {
             let _ = fs::remove_dir_all(folder);
@@ -442,7 +433,7 @@ fn handed_in(
     let mut leftover = Vec::new();
     for (token, owned) in tokens.iter().zip(owned) {
         let folder = root.join(token.as_str());
-        match (fs::symlink_metadata(&folder).is_ok(), failure.is_some()) {
+        match (fs::symlink_metadata(&folder).is_ok(), result.is_err()) {
             (false, _) => settled.push((owned, State::Gone)),
             (true, false) => settled.push((owned, State::Made)),
             (true, true) => leftover.push(folder.to_string_lossy().into_owned()),
@@ -450,13 +441,13 @@ fn handed_in(
     }
     let _ = owner.claims.settle_all(&settled);
 
-    match failure {
-        None => Ok(Handed {
+    match result {
+        Ok(()) => Ok(Handed {
             paths,
             copied: made,
         }),
-        Some(error) if leftover.is_empty() => Err(error),
-        Some(mut error) => {
+        Err(error) if leftover.is_empty() => Err(error),
+        Err(mut error) => {
             error.error.push_str(&format!(
                 " Atlas could not remove what it began copying at {}; it stays claimed for this task.",
                 leftover.join(", ")
@@ -686,19 +677,19 @@ fn bundle_value(bundle: &Path, key: &str) -> Option<String> {
 #[derive(Debug, Default, PartialEq, Eq)]
 pub(crate) struct Removed {
     /// The folders removed.
-    pub folders: Vec<String>,
+    pub(crate) folders: Vec<String>,
     /// How many copies were kept because another host session made them,
     /// or their label could not be read.
-    pub kept_others: usize,
+    pub(crate) kept_others: usize,
     /// The copies that could not be removed.
-    pub failed: Vec<Failed>,
+    pub(crate) failed: Vec<Failed>,
 }
 
 /// A copy folder that could not be removed, and why.
 #[derive(Clone, Debug, PartialEq, Eq, serde::Serialize)]
 pub(crate) struct Failed {
-    pub path: String,
-    pub error: String,
+    pub(crate) path: String,
+    pub(crate) error: String,
 }
 
 impl Removed {

@@ -130,13 +130,10 @@ impl Viewer {
         let facts = crate::host_session::reading::SessionFacts::local(&client.controller, now);
         let reading_client = client.clone();
         let reading = tokio::task::spawn_blocking(move || {
-            reading_client.output_dir().ok().map(|output| {
-                crate::host_session::reading::SessionReading::collect(
-                    output,
-                    &reading_client.controller,
-                    crate::host_session::liveness::Snapshot::polled,
-                )
-            })
+            crate::host_session::reading::SessionReading::collect(
+                reading_client.output_dir().ok(),
+                &reading_client.controller,
+            )
         })
         .await
         .ok()
@@ -501,7 +498,7 @@ async fn sessions_named<'a>(
     tokio::task::spawn_blocking(move || {
         let records = || seen.iter().map(|seen| &seen.record);
         let named = names(records());
-        let reading = client.output_dir().ok().map(|output| crate::host_session::reading::SessionReading::collect(output, &client.controller, crate::host_session::liveness::Snapshot::polled));
+        let reading = crate::host_session::reading::SessionReading::collect(client.output_dir().ok(), &client.controller);
         let processes = reading.as_ref().map(|reading| &reading.processes);
         let now = crate::host_session::now_ms();
         let facts = crate::host_session::reading::SessionFacts::local(&client.controller, u128::from(now) * 1_000_000);

@@ -14,19 +14,19 @@ use std::path::PathBuf;
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub(crate) struct FileReport {
-    pub target: PathBuf,
-    pub operation: Lenient<Operation>,
+    pub(crate) target: PathBuf,
+    pub(crate) operation: Lenient<Operation>,
     /// Whether the file it replaces was copied by an earlier format.
     #[serde(default)]
-    pub legacy_previous: bool,
+    pub(crate) legacy_previous: bool,
 }
 
 /// One file of a plan as `environment list` shows it: its target and
 /// operation, and nothing else the helper sends.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub(crate) struct ShownFile {
-    pub target: PathBuf,
-    pub operation: Lenient<Operation>,
+    pub(crate) target: PathBuf,
+    pub(crate) operation: Lenient<Operation>,
 }
 
 impl From<&FileReport> for ShownFile {
@@ -42,19 +42,19 @@ impl From<&FileReport> for ShownFile {
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub(crate) struct TransactionSummary {
-    pub plan_id: String,
-    pub phase: Lenient<Phase>,
+    pub(crate) plan_id: String,
+    pub(crate) phase: Lenient<Phase>,
     /// Whether it is the one that must be resumed or rolled back first.
     #[serde(default)]
-    pub active: bool,
+    pub(crate) active: bool,
     /// When its record last changed, in milliseconds since 1970.
     #[serde(default)]
-    pub updated_at: u64,
+    pub(crate) updated_at: u64,
     #[serde(default)]
-    pub files: Vec<FileReport>,
+    pub(crate) files: Vec<FileReport>,
     /// How many folders undoing it could not remove.
     #[serde(default)]
-    pub retained_directories: usize,
+    pub(crate) retained_directories: usize,
 }
 
 /// The helper's list of its transactions: those listed, and how many were
@@ -62,17 +62,17 @@ pub(crate) struct TransactionSummary {
 /// be read.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub(crate) struct Transactions {
-    pub ok: bool,
+    pub(crate) ok: bool,
     /// Each as the helper sent it; one this build cannot read is kept as
     /// it came, and counted as unreadable.
     #[serde(default)]
-    pub transactions: Vec<Lenient<TransactionSummary>>,
+    pub(crate) transactions: Vec<Lenient<TransactionSummary>>,
     #[serde(default)]
-    pub hidden: u64,
+    pub(crate) hidden: u64,
     #[serde(default)]
-    pub more: u64,
+    pub(crate) more: u64,
     #[serde(default)]
-    pub unreadable: u64,
+    pub(crate) unreadable: u64,
 }
 
 impl Transactions {
@@ -102,18 +102,18 @@ pub(crate) enum InstallSeen {
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub(crate) struct InstallState {
-    pub install_id: String,
-    pub phase: Lenient<InstallSeen>,
+    pub(crate) install_id: String,
+    pub(crate) phase: Lenient<InstallSeen>,
     /// Whether its destination holds the exact folder Atlas placed; not
     /// said of an install with no record.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub verified: Option<bool>,
+    pub(crate) verified: Option<bool>,
     /// What its record says, when it has one that reads.
     #[serde(flatten)]
-    pub recorded: Option<InstalledApp>,
+    pub(crate) recorded: Option<InstalledApp>,
     /// Where it is and what runs from it, while it is verified.
     #[serde(flatten)]
-    pub placed: Option<Placed>,
+    pub(crate) placed: Option<Placed>,
 }
 
 impl InstallState {
@@ -140,50 +140,50 @@ impl InstallState {
 #[serde(rename_all = "camelCase")]
 pub(crate) struct InstalledApp {
     /// Its bundle's name, without `.app`.
-    pub app: String,
-    pub bundle_id: Option<String>,
+    pub(crate) app: String,
+    pub(crate) bundle_id: Option<String>,
 }
 
 /// A verified install: where it is, its folder's node, whether it is
 /// unchanged, and what runs from it.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub(crate) struct Placed {
-    pub path: PathBuf,
-    pub root: Node,
+    pub(crate) path: PathBuf,
+    pub(crate) root: Node,
     #[serde(default)]
-    pub present: bool,
+    pub(crate) present: bool,
     /// None when printing it did not finish in time.
     #[serde(default)]
-    pub unchanged: Option<bool>,
+    pub(crate) unchanged: Option<bool>,
     /// The processes running from it.
     #[serde(default)]
-    pub processes: Vec<RunningFrom>,
+    pub(crate) processes: Vec<RunningFrom>,
     /// The processes running from a copy macOS moved an app to that may
     /// be this install's: never signalled.
     #[serde(default)]
-    pub unproven: Vec<RunningFrom>,
+    pub(crate) unproven: Vec<RunningFrom>,
 }
 
 /// A process in the helper, by its PID and executable.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub(crate) struct RunningFrom {
-    pub pid: u32,
-    pub executable: String,
+    pub(crate) pid: u32,
+    pub(crate) executable: String,
 }
 
 /// The reply to an install Atlas placed.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub(crate) struct Installed {
-    pub ok: bool,
-    pub installed: bool,
-    pub install_id: String,
-    pub app: String,
-    pub path: PathBuf,
-    pub bundle_id: Option<String>,
-    pub version: Option<String>,
+    pub(crate) ok: bool,
+    pub(crate) installed: bool,
+    pub(crate) install_id: String,
+    pub(crate) app: String,
+    pub(crate) path: PathBuf,
+    pub(crate) bundle_id: Option<String>,
+    pub(crate) version: Option<String>,
     /// Whether LaunchServices took it, so it opens by its name.
-    pub registered: bool,
+    pub(crate) registered: bool,
 }
 
 /// The reply to an install or removal that changed the helper and then
@@ -191,10 +191,10 @@ pub(crate) struct Installed {
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub(crate) struct Unfinished {
-    pub ok: bool,
-    pub install_id: String,
-    pub phase: InstallPhase,
-    pub error: String,
+    pub(crate) ok: bool,
+    pub(crate) install_id: String,
+    pub(crate) phase: InstallPhase,
+    pub(crate) error: String,
 }
 
 /// Why an install was left in place.
@@ -236,23 +236,23 @@ pub(crate) enum Outcome {
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub(crate) struct Removal {
-    pub ok: bool,
+    pub(crate) ok: bool,
     #[serde(default)]
-    pub install_id: String,
+    pub(crate) install_id: String,
     #[serde(flatten)]
-    pub outcome: Outcome,
+    pub(crate) outcome: Outcome,
     /// Its bundle's name, without `.app`, when its record reads.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub app: Option<String>,
+    pub(crate) app: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub side_effects: Option<SideEffects>,
+    pub(crate) side_effects: Option<SideEffects>,
 }
 
 /// The files an installed app keeps outside its bundle that exist now.
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub(crate) struct SideEffects {
     #[serde(default)]
-    pub kept: Vec<SideEffect>,
+    pub(crate) kept: Vec<SideEffect>,
 }
 
 /// A file an installed app keeps outside its bundle, by its path in the
@@ -260,9 +260,9 @@ pub(crate) struct SideEffects {
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub(crate) struct SideEffect {
-    pub path: String,
+    pub(crate) path: String,
     #[serde(default)]
-    pub existed_before: bool,
+    pub(crate) existed_before: bool,
 }
 
 #[cfg(test)]

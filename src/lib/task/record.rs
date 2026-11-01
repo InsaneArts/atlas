@@ -30,37 +30,37 @@ const OUTPUTS: usize = 64;
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub(crate) struct Record {
-    pub version: u32,
-    pub key: Key,
-    pub session: Key,
+    pub(crate) version: u32,
+    pub(crate) key: Key,
+    pub(crate) session: Key,
     /// The ATLAS_TASK name; none for a session's default task.
-    pub name: Option<Name>,
+    pub(crate) name: Option<Name>,
     /// When the task's first claim was written, in milliseconds since 1970.
-    pub started: u64,
-    pub updated: u64,
+    pub(crate) started: u64,
+    pub(crate) updated: u64,
     /// What the task made, oldest first.
     #[serde(default)]
-    pub owned: Vec<Entry>,
+    pub(crate) owned: Vec<Entry>,
     /// The cleanups that covered this task's work, oldest first. Written
     /// only when there is one, so a record without stays as earlier builds
     /// wrote it.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub cleanups: Vec<CleanupNote>,
+    pub(crate) cleanups: Vec<CleanupNote>,
     /// Who took over this task's work after its session ended, when
     /// someone did.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub adopted_by: Option<Adoption>,
+    pub(crate) adopted_by: Option<Adoption>,
     /// The background jobs the task started, oldest first: the person's
     /// side's copy of each one's identity, which a stop must agree with.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub jobs: Vec<JobEntry>,
+    pub(crate) jobs: Vec<JobEntry>,
     /// The collections of files the task made, oldest first, by their
     /// receipts; the files' names and paths are kept in the receipts only.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub outputs: Vec<OutputEntry>,
+    pub(crate) outputs: Vec<OutputEntry>,
     /// Fields a later build keeps here, as it wrote them.
     #[serde(flatten)]
-    pub later: Map<String, Value>,
+    pub(crate) later: Map<String, Value>,
 }
 
 impl Record {
@@ -418,32 +418,32 @@ pub(crate) enum CleanupState {
 /// A cleanup that covered a task's work: its receipt's ID and state.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub(crate) struct CleanupNote {
-    pub id: Token,
-    pub state: CleanupState,
+    pub(crate) id: Token,
+    pub(crate) state: CleanupState,
     /// When its receipt last changed, in milliseconds since 1970.
-    pub updated: u64,
+    pub(crate) updated: u64,
 }
 
 /// A background job a task started, as the person's side knows it.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub(crate) struct JobEntry {
-    pub id: JobId,
-    pub name: String,
+    pub(crate) id: JobId,
+    pub(crate) name: String,
     /// When it started, in milliseconds since 1970.
-    pub started_at: u64,
+    pub(crate) started_at: u64,
     /// What it is: its boot, leader, start time and group.
-    pub expected: Expected,
-    pub state: Lenient<JobState>,
+    pub(crate) expected: Expected,
+    pub(crate) state: Lenient<JobState>,
     /// How it ended, once it did.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub how: Option<Lenient<How>>,
+    pub(crate) how: Option<Lenient<How>>,
     /// When it ended, in milliseconds since 1970.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub ended_at: Option<u64>,
+    pub(crate) ended_at: Option<u64>,
     /// Fields a later build keeps on an entry, as it wrote them.
     #[serde(flatten)]
-    pub later: Map<String, Value>,
+    pub(crate) later: Map<String, Value>,
 }
 
 impl JobEntry {
@@ -484,19 +484,19 @@ impl<T> From<T> for Lenient<T> {
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub(crate) struct OutputEntry {
-    pub receipt: ReceiptId,
-    pub at: u64,
-    pub files: usize,
-    pub bytes: u64,
+    pub(crate) receipt: ReceiptId,
+    pub(crate) at: u64,
+    pub(crate) files: usize,
+    pub(crate) bytes: u64,
     /// Fields a later build keeps on an entry, as it wrote them.
     #[serde(flatten)]
-    pub later: Map<String, Value>,
+    pub(crate) later: Map<String, Value>,
 }
 
 /// Who took over a task's work after its session ended: the adopting
 /// session's key (none for the person, through Atlas.app), and when.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub(crate) struct Adoption {
-    pub key: Option<Key>,
-    pub at: u64,
+    pub(crate) key: Option<Key>,
+    pub(crate) at: u64,
 }

@@ -20,7 +20,7 @@ use serde_json::{Value, json};
 use std::path::Path;
 
 /// A step as replies show it: its number, what it does and what to.
-pub(super) fn described(copies: &Path, entry: &Entry) -> Value {
+pub(super) fn described(copies: &Path, entry: &Entry, copied_app: Option<String>) -> Value {
     let mut value = json!({"n": entry.n});
     match &entry.step {
         Step::CheckOutputs { outputs } => {
@@ -46,7 +46,7 @@ pub(super) fn described(copies: &Path, entry: &Entry) -> Value {
         Step::RemoveCopy { copy } => {
             value["do"] = json!("remove-copy");
             value["path"] = json!(handoff::copy_folder(copies, copy));
-            value["app"] = json!(handoff::copy_app(copies, copy));
+            value["app"] = json!(copied_app);
         }
     }
     value
@@ -56,7 +56,7 @@ pub(super) fn described(copies: &Path, entry: &Entry) -> Value {
 pub(super) fn said_state(value: &mut Value, entry: &Entry) {
     value["state"] = json!(entry.state);
     if let Some(reason) = entry.reason {
-        value["reason"] = json!(reason.as_str());
+        value["reason"] = json!(reason);
     }
     if entry.retry {
         value["retry"] = json!(true);
@@ -100,12 +100,16 @@ pub(super) fn left(
         .into_iter()
         .flat_map(|receipt| &receipt.steps)
         .flat_map(|entry| &entry.came_to.untraced);
-    for app in untraced {
+    add_untraced(&mut left, untraced);
+    left
+}
+
+pub(super) fn add_untraced<'a>(left: &mut Vec<Value>, apps: impl IntoIterator<Item = &'a String>) {
+    for app in apps {
         if !left.iter().any(|known| known["app"] == app.as_str()) {
             left.push(json!({"app": app, "why": "runs from a copy macOS moved it to"}));
         }
     }
-    left
 }
 
 /// The reply to a cleanup that ran: `ok` exactly when it is complete, kept
@@ -122,7 +126,11 @@ pub(super) fn applied(
         .steps
         .iter()
         .map(|entry| {
-            let mut value = described(copies, entry);
+            let copied_app = match &entry.step {
+                Step::RemoveCopy { copy } => handoff::copy_app(copies, copy),
+                _ => None,
+            };
+            let mut value = described(copies, entry, copied_app);
             said_state(&mut value, entry);
             value
         })

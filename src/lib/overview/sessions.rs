@@ -41,14 +41,10 @@ pub(crate) async fn add_sessions_for(
     let has_own = own.is_some();
     let own = own.cloned();
     let (listed, own_entry) = tokio::task::spawn_blocking(move || {
-        let Ok(output) = client.output_dir() else {
+        let Some(reading) = SessionReading::collect(client.output_dir().ok(), &client.controller)
+        else {
             return (HostSessions::default(), None);
         };
-        let reading = SessionReading::collect(
-            output,
-            &client.controller,
-            crate::host_session::liveness::Snapshot::polled,
-        );
         let own_entry = own.and_then(|key| {
             reading
                 .live(facts)

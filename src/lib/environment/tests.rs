@@ -1855,11 +1855,15 @@ fn only_old_readable_plans_without_unknown_requests_are_pruned() {
     std::thread::sleep(std::time::Duration::from_millis(20));
 
     assert_eq!(
-        stale(&sandbox.root, std::time::Duration::ZERO),
+        older(
+            &sandbox.root,
+            "environment-plan-",
+            std::time::Duration::ZERO
+        ),
         vec![(id.clone(), stage.clone())],
         "a command's folder is never a plan"
     );
-    assert!(stale(&sandbox.root, UNUSED).is_empty());
+    assert!(older(&sandbox.root, "environment-plan-", UNUSED).is_empty());
     assert!(!prunable(&stage, &id, 501), "no plan to ask about");
 
     write_plan(&stage, &id, 501);
@@ -1883,10 +1887,13 @@ fn old_command_folders_are_pruned() {
     std::thread::sleep(std::time::Duration::from_millis(20));
 
     assert_eq!(
-        stale_runs(&sandbox.root, std::time::Duration::ZERO),
+        older(&sandbox.root, "environment-run-", std::time::Duration::ZERO)
+            .into_iter()
+            .map(|(_, stage)| stage)
+            .collect::<Vec<_>>(),
         vec![run.clone()]
     );
-    assert!(stale_runs(&sandbox.root, UNUSED).is_empty());
+    assert!(older(&sandbox.root, "environment-run-", UNUSED).is_empty());
 
     prune_runs(&sandbox.root);
     assert!(run.exists(), "a recent command's folder stays");
@@ -1928,9 +1935,16 @@ async fn an_environment_request_reads_the_helper_only_once_it_has_control() {
         id: crate::files::token(),
         apply: true,
     };
-    let refused = dispatch_within(&client, "nobody", &stage, request, Duration::from_secs(1))
-        .await
-        .unwrap_err();
+    let refused = dispatch_as(
+        &client,
+        None,
+        "nobody",
+        &stage,
+        request,
+        Duration::from_secs(1),
+    )
+    .await
+    .unwrap_err();
     assert_eq!(refused.code, "busy");
     assert!(
         tokio::time::timeout(Duration::from_millis(100), daemon.accept())

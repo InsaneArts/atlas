@@ -10,7 +10,7 @@ use crate::{
     },
     session_view::{self, Scene, Who},
 };
-use std::{collections::BTreeMap, sync::Arc};
+use std::{collections::BTreeMap, path::Path, sync::Arc};
 
 /// What a status says that the sessions' states depend on.
 #[derive(Clone, Copy, Debug)]
@@ -64,26 +64,32 @@ pub(crate) fn unrecorded<'a>(
 /// Whether a live holder, waiting or running note names a session with no
 /// record yet among `seen`: a session on its first command.
 pub(crate) fn first_command_running(
-    output: &std::path::Path,
+    output: Option<&Path>,
     controller: &Controller,
     seen: &[Seen],
 ) -> bool {
-    let reading = SessionReading::collect(output, controller, Snapshot::polled);
-    !unrecorded(
-        reading.holder.as_ref(),
-        &reading.waiting,
-        &reading.running,
-        seen,
-    )
-    .is_empty()
+    SessionReading::collect(output, controller).is_some_and(|reading| {
+        !unrecorded(
+            reading.holder.as_ref(),
+            &reading.waiting,
+            &reading.running,
+            seen,
+        )
+        .is_empty()
+    })
 }
 
 impl SessionReading {
-    pub(crate) fn collect(
-        output: &std::path::Path,
+    pub(crate) fn collect(output: Option<&Path>, controller: &Controller) -> Option<Self> {
+        Self::collect_with(output, controller, Snapshot::polled)
+    }
+
+    pub(crate) fn collect_with(
+        output: Option<&Path>,
         controller: &Controller,
         sample: impl FnOnce(&std::path::Path, Vec<crate::process::Instance>) -> Snapshot,
-    ) -> Self {
+    ) -> Option<Self> {
+        let output = output?;
         let seen = Store::at(output).recent();
         let rows = activity_log::recent(output, SESSION_ROWS);
         let causes = controller
@@ -92,7 +98,7 @@ impl SessionReading {
         let holder = controller.holder_note();
         let waiting = controller.waiting_candidates();
         let running = controller.running_candidates();
-        Self {
+        let mut reading = Self {
             seen,
             rows,
             causes,
@@ -101,7 +107,17 @@ impl SessionReading {
             running,
             processes: Snapshot::default(),
         }
-        .sampled(output, sample)
+        .sample(output, sample);
+        reading.holder = reading
+            .holder
+            .filter(|note| reading.processes.running(note.process));
+        reading
+            .waiting
+            .retain(|note| reading.processes.state(note.process) == crate::process::State::Running);
+        reading
+            .running
+            .retain(|note| reading.processes.running(note.process));
+        Some(reading)
     }
 
     pub(crate) fn sample(
@@ -118,37 +134,6 @@ impl SessionReading {
             .chain(self.seen.iter().filter_map(|seen| seen.record.host_process))
             .collect();
         self.processes = sample(output, instances);
-        self
-    }
-
-    pub(crate) fn sampled_for_service_change(
-        self,
-        output: &std::path::Path,
-        sample: impl FnOnce(&std::path::Path, Vec<crate::process::Instance>) -> Snapshot,
-    ) -> Self {
-        let mut reading = self.sample(output, sample);
-        let remains = |note: &crate::control::Note| {
-            reading.processes.state(note.process) != crate::process::State::Gone
-        };
-        reading.holder = reading.holder.filter(remains);
-        reading.waiting.retain(remains);
-        reading.running.retain(remains);
-        reading
-    }
-
-    pub(crate) fn sampled(
-        mut self,
-        output: &std::path::Path,
-        sample: impl FnOnce(&std::path::Path, Vec<crate::process::Instance>) -> Snapshot,
-    ) -> Self {
-        self = self.sample(output, sample);
-        self.holder = self
-            .holder
-            .filter(|note| self.processes.running(note.process));
-        self.waiting
-            .retain(|note| self.processes.state(note.process) == crate::process::State::Running);
-        self.running
-            .retain(|note| self.processes.running(note.process));
         self
     }
 

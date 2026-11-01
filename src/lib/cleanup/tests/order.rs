@@ -337,7 +337,7 @@ async fn an_incomplete_receipt_stays_while_its_session_record_is_preserved() {
     let mut receipt = Receipt::new(host.key().clone(), None, Actor::Agent);
     receipt
         .steps
-        .push(Entry::new(1, Step::UndoPlan { plan: Token::new() }, vec![]));
+        .push(Entry::new(1, Step::UndoPlan { plan: Token::new() }));
     Receipts::at(&place.output).save(&mut receipt).unwrap();
     receipt.updated = 1;
     let receipt_path = place.output.join(format!("cleanup/{}.json", receipt.id));
@@ -583,4 +583,122 @@ async fn what_a_finished_step_came_to_survives_a_later_run() {
         json!([".config/probe/settings.toml"]),
         "{second}"
     );
+}
+
+#[tokio::test]
+async fn preview_batches_observations_and_does_not_read_finished_steps_again() {
+    let place = Place::new();
+    let key = session("preview-reads");
+    let task = default_task(&key);
+    let copy = place.copy(Some(&key));
+    let plan = Token::new();
+    let install = Token::new();
+    for owned in [
+        Owned::Copy { id: copy },
+        Owned::Plan { id: plan },
+        Owned::Install {
+            id: install,
+            app: "Probe".into(),
+        },
+    ] {
+        place.claim(&task, owned);
+    }
+    job_started(&place, &task, "web");
+    let fake = Fake::at(&place.root);
+    let scope = own(&key);
+    let loaded = place.loaded(&scope);
+    let first = preview(&fake, &place.output, &scope, &loaded)
+        .await
+        .unwrap();
+    assert_eq!(
+        kinds(&first),
+        [
+            "quit",
+            "stop-job",
+            "undo-plan",
+            "remove-install",
+            "remove-copy"
+        ]
+    );
+    assert_eq!(
+        (
+            fake.app_reads.get(),
+            fake.plan_reads.get(),
+            fake.install_reads.get(),
+            fake.job_reads.get()
+        ),
+        (1, 1, 1, 1)
+    );
+    assert!(!place.output.join("cleanup").exists());
+
+    let mut receipt = Receipt::new(key.clone(), None, Actor::Agent);
+    plan::merge_with(&mut receipt.steps, &loaded.undoable(), &loaded.others());
+    for entry in &mut receipt.steps {
+        if !matches!(entry.step, Step::UndoPlan { .. }) {
+            entry.set(StepState::Done, None);
+        }
+    }
+    Receipts::at(&place.output).save(&mut receipt).unwrap();
+    for reads in [
+        &fake.app_reads,
+        &fake.plan_reads,
+        &fake.install_reads,
+        &fake.job_reads,
+    ] {
+        reads.set(0);
+    }
+    let resumed = preview(&fake, &place.output, &scope, &place.loaded(&scope))
+        .await
+        .unwrap();
+    assert_eq!(resumed["receipt"], json!(receipt.id));
+    let states: Vec<_> = resumed["steps"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|step| step["state"].as_str())
+        .collect();
+    assert_eq!(
+        states,
+        [Some("done"), Some("done"), None, Some("done"), Some("done")]
+    );
+    assert_eq!(
+        (
+            fake.app_reads.get(),
+            fake.plan_reads.get(),
+            fake.install_reads.get(),
+            fake.job_reads.get()
+        ),
+        (0, 1, 0, 0)
+    );
+}
+
+#[tokio::test]
+async fn describing_a_preview_uses_the_copy_observed_before_description() {
+    let place = Place::new();
+    let key = session("preview-snapshot");
+    let task = default_task(&key);
+    let copy = place.copy(Some(&key));
+    place.claim(&task, Owned::Copy { id: copy.clone() });
+    let fake = Fake::at(&place.root);
+    let scope = own(&key);
+    let loaded = place.loaded(&scope);
+    let mut steps = Vec::new();
+    plan::merge(&mut steps, &loaded.undoable());
+    let observed = observe(&fake, &steps).await.unwrap();
+    let descriptions: Vec<_> = steps
+        .iter()
+        .map(|entry| observed.step(&fake, &scope, entry))
+        .collect();
+    fs::remove_dir_all(place.folder(&copy)).unwrap();
+    let shown: Vec<_> = descriptions
+        .into_iter()
+        .map(|step| step.describe(&place.root))
+        .collect();
+    let removed = shown
+        .iter()
+        .find(|step| step["do"] == "remove-copy")
+        .unwrap();
+    assert_eq!(removed["app"], "TextEdit");
+    assert_eq!(removed["present"], true);
+    assert!(!place.folder(&copy).exists());
 }

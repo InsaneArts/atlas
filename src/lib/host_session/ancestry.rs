@@ -4,21 +4,21 @@ use crate::process::{Instance, Own, Start, own};
 /// What macOS says of one described process.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct Facts {
-    pub parent: i32,
-    pub uid: u32,
+    pub(crate) parent: i32,
+    pub(crate) uid: u32,
     /// Its command name, at most 16 bytes as the kernel keeps it.
-    pub command: String,
-    pub start: Start,
+    pub(crate) command: String,
+    pub(crate) start: Start,
 }
 
 /// One ancestor of this process.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct Ancestor {
-    pub pid: i32,
-    pub uid: u32,
-    pub instance: Instance,
-    pub parent: i32,
-    pub command: String,
+    pub(crate) pid: i32,
+    pub(crate) uid: u32,
+    pub(crate) instance: Instance,
+    pub(crate) parent: i32,
+    pub(crate) command: String,
 }
 
 /// The facts of `pid`, when it is a live process of this account.

@@ -85,31 +85,31 @@ const SIDE_EFFECTS: [(&str, &str); 6] = [
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub(super) struct Install {
-    pub version: u32,
-    pub id: String,
+    pub(crate) version: u32,
+    pub(crate) id: String,
     /// The bundle's file name, under [`APPLICATIONS`].
-    pub name: String,
-    pub phase: InstallPhase,
+    pub(crate) name: String,
+    pub(crate) phase: InstallPhase,
     /// Whether anything was at the destination before. Atlas refuses to
     /// install over anything, so an install it made always says false.
-    pub existed: bool,
-    pub bundle_id: Option<String>,
-    pub version_string: Option<String>,
+    pub(crate) existed: bool,
+    pub(crate) bundle_id: Option<String>,
+    pub(crate) version_string: Option<String>,
     /// The main executable's file name, as the bundle said when installed.
     #[serde(default)]
-    pub executable: Option<String>,
-    pub print: Option<BundlePrint>,
+    pub(crate) executable: Option<String>,
+    pub(crate) print: Option<BundlePrint>,
     /// Whether [`APPLICATIONS`] was made for this install; it is never
     /// removed.
-    pub made_folder: bool,
+    pub(crate) made_folder: bool,
     /// Which files keyed by the bundle identifier existed at install time.
-    pub before: BTreeMap<String, bool>,
+    pub(crate) before: BTreeMap<String, bool>,
     /// Why it was kept, once it was.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub kept: Option<KeptReason>,
+    pub(crate) kept: Option<KeptReason>,
     /// When it was held, in milliseconds since 1970, once it was.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub held_at: Option<u64>,
+    pub(crate) held_at: Option<u64>,
 }
 
 /// How far an install, or taking it away, got.

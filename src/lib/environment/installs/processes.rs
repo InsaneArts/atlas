@@ -13,12 +13,12 @@ use std::{
 /// both.
 pub(in crate::environment) struct Looks<'a> {
     /// The helper's processes, each with the executable it runs.
-    pub processes: &'a dyn Fn() -> Result<Vec<(u32, String)>>,
+    pub(crate) processes: &'a dyn Fn() -> Result<Vec<(u32, String)>>,
     /// The bundle a translocated bundle was opened from, when macOS can
     /// say.
-    pub original: &'a dyn Fn(&Path) -> Option<PathBuf>,
+    pub(crate) original: &'a dyn Fn(&Path) -> Option<PathBuf>,
     /// The bundle identifier a bundle's Info.plist names.
-    pub bundle_id: &'a dyn Fn(&Path) -> Option<String>,
+    pub(crate) bundle_id: &'a dyn Fn(&Path) -> Option<String>,
 }
 
 impl Looks<'static> {

@@ -24,7 +24,7 @@ use std::{
     time::{Duration, Instant},
 };
 
-pub(crate) struct Live<'a> {
+pub(super) struct Live<'a> {
     client: &'a Client,
     /// The control a cleanup that acts holds; none for a preview, which
     /// only reads.

@@ -8,14 +8,8 @@ const LOCK_PATIENCE: std::time::Duration = std::time::Duration::from_millis(250)
 /// Why the store could not be used: another operation has it.
 const RUNNING: &str = "Another environment operation is running";
 
-/// Take the store lock without blocking on a real holder.
-fn take(lock: &LockFile, write: bool, retry: impl FnMut(std::time::Instant) -> bool) -> Result<()> {
-    let held = if write { Lock::Exclusive } else { Lock::Shared };
-    lock_retrying(lock, held, LOCK_PATIENCE, retry).map_err(|_| problem(RUNNING))
-}
-
 pub(super) struct Store {
-    pub path: PathBuf,
+    pub(super) path: PathBuf,
     lock: Option<LockFile>,
     /// Whether the store's folder was there when it was opened.
     existed: bool,
@@ -30,10 +24,10 @@ impl Store {
 
     pub(super) fn open_with_retry(
         home: &Path,
-        lock: Lock,
+        access: Lock,
         retry: impl FnMut(std::time::Instant) -> bool,
     ) -> Result<Self> {
-        let write = lock == Lock::Exclusive;
+        let write = access == Lock::Exclusive;
         let path = home.join(STATE);
 
         let directory = if write {
@@ -54,7 +48,7 @@ impl Store {
         let lock = open_regular(&path.join("lock"), write)?.map(LockFile);
         if let Some(lock) = &lock {
             validate_private(&lock.0, false)?;
-            take(lock, write, retry)?;
+            lock_retrying(lock, access, LOCK_PATIENCE, retry).map_err(|_| problem(RUNNING))?;
         }
 
         Ok(Self {
