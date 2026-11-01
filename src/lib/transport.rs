@@ -464,7 +464,6 @@ mod tests {
             serde_json::from_str(include_str!("../../tests/fixtures/reply-cost/run.json")).unwrap();
         for fixture in fixtures {
             let reply = &fixture["input"];
-            crate::test_support::reply_cost(reply, &fixture["eventCost"]);
             if let Some(bytes) = fixture["decodedBytes"].as_u64() {
                 assert_eq!(
                     run_output(reply, OUTPUT_LIMIT).unwrap().len(),

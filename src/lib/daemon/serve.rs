@@ -857,6 +857,50 @@ mod tests {
     use crate::transport::{Transport, run_output};
     use tokio::io::{AsyncBufReadExt, BufReader};
 
+    #[tokio::test]
+    async fn event_cost_counts_the_emitted_json_lines_and_delimiters() {
+        let fixtures: Vec<Value> =
+            serde_json::from_str(include_str!("../../../tests/fixtures/reply-cost/run.json"))
+                .unwrap();
+        for fixture in fixtures {
+            let mut reply = fixture["input"].clone();
+            let events = reply.as_object_mut().unwrap().remove("events").unwrap();
+            let (mut client, mut server) = UnixStream::pair().unwrap();
+            let send = async move {
+                for event in events.as_array().unwrap() {
+                    write(&mut server, event).await.unwrap();
+                }
+                write(&mut server, &reply).await.unwrap();
+            };
+            let receive = async {
+                let mut bytes = Vec::new();
+                client.read_to_end(&mut bytes).await.unwrap();
+                bytes
+            };
+            let ((), bytes) = tokio::join!(send, receive);
+            let baseline = &fixture["eventCost"];
+            assert_eq!(
+                bytes.len(),
+                baseline["bytes"].as_u64().unwrap() as usize,
+                "{}",
+                baseline["id"]
+            );
+            let serialized = String::from_utf8(bytes).unwrap();
+            assert_eq!(
+                serialized,
+                baseline["serialized"].as_str().unwrap(),
+                "{}",
+                baseline["id"]
+            );
+            assert_eq!(
+                serialized.lines().count() - 1,
+                baseline["rows"].as_u64().unwrap() as usize,
+                "{}",
+                baseline["id"]
+            );
+        }
+    }
+
     /// The run loop mode is passed by name; it is the default mode.
     #[test]
     #[allow(
