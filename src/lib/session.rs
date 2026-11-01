@@ -182,9 +182,12 @@ pub fn require_hidden(value: &Value, uid: u32) -> Result<Session> {
             ));
         }
 
+        let cause = value["error"]
+            .as_str()
+            .map_or_else(String::new, |cause| format!(": {cause}"));
         return Err(Error::new(
             Code::Transport,
-            "The helper is not answering. Run atlas doctor.",
+            format!("The helper is not answering{cause}. Run atlas doctor."),
         ));
     }
 
@@ -1237,6 +1240,28 @@ mod tests {
         Absence::Missing.explain(&mut gone);
         assert_eq!(gone["absence"], "missing");
         assert!(gone.get("account").is_none());
+    }
+
+    /// A failed connection keeps its step and socket, so an error alone says
+    /// which connection failed.
+    #[test]
+    fn a_helper_that_cannot_be_reached_keeps_the_cause_of_the_failure() {
+        let uid = (nix::unistd::getuid().as_raw() + 1).max(501);
+        let cause = "Could not connect to socket /tmp/helper.sock: Connection refused";
+        let error = require_hidden(&json!({"ok": false, "error": cause}), uid).unwrap_err();
+        assert_eq!(
+            (error.code, error.error),
+            (
+                Code::Transport,
+                format!("The helper is not answering: {cause}. Run atlas doctor.")
+            )
+        );
+
+        let error = require_hidden(&json!({"ok": false}), uid).unwrap_err();
+        assert_eq!(
+            error.error,
+            "The helper is not answering. Run atlas doctor."
+        );
     }
 
     /// A helper too busy for one more caller is busy, never "not answering",

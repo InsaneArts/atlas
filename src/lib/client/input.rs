@@ -213,13 +213,16 @@ impl Client {
     /// changed size it is re-pinned too, but the action is refused so the
     /// caller looks at the screen again before acting on it.
     pub(super) async fn repin(&self, session: Session) -> Result<Session> {
+        let status = self.status().await;
         let unavailable = || {
+            let cause = status["inputService"]["error"]
+                .as_str()
+                .map_or_else(String::new, |cause| format!(" ({cause})"));
             Error::new(
                 Code::Startup,
-                "The native input service is unavailable; run atlas start-input",
+                format!("The native input service is unavailable{cause}; run atlas start-input"),
             )
         };
-        let status = self.status().await;
         require_accessibility(&status)?;
         if !crate::session::pinned_to_session(&status, &session) {
             return Err(unavailable());
@@ -390,11 +393,17 @@ impl Client {
                 let error = match result {
                     Ok(_) => Error::new(
                         Code::Uncertain,
-                        "Input finished but native release was not confirmed",
+                        format!(
+                            "Input finished but native release was not confirmed: {}",
+                            cleanup.error
+                        ),
                     ),
                     Err(error) => Error::new(
                         Code::Uncertain,
-                        format!("{} Native release was not confirmed either.", error.error),
+                        format!(
+                            "{} Native release was not confirmed either: {}",
+                            error.error, cleanup.error
+                        ),
                     ),
                 };
                 return Err(error.uncertain());
