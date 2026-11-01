@@ -108,7 +108,7 @@ impl Gate {
 
     pub(super) fn acquire(self: &Arc<Self>, owner: &str, who: Who) -> Result<Grant> {
         let state = self.lock()?;
-        self.acquire_at(state, owner, who, Instant::now())
+        self.acquire_at(state, owner, who, Instant::now(), Instant::now)
     }
 
     fn acquire_at(
@@ -117,6 +117,7 @@ impl Gate {
         owner: &str,
         who: Who,
         now: Instant,
+        deadline_now: impl FnOnce() -> Instant,
     ) -> Result<Grant> {
         state.expire_at(now);
 
@@ -150,7 +151,7 @@ impl Gate {
 
         state.owner = Some(owner.to_owned());
         state.previous = state.owner.clone();
-        state.expires = Some(now + super::GRANT_TTL);
+        state.expires = Some(deadline_now() + super::GRANT_TTL);
         state.person = who == Who::Person;
         state.cancelled = None;
 
@@ -183,12 +184,18 @@ impl Gate {
 
     pub(super) fn renew(&self, owner: &str) -> Result<()> {
         let state = self.lock()?;
-        self.renew_at(state, owner, Instant::now())
+        self.renew_at(state, owner, Instant::now(), Instant::now)
     }
 
-    fn renew_at(&self, mut state: MutexGuard<'_, State>, owner: &str, now: Instant) -> Result<()> {
+    fn renew_at(
+        &self,
+        mut state: MutexGuard<'_, State>,
+        owner: &str,
+        now: Instant,
+        deadline_now: impl FnOnce() -> Instant,
+    ) -> Result<()> {
         state.require_at(owner, false, now)?;
-        state.expires = Some(now + super::GRANT_TTL);
+        state.expires = Some(deadline_now() + super::GRANT_TTL);
         Ok(())
     }
 
@@ -295,7 +302,7 @@ mod tests {
         let gate = gate();
         assert_eq!(gate.holder_at(gate.lock().unwrap(), now).unwrap(), None);
         let _grant = gate
-            .acquire_at(gate.lock().unwrap(), &owner('a'), Who::Agent, now)
+            .acquire_at(gate.lock().unwrap(), &owner('a'), Who::Agent, now, || now)
             .unwrap();
 
         assert!(gate.active_at(gate.lock().unwrap(), now).unwrap());
@@ -304,11 +311,11 @@ mod tests {
             Some(Holder::Agent)
         );
         assert_eq!(
-            code(gate.acquire_at(gate.lock().unwrap(), &owner('b'), Who::Agent, now)),
+            code(gate.acquire_at(gate.lock().unwrap(), &owner('b'), Who::Agent, now, || now)),
             "busy"
         );
         assert_eq!(
-            code(gate.acquire_at(gate.lock().unwrap(), &owner('a'), Who::Agent, now)),
+            code(gate.acquire_at(gate.lock().unwrap(), &owner('a'), Who::Agent, now, || now)),
             "busy",
             "even the owner"
         );
@@ -319,7 +326,7 @@ mod tests {
         let now = Instant::now();
         let gate = gate();
         let _person = gate
-            .acquire_at(gate.lock().unwrap(), &owner('a'), Who::Person, now)
+            .acquire_at(gate.lock().unwrap(), &owner('a'), Who::Person, now, || now)
             .unwrap();
 
         assert_eq!(
@@ -327,7 +334,7 @@ mod tests {
             Some(Holder::Person)
         );
         let said = |who| {
-            gate.acquire_at(gate.lock().unwrap(), &owner('b'), who, now)
+            gate.acquire_at(gate.lock().unwrap(), &owner('b'), who, now, || now)
                 .err()
                 .map(|error| (error.code, error.error))
         };
@@ -336,7 +343,7 @@ mod tests {
             Some((Code::Busy, crate::error::PERSON_HAS_CONTROL.to_owned()))
         );
         let holder = |gate: &Arc<Gate>, who| {
-            gate.acquire_at(gate.lock().unwrap(), &owner('b'), who, now)
+            gate.acquire_at(gate.lock().unwrap(), &owner('b'), who, now, || now)
                 .err()?
                 .holder
         };
@@ -345,7 +352,7 @@ mod tests {
 
         let other = self::gate();
         let _agent = other
-            .acquire_at(other.lock().unwrap(), &owner('c'), Who::Agent, now)
+            .acquire_at(other.lock().unwrap(), &owner('c'), Who::Agent, now, || now)
             .unwrap();
         assert_eq!(
             holder(&other, Who::Agent),
@@ -378,7 +385,7 @@ mod tests {
             "g".repeat(48),
         ] {
             assert_eq!(
-                code(gate.acquire_at(gate.lock().unwrap(), &bad, Who::Agent, now)),
+                code(gate.acquire_at(gate.lock().unwrap(), &bad, Who::Agent, now, || now)),
                 "input",
                 "{bad:?}"
             );
@@ -390,9 +397,90 @@ mod tests {
                 gate.lock().unwrap(),
                 &crate::files::token(),
                 Who::Agent,
-                now
+                now,
+                || now
             )),
             "ok"
+        );
+    }
+
+    #[test]
+    fn acquisition_starts_the_ttl_when_the_deadline_is_set() {
+        use std::time::Duration;
+
+        let checked = Instant::now();
+        let assigned = checked + Duration::from_secs(7);
+        for who in [Who::Agent, Who::Person] {
+            let gate = gate();
+            let grant = gate
+                .acquire_at(gate.lock().unwrap(), &owner('a'), who, checked, || assigned)
+                .unwrap();
+            assert_eq!(
+                gate.lock().unwrap().expires,
+                Some(assigned + super::super::GRANT_TTL)
+            );
+            drop(grant.authorize_at(gate.lock().unwrap(), assigned).unwrap());
+        }
+    }
+
+    #[test]
+    fn renewal_starts_the_ttl_after_authorization() {
+        use std::time::Duration;
+
+        let start = Instant::now();
+        let gate = gate();
+        let grant = gate
+            .acquire_at(gate.lock().unwrap(), &owner('a'), Who::Agent, start, || {
+                start
+            })
+            .unwrap();
+        let checked = start + Duration::from_secs(1);
+        let assigned = checked + Duration::from_secs(7);
+        gate.renew_at(gate.lock().unwrap(), &owner('a'), checked, || assigned)
+            .unwrap();
+        assert_eq!(
+            gate.lock().unwrap().expires,
+            Some(assigned + super::super::GRANT_TTL)
+        );
+        drop(grant.authorize_at(gate.lock().unwrap(), assigned).unwrap());
+    }
+
+    #[test]
+    fn refused_acquisitions_and_renewals_do_not_sample_deadline_time() {
+        let now = Instant::now();
+        let gate = gate();
+        assert_eq!(
+            code(
+                gate.acquire_at(gate.lock().unwrap(), "invalid", Who::Agent, now, || {
+                    panic!("refused acquisition sampled deadline time")
+                })
+            ),
+            "input"
+        );
+        gate.acquire_at(gate.lock().unwrap(), &owner('a'), Who::Agent, now, || now)
+            .unwrap();
+        assert_eq!(
+            code(
+                gate.acquire_at(gate.lock().unwrap(), &owner('b'), Who::Agent, now, || {
+                    panic!("busy acquisition sampled deadline time")
+                })
+            ),
+            "busy"
+        );
+        for (owner, checked) in [
+            (owner('b'), now),
+            (owner('a'), now + super::super::GRANT_TTL),
+        ] {
+            assert_eq!(
+                code(gate.renew_at(gate.lock().unwrap(), &owner, checked, || {
+                    panic!("refused renewal sampled deadline time")
+                })),
+                "lease-lost"
+            );
+        }
+        assert_eq!(
+            gate.lock().unwrap().expires,
+            Some(now + super::super::GRANT_TTL)
         );
     }
 
@@ -405,7 +493,9 @@ mod tests {
         let acquired = || {
             let gate = gate();
             let grant = gate
-                .acquire_at(gate.lock().unwrap(), &owner('a'), Who::Agent, start)
+                .acquire_at(gate.lock().unwrap(), &owner('a'), Who::Agent, start, || {
+                    start
+                })
                 .unwrap();
             assert_eq!(gate.lock().unwrap().expires, Some(expires));
             (gate, grant)
@@ -440,7 +530,7 @@ mod tests {
 
             let (gate, _) = acquired();
             assert_eq!(
-                code(gate.renew_at(gate.lock().unwrap(), &owner('a'), now)),
+                code(gate.renew_at(gate.lock().unwrap(), &owner('a'), now, || now)),
                 expected
             );
             assert_eq!(
@@ -454,7 +544,7 @@ mod tests {
 
             let (gate, _) = acquired();
             assert_eq!(
-                code(gate.acquire_at(gate.lock().unwrap(), &owner('b'), Who::Agent, now)),
+                code(gate.acquire_at(gate.lock().unwrap(), &owner('b'), Who::Agent, now, || now)),
                 if valid { "busy" } else { "ok" }
             );
         }
@@ -467,15 +557,17 @@ mod tests {
         let start = Instant::now();
         let gate = gate();
         let first = gate
-            .acquire_at(gate.lock().unwrap(), &owner('a'), Who::Agent, start)
+            .acquire_at(gate.lock().unwrap(), &owner('a'), Who::Agent, start, || {
+                start
+            })
             .unwrap();
         let renewed = start + Duration::from_secs(2);
-        gate.renew_at(gate.lock().unwrap(), &owner('a'), renewed)
+        gate.renew_at(gate.lock().unwrap(), &owner('a'), renewed, || renewed)
             .unwrap();
         let deadline = renewed + Duration::from_secs(6);
         assert_eq!(gate.lock().unwrap().expires, Some(deadline));
         assert_eq!(
-            code(gate.renew_at(gate.lock().unwrap(), &owner('b'), renewed)),
+            code(gate.renew_at(gate.lock().unwrap(), &owner('b'), renewed, || renewed)),
             "lease-lost"
         );
         assert_eq!(gate.lock().unwrap().expires, Some(deadline));
@@ -493,17 +585,23 @@ mod tests {
         gate.cancel(Some(&owner('a'))).unwrap();
         let acquired = renewed + Duration::from_secs(5);
         let _second = gate
-            .acquire_at(gate.lock().unwrap(), &owner('b'), Who::Agent, acquired)
+            .acquire_at(
+                gate.lock().unwrap(),
+                &owner('b'),
+                Who::Agent,
+                acquired,
+                || acquired,
+            )
             .unwrap();
         let deadline = acquired + Duration::from_secs(6);
         assert_eq!(gate.lock().unwrap().expires, Some(deadline));
         assert_eq!(
-            code(gate.renew_at(gate.lock().unwrap(), &owner('a'), acquired)),
+            code(gate.renew_at(gate.lock().unwrap(), &owner('a'), acquired, || acquired)),
             "lease-lost"
         );
         assert_eq!(gate.lock().unwrap().expires, Some(deadline));
         assert_eq!(
-            code(gate.renew_at(gate.lock().unwrap(), &owner('b'), deadline)),
+            code(gate.renew_at(gate.lock().unwrap(), &owner('b'), deadline, || deadline)),
             "lease-lost"
         );
         assert_eq!(
@@ -520,7 +618,9 @@ mod tests {
         for stopped in [false, true] {
             let gate = gate();
             let grant = gate
-                .acquire_at(gate.lock().unwrap(), &owner('a'), Who::Agent, start)
+                .acquire_at(gate.lock().unwrap(), &owner('a'), Who::Agent, start, || {
+                    start
+                })
                 .unwrap();
             if stopped {
                 gate.hold(true).unwrap();
@@ -529,7 +629,7 @@ mod tests {
             }
 
             assert_eq!(
-                code(gate.renew_at(gate.lock().unwrap(), &owner('a'), expires)),
+                code(gate.renew_at(gate.lock().unwrap(), &owner('a'), expires, || expires)),
                 "lease-lost"
             );
             assert_eq!(gate.lock().unwrap().expires, Some(expires));
@@ -563,7 +663,9 @@ mod tests {
             for stopped in [false, true] {
                 let gate = gate();
                 let grant = gate
-                    .acquire_at(gate.lock().unwrap(), &owner('a'), Who::Agent, start)
+                    .acquire_at(gate.lock().unwrap(), &owner('a'), Who::Agent, start, || {
+                        start
+                    })
                     .unwrap();
                 if expired {
                     assert!(!gate.active_at(gate.lock().unwrap(), expires).unwrap());
@@ -602,14 +704,14 @@ mod tests {
         for ending in ["revoke", "close", "acquire"] {
             let gate = gate();
             let grant = gate
-                .acquire_at(gate.lock().unwrap(), &owner('a'), Who::Agent, now)
+                .acquire_at(gate.lock().unwrap(), &owner('a'), Who::Agent, now, || now)
                 .unwrap();
             gate.cancel(None).unwrap();
             match ending {
                 "revoke" => gate.revoke().unwrap(),
                 "close" => gate.close().unwrap(),
                 "acquire" => {
-                    gate.acquire_at(gate.lock().unwrap(), &owner('b'), Who::Agent, now)
+                    gate.acquire_at(gate.lock().unwrap(), &owner('b'), Who::Agent, now, || now)
                         .unwrap();
                     assert_eq!(code(gate.cancel(Some(&owner('a')))), "lease-lost");
                 }
@@ -640,10 +742,18 @@ mod tests {
         let expires = start + super::super::GRANT_TTL;
         let gate = gate();
         let first = gate
-            .acquire_at(gate.lock().unwrap(), &owner('a'), Who::Agent, start)
+            .acquire_at(gate.lock().unwrap(), &owner('a'), Who::Agent, start, || {
+                start
+            })
             .unwrap();
         let second = gate
-            .acquire_at(gate.lock().unwrap(), &owner('b'), Who::Agent, expires)
+            .acquire_at(
+                gate.lock().unwrap(),
+                &owner('b'),
+                Who::Agent,
+                expires,
+                || expires,
+            )
             .unwrap();
         assert_eq!(code(gate.cancel(Some(&owner('a')))), "lease-lost");
         assert_eq!(
@@ -680,7 +790,13 @@ mod tests {
         let gate = gate();
         gate.hold(true).unwrap();
         let person = gate
-            .acquire_at(gate.lock().unwrap(), &owner('a'), Who::Person, start)
+            .acquire_at(
+                gate.lock().unwrap(),
+                &owner('a'),
+                Who::Person,
+                start,
+                || start,
+            )
             .unwrap();
         gate.hold(true).unwrap();
         drop(
@@ -699,18 +815,32 @@ mod tests {
         gate.revoke().unwrap();
         assert!(gate.held().unwrap());
         assert_eq!(
-            code(gate.acquire_at(gate.lock().unwrap(), &owner('b'), Who::Agent, expires)),
+            code(gate.acquire_at(
+                gate.lock().unwrap(),
+                &owner('b'),
+                Who::Agent,
+                expires,
+                || expires
+            )),
             "stopped"
         );
         gate.close().unwrap();
         let error = gate
-            .acquire_at(gate.lock().unwrap(), "invalid", Who::Agent, expires)
+            .acquire_at(gate.lock().unwrap(), "invalid", Who::Agent, expires, || {
+                expires
+            })
             .err()
             .unwrap();
         assert_eq!(error.code, Code::Busy);
         assert_eq!(error.holder, None);
         assert_eq!(
-            code(gate.acquire_at(gate.lock().unwrap(), &owner('b'), Who::Person, expires)),
+            code(gate.acquire_at(
+                gate.lock().unwrap(),
+                &owner('b'),
+                Who::Person,
+                expires,
+                || expires
+            )),
             "busy"
         );
     }
@@ -720,7 +850,7 @@ mod tests {
         let now = Instant::now();
         let gate = gate();
         let grant = gate
-            .acquire_at(gate.lock().unwrap(), &owner('a'), Who::Agent, now)
+            .acquire_at(gate.lock().unwrap(), &owner('a'), Who::Agent, now, || now)
             .unwrap();
         assert!(
             std::panic::catch_unwind(|| {
@@ -753,12 +883,12 @@ mod tests {
         let now = Instant::now();
         let gate = gate();
         let _first = gate
-            .acquire_at(gate.lock().unwrap(), &owner('a'), Who::Agent, now)
+            .acquire_at(gate.lock().unwrap(), &owner('a'), Who::Agent, now, || now)
             .unwrap();
 
         gate.cancel(Some(&owner('a'))).unwrap();
         let _second = gate
-            .acquire_at(gate.lock().unwrap(), &owner('b'), Who::Agent, now)
+            .acquire_at(gate.lock().unwrap(), &owner('b'), Who::Agent, now, || now)
             .unwrap();
         assert_eq!(code(gate.cancel(Some(&owner('a')))), "lease-lost");
         assert!(gate.active_at(gate.lock().unwrap(), now).unwrap());
@@ -774,7 +904,7 @@ mod tests {
         let now = Instant::now();
         let gate = gate();
         let _acquired = gate
-            .acquire_at(gate.lock().unwrap(), &owner('a'), Who::Agent, now)
+            .acquire_at(gate.lock().unwrap(), &owner('a'), Who::Agent, now, || now)
             .unwrap();
         let grant = gate
             .grant_at(gate.lock().unwrap(), &owner('a'), now)
@@ -783,7 +913,7 @@ mod tests {
         gate.cancel(None).unwrap();
 
         assert_eq!(
-            code(gate.renew_at(gate.lock().unwrap(), &owner('a'), now)),
+            code(gate.renew_at(gate.lock().unwrap(), &owner('a'), now, || now)),
             "lease-lost",
             "a keep-alive is not told"
         );
@@ -804,7 +934,7 @@ mod tests {
         );
 
         let _again = gate
-            .acquire_at(gate.lock().unwrap(), &owner('a'), Who::Agent, now)
+            .acquire_at(gate.lock().unwrap(), &owner('a'), Who::Agent, now, || now)
             .unwrap();
         gate.revoke().unwrap();
 
@@ -820,7 +950,7 @@ mod tests {
         let now = Instant::now();
         let gate = gate();
         let _acquired = gate
-            .acquire_at(gate.lock().unwrap(), &owner('a'), Who::Agent, now)
+            .acquire_at(gate.lock().unwrap(), &owner('a'), Who::Agent, now, || now)
             .unwrap();
         let grant = gate
             .grant_at(gate.lock().unwrap(), &owner('a'), now)
@@ -835,12 +965,12 @@ mod tests {
             "what it was doing stops"
         );
         assert_eq!(
-            code(gate.acquire_at(gate.lock().unwrap(), &owner('b'), Who::Agent, now)),
+            code(gate.acquire_at(gate.lock().unwrap(), &owner('b'), Who::Agent, now, || now)),
             "stopped"
         );
 
         let person = gate
-            .acquire_at(gate.lock().unwrap(), &owner('c'), Who::Person, now)
+            .acquire_at(gate.lock().unwrap(), &owner('c'), Who::Person, now, || now)
             .unwrap();
         gate.hold(true).unwrap();
         assert_eq!(
@@ -853,7 +983,7 @@ mod tests {
         gate.hold(false).unwrap();
         assert!(!gate.held().unwrap());
         assert_eq!(
-            code(gate.acquire_at(gate.lock().unwrap(), &owner('b'), Who::Agent, now)),
+            code(gate.acquire_at(gate.lock().unwrap(), &owner('b'), Who::Agent, now, || now)),
             "ok"
         );
     }
@@ -863,7 +993,7 @@ mod tests {
         let now = Instant::now();
         let gate = gate();
         let _acquired = gate
-            .acquire_at(gate.lock().unwrap(), &owner('a'), Who::Agent, now)
+            .acquire_at(gate.lock().unwrap(), &owner('a'), Who::Agent, now, || now)
             .unwrap();
         gate.hold(true).unwrap();
         assert_eq!(
@@ -879,7 +1009,7 @@ mod tests {
 
         gate.hold(false).unwrap();
         let _again = gate
-            .acquire_at(gate.lock().unwrap(), &owner('b'), Who::Agent, now)
+            .acquire_at(gate.lock().unwrap(), &owner('b'), Who::Agent, now, || now)
             .unwrap();
         gate.cancel(None).unwrap();
         gate.hold(true).unwrap();
@@ -895,7 +1025,7 @@ mod tests {
         let now = Instant::now();
         let gate = gate();
         let grant = gate
-            .acquire_at(gate.lock().unwrap(), &owner('a'), Who::Agent, now)
+            .acquire_at(gate.lock().unwrap(), &owner('a'), Who::Agent, now, || now)
             .unwrap();
 
         gate.close().unwrap();
@@ -905,13 +1035,13 @@ mod tests {
             "lease-lost"
         );
         assert_eq!(
-            code(gate.acquire_at(gate.lock().unwrap(), &owner('b'), Who::Agent, now)),
+            code(gate.acquire_at(gate.lock().unwrap(), &owner('b'), Who::Agent, now, || now)),
             "busy"
         );
 
         gate.cancel(None).unwrap();
         assert_eq!(
-            code(gate.acquire_at(gate.lock().unwrap(), &owner('b'), Who::Agent, now)),
+            code(gate.acquire_at(gate.lock().unwrap(), &owner('b'), Who::Agent, now, || now)),
             "busy",
             "for good"
         );
