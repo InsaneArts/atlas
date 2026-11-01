@@ -6,6 +6,9 @@
 //! task's record holds the person's side's copy of its identity, which a
 //! stop must agree with. A job of another task is stopped only when that
 //! task is named.
+//! size-exception: controller job operations share task identity and tolerant
+//! wire conversion here; the identity-mismatch and future-reply tests protect
+//! those contracts while durable helper records remain a separate owner.
 use crate::{
     client::Client,
     daemon::protocol::{
@@ -547,17 +550,7 @@ pub async fn log(client: &Client, id: &JobId, bytes: usize, task: Option<&Key>) 
         Err(_) => {}
     }
     let request = json!({"op": "job", "action": "log", "id": id, "bytes": bytes});
-    let reply = client
-        .transport
-        .call(&request)
-        .await
-        .map_err(Error::certain)?;
-    if reply["code"] == "bad-request" {
-        return Err(Error::new(Code::Daemon, OLDER));
-    }
-    if reply["ok"] != true {
-        return Err(refused(&reply));
-    }
+    let reply = read_one(client, &request).await?;
     let malformed = || Error::new(Code::Protocol, "The job's log came back malformed");
     let Ok(JobReply::Log(logged)) = JobReply::deserialize(&reply) else {
         return Err(malformed());
@@ -583,16 +576,16 @@ pub async fn log(client: &Client, id: &JobId, bytes: usize, task: Option<&Key>) 
 /// How stopping every job came out, for a log-out or uninstall to say.
 pub(crate) struct Everyone {
     /// How many were told to stop.
-    pub asked: u64,
+    pub(crate) asked: u64,
     /// How many still ran when Atlas stopped waiting.
-    pub left: u64,
+    pub(crate) left: u64,
     /// How many the helper would not signal: their processes no longer
     /// matched them, or their records could not be written.
-    pub refused: u64,
+    pub(crate) refused: u64,
     /// How many the helper could not observe, so it signalled nothing.
-    pub unknown: u64,
+    pub(crate) unknown: u64,
     /// Why the helper could not be told, when it could not.
-    pub error: Option<String>,
+    pub(crate) error: Option<String>,
 }
 
 impl Everyone {
@@ -690,11 +683,12 @@ pub(crate) async fn stop_every(client: &Client, reason: StopReason) -> Everyone 
     }
 }
 
-/// Job `id` as the helper shows it now. Reading changes nothing.
-pub(crate) async fn show(client: &Client, id: &JobId) -> Result<Shown> {
+/// Single-job reads keep transport failures certain and recognize older daemons
+/// before decoding their operation-specific replies.
+async fn read_one(client: &Client, request: &Value) -> Result<Value> {
     let reply = client
         .transport
-        .call(&json!({"op": "job", "action": "show", "id": id}))
+        .call(request)
         .await
         .map_err(Error::certain)?;
     if reply["code"] == "bad-request" {
@@ -703,6 +697,12 @@ pub(crate) async fn show(client: &Client, id: &JobId) -> Result<Shown> {
     if reply["ok"] != true {
         return Err(refused(&reply));
     }
+    Ok(reply)
+}
+
+/// Job `id` as the helper shows it now. Reading changes nothing.
+pub(crate) async fn show(client: &Client, id: &JobId) -> Result<Shown> {
+    let reply = read_one(client, &json!({"op": "job", "action": "show", "id": id})).await?;
     Ok(match JobReply::deserialize(&reply) {
         Ok(JobReply::Show(Showing::One { job: Some(shown) })) => shown,
         _ => Shown::Later(reply["job"].clone()),

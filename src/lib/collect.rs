@@ -10,8 +10,7 @@
 mod receipt;
 mod scavenge;
 
-pub(crate) use receipt::{Intact, intact};
-pub use receipt::{Kept, ReadSpan, ReceiptId};
+pub(crate) use receipt::{Intact, Kept, ReadSpan, ReceiptId, intact};
 
 use crate::{
     client::Client,
@@ -37,11 +36,9 @@ use std::{
 };
 
 /// The most files one call collects.
-pub const MAX_FILES: usize = 16;
+pub(crate) const MAX_FILES: usize = 16;
 /// The most bytes one call collects, every file together.
-pub const MAX_TOTAL: u64 = 1 << 30;
-/// The largest file collected unless the agent allows more.
-pub const DEFAULT_SIZE: u64 = 64 << 20;
+pub(crate) const MAX_TOTAL: u64 = 1 << 30;
 /// What an older helper daemon is told it cannot do.
 const OLDER: &str = "The helper is running an older Atlas that cannot collect files; run atlas restart, then try again";
 /// Room left free beside a copy, so collecting never fills the disk.
@@ -385,51 +382,46 @@ impl One<'_> {
         client: &Client,
         pin: Option<SessionPin>,
     ) -> std::result::Result<Kept, Failure> {
-        let collected = self.copy(client, pin).await;
+        let collected = async {
+            let fail = |reason| Failure::new(reason, self.source);
+            let name = self.name()?;
+
+            let started = now_ms();
+            let mut partial = OpenOptions::new()
+                .write(true)
+                .create_new(true)
+                .mode(0o600)
+                .custom_flags(libc::O_NOFOLLOW)
+                .open(&self.partial)
+                .map_err(|_| fail(ReadRefusal::Space))?;
+            let mut hasher = Sha256::new();
+            let Received {
+                identity,
+                real,
+                in_home,
+            } = self.receive(client, pin, &mut partial, &mut hasher).await?;
+            let sha256 = crate::name::hex(&hasher.finalize());
+            self.confirm(client, pin, identity, &mut partial, &sha256)
+                .await?;
+            partial.sync_all().map_err(|_| fail(ReadRefusal::Space))?;
+            drop(partial);
+
+            let path = self.link(name)?;
+            Ok(Kept {
+                source: real,
+                in_home,
+                path,
+                size: identity.size,
+                sha256,
+                read: Some(ReadSpan {
+                    started,
+                    finished: now_ms(),
+                }),
+            })
+        }
+        .await;
         let _ = fs::remove_file(&self.partial);
         collected
-    }
-
-    async fn copy(
-        &self,
-        client: &Client,
-        pin: Option<SessionPin>,
-    ) -> std::result::Result<Kept, Failure> {
-        let fail = |reason| Failure::new(reason, self.source);
-        let name = self.name()?;
-
-        let started = now_ms();
-        let mut partial = OpenOptions::new()
-            .write(true)
-            .create_new(true)
-            .mode(0o600)
-            .custom_flags(libc::O_NOFOLLOW)
-            .open(&self.partial)
-            .map_err(|_| fail(ReadRefusal::Space))?;
-        let mut hasher = Sha256::new();
-        let Received {
-            identity,
-            real,
-            in_home,
-        } = self.receive(client, pin, &mut partial, &mut hasher).await?;
-        let sha256 = crate::name::hex(&hasher.finalize());
-        self.confirm(client, pin, identity, &mut partial, &sha256)
-            .await?;
-        partial.sync_all().map_err(|_| fail(ReadRefusal::Space))?;
-        drop(partial);
-
-        let path = self.link(name)?;
-        Ok(Kept {
-            source: real,
-            in_home,
-            path,
-            size: identity.size,
-            sha256,
-            read: Some(ReadSpan {
-                started,
-                finished: now_ms(),
-            }),
-        })
     }
 
     /// The name its copy takes: the source's own, when it can be a file

@@ -45,7 +45,7 @@ fn request_accessibility() {
 ///
 /// With nothing to ask right after the person logged in (after a restart
 /// or a log-out), they are told they can switch back to `controller`.
-pub async fn request_consent_on_arrival(controller: u32, restart: impl Fn()) {
+pub(super) async fn request_consent_on_arrival(controller: u32, restart: impl Fn()) {
     let shown = || console_state() == Some(true);
     let mut present = false;
 
@@ -167,7 +167,7 @@ const RECORDING_RESTART_GAP: Duration = Duration::from_secs(60);
 /// window sees the switch on at once, whichever permission the person turned
 /// on first. It runs apart from the arrival's requests, which a moment off
 /// screen ends, and ends once this process may record.
-pub async fn restart_for_recording(restart: impl Fn()) {
+pub(super) async fn restart_for_recording(restart: impl Fn()) {
     watch_recording(
         || tokio::time::sleep(RECORDING_WATCH),
         capture::permitted,
@@ -505,7 +505,7 @@ async fn setting_up() -> bool {
 /// automatic capitalisation, smart punctuation and predictions are turned
 /// off in the helper's own preferences (apps read them when they start).
 /// The person's account is never touched.
-pub fn type_exactly() {
+pub(super) fn type_exactly() {
     for key in [
         "NSAutomaticSpellingCorrectionEnabled",
         "NSAutomaticCapitalizationEnabled",
@@ -575,7 +575,7 @@ fn console_state() -> Option<bool> {
 
 /// Who owns this graphical session and whether their login has finished,
 /// from the window server's own session record.
-pub fn session_owner() -> Option<(i64, bool)> {
+pub(super) fn session_owner() -> Option<(i64, bool)> {
     let record = cf::session()?;
     let uid = cf::integer(&record, "kCGSSessionUserIDKey")?;
     let done = cf::boolean(&record, "kCGSessionLoginDoneKey")?;
@@ -584,7 +584,7 @@ pub fn session_owner() -> Option<(i64, bool)> {
 
 /// Whether the session is on the console. Unknown counts as on the console:
 /// nothing acts unless the session is known to be hidden.
-pub fn on_console() -> bool {
+pub(super) fn on_console() -> bool {
     console_state() != Some(false)
 }
 
@@ -595,7 +595,7 @@ fn session(manager: &str) -> Value {
 }
 
 /// The main display's bounds in points: x, y, width, height.
-pub fn display_bounds() -> (f64, f64, f64, f64) {
+pub(super) fn display_bounds() -> (f64, f64, f64, f64) {
     let bounds = CGDisplayBounds(CGMainDisplayID());
     (
         bounds.origin.x,
@@ -624,7 +624,7 @@ fn display() -> Value {
 }
 
 /// launchd's session type for this process (`launchctl managername`).
-pub fn manager_name() -> String {
+pub(super) fn manager_name() -> String {
     std::process::Command::new("/bin/launchctl")
         .arg("managername")
         .output()
@@ -638,7 +638,7 @@ pub fn manager_name() -> String {
 /// The daemon's hello: who and where the helper is, what it may do, and,
 /// when it keeps background jobs, how many may still run, are launching,
 /// or have records it cannot read (`jobs`).
-pub fn hello(manager: &str, jobs: Option<Census>) -> Value {
+pub(super) fn hello(manager: &str, jobs: Option<Census>) -> Value {
     use crate::daemon::protocol::{JOBS, READ, SESSION_PIN};
 
     let mut capabilities = vec![SESSION_PIN, READ];

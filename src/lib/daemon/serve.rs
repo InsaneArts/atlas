@@ -1,17 +1,22 @@
 //! The helper daemon's socket: one request per connection, answered with
 //! protocol v1 replies.
-use super::capture::screenshot;
+//! size-exception: this owner retains listener admission, connection outcomes
+//! and registered run cleanup together. Shutdown and abandoned-handler tests
+//! protect the shared stop deadline and ownership after a socket disappears.
+use super::capture::{Capture, Screen, screenshot};
+use super::protocol::refused;
 use crate::{
     daemon::{
         facts,
         job::{self, Jobs},
-        protocol::{self, JobRequest, MAX_REQUEST, ReadRequest, Request, failure},
+        protocol::{self, ConnectionPhase, MAX_REQUEST, Policy, ReadRequest, Request, failure},
         read, run,
     },
     error::{Code, Error, Result},
     native::{apps, capture, endpoint, windows},
     session::{InputEpoch, validate_target_uid},
 };
+#[cfg(test)]
 use objc2_core_foundation::CGRect;
 use serde_json::{Value, json};
 use std::{collections::HashMap, path::PathBuf, sync::Arc, time::Duration};
@@ -38,13 +43,6 @@ const SHUTDOWN: Duration = Duration::from_secs(2);
 
 /// How often a running command checks that the helper is still off screen.
 const CONSOLE_CHECK: Duration = Duration::from_secs(1);
-
-#[derive(Clone, Copy, Debug)]
-enum ConnectionPhase {
-    Refusal,
-    Read(&'static str),
-    Mutation(&'static str),
-}
 
 type Connections = HashMap<Id, watch::Receiver<ConnectionPhase>>;
 
@@ -159,24 +157,10 @@ async fn drain_runs(daemon: &Daemon, deadline: tokio::time::Instant) -> Result<(
         })
 }
 
-/// Takes a screenshot of a display, or of an area of it in display points:
-/// the real display in the daemon, a synthetic image in tests, so ordinary
-/// tests never capture the desktop they run on.
-type Capture = fn(u32, Option<CGRect>, Option<u32>) -> Result<capture::Shot>;
-
 pub(super) struct Daemon {
     /// launchd's session type, read once at start.
     manager: String,
-    pub(super) capture: Capture,
-    /// The session's on-screen windows, front to back.
-    pub(super) windows: fn() -> Result<Vec<windows::Window>>,
-    /// Bundle identity is read in this helper session, never the controller's.
-    pub(super) bundle_id: fn(i64) -> Option<String>,
-    /// Where the Dock in a window list takes clicks.
-    pub(super) dock: fn(&[windows::Window]) -> windows::Dock,
-    /// Whether the helper's session is on the console right now.
-    pub(super) on_console: fn() -> bool,
-    pub(super) session: fn() -> Result<Value>,
+    screen: Screen,
     restarting: Notify,
     /// Set when the daemon stops, so running commands are ended first.
     stopping: watch::Sender<bool>,
@@ -197,12 +181,14 @@ impl Daemon {
     ) -> Self {
         Self {
             manager,
-            capture,
-            windows: windows::windows,
-            bundle_id: apps::bundle_id,
-            dock: read_dock,
-            on_console,
-            session,
+            screen: Screen {
+                capture,
+                windows: windows::windows,
+                bundle_id: apps::bundle_id,
+                dock: read_dock,
+                on_console,
+                session,
+            },
             restarting: Notify::new(),
             stopping: watch::Sender::new(false),
             jobs: None,
@@ -233,7 +219,7 @@ impl Daemon {
         loop {
             tokio::time::sleep(CONSOLE_CHECK).await;
 
-            if (self.on_console)() {
+            if (self.screen.on_console)() {
                 return;
             }
         }
@@ -271,7 +257,9 @@ fn require_graphical_session(uid: u32, manager: &str) -> Result<()> {
 /// Serve protocol v1 on `socket` as the helper `uid`, for the controller
 /// `controller_uid`. Returns when stopped; a `restart` request ends it with
 /// an error so launchd starts a fresh daemon.
-pub async fn serve(uid: u32, controller_uid: u32, socket: PathBuf) -> Result<()> {
+/// size-exception: watchers, credentialed admission and stop-before-drain share
+/// one lifetime, covered by the shutdown and supervisor-outcome tests.
+pub(crate) async fn serve(uid: u32, controller_uid: u32, socket: PathBuf) -> Result<()> {
     validate_target_uid(uid, controller_uid)?;
 
     if nix::unistd::getuid().as_raw() != uid {
@@ -338,7 +326,7 @@ pub async fn serve(uid: u32, controller_uid: u32, socket: PathBuf) -> Result<()>
         (Some(jobs), Some(marker)) => Some(tokio::spawn(job::supervise(
             jobs.clone(),
             marker,
-            daemon.on_console,
+            daemon.screen.on_console,
             daemon.stopping.subscribe(),
         ))),
         _ => None,
@@ -509,63 +497,6 @@ async fn write<W: AsyncWrite + Unpin>(stream: &mut W, reply: &Value) -> Result<(
     Ok(())
 }
 
-/// An error as a protocol reply.
-pub(super) fn refused(error: Error) -> Value {
-    failure(error.code, error.error)
-}
-
-/// Whether `request` may run in the session's current state: commands,
-/// captures, new background jobs and reads of files never run while the
-/// helper is on the console, where they would act on a desktop a person is
-/// using. Stopping, showing and reading a job's log go on: ending things is
-/// what the helper on screen asks for.
-pub(super) fn allowed(request: &Request, on_console: bool) -> Option<Value> {
-    let acts = matches!(
-        request,
-        Request::Run { .. }
-            | Request::Windows { .. }
-            | Request::Screenshot { .. }
-            | Request::Logout { .. }
-            | Request::Job(JobRequest::Start { .. })
-            | Request::Read(_)
-    );
-
-    (acts && on_console).then(|| {
-        failure(
-            Code::OnConsole,
-            "The helper is on the screen; switch back to your own account first",
-        )
-    })
-}
-
-/// The refusal of a request pinned to a helper session other than this
-/// one, as `session` reads it now; none for a request with no pin.
-fn pinned_elsewhere(request: &Request, session: fn() -> Result<Value>) -> Option<Value> {
-    let pin = match request {
-        Request::Apps { pin }
-        | Request::Windows { pin, .. }
-        | Request::Run { pin, .. }
-        | Request::Job(JobRequest::Start { pin, .. })
-        | Request::Read(ReadRequest { pin, .. }) => (*pin)?,
-        _ => return None,
-    };
-    let here = session()
-        .and_then(|proof| InputEpoch::from_proof(&proof, std::process::id()))
-        .map(|epoch| protocol::SessionPin {
-            security_session_id: epoch.security_session_id,
-            display_id: epoch.display_id,
-        });
-
-    match here {
-        Ok(here) if here == pin => None,
-        Ok(_) => Some(failure(
-            Code::SessionChanged,
-            "The helper changed since Atlas checked it; look again",
-        )),
-        Err(error) => Some(refused(error)),
-    }
-}
-
 /// Ask macOS to log this login out, as its Apple menu's Log Out does but
 /// without the confirmation: apps quit as at any log-out, and one may hold
 /// it up (asking to save). loginwindow answers at once; only its error is a
@@ -665,39 +596,29 @@ async fn handle(
         }
     });
 
-    let request = request.and_then(|request| match allowed(&request, (daemon.on_console)()) {
-        Some(refusal) => Err(refusal),
-        None => Ok(request),
-    });
-    let request = request.and_then(|request| match pinned_elsewhere(&request, daemon.session) {
-        Some(refusal) => Err(refusal),
-        None => Ok(request),
-    });
-    phase.send_replace(match &request {
-        Err(_) => ConnectionPhase::Refusal,
-        Ok(Request::Hello) => ConnectionPhase::Read("hello"),
-        Ok(Request::HostSession(_)) => ConnectionPhase::Read("host-session"),
-        Ok(Request::Apps { .. }) => ConnectionPhase::Read("apps"),
-        Ok(Request::Windows { .. }) => ConnectionPhase::Read("windows"),
-        Ok(Request::Screenshot { .. }) => ConnectionPhase::Read("screenshot"),
-        Ok(Request::Read(_)) => ConnectionPhase::Read("read"),
-        Ok(Request::Run { .. }) => ConnectionPhase::Mutation("run"),
-        Ok(Request::Restart) => ConnectionPhase::Mutation("restart"),
-        Ok(Request::Logout { .. }) => ConnectionPhase::Mutation("logout"),
-        Ok(Request::Job(JobRequest::Start { .. })) => ConnectionPhase::Mutation("job-start"),
-        Ok(Request::Job(JobRequest::Stop { .. } | JobRequest::StopAll { .. })) => {
-            ConnectionPhase::Mutation("job-stop")
+    let request = request.and_then(|request| {
+        let policy = request.policy();
+        if let Some(refusal) = policy
+            .allowed((daemon.screen.on_console)())
+            .or_else(|| policy.pinned_elsewhere(daemon.screen.session))
+        {
+            return Err(refusal);
         }
-        Ok(Request::Job(_)) => ConnectionPhase::Read("job"),
+        Ok((request, policy))
     });
+    phase.send_replace(
+        request
+            .as_ref()
+            .map_or(ConnectionPhase::Refusal, |(_, policy)| policy.phase),
+    );
     let reply = match request {
         Err(reply) => reply,
-        Ok(Request::HostSession(claims)) => tokio::task::spawn_blocking(move || {
+        Ok((Request::HostSession(claims), _)) => tokio::task::spawn_blocking(move || {
             crate::host_session::verification::verify(&claims, caller, peer.uid())
         })
         .await
         .unwrap_or_else(|_| failure(Code::State, "The caller's host could not be verified")),
-        Ok(Request::Hello) => {
+        Ok((Request::Hello, _)) => {
             // The first hello of this login: Atlas answers in the helper.
             static GREETED: std::sync::atomic::AtomicBool =
                 std::sync::atomic::AtomicBool::new(false);
@@ -706,7 +627,7 @@ async fn handle(
             }
             daemon.hello()
         }
-        Ok(Request::Apps { .. }) => match tokio::task::spawn_blocking(|| {
+        Ok((Request::Apps { .. }, _)) => match tokio::task::spawn_blocking(|| {
             crate::native::processes::snapshot(|| Ok(apps::running()), |app| i64::from(app.pid))
         })
         .await
@@ -715,141 +636,164 @@ async fn handle(
             Ok(Err(error)) => json!(error),
             Err(_) => failure(Code::Apps, "Running applications could not be listed"),
         },
-        Ok(request @ Request::Windows { dock, .. }) => {
-            let daemon = daemon.clone();
-            tokio::task::spawn_blocking(move || {
-                let guard = || {
-                    allowed(&request, (daemon.on_console)())
-                        .or_else(|| pinned_elsewhere(&request, daemon.session))
-                };
-                if let Some(refusal) = guard() {
-                    return refusal;
-                }
-                let reply = match crate::native::processes::snapshot(daemon.windows, |w| w.pid) {
-                    Ok((windows, starts)) => {
-                        let mut reply = json!({"ok": true, "windows": windows, "starts": starts});
-                        if dock {
-                            reply["dock"] = json!((daemon.dock)(&windows));
-                        }
-                        reply
-                    }
-                    Err(error) => json!(error),
-                };
-                guard().unwrap_or(reply)
-            })
-            .await
-            .unwrap_or_else(|_| failure(Code::Windows, "The helper window list is unavailable"))
+        Ok((Request::Windows { dock, .. }, policy)) => {
+            serve_windows(daemon.clone(), dock, policy).await
         }
-        Ok(Request::Screenshot {
-            max_dimension,
-            per_point,
-            crop,
-        }) => screenshot(&daemon, max_dimension, per_point, crop).await,
-        Ok(request @ Request::Run { .. }) => {
-            let (send, outcome) = oneshot::channel();
-            let (start, registered) = oneshot::channel();
-            let runner = daemon.clone();
-            let mut runs = daemon.runs.lock().await;
-            runs.spawn(async move {
-                if registered.await.is_err() {
-                    return Ok(());
-                }
-                let mut send = send;
-                let result = async {
-                    if let Some(refusal) = allowed(&request, (runner.on_console)())
-                        .or_else(|| pinned_elsewhere(&request, runner.session))
-                    {
-                        phase.send_replace(ConnectionPhase::Refusal);
-                        return write(&mut writer, &refusal).await;
-                    }
-                    let Request::Run { argv, timeout, .. } = request else {
-                        unreachable!("only run requests are registered here");
-                    };
-                    // Events reach the client through their own writer, so a slow
-                    // client never stalls supervision of the command.
-                    let (events, mut queue) = mpsc::channel(run::EVENTS);
-                    let mut delivery = tokio::spawn(async move {
-                        while let Some(event) = queue.recv().await {
-                            write(&mut writer, &event).await?;
-                        }
-                        Ok::<_, Error>(writer)
-                    });
-                    // The client never sends after its request. Losing either
-                    // the client or its handler cancels the owned command.
-                    let cancel = async {
-                        let mut byte = [0; 1];
-                        tokio::select! {
-                            _ = reader.read(&mut byte) => run::Cancel::Left,
-                            () = send.closed() => run::Cancel::Left,
-                            () = runner.stopped() => run::Cancel::Stopping,
-                            () = runner.on_screen() => run::Cancel::OnConsole,
-                        }
-                    };
-                    let reply = run::run(&argv, timeout, events, cancel).await;
-                    let delivered = tokio::select! {
-                        delivered = &mut delivery => delivered,
-                        () = send.closed() => {
-                            // The command has already settled. Stop and join
-                            // its writer too when the handler is cancelled,
-                            // rather than drain queued events to a lost owner.
-                            delivery.abort();
-                            delivery.await
-                        }
-                    };
-                    let mut writer = delivered
-                        .map_err(|_| Error::new(Code::Transport, "The event writer failed"))??;
-                    tokio::select! {
-                        written = write(&mut writer, &reply) => written,
-                        () = send.closed() => Err(Error::new(
-                            Code::Transport,
-                            "The run handler left before observing completion",
-                        ).uncertain()),
-                    }
-                }
-                .await;
-                match send.send(result) {
-                    Ok(()) => Ok(()),
-                    Err(Err(error)) => Err(error),
-                    Err(Ok(())) => Err(Error::new(
-                        Code::Transport,
-                        "The run handler left before observing completion",
-                    )
-                    .uncertain()),
-                }
-            });
-            drop(runs);
-            // Registration precedes execution, with no cancellation point
-            // between recording the task and allowing it to start.
-            let _ = start.send(());
-            return outcome.await.map_err(|error| {
-                Error::new(Code::Job, "Daemon run did not report its outcome")
-                    .uncertain()
-                    .with_source(error)
-            })?;
+        Ok((
+            Request::Screenshot {
+                max_dimension,
+                per_point,
+                crop,
+            },
+            _,
+        )) => screenshot(&daemon.screen, max_dimension, per_point, crop).await,
+        Ok((Request::Run { argv, timeout, .. }, policy)) => {
+            return serve_run(daemon, argv, timeout, policy, (reader, writer), phase).await;
         }
-        Ok(Request::Restart) => {
+        Ok((Request::Restart, _)) => {
             let written = write(&mut writer, &json!({"ok": true, "op": "restart"})).await;
             daemon.restarting.notify_one();
             return written;
         }
         // Answered before the log-out ends this process with the session.
-        Ok(Request::Logout { force: true }) => {
+        Ok((Request::Logout { force: true }, _)) => {
             let written = write(&mut writer, &json!({"ok": true, "op": "logout"})).await;
             force_log_out();
             return written;
         }
-        Ok(Request::Logout { force: false }) => ask_to_log_out().await,
-        Ok(Request::Job(request)) => match &daemon.jobs {
+        Ok((Request::Logout { force: false }, _)) => ask_to_log_out().await,
+        Ok((Request::Job(request), _)) => match &daemon.jobs {
             Some(jobs) => jobs.serve(request).await,
             None => failure(
                 Code::Daemon,
                 "This helper daemon cannot keep background jobs; run atlas restart",
             ),
         },
-        Ok(Request::Read(request)) => return serve_read(&daemon, request, writer).await,
+        Ok((Request::Read(request), _)) => return serve_read(&daemon, request, writer).await,
     };
 
     write(&mut writer, &reply).await
+}
+
+/// Retain the daemon while the window worker checks admission and reads its
+/// snapshot, even if the connection disappears before the worker finishes.
+async fn serve_windows(daemon: Arc<Daemon>, dock: bool, policy: Policy) -> Value {
+    tokio::task::spawn_blocking(move || {
+        let guard = || {
+            policy
+                .allowed((daemon.screen.on_console)())
+                .or_else(|| policy.pinned_elsewhere(daemon.screen.session))
+        };
+        if let Some(refusal) = guard() {
+            return refusal;
+        }
+        let reply = match crate::native::processes::snapshot(daemon.screen.windows, |w| w.pid) {
+            Ok((windows, starts)) => {
+                let mut reply = json!({"ok": true, "windows": windows, "starts": starts});
+                if dock {
+                    reply["dock"] = json!((daemon.screen.dock)(&windows));
+                }
+                reply
+            }
+            Err(error) => json!(error),
+        };
+        guard().unwrap_or(reply)
+    })
+    .await
+    .unwrap_or_else(|_| failure(Code::Windows, "The helper window list is unavailable"))
+}
+
+/// Register a streamed command before permitting execution, retaining its writer
+/// and child cleanup independently of the socket handler's lifetime.
+async fn serve_run(
+    daemon: Arc<Daemon>,
+    argv: Vec<String>,
+    timeout: Duration,
+    policy: Policy,
+    (mut reader, mut writer): (
+        tokio::net::unix::OwnedReadHalf,
+        tokio::net::unix::OwnedWriteHalf,
+    ),
+    phase: watch::Sender<ConnectionPhase>,
+) -> Result<()> {
+    let (send, outcome) = oneshot::channel();
+    let (start, registered) = oneshot::channel();
+    let runner = daemon.clone();
+    let mut runs = daemon.runs.lock().await;
+    runs.spawn(async move {
+        if registered.await.is_err() {
+            return Ok(());
+        }
+        let mut send = send;
+        let result = async {
+            if let Some(refusal) = policy
+                .allowed((runner.screen.on_console)())
+                .or_else(|| policy.pinned_elsewhere(runner.screen.session))
+            {
+                phase.send_replace(ConnectionPhase::Refusal);
+                return write(&mut writer, &refusal).await;
+            }
+            // Events reach the client through their own writer, so a slow
+            // client never stalls supervision of the command.
+            let (events, mut queue) = mpsc::channel(run::EVENTS);
+            let mut delivery = tokio::spawn(async move {
+                while let Some(event) = queue.recv().await {
+                    write(&mut writer, &event).await?;
+                }
+                Ok::<_, Error>(writer)
+            });
+            // The client never sends after its request. Losing either
+            // the client or its handler cancels the owned command.
+            let cancel = async {
+                let mut byte = [0; 1];
+                tokio::select! {
+                    _ = reader.read(&mut byte) => run::Cancel::Left,
+                    () = send.closed() => run::Cancel::Left,
+                    () = runner.stopped() => run::Cancel::Stopping,
+                    () = runner.on_screen() => run::Cancel::OnConsole,
+                }
+            };
+            let reply = run::run(&argv, timeout, events, cancel).await;
+            let delivered = tokio::select! {
+                delivered = &mut delivery => delivered,
+                () = send.closed() => {
+                    // The command has already settled. Stop and join
+                    // its writer too when the handler is cancelled,
+                    // rather than drain queued events to a lost owner.
+                    delivery.abort();
+                    delivery.await
+                }
+            };
+            let mut writer =
+                delivered.map_err(|_| Error::new(Code::Transport, "The event writer failed"))??;
+            tokio::select! {
+                written = write(&mut writer, &reply) => written,
+                () = send.closed() => Err(Error::new(
+                    Code::Transport,
+                    "The run handler left before observing completion",
+                ).uncertain()),
+            }
+        }
+        .await;
+        match send.send(result) {
+            Ok(()) => Ok(()),
+            Err(Err(error)) => Err(error),
+            Err(Ok(())) => Err(Error::new(
+                Code::Transport,
+                "The run handler left before observing completion",
+            )
+            .uncertain()),
+        }
+    });
+    drop(runs);
+    // Registration precedes execution, with no cancellation point
+    // between recording the task and allowing it to start.
+    let _ = start.send(());
+    outcome.await.map_err(|error| {
+        Error::new(Code::Job, "Daemon run did not report its outcome")
+            .uncertain()
+            .with_source(error)
+    })?
 }
 
 /// Read part of a file for the person's side, its `data` events written as
@@ -863,8 +807,8 @@ async fn serve_read(
     request: ReadRequest,
     mut writer: tokio::net::unix::OwnedWriteHalf,
 ) -> Result<()> {
-    let on_console = daemon.on_console;
-    let session = daemon.session;
+    let on_console = daemon.screen.on_console;
+    let session = daemon.screen.session;
     let epoch = match session().and_then(|proof| InputEpoch::from_proof(&proof, std::process::id()))
     {
         Ok(epoch) => epoch,
@@ -876,7 +820,7 @@ async fn serve_read(
     // before it delivers each part already read.
     let screened = Request::Read(request.clone());
     let guard = move || {
-        if let Some(refusal) = allowed(&screened, on_console()) {
+        if let Some(refusal) = screened.policy().allowed(on_console()) {
             return Err(refusal);
         }
         let current = InputEpoch::from_proof(&session().map_err(refused)?, std::process::id())
@@ -936,7 +880,7 @@ async fn deliver<W: AsyncWrite + Unpin>(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::daemon::protocol::{Crop, Region};
+    use crate::daemon::protocol::{Crop, JobRequest, Region};
     use crate::daemon::run::tests::child::Processes;
     use crate::transport::{Transport, run_output};
     use std::os::fd::AsRawFd;
@@ -980,7 +924,7 @@ mod tests {
             || panic!("private handler cause"),
             session,
         );
-        daemon.windows = fake_windows;
+        daemon.screen.windows = fake_windows;
         let (mut client, server) = UnixStream::pair().unwrap();
         client.write_all(b"{\"op\":\"windows\"}\n").await.unwrap();
         let (phase, observed) = watch::channel(ConnectionPhase::Refusal);
@@ -1455,9 +1399,9 @@ mod tests {
             if on_console { || true } else { || false },
             session,
         );
-        daemon.windows = fake_windows;
-        daemon.bundle_id = fake_bundle_id;
-        daemon.dock = |_| windows::Dock::Icons(Vec::new());
+        daemon.screen.windows = fake_windows;
+        daemon.screen.bundle_id = fake_bundle_id;
+        daemon.screen.dock = |_| windows::Dock::Icons(Vec::new());
         Arc::new(daemon)
     }
 
@@ -1562,8 +1506,11 @@ mod tests {
             dock: true,
             pin: None,
         };
-        assert!(allowed(&request, false).is_none());
-        assert_eq!(allowed(&request, true).unwrap()["code"], "on-console");
+        assert!(request.policy().allowed(false).is_none());
+        assert_eq!(
+            request.policy().allowed(true).unwrap()["code"],
+            "on-console"
+        );
     }
 
     #[test]
@@ -1576,7 +1523,7 @@ mod tests {
                     display_id,
                 }),
             };
-            let refusal = pinned_elsewhere(&request, session).unwrap();
+            let refusal = request.policy().pinned_elsewhere(session).unwrap();
             assert_eq!(refusal["code"], "session-changed");
             assert_eq!(refusal["uncertain"], false);
         }
@@ -1696,14 +1643,13 @@ mod tests {
             assert_eq!(
                 reply,
                 vec![
-                    allowed(
-                        &Request::Screenshot {
-                            max_dimension: None,
-                            per_point: false,
-                            crop: None
-                        },
-                        true
-                    )
+                    (Request::Screenshot {
+                        max_dimension: None,
+                        per_point: false,
+                        crop: None
+                    })
+                    .policy()
+                    .allowed(true)
                     .unwrap()
                 ]
             );
@@ -1744,8 +1690,8 @@ mod tests {
                     Ok(proof)
                 },
             );
-            daemon.windows = fake_windows;
-            daemon.dock = |_| windows::Dock::Icons(Vec::new());
+            daemon.screen.windows = fake_windows;
+            daemon.screen.dock = |_| windows::Dock::Icons(Vec::new());
 
             let reply = exchange(Arc::new(daemon), request).await;
             assert_eq!(CAPTURES.load(Ordering::SeqCst), change_at - 1, "{request}");
@@ -1778,14 +1724,13 @@ mod tests {
         assert_eq!(
             reply,
             vec![
-                allowed(
-                    &Request::Screenshot {
-                        max_dimension: None,
-                        per_point: false,
-                        crop: None
-                    },
-                    true
-                )
+                (Request::Screenshot {
+                    max_dimension: None,
+                    per_point: false,
+                    crop: None
+                })
+                .policy()
+                .allowed(true)
                 .unwrap()
             ]
         );
@@ -1906,9 +1851,9 @@ mod tests {
         windows: fn() -> Result<Vec<windows::Window>>,
     ) -> Arc<Daemon> {
         let mut daemon = Daemon::new("Aqua".into(), capture, || false, session);
-        daemon.windows = windows;
-        daemon.bundle_id = fake_bundle_id;
-        daemon.dock = |_| windows::Dock::Icons(Vec::new());
+        daemon.screen.windows = windows;
+        daemon.screen.bundle_id = fake_bundle_id;
+        daemon.screen.dock = |_| windows::Dock::Icons(Vec::new());
         Arc::new(daemon)
     }
 
@@ -1918,11 +1863,11 @@ mod tests {
         static LISTS: AtomicUsize = AtomicUsize::new(0);
         static DOCKS: AtomicUsize = AtomicUsize::new(0);
         let mut daemon = Daemon::new("Aqua".into(), synthetic, || false, session);
-        daemon.windows = || {
+        daemon.screen.windows = || {
             LISTS.fetch_add(1, Ordering::SeqCst);
             fake_windows()
         };
-        daemon.dock = |_| {
+        daemon.screen.dock = |_| {
             DOCKS.fetch_add(1, Ordering::SeqCst);
             windows::Dock::Unread
         };
@@ -1940,7 +1885,7 @@ mod tests {
             DOCKS.store(0, Ordering::SeqCst);
             let reply = tokio::time::timeout(
                 Duration::from_secs(5),
-                screenshot(&daemon, None, false, crop),
+                screenshot(&daemon.screen, None, false, crop),
             )
             .await
             .unwrap();

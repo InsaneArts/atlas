@@ -24,15 +24,14 @@ name_type! {
 
 impl JobId {
     /// How many hexadecimal digits a job's ID has.
-    pub const LEN: usize = 12;
+    pub(crate) const LEN: usize = 12;
 
     /// A new random ID.
     pub fn new() -> Self {
         Self(random_hex(Self::LEN))
     }
 
-    /// `text` as a job's ID, when it is exactly [`JobId::LEN`] lowercase
-    /// hexadecimal digits.
+    /// `text` as a job's ID, when it is exactly 12 lowercase hexadecimal digits.
     pub fn parse(text: &str) -> Option<Self> {
         lower_hex(text, Self::LEN).then(|| Self(text.to_owned()))
     }
@@ -80,7 +79,7 @@ pub struct JobStart {
 
 /// What is asked of the helper's background jobs.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub enum JobRequest {
+pub(crate) enum JobRequest {
     /// Start a job for the helper account `uid`: its program runs for at
     /// most the start's lifetime, for its task of its host session.
     Start {
@@ -106,7 +105,7 @@ pub enum JobRequest {
 /// How far a job got.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
-pub enum JobState {
+pub(crate) enum JobState {
     /// Written before anything is spawned: no process yet.
     Starting,
     /// Its launcher runs, with its PID and start time, but it has not yet
@@ -120,7 +119,7 @@ pub enum JobState {
 
 impl JobState {
     /// Whether a job in this state may still have processes.
-    pub fn live(self) -> bool {
+    pub(crate) fn live(self) -> bool {
         matches!(self, Self::Launched | Self::Running | Self::Stopping)
     }
 }
@@ -164,15 +163,15 @@ impl From<StopReason> for How {
 /// went, and still runs: reported, never signalled.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
-pub struct Left {
-    pub pid: i32,
-    pub name: String,
+pub(crate) struct Left {
+    pub(crate) pid: i32,
+    pub(crate) name: String,
 }
 
 /// Why a job request was refused, or why nothing could be sent to a job.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
-pub enum JobRefusal {
+pub(crate) enum JobRefusal {
     /// No record names the job, its record cannot be read, or it has not
     /// finished starting.
     Unknown,
@@ -197,27 +196,27 @@ pub enum JobRefusal {
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct JobView {
-    pub id: JobId,
+    pub(crate) id: JobId,
     /// The agent's name for it, or its program's file name.
-    pub name: String,
-    pub task: Option<Key>,
-    pub session: Option<Key>,
+    pub(crate) name: String,
+    pub(crate) task: Option<Key>,
+    pub(crate) session: Option<Key>,
     /// The helper account it runs as.
-    pub uid: u32,
-    pub boot: String,
-    pub pid: Option<i32>,
-    pub start: Option<Start>,
-    pub pgid: Option<i32>,
-    pub state: JobState,
-    pub started_at: u64,
-    pub ends_at: u64,
+    pub(crate) uid: u32,
+    pub(crate) boot: String,
+    pub(crate) pid: Option<i32>,
+    pub(crate) start: Option<Start>,
+    pub(crate) pgid: Option<i32>,
+    pub(crate) state: JobState,
+    pub(crate) started_at: u64,
+    pub(crate) ends_at: u64,
     /// How often its log was emptied for growing past its limit.
-    pub log_resets: u32,
+    pub(crate) log_resets: u32,
     /// Found again by a daemon that did not start it.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
-    pub adopted: bool,
+    pub(crate) adopted: bool,
     #[serde(flatten)]
-    pub progress: Progress,
+    pub(crate) progress: Progress,
 }
 
 impl JobView {
@@ -233,7 +232,7 @@ impl JobView {
     }
 
     /// How it ended, once it did.
-    pub fn ended(&self) -> Option<&EndedView> {
+    pub(crate) fn ended(&self) -> Option<&EndedView> {
         match &self.progress {
             Progress::Ended(ended) => Some(ended),
             _ => None,
@@ -245,7 +244,7 @@ impl JobView {
 /// either is known.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
 #[serde(untagged)]
-pub enum Progress {
+pub(crate) enum Progress {
     Ended(EndedView),
     Stopping(StoppingView),
     Neither {},
@@ -254,34 +253,34 @@ pub enum Progress {
 /// How a job ended, and what it left.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
-pub struct EndedView {
-    pub how: How,
+pub(crate) struct EndedView {
+    pub(crate) how: How,
     /// When, in milliseconds since 1970.
-    pub ended_at: u64,
+    pub(crate) ended_at: u64,
     /// The last signal Atlas sent it, if any.
-    pub signal: Option<String>,
+    pub(crate) signal: Option<String>,
     /// Its leader's exit, when the daemon collected it.
-    pub exit_code: Option<i32>,
+    pub(crate) exit_code: Option<i32>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub exit_signal: Option<String>,
-    pub left: Vec<Left>,
+    pub(crate) exit_signal: Option<String>,
+    pub(crate) left: Vec<Left>,
     /// How many processes its leader left behind, for a job whose leader
     /// went while its group still ran.
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub remaining: Option<usize>,
+    pub(crate) remaining: Option<usize>,
 }
 
 /// A stop under way.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
-pub struct StoppingView {
+pub(crate) struct StoppingView {
     /// The last signal Atlas sent, if any.
-    pub signal: Option<String>,
+    pub(crate) signal: Option<String>,
     /// How many of its processes outlived KILL.
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub remaining: Option<usize>,
+    pub(crate) remaining: Option<usize>,
     /// Why no signal could be sent the last time.
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub refused: Option<JobRefusal>,
+    pub(crate) refused: Option<JobRefusal>,
 }
 
 /// Read leniently: a job that says how it ended has ended, one that says
@@ -339,16 +338,16 @@ impl<'de> Deserialize<'de> for Progress {
 
 /// A job whose record cannot be read, so whether it runs is not known.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-pub struct Unreadable {
-    pub id: JobId,
-    pub state: Unread,
-    pub error: String,
+pub(crate) struct Unreadable {
+    pub(crate) id: JobId,
+    pub(crate) state: Unread,
+    pub(crate) error: String,
 }
 
 /// The state an unreadable record's job is shown in.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
-pub enum Unread {
+pub(crate) enum Unread {
     Unknown,
 }
 
@@ -357,7 +356,7 @@ pub enum Unread {
 /// it came.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(untagged)]
-pub enum Shown {
+pub(crate) enum Shown {
     Job(Box<JobView>),
     Unreadable(Unreadable),
     Later(Value),
@@ -365,7 +364,7 @@ pub enum Shown {
 
 impl Shown {
     /// The job's view, when its record could be read.
-    pub fn job(&self) -> Option<&JobView> {
+    pub(crate) fn job(&self) -> Option<&JobView> {
         match self {
             Self::Job(job) => Some(job),
             _ => None,
@@ -373,7 +372,7 @@ impl Shown {
     }
 
     /// The job's ID, when the row names one.
-    pub fn id(&self) -> Option<JobId> {
+    pub(crate) fn id(&self) -> Option<JobId> {
         match self {
             Self::Job(job) => Some(job.id.clone()),
             Self::Unreadable(unreadable) => Some(unreadable.id.clone()),
@@ -382,13 +381,13 @@ impl Shown {
     }
 
     /// When the job started; 0 when the row does not say.
-    pub fn started_at(&self) -> u64 {
+    pub(crate) fn started_at(&self) -> u64 {
         self.job().map_or(0, |job| job.started_at)
     }
 
     /// How far the job got, as far as the row says: none for a job whose
     /// record cannot be read.
-    pub fn state(&self) -> Option<JobState> {
+    pub(crate) fn state(&self) -> Option<JobState> {
         match self {
             Self::Job(job) => Some(job.state),
             Self::Unreadable(_) => None,
@@ -398,7 +397,7 @@ impl Shown {
 
     /// Whether the job's record cannot be read, so whether it runs is not
     /// known.
-    pub fn unreadable(&self) -> bool {
+    pub(crate) fn unreadable(&self) -> bool {
         match self {
             Self::Job(_) => false,
             Self::Unreadable(_) => true,
@@ -410,7 +409,7 @@ impl Shown {
 /// The daemon's reply to a job request it carried out, by its action.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "action", rename_all = "kebab-case")]
-pub enum JobReply {
+pub(crate) enum JobReply {
     Start { job: JobView },
     Stop(Stopped),
     StopAll(StoppedAll),
@@ -420,7 +419,7 @@ pub enum JobReply {
 
 impl JobReply {
     /// The reply as it goes on the wire, with `ok` and `op` beside it.
-    pub fn into_value(self) -> Value {
+    pub(crate) fn into_value(self) -> Value {
         match serde_json::to_value(self) {
             Ok(Value::Object(mut reply)) => {
                 reply.insert("ok".into(), Value::Bool(true));
@@ -437,16 +436,16 @@ impl JobReply {
 
 /// The reply to a stop: the job, and what the stop came to.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-pub struct Stopped {
-    pub job: JobView,
+pub(crate) struct Stopped {
+    pub(crate) job: JobView,
     #[serde(flatten)]
-    pub came_to: StopCameTo,
+    pub(crate) came_to: StopCameTo,
 }
 
 /// What a stop of one job came to.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
-pub enum StopCameTo {
+pub(crate) enum StopCameTo {
     /// The signal sent to its group.
     Signalled(String),
     /// It was already being stopped.
@@ -459,34 +458,34 @@ pub enum StopCameTo {
 /// which could not be signalled or read.
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default)]
-pub struct StoppedAll {
-    pub stopping: u64,
-    pub ended: u64,
+pub(crate) struct StoppedAll {
+    pub(crate) stopping: u64,
+    pub(crate) ended: u64,
     /// Those nothing could be sent to, and why.
-    pub refused: Vec<RefusedJob>,
+    pub(crate) refused: Vec<RefusedJob>,
     /// Those whose processes could not be read.
-    pub unknown: Vec<NamedJob>,
+    pub(crate) unknown: Vec<NamedJob>,
     /// Those whose records could not be read.
-    pub unresolved: Vec<NamedJob>,
+    pub(crate) unresolved: Vec<NamedJob>,
 }
 
 /// A job nothing could be sent to, and why.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-pub struct RefusedJob {
-    pub id: JobId,
-    pub reason: JobRefusal,
+pub(crate) struct RefusedJob {
+    pub(crate) id: JobId,
+    pub(crate) reason: JobRefusal,
 }
 
 /// A job named by its ID alone.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-pub struct NamedJob {
-    pub id: JobId,
+pub(crate) struct NamedJob {
+    pub(crate) id: JobId,
 }
 
 /// The reply to a show: one job, or every one.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(untagged)]
-pub enum Showing {
+pub(crate) enum Showing {
     Every { jobs: Vec<Shown> },
     One { job: Option<Shown> },
 }
@@ -494,46 +493,46 @@ pub enum Showing {
 /// The end of a job's output.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
-pub struct Logged {
-    pub id: JobId,
+pub(crate) struct Logged {
+    pub(crate) id: JobId,
     /// The task the job belongs to.
-    pub task: Option<Key>,
+    pub(crate) task: Option<Key>,
     /// The output's last bytes, as base64.
-    pub data: String,
+    pub(crate) data: String,
     /// How long the log is now.
-    pub size: u64,
-    pub output_truncated: bool,
-    pub log_resets: u32,
+    pub(crate) size: u64,
+    pub(crate) output_truncated: bool,
+    pub(crate) log_resets: u32,
 }
 
 /// What the daemon's hello says of its jobs.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
-pub struct Census {
+pub(crate) struct Census {
     /// How many may run.
-    pub running: usize,
+    pub(crate) running: usize,
     /// How many a start is launching.
-    pub launching: usize,
+    pub(crate) launching: usize,
     /// How many records cannot be read, whose jobs may still run too.
-    pub unresolved: usize,
+    pub(crate) unresolved: usize,
 }
 
 /// The daemon's refusal of a job request: why, and which job, with the
 /// job as the daemon keeps it when its start could not be confirmed.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-pub struct JobFailure {
-    pub error: String,
-    pub reason: JobRefusal,
+pub(crate) struct JobFailure {
+    pub(crate) error: String,
+    pub(crate) reason: JobRefusal,
     /// Whether the job may run anyway.
-    pub uncertain: bool,
+    pub(crate) uncertain: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub id: Option<JobId>,
+    pub(crate) id: Option<JobId>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub job: Option<JobView>,
+    pub(crate) job: Option<JobView>,
 }
 
 impl JobFailure {
     /// A refusal for `reason`: never of unknown outcome.
-    pub fn new(reason: JobRefusal, error: impl Into<String>) -> Self {
+    pub(crate) fn new(reason: JobRefusal, error: impl Into<String>) -> Self {
         Self {
             error: error.into(),
             reason,
@@ -545,7 +544,7 @@ impl JobFailure {
 
     /// The refusal, naming job `id`.
     #[must_use]
-    pub fn about(self, id: &JobId) -> Self {
+    pub(crate) fn about(self, id: &JobId) -> Self {
         Self {
             id: Some(id.clone()),
             ..self
@@ -554,7 +553,7 @@ impl JobFailure {
 
     /// The refusal as it goes on the wire, in the shape every Atlas
     /// failure has.
-    pub fn into_value(self) -> Value {
+    pub(crate) fn into_value(self) -> Value {
         let mut reply = failure(Code::Job, "");
         if let (Ok(Value::Object(fields)), Some(reply)) =
             (serde_json::to_value(self), reply.as_object_mut())

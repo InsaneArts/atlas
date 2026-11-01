@@ -1,16 +1,28 @@
 use super::{
     crop, facts,
-    protocol::{Crop, Region, Request, failure},
-    serve::{Daemon, allowed, refused},
+    protocol::{Crop, Region, Request, failure, refused},
 };
 use crate::{
-    error::Code,
+    error::{Code, Result},
     native::{capture, windows},
     session::InputEpoch,
 };
 use base64::{Engine, engine::general_purpose::STANDARD};
 use objc2_core_foundation::{CGPoint, CGRect, CGSize};
 use serde_json::{Value, json};
+
+/// Real display capture in the daemon, synthetic pixels in contract tests.
+pub(super) type Capture = fn(u32, Option<CGRect>, Option<u32>) -> Result<capture::Shot>;
+
+/// Observations from this helper login, shared by capture and window reads.
+pub(super) struct Screen {
+    pub(super) capture: Capture,
+    pub(super) windows: fn() -> Result<Vec<windows::Window>>,
+    pub(super) bundle_id: fn(i64) -> Option<String>,
+    pub(super) dock: fn(&[windows::Window]) -> windows::Dock,
+    pub(super) on_console: fn() -> bool,
+    pub(super) session: fn() -> Result<Value>,
+}
 
 /// Windows that lie entirely outside the main display.
 fn off_display_windows(windows: &[windows::Window]) -> Vec<Value> {
@@ -70,17 +82,17 @@ fn crop_keys(
 }
 
 pub(super) async fn screenshot(
-    daemon: &Daemon,
+    screen: &Screen,
     max_dimension: Option<u32>,
     per_point: bool,
     crop: Option<Crop>,
 ) -> Value {
-    let capture = daemon.capture;
-    let list = daemon.windows;
-    let bundle_id = daemon.bundle_id;
-    let dock = daemon.dock;
-    let on_console = daemon.on_console;
-    let session = daemon.session;
+    let capture = screen.capture;
+    let list = screen.windows;
+    let bundle_id = screen.bundle_id;
+    let dock = screen.dock;
+    let on_console = screen.on_console;
+    let session = screen.session;
     let epoch = match session().and_then(|proof| InputEpoch::from_proof(&proof, std::process::id()))
     {
         Ok(epoch) => epoch,
@@ -93,7 +105,7 @@ pub(super) async fn screenshot(
             crop,
         };
         let validate = || {
-            if let Some(refusal) = allowed(&request, on_console()) {
+            if let Some(refusal) = request.policy().allowed(on_console()) {
                 return Err(refusal);
             }
             let current = InputEpoch::from_proof(&session().map_err(refused)?, std::process::id())

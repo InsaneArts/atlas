@@ -27,7 +27,7 @@ const IDENTITY_RETRY: Duration = Duration::from_millis(10);
 /// Longest reply, every line together.
 const MAX_REPLY: usize = 64 * 1024 * 1024;
 /// Most event lines before the final reply.
-pub const MAX_REPLY_EVENTS: usize = 1024;
+pub(crate) const MAX_REPLY_EVENTS: usize = 1024;
 
 #[derive(Clone)]
 pub struct Transport {
@@ -38,14 +38,14 @@ pub struct Transport {
     pub peer_uid: u32,
 }
 
-pub struct Pending {
+pub(crate) struct Pending {
     stream: UnixStream,
     deadline: Instant,
     started: Instant,
 }
 
 impl Transport {
-    pub async fn connect(&self) -> Result<Pending> {
+    pub(crate) async fn connect(&self) -> Result<Pending> {
         let started = Instant::now();
         let deadline = started + self.timeout;
         let stream = self
@@ -156,7 +156,7 @@ fn refused(path: &Path, error: io::Error) -> Error {
 }
 
 impl Pending {
-    pub async fn dispatch(mut self, request: &Value) -> Result<Self> {
+    pub(crate) async fn dispatch(mut self, request: &Value) -> Result<Self> {
         let mut payload = serde_json::to_vec(request)?;
         if payload.len() > MAX_REQUEST {
             return Err(Error::new(Code::Protocol, "Request exceeds 1 MiB"));
@@ -185,27 +185,31 @@ impl Pending {
     }
 
     /// A definite refusal the peer sent before it hung up, if one is waiting.
-    async fn waiting_refusal(&mut self) -> Option<Error> {
-        let deadline = self.deadline.min(Instant::now() + WAITING);
-        let reply = timeout_at(deadline, self.receive()).await.ok()?.ok()?;
+    async fn waiting_refusal(mut self) -> Option<Error> {
+        self.deadline = self.deadline.min(Instant::now() + WAITING);
+        let reply = self.finish().await.ok()?;
 
         (reply["ok"] == false && reply["uncertain"] != true).then(|| refusal(&reply))
     }
 
-    pub async fn finish(mut self) -> Result<Value> {
-        let deadline = self.deadline;
-        timeout_at(deadline, self.receive())
-            .await
-            .map_err(|_| {
-                Error::new(Code::Transport, "Helper exceeded the request deadline").uncertain()
-            })?
-            .map_err(Error::uncertain)
+    pub(crate) async fn finish(self) -> Result<Value> {
+        let mut events = Vec::new();
+        let mut reply = self
+            .finish_each(&mut |event| {
+                events.push(event);
+                Ok(())
+            })
+            .await?;
+        if !events.is_empty() {
+            reply["events"] = json!(events);
+        }
+        Ok(reply)
     }
 
     /// The final reply, each event line before it handed to `each` as it
     /// arrives rather than kept, so a long reply is never held whole. A
     /// failure of `each` ends the reply there.
-    pub async fn finish_each(
+    pub(crate) async fn finish_each(
         mut self,
         each: &mut (dyn FnMut(Value) -> Result<()> + Send),
     ) -> Result<Value> {
@@ -216,20 +220,6 @@ impl Pending {
                 Error::new(Code::Transport, "Helper exceeded the request deadline").uncertain()
             })?
             .map_err(Error::uncertain)
-    }
-
-    async fn receive(&mut self) -> Result<Value> {
-        let mut events = Vec::new();
-        let mut reply = self
-            .receive_each(&mut |event| {
-                events.push(event);
-                Ok(())
-            })
-            .await?;
-        if !events.is_empty() {
-            reply["events"] = json!(events);
-        }
-        Ok(reply)
     }
 
     async fn receive_each(
@@ -331,7 +321,7 @@ pub(crate) fn refusal(reply: &Value) -> Error {
 }
 
 #[derive(Debug, PartialEq, Eq)]
-pub enum OutputError {
+pub(crate) enum OutputError {
     Malformed,
     Oversized,
 }
@@ -339,7 +329,7 @@ pub enum OutputError {
 /// Concatenate the base64 `output` events of a helper `run` reply. An event
 /// that must decode past `limit` is refused unread; a decoded total over
 /// `limit` (by at most a padding remainder) is refused after decoding.
-pub fn run_output(reply: &Value, limit: usize) -> std::result::Result<Vec<u8>, OutputError> {
+pub(crate) fn run_output(reply: &Value, limit: usize) -> std::result::Result<Vec<u8>, OutputError> {
     event_bytes(reply, "output", limit)
 }
 
@@ -365,7 +355,7 @@ fn event_bytes(
 /// Append the base64 `data` of one `event` to `output`, refusing it unread
 /// when it must decode past `limit` in all, and after decoding when it
 /// did. Binary data is never decoded as text.
-pub fn append_event(
+pub(crate) fn append_event(
     event: &Value,
     output: &mut Vec<u8>,
     limit: usize,
@@ -386,7 +376,7 @@ pub fn append_event(
 }
 
 /// The most output `with_output` keeps as text.
-pub const OUTPUT_LIMIT: usize = 1 << 20;
+pub(crate) const OUTPUT_LIMIT: usize = 1 << 20;
 
 /// The first `limit` bytes of a reply's output, read event by event; None
 /// when an event before the limit does not decode.
@@ -413,7 +403,7 @@ fn output_prefix(reply: &Value, limit: usize) -> Option<Vec<u8>> {
 /// A helper `run` reply with its output decoded into an `output` string
 /// (lossy UTF-8) and the command's `pid` in place of the events they came
 /// in, so callers need not decode them and never read them twice. Output
-/// past [`OUTPUT_LIMIT`] is cut and said to be (`outputTruncated`). Events
+/// past 1 MiB is cut and said to be (`outputTruncated`). Events
 /// stay only when they could not be decoded.
 pub fn with_output(mut reply: Value) -> Value {
     let (output, cut) = match run_output(&reply, OUTPUT_LIMIT) {

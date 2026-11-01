@@ -89,29 +89,29 @@ impl JobIdentity {
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub(super) struct Stopping {
     /// How the job ends once nothing of it is left.
-    pub why: How,
+    pub(super) why: How,
     /// When the stop began, in milliseconds since 1970: the grace runs from
     /// the TERM, which is sent at once when the job's identity holds.
-    pub since: u64,
-    pub grace_ms: u64,
+    pub(super) since: u64,
+    pub(super) grace_ms: u64,
     /// Whether TERM reached its group.
     #[serde(default)]
-    pub term_sent: bool,
+    pub(super) term_sent: bool,
     /// The last signal Atlas sent, if any.
     #[serde(default)]
-    pub signal: Option<String>,
+    pub(super) signal: Option<String>,
     /// When KILL was first sent, and last.
     #[serde(default)]
-    pub killed: Option<u64>,
+    pub(super) killed: Option<u64>,
     #[serde(default)]
-    pub killed_last: Option<u64>,
+    pub(super) killed_last: Option<u64>,
     /// How many of its processes outlived KILL.
     #[serde(default)]
-    pub stuck: Option<usize>,
+    pub(super) stuck: Option<usize>,
     /// Why no signal could be sent the last time: its processes no longer
     /// match it, or could not be read.
     #[serde(default)]
-    pub refused: Option<JobRefusal>,
+    pub(super) refused: Option<JobRefusal>,
 }
 
 impl Stopping {
@@ -135,54 +135,54 @@ impl Stopping {
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub(super) struct Ended {
-    pub how: How,
+    pub(super) how: How,
     /// When, in milliseconds since 1970.
-    pub at: u64,
+    pub(super) at: u64,
     /// The last signal Atlas sent it, if any.
     #[serde(default)]
-    pub signal: Option<String>,
+    pub(super) signal: Option<String>,
     /// Its leader's exit, when the daemon collected it.
     #[serde(default)]
-    pub exit_code: Option<i32>,
+    pub(super) exit_code: Option<i32>,
     #[serde(default)]
-    pub exit_signal: Option<String>,
+    pub(super) exit_signal: Option<String>,
     #[serde(default)]
-    pub left: Vec<Left>,
+    pub(super) left: Vec<Left>,
 }
 
 /// The daemon's record of one job: the truth about its process.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub(super) struct Record {
-    pub version: u32,
-    pub id: JobId,
+    pub(super) version: u32,
+    pub(super) id: JobId,
     /// The agent's name for it, or its program's file name.
-    pub name: String,
-    pub task: Option<Key>,
-    pub session: Option<Key>,
+    pub(super) name: String,
+    pub(super) task: Option<Key>,
+    pub(super) session: Option<Key>,
     /// The helper account it runs as.
-    pub uid: u32,
-    pub boot: String,
-    pub pid: Option<i32>,
-    pub start: Option<Start>,
-    pub pgid: Option<i32>,
-    pub state: JobState,
-    pub started_at: u64,
-    pub ends_at: u64,
+    pub(super) uid: u32,
+    pub(super) boot: String,
+    pub(super) pid: Option<i32>,
+    pub(super) start: Option<Start>,
+    pub(super) pgid: Option<i32>,
+    pub(super) state: JobState,
+    pub(super) started_at: u64,
+    pub(super) ends_at: u64,
     /// Found again by a daemon that did not start it.
     #[serde(default)]
-    pub adopted: bool,
+    pub(super) adopted: bool,
     /// Its descendants seen while it ran, by PID and start time: only to
     /// say which left its group, never to decide a signal.
     #[serde(default)]
-    pub seen: Vec<Instance>,
+    pub(super) seen: Vec<Instance>,
     #[serde(default)]
-    pub stopping: Option<Stopping>,
+    pub(super) stopping: Option<Stopping>,
     #[serde(default)]
-    pub ended: Option<Ended>,
+    pub(super) ended: Option<Ended>,
     /// How often its log was emptied for growing past its limit.
     #[serde(default)]
-    pub log_resets: u32,
+    pub(super) log_resets: u32,
 }
 
 impl Record {
@@ -208,11 +208,6 @@ impl Record {
     /// What the job is, when it has a process.
     pub(super) fn expected(&self) -> Option<Expected> {
         self.identity().map(|identity| identity.as_expected())
-    }
-
-    /// Whether it may still have processes.
-    pub(super) fn live(&self) -> bool {
-        self.state.live()
     }
 
     /// The job as replies show it.

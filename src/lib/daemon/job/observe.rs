@@ -14,7 +14,7 @@ pub(super) const SEEN_MAX: usize = 256;
 
 /// The kernel as the daemon uses it: process facts, and the one way it
 /// signals. Tests stand in for it.
-pub trait Kernel: Send + Sync {
+pub(super) trait Kernel: Send + Sync {
     /// `pid` now, whoever's it is; none when there is no such process.
     fn process(&self, pid: i32) -> Result<Option<Info>>;
     /// Every process in group `pgid`, unreaped ones included.

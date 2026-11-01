@@ -1,6 +1,8 @@
 //! Protocol v1 requests the helper daemon accepts, validated before anything
 //! runs. Refusals keep their exact wording: clients and the live checks
 //! match on it.
+#[cfg(target_os = "macos")]
+use crate::error::Error;
 use crate::{error::Code, host_session::Key};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
@@ -9,11 +11,12 @@ use std::time::Duration;
 mod job;
 mod read;
 
-pub use job::*;
-pub use read::ReadRefusal;
+pub(crate) use job::*;
+pub use job::{Expected, How, JobId, JobStart, JobView, StopReason};
+pub(crate) use read::ReadRefusal;
 
 /// Longest request line, in bytes.
-pub const MAX_REQUEST: usize = 1024 * 1024;
+pub(crate) const MAX_REQUEST: usize = 1024 * 1024;
 const MAX_ARGUMENTS: usize = 4096;
 const MAX_ARGUMENT_BYTES: usize = 256 * 1024;
 const MAX_TIMEOUT_MS: u64 = 10 * 60 * 1000;
@@ -31,18 +34,18 @@ const JOB_LIFETIME_MIN: Duration = Duration::from_secs(1);
 pub const JOB_GRACE_MAX: Duration = Duration::from_secs(60);
 const JOB_GRACE_MIN: Duration = Duration::from_secs(1);
 /// How long a stop waits between TERM and KILL unless told.
-pub const JOB_GRACE: Duration = Duration::from_secs(5);
+pub(crate) const JOB_GRACE: Duration = Duration::from_secs(5);
 /// The most of a job's log one request reads.
 pub const JOB_LOG_MAX: usize = 1024 * 1024;
 /// The most characters a job's name keeps.
-pub const JOB_NAME_MAX: usize = 64;
+pub(crate) const JOB_NAME_MAX: usize = 64;
 
 /// The largest part of a file one read returns.
-pub const READ_RANGE_MAX: u64 = 8 * 1024 * 1024;
+pub(crate) const READ_RANGE_MAX: u64 = 8 * 1024 * 1024;
 /// The largest file a read accepts.
 pub const READ_SIZE_MAX: u64 = 1 << 30;
 /// The longest path a read takes, in bytes.
-pub const READ_PATH_MAX: usize = 1024;
+pub(crate) const READ_PATH_MAX: usize = 1024;
 
 /// A rectangle of the display in whole points: its top-left corner and size.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -97,57 +100,57 @@ pub enum Crop {
 
 /// The daemon capability to refuse a request meant for another session of
 /// the helper, as its hello lists it.
-pub const SESSION_PIN: &str = "session-pin";
+pub(crate) const SESSION_PIN: &str = "session-pin";
 
 /// The helper session a request was verified in: the daemon refuses it in
 /// any other, so a helper that logged in again is never read as the one
 /// that was checked.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub struct SessionPin {
-    pub security_session_id: u64,
-    pub display_id: u64,
+pub(crate) struct SessionPin {
+    pub(crate) security_session_id: u64,
+    pub(crate) display_id: u64,
 }
 
 /// The daemon capability to keep background jobs, as its hello lists it.
-pub const JOBS: &str = "jobs";
+pub(crate) const JOBS: &str = "jobs";
 
 /// The daemon capability to read files for the person's side to collect.
-pub const READ: &str = "read";
+pub(crate) const READ: &str = "read";
 
 /// What a file is, as `fstat` of its open descriptor says: the same path
 /// with any of these changed is another file, or one being written.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
-pub struct FileIdentity {
-    pub dev: u64,
-    pub ino: u64,
-    pub size: u64,
+pub(crate) struct FileIdentity {
+    pub(crate) dev: u64,
+    pub(crate) ino: u64,
+    pub(crate) size: u64,
     /// Its modification and change times, in seconds and nanoseconds.
-    pub mtime: [i64; 2],
-    pub ctime: [i64; 2],
+    pub(crate) mtime: [i64; 2],
+    pub(crate) ctime: [i64; 2],
 }
 
 /// Part of a regular file in the helper, or its digest, for the person's
 /// side to collect.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct ReadRequest {
+pub(crate) struct ReadRequest {
     /// As given: relative to the helper's home, or absolute.
-    pub path: String,
-    pub offset: u64,
+    pub(crate) path: String,
+    pub(crate) offset: u64,
     /// At most [`READ_RANGE_MAX`]; 0 with `digest`.
-    pub length: u64,
+    pub(crate) length: u64,
     /// What the first part found the file to be; none for the first part.
-    pub expect: Option<FileIdentity>,
+    pub(crate) expect: Option<FileIdentity>,
     /// Hash the whole file instead of returning a part.
-    pub digest: bool,
+    pub(crate) digest: bool,
     /// The largest file accepted.
-    pub max_size: u64,
-    pub pin: Option<SessionPin>,
+    pub(crate) max_size: u64,
+    pub(crate) pin: Option<SessionPin>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub enum Request {
+pub(crate) enum Request {
     Hello,
     HostSession(Vec<crate::host_session::HostClaim>),
     Screenshot {
@@ -179,10 +182,102 @@ pub enum Request {
     Read(ReadRequest),
 }
 
+/// Admission and lost-reply handling are chosen together for every request.
+#[cfg(target_os = "macos")]
+#[derive(Clone, Copy)]
+pub(super) struct Policy {
+    console: Console,
+    pin: Option<SessionPin>,
+    pub(super) phase: ConnectionPhase,
+}
+
+#[cfg(target_os = "macos")]
+#[derive(Clone, Copy)]
+enum Console {
+    Any,
+    Hidden,
+}
+
+#[cfg(target_os = "macos")]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum ConnectionPhase {
+    Refusal,
+    Read(&'static str),
+    Mutation(&'static str),
+}
+
+#[cfg(target_os = "macos")]
+impl Request {
+    pub(super) fn policy(&self) -> Policy {
+        use ConnectionPhase::{Mutation, Read};
+        use Console::{Any, Hidden};
+        let (console, pin, phase) = match self {
+            Self::Hello => (Any, None, Read("hello")),
+            Self::HostSession(_) => (Any, None, Read("host-session")),
+            Self::Apps { pin } => (Any, *pin, Read("apps")),
+            Self::Windows { pin, .. } => (Hidden, *pin, Read("windows")),
+            Self::Screenshot { .. } => (Hidden, None, Read("screenshot")),
+            Self::Read(ReadRequest { pin, .. }) => (Hidden, *pin, Read("read")),
+            Self::Run { pin, .. } => (Hidden, *pin, Mutation("run")),
+            Self::Restart => (Any, None, Mutation("restart")),
+            Self::Logout { .. } => (Hidden, None, Mutation("logout")),
+            Self::Job(JobRequest::Start { pin, .. }) => (Hidden, *pin, Mutation("job-start")),
+            Self::Job(JobRequest::Stop { .. } | JobRequest::StopAll { .. }) => {
+                (Any, None, Mutation("job-stop"))
+            }
+            Self::Job(JobRequest::Show { .. } | JobRequest::Log { .. }) => (Any, None, Read("job")),
+        };
+        Policy {
+            console,
+            pin,
+            phase,
+        }
+    }
+}
+
+#[cfg(target_os = "macos")]
+impl Policy {
+    /// Ending and inspecting jobs remain available while the helper is visible.
+    pub(super) fn allowed(self, on_console: bool) -> Option<Value> {
+        (matches!(self.console, Console::Hidden) && on_console).then(|| {
+            failure(
+                Code::OnConsole,
+                "The helper is on the screen; switch back to your own account first",
+            )
+        })
+    }
+
+    /// A pin is checked against a fresh session observation at each admission point.
+    pub(super) fn pinned_elsewhere(self, session: fn() -> Result<Value, Error>) -> Option<Value> {
+        let pin = self.pin?;
+        let here = session()
+            .and_then(|proof| crate::session::InputEpoch::from_proof(&proof, std::process::id()))
+            .map(|epoch| SessionPin {
+                security_session_id: epoch.security_session_id,
+                display_id: epoch.display_id,
+            });
+
+        match here {
+            Ok(here) if here == pin => None,
+            Ok(_) => Some(failure(
+                Code::SessionChanged,
+                "The helper changed since Atlas checked it; look again",
+            )),
+            Err(error) => Some(refused(error)),
+        }
+    }
+}
+
 /// A refusal in the shape every Atlas failure has, so a reader needs one
 /// parser. Nothing here is of unknown outcome: the request never ran.
-pub fn failure(code: Code, error: impl Into<String>) -> Value {
+pub(crate) fn failure(code: Code, error: impl Into<String>) -> Value {
     json!({"ok": false, "code": code, "error": error.into(), "uncertain": false})
+}
+
+/// A pre-execution error is always a certain refusal.
+#[cfg(target_os = "macos")]
+pub(super) fn refused(error: Error) -> Value {
+    failure(error.code, error.error)
 }
 
 fn bad(error: impl Into<String>) -> Value {
@@ -190,7 +285,7 @@ fn bad(error: impl Into<String>) -> Value {
 }
 
 /// Parse one request line, or the reply that refuses it.
-pub fn parse(line: &[u8]) -> Result<Request, Value> {
+pub(crate) fn parse(line: &[u8]) -> Result<Request, Value> {
     if line.len() > MAX_REQUEST {
         return Err(bad("request exceeds 1 MiB"));
     }
@@ -213,22 +308,12 @@ pub fn parse(line: &[u8]) -> Result<Request, Value> {
             pin: pin(&request)?,
         }),
         "windows" => Ok(Request::Windows {
-            dock: match &request["dock"] {
-                Value::Null => false,
-                value => value
-                    .as_bool()
-                    .ok_or_else(|| bad("\"dock\" must be true or false"))?,
-            },
+            dock: boolean(&request, "dock")?,
             pin: pin(&request)?,
         }),
         "restart" => Ok(Request::Restart),
         "logout" => Ok(Request::Logout {
-            force: match &request["force"] {
-                Value::Null => false,
-                value => value
-                    .as_bool()
-                    .ok_or_else(|| bad("\"force\" must be true or false"))?,
-            },
+            force: boolean(&request, "force")?,
         }),
         "screenshot" => {
             let max_dimension = match &request["maxDimension"] {
@@ -242,12 +327,7 @@ pub fn parse(line: &[u8]) -> Result<Request, Value> {
                 ),
             };
 
-            let per_point = match &request["perPoint"] {
-                Value::Null => false,
-                value => value
-                    .as_bool()
-                    .ok_or_else(|| bad("\"perPoint\" must be true or false"))?,
-            };
+            let per_point = boolean(&request, "perPoint")?;
 
             Ok(Request::Screenshot {
                 max_dimension,
@@ -256,28 +336,7 @@ pub fn parse(line: &[u8]) -> Result<Request, Value> {
             })
         }
         "run" => {
-            let argv = request["argv"]
-                .as_array()
-                .filter(|argv| !argv.is_empty())
-                .ok_or_else(|| bad("run requires a non-empty \"argv\" array"))?;
-            if argv.len() > MAX_ARGUMENTS {
-                return Err(bad("run accepts at most 4096 arguments"));
-            }
-
-            let argv = argv
-                .iter()
-                .map(|argument| {
-                    argument
-                        .as_str()
-                        .filter(|text| text.len() <= MAX_ARGUMENT_BYTES && !text.contains('\0'))
-                        .map(str::to_owned)
-                        .ok_or_else(|| bad("run arguments must be strings without NUL"))
-                })
-                .collect::<Result<Vec<_>, _>>()?;
-            if argv[0].is_empty() {
-                return Err(bad("run requires a non-empty \"argv\" array"));
-            }
-
+            let argv = argv(&request, "run")?;
             let timeout = match &request["timeoutMs"] {
                 Value::Null => DEFAULT_TIMEOUT_MS,
                 value => value
@@ -298,15 +357,25 @@ pub fn parse(line: &[u8]) -> Result<Request, Value> {
     }
 }
 
-/// A job start's program and its arguments, bounded as `run`'s are.
-fn job_argv(request: &Value) -> Result<Vec<String>, Value> {
-    let empty = || bad("job start requires a non-empty \"argv\" array");
+/// Absent and null switches both retain the protocol's false default.
+fn boolean(request: &Value, field: &str) -> Result<bool, Value> {
+    match &request[field] {
+        Value::Null => Ok(false),
+        value => value
+            .as_bool()
+            .ok_or_else(|| bad(format!("\"{field}\" must be true or false"))),
+    }
+}
+
+/// Run and job starts accept the same bounded arguments, with distinct words.
+fn argv(request: &Value, operation: &str) -> Result<Vec<String>, Value> {
+    let empty = || bad(format!("{operation} requires a non-empty \"argv\" array"));
     let argv = request["argv"]
         .as_array()
         .filter(|argv| !argv.is_empty())
         .ok_or_else(empty)?;
     if argv.len() > MAX_ARGUMENTS {
-        return Err(bad("job start accepts at most 4096 arguments"));
+        return Err(bad(format!("{operation} accepts at most 4096 arguments")));
     }
 
     let argv = argv
@@ -316,10 +385,10 @@ fn job_argv(request: &Value) -> Result<Vec<String>, Value> {
                 .as_str()
                 .filter(|text| text.len() <= MAX_ARGUMENT_BYTES && !text.contains('\0'))
                 .map(str::to_owned)
-                .ok_or_else(|| bad("job start arguments must be strings without NUL"))
+                .ok_or_else(|| bad(format!("{operation} arguments must be strings without NUL")))
         })
         .collect::<Result<Vec<_>, _>>()?;
-    if argv[0].is_empty() {
+    if argv.first().is_none_or(String::is_empty) {
         return Err(empty());
     }
     Ok(argv)
@@ -396,7 +465,7 @@ fn job(request: &Value) -> Result<JobRequest, Value> {
                 .ok_or_else(|| bad("job start requires the helper's \"uid\""))?;
             Ok(JobRequest::Start {
                 start: JobStart {
-                    argv: job_argv(request)?,
+                    argv: argv(request, "job start")?,
                     lifetime: millis(
                         request,
                         "lifetimeMs",
@@ -471,12 +540,7 @@ fn read(request: &Value) -> Result<ReadRequest, Value> {
     if length > READ_RANGE_MAX {
         return Err(bad("\"length\" must be at most 8388608"));
     }
-    let digest = match &request["digest"] {
-        Value::Null => false,
-        value => value
-            .as_bool()
-            .ok_or_else(|| bad("\"digest\" must be true or false"))?,
-    };
+    let digest = boolean(request, "digest")?;
     if digest && length != 0 {
         return Err(bad("A digest reads the whole file: give \"length\" 0"));
     }
@@ -663,6 +727,133 @@ mod tests {
             refused(r#"{"op":"run","argv":[],"timeoutMs":3000}"#),
             json!({"ok": false, "code": "bad-request", "error": "run requires a non-empty \"argv\" array", "uncertain": false})
         );
+    }
+
+    #[test]
+    fn run_and_job_arguments_keep_their_limits_and_error_precedence() {
+        for (operation, prefix) in [
+            ("run", json!({"op": "run"})),
+            (
+                "job start",
+                json!({"op": "job", "action": "start", "uid": 502, "lifetimeMs": 5000}),
+            ),
+        ] {
+            for (arguments, message) in [
+                (json!([]), "requires a non-empty \"argv\" array"),
+                (json!([""]), "requires a non-empty \"argv\" array"),
+                (json!(["", 7]), "arguments must be strings without NUL"),
+                (json!(["x\0"]), "arguments must be strings without NUL"),
+                (
+                    json!(["x".repeat(MAX_ARGUMENT_BYTES + 1)]),
+                    "arguments must be strings without NUL",
+                ),
+                (
+                    json!(vec![Value::Null; MAX_ARGUMENTS + 1]),
+                    "accepts at most 4096 arguments",
+                ),
+            ] {
+                let mut request = prefix.clone();
+                request["argv"] = arguments;
+                assert_eq!(
+                    parse(request.to_string().as_bytes()),
+                    Err(bad(format!("{operation} {message}")))
+                );
+            }
+            let mut request = prefix;
+            request["argv"] = json!(vec!["x"; MAX_ARGUMENTS]);
+            assert!(parse(request.to_string().as_bytes()).is_ok());
+            request["argv"] = json!(["x".repeat(MAX_ARGUMENT_BYTES)]);
+            assert!(parse(request.to_string().as_bytes()).is_ok());
+        }
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn every_request_deliberately_selects_admission_and_lost_reply_handling() {
+        let pin = json!({"securitySessionId": 42, "displayId": 7});
+        for (mut request, hidden, pinned, mutation, label) in [
+            (json!({"op": "hello"}), false, false, false, "hello"),
+            (json!({"op": "apps"}), false, true, false, "apps"),
+            (json!({"op": "windows"}), true, true, false, "windows"),
+            (
+                json!({"op": "screenshot"}),
+                true,
+                false,
+                false,
+                "screenshot",
+            ),
+            (
+                json!({"op": "read", "path": "x", "maxSize": 1}),
+                true,
+                true,
+                false,
+                "read",
+            ),
+            (
+                json!({"op": "run", "argv": ["true"]}),
+                true,
+                true,
+                true,
+                "run",
+            ),
+            (json!({"op": "restart"}), false, false, true, "restart"),
+            (json!({"op": "logout"}), true, false, true, "logout"),
+            (
+                json!({"op": "job", "action": "start", "argv": ["true"], "uid": 502, "lifetimeMs": 5000}),
+                true,
+                true,
+                true,
+                "job-start",
+            ),
+            (
+                json!({"op": "job", "action": "stop", "id": "7c2e91a04b3f", "expect": {"boot": "B", "pid": 4312, "start": [1, 2], "pgid": 4312}}),
+                false,
+                false,
+                true,
+                "job-stop",
+            ),
+            (
+                json!({"op": "job", "action": "stop-all", "reason": "person"}),
+                false,
+                false,
+                true,
+                "job-stop",
+            ),
+            (
+                json!({"op": "job", "action": "show"}),
+                false,
+                false,
+                false,
+                "job",
+            ),
+            (
+                json!({"op": "job", "action": "log", "id": "7c2e91a04b3f", "bytes": 1}),
+                false,
+                false,
+                false,
+                "job",
+            ),
+        ] {
+            request["session"] = pin.clone();
+            let parsed = parse(request.to_string().as_bytes());
+            assert!(parsed.is_ok(), "{request}");
+            if let Ok(parsed) = parsed {
+                let policy = parsed.policy();
+                assert!(policy.allowed(false).is_none(), "{request}");
+                assert_eq!(policy.allowed(true).is_some(), hidden, "{request}");
+                assert_eq!(policy.pin.is_some(), pinned, "{request}");
+                let phase = if mutation {
+                    ConnectionPhase::Mutation(label)
+                } else {
+                    ConnectionPhase::Read(label)
+                };
+                assert_eq!(policy.phase, phase, "{request}");
+            }
+        }
+        let host = Request::HostSession(Vec::new()).policy();
+        assert!(host.allowed(true).is_none());
+        assert!(host.pin.is_none());
+        assert!(matches!(host.phase, ConnectionPhase::Read("host-session")));
     }
 
     #[test]

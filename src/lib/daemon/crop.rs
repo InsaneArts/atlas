@@ -11,12 +11,12 @@ const PADDING: f64 = 8.0;
 
 /// The part of the display showing one app's windows.
 #[derive(Debug, Clone, PartialEq)]
-pub struct AppCrop {
-    pub region: Region,
+pub(super) struct AppCrop {
+    pub(super) region: Region,
     /// The owner of the app's frontmost window.
-    pub name: Option<String>,
+    pub(super) name: Option<String>,
     /// Other apps' windows in front of the app's, inside the crop.
-    pub overlapping: Vec<Window>,
+    pub(super) overlapping: Vec<Window>,
 }
 
 fn bounds(region: &Region) -> Bounds {
@@ -44,7 +44,7 @@ fn clipped(bounds: &Bounds, area: &Bounds) -> Bounds {
 }
 
 /// `region` cut to the display; None when nothing of it is on the display.
-pub fn clamp(region: Region, display: &Region) -> Option<Region> {
+pub(super) fn clamp(region: Region, display: &Region) -> Option<Region> {
     let left = region.x.max(display.x);
     let top = region.y.max(display.y);
     let right = (region.x + region.width).min(display.x + display.width);
@@ -62,7 +62,7 @@ pub fn clamp(region: Region, display: &Region) -> Option<Region> {
 /// others in front of them inside it, the parts of the Dock that take
 /// clicks among them; None when it has no window on screen. `windows` is
 /// front to back, in display points.
-pub fn app(windows: &[Window], pid: i64, display: &Region, dock: &Dock) -> Option<AppCrop> {
+pub(super) fn app(windows: &[Window], pid: i64, display: &Region, dock: &Dock) -> Option<AppCrop> {
     let screen = bounds(display);
     let strips: Vec<&Bounds> = windows
         .iter()

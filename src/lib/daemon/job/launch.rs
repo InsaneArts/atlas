@@ -107,7 +107,7 @@ impl Jobs {
         let running: Vec<&Record> = records
             .iter()
             .filter_map(|read| match read {
-                Found::Record(record) if record.live() => Some(record.as_ref()),
+                Found::Record(record) if record.state.live() => Some(record.as_ref()),
                 _ => None,
             })
             .collect();

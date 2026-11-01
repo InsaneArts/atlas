@@ -21,7 +21,7 @@ name_type! {
     /// 1970, and six random hexadecimal digits, so two collections never
     /// share one.
     #[derive(Hash)]
-    pub struct ReceiptId;
+    pub(crate) struct ReceiptId;
     refused(text) = format!("{text} is not a collection's receipt");
     display
 }
@@ -33,7 +33,7 @@ impl ReceiptId {
     }
 
     /// `text` as a receipt, when it is one of Atlas's.
-    pub fn parse(text: &str) -> Option<Self> {
+    pub(crate) fn parse(text: &str) -> Option<Self> {
         let (at, random) = text.split_once('-')?;
         let at_ok =
             !at.is_empty() && at.len() <= 20 && at.bytes().all(|byte| byte.is_ascii_digit());
@@ -45,18 +45,18 @@ impl ReceiptId {
 /// is, and what the copy must still be.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub struct Kept {
-    pub source: String,
+pub(crate) struct Kept {
+    pub(crate) source: String,
     /// The source relative to the helper's home, when it is in it.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub in_home: Option<String>,
-    pub path: PathBuf,
-    pub size: u64,
-    pub sha256: String,
+    pub(crate) in_home: Option<String>,
+    pub(crate) path: PathBuf,
+    pub(crate) size: u64,
+    pub(crate) sha256: String,
     /// When this version of the source was read, by this Mac's clock;
     /// none in a receipt from before Atlas kept it.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub read: Option<ReadSpan>,
+    pub(crate) read: Option<ReadSpan>,
 }
 
 /// When one version of a file was read: from its first part to its
@@ -64,22 +64,22 @@ pub struct Kept {
 /// bytes kept are the file as it stood somewhere in between.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub struct ReadSpan {
-    pub started: u64,
-    pub finished: u64,
+pub(crate) struct ReadSpan {
+    pub(crate) started: u64,
+    pub(crate) finished: u64,
 }
 
 impl ReadSpan {
     /// Whether this span can be trusted to order versions, for a collection
     /// made at `collected`: a clock that moved backwards while it was read,
     /// or since the collection began, leaves it out of order.
-    pub fn trusted(&self, collected: u64) -> bool {
+    pub(crate) fn trusted(&self, collected: u64) -> bool {
         collected <= self.started && self.started <= self.finished
     }
 
     /// Whether this version was read wholly before `other` began: only then
     /// is `other` the newer of the two.
-    pub fn before(&self, other: &Self) -> bool {
+    pub(crate) fn before(&self, other: &Self) -> bool {
         self.finished < other.started
     }
 }

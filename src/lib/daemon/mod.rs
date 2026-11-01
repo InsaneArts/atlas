@@ -6,14 +6,14 @@
 #[cfg(target_os = "macos")]
 mod capture;
 #[cfg(target_os = "macos")]
-pub mod crop;
+mod crop;
 #[cfg(target_os = "macos")]
 pub mod facts;
 pub mod job;
 pub mod protocol;
 #[cfg(target_os = "macos")]
-pub mod read;
-pub mod run;
+pub(crate) mod read;
+mod run;
 #[cfg(target_os = "macos")]
 pub mod serve;
 

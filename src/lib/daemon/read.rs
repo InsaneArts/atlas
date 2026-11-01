@@ -28,7 +28,7 @@ use std::{
 };
 
 /// Bytes per `data` event.
-pub const CHUNK: usize = 256 * 1024;
+const CHUNK: usize = 256 * 1024;
 /// A file changed more recently than this is still being written.
 const STILL: Duration = Duration::from_secs(2);
 /// `st_flags` of a file whose contents are not on this Mac yet
@@ -56,17 +56,17 @@ const TEMPORARY_FOLDERS: &str = "/private/var/folders";
 
 /// Where the helper's files may be read from: its home and its own
 /// temporary folder, as they really are.
-pub struct Places {
-    pub home: PathBuf,
+pub(crate) struct Places {
+    pub(crate) home: PathBuf,
     /// The account's own temporary folder; none when it is not known, and
     /// then no account's is read.
-    pub temporary: Option<PathBuf>,
+    pub(crate) temporary: Option<PathBuf>,
 }
 
 impl Places {
     /// The places of the daemon's own account: `HOME`, and the temporary
     /// folder macOS keeps for it, each as it really is.
-    pub fn here() -> Option<Self> {
+    pub(super) fn here() -> Option<Self> {
         let home = std::env::var_os("HOME").and_then(|path| std::fs::canonicalize(path).ok())?;
         Some(Self {
             home,
@@ -121,7 +121,7 @@ fn own_temporary() -> Option<PathBuf> {
 /// read. `guard` says whether the helper may still be read, as before the
 /// request was taken: it is asked before the file is opened, before each
 /// part and before the digest, and its refusal is the reply.
-pub fn read(
+pub(super) fn read(
     request: &ReadRequest,
     places: &Places,
     uid: u32,

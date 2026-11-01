@@ -20,7 +20,7 @@ macro_rules! name_type {
         $vis struct $name(String);
 
         impl $name {
-            pub fn as_str(&self) -> &str {
+            $vis fn as_str(&self) -> &str {
                 &self.0
             }
         }

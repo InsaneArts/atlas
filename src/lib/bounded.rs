@@ -70,29 +70,10 @@ fn output_with_limit(command: &mut Command, limit: Duration, cap: usize) -> io::
     drop(stdout.fd.take());
     drop(stderr.fd.take());
     let status = match result {
-        Ok(()) => reap(&mut child).map_err(|error| {
-            // A failed wait cannot prove the identity is still reserved.
-            // Never signal the group after attempting the final reap.
-            let kind = error.kind();
-            io::Error::new(
-                kind,
-                CleanupFailure {
-                    pid: child.id(),
-                    group: None,
-                    child: Some(error),
-                },
-            )
-        })?,
-        Err(primary) if primary.raw_os_error() == Some(libc::ECHILD) => {
-            return Err(io::Error::new(
-                primary.kind(),
-                CleanupFailure {
-                    pid: child.id(),
-                    group: None,
-                    child: Some(primary),
-                },
-            ));
-        }
+        // A failed wait cannot prove the identity is still reserved.
+        // Never signal the group after attempting the final reap.
+        Ok(()) => reap(&mut child),
+        Err(primary) if primary.raw_os_error() == Some(libc::ECHILD) => Err(primary),
         Err(primary) => {
             return Err(match stop(&mut child) {
                 Ok(()) => primary,
@@ -108,7 +89,17 @@ fn output_with_limit(command: &mut Command, limit: Duration, cap: usize) -> io::
                 }
             });
         }
-    };
+    }
+    .map_err(|error| {
+        io::Error::new(
+            error.kind(),
+            CleanupFailure {
+                pid: child.id(),
+                group: None,
+                child: Some(error),
+            },
+        )
+    })?;
     Ok(Output {
         status,
         stdout: stdout.bytes,

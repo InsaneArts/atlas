@@ -6,7 +6,7 @@ use serde_json::Value;
 /// Why a file was not collected.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
-pub enum ReadRefusal {
+pub(crate) enum ReadRefusal {
     /// Not in the helper's home, its own temporary folder or `/tmp`, or in
     /// Atlas's own folder.
     Outside,
@@ -42,12 +42,12 @@ pub enum ReadRefusal {
 
 impl ReadRefusal {
     /// The reason a helper's refusal names, when it is one of these.
-    pub fn of(reply: &Value) -> Option<Self> {
+    pub(crate) fn of(reply: &Value) -> Option<Self> {
         Self::deserialize(&reply["reason"]).ok()
     }
 
     /// The word for it, as replies give it.
-    pub fn as_str(self) -> &'static str {
+    pub(crate) fn as_str(self) -> &'static str {
         match self {
             Self::Outside => "outside",
             Self::Protected => "protected",
@@ -69,7 +69,7 @@ impl ReadRefusal {
     }
 
     /// What the helper daemon says of it, naming no file.
-    pub fn said(self) -> &'static str {
+    pub(crate) fn said(self) -> &'static str {
         match self {
             Self::Outside => {
                 "Only files in the helper's home, its temporary folder or /tmp are collected"

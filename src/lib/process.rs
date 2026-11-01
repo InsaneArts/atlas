@@ -15,7 +15,7 @@ use std::ffi::CStr;
 
 /// When a process started: seconds and microseconds since 1970, as the
 /// kernel keeps them.
-pub type Start = [u64; 2];
+pub(crate) type Start = [u64; 2];
 
 /// One process instance: the same PID with another start time is another
 /// process.
@@ -35,13 +35,13 @@ impl Instance {
     pub fn current() -> Option<Self> {
         let pid = i32::try_from(std::process::id()).ok()?;
         match own(pid) {
-            Own::Found(info) => Some(Self::new(pid, info.instance.start)),
+            Own::Found(info) => Some(info.instance),
             Own::Gone | Own::Unknown => None,
         }
     }
 
     /// How this very process is now, as this account may know it.
-    pub fn state(&self) -> State {
+    pub(crate) fn state(&self) -> State {
         #[cfg(test)]
         STATE_READS.with(|reads| {
             if let Some(count) = reads.get() {
@@ -59,12 +59,12 @@ impl Instance {
 
     /// Whether this very process still runs, stopped or not: its PID lives
     /// with the same start time.
-    pub fn running(&self) -> bool {
+    pub(crate) fn running(&self) -> bool {
         matches!(self.state(), State::Running | State::Stopped)
     }
 
     /// When it started, in milliseconds since 1970.
-    pub fn started_ms(&self) -> u64 {
+    pub(crate) fn started_ms(&self) -> u64 {
         self.start[0]
             .saturating_mul(1000)
             .saturating_add(self.start[1] / 1000)
@@ -98,7 +98,7 @@ pub(crate) fn measure_states<T>(read: impl FnOnce() -> T) -> (T, usize) {
 
 /// How an [`Instance`] is now, as this account may know it.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum State {
+pub(crate) enum State {
     Running,
     /// Suspended, as by SIGSTOP: it runs again only once continued.
     Stopped,
@@ -145,15 +145,15 @@ pub struct Info {
     pub ppid: i32,
     pub pgid: i32,
     /// Its effective user ID.
-    pub uid: u32,
+    pub(crate) uid: u32,
     /// Its real user ID.
-    pub ruid: u32,
+    pub(crate) ruid: u32,
     /// Its saved user ID.
     pub svuid: u32,
     /// It has exited and waits for its parent to collect its status.
     pub zombie: bool,
     /// It is suspended, as by SIGSTOP.
-    pub stopped: bool,
+    pub(crate) stopped: bool,
     /// Its command name, as the kernel keeps it (at most 16 bytes).
     pub name: String,
 }
@@ -320,7 +320,7 @@ const SZOMB: u8 = 5;
 
 /// This boot's identity, `kern.bootsessionuuid`: unaffected by changes to
 /// the clock.
-pub fn boot() -> Result<String> {
+pub(crate) fn boot() -> Result<String> {
     boot_named(c"kern.bootsessionuuid")
 }
 
@@ -350,7 +350,7 @@ fn boot_named(name: &CStr) -> Result<String> {
 
 /// The exact start time of any account's process, an unreaped one
 /// included. A process that does not exist is an error.
-pub fn start(pid: i32) -> Result<Start> {
+pub(crate) fn start(pid: i32) -> Result<Start> {
     info(pid)?
         .map(|info| info.instance.start)
         .ok_or_else(|| Error::new(Code::State, "The process's start time is unavailable"))
@@ -379,7 +379,7 @@ pub fn group(pgid: i32) -> Result<Vec<Info>> {
 }
 
 /// Every process whose effective user ID is `uid`.
-pub fn of_user(uid: u32) -> Result<Vec<Info>> {
+pub(crate) fn of_user(uid: u32) -> Result<Vec<Info>> {
     let id = libc::c_int::try_from(uid)
         .map_err(|_| Error::new(Code::State, "The account's user ID is out of range"))?;
     Ok(

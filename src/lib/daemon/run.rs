@@ -46,7 +46,7 @@ const GRACE: Duration = Duration::from_secs(2);
 const LINGER: Duration = Duration::from_millis(200);
 
 /// Events buffered for a slow client.
-pub const EVENTS: usize = 256;
+pub(super) const EVENTS: usize = 256;
 
 /// Output events per run, leaving room in what the client accepts per reply
 /// for the `started` event.
@@ -326,7 +326,7 @@ impl Output {
 
 /// Why a command was ended before it finished.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum Cancel {
+pub(super) enum Cancel {
     /// The client hung up.
     Left,
     /// The daemon is stopping.
@@ -352,7 +352,7 @@ impl StopCause {
 /// When `cancel` completes (the client left, the daemon is stopping or the
 /// helper came on screen) or the client stops taking events, the group is
 /// ended before returning.
-pub async fn run(
+pub(super) async fn run(
     argv: &[String],
     timeout: Duration,
     events: Sender<Value>,
@@ -362,35 +362,33 @@ pub async fn run(
     run_at(argv, home(), timeout, events, cancel).await
 }
 
-/// [`run`] with `home` as the helper's home.
-async fn run_at(
+/// Spawn with merged output in a group of its own, retaining the child until
+/// pipe setup either succeeds or has killed and reaped it.
+async fn spawn(
     argv: &[String],
-    home: Option<PathBuf>,
-    timeout: Duration,
-    events: Sender<Value>,
-    cancel: impl Future<Output = Cancel>,
-) -> Value {
+    home: Option<&Path>,
+) -> Result<(tokio::process::Child, pipe::Receiver, Pid, Instant), Value> {
     // The protocol never passes an empty argv; refuse one rather than panic.
-    let Some(name) = argv.first() else {
-        return failure(Code::SpawnFailed, "No command to run");
+    let Some((name, arguments)) = argv.split_first() else {
+        return Err(failure(Code::SpawnFailed, "No command to run"));
     };
 
-    let path = search_path(home.as_deref());
-    let Some(program) = resolve(name, Some(&path), home.as_deref()) else {
-        return unresolved(name, home.as_deref());
+    let path = search_path(home);
+    let Some(program) = resolve(name, Some(&path), home) else {
+        return Err(unresolved(name, home));
     };
 
     let (reader, writer) = match std::io::pipe() {
         Ok(pair) => pair,
-        Err(error) => return failure(Code::SpawnFailed, error.to_string()),
+        Err(error) => return Err(failure(Code::SpawnFailed, error.to_string())),
     };
 
     let spawned = (|| {
         let errors = writer.try_clone()?;
         let mut command = Command::new(&program);
         command
-            .arg0(&argv[0])
-            .args(&argv[1..])
+            .arg0(name)
+            .args(arguments)
             .env("PATH", &path)
             .stdin(Stdio::null())
             .stdout(Stdio::from(OwnedFd::from(writer)))
@@ -402,7 +400,7 @@ async fn run_at(
             command.env("LANG", lang);
         }
 
-        if let Some(home) = &home {
+        if let Some(home) = home {
             command.current_dir(home);
         }
 
@@ -410,33 +408,50 @@ async fn run_at(
     })();
     let mut child = match spawned {
         Ok(child) => child,
-        Err(error) => return failure(Code::SpawnFailed, format!("{}: {error}", argv[0])),
+        Err(error) => return Err(failure(Code::SpawnFailed, format!("{name}: {error}"))),
     };
 
     let started = Instant::now();
 
     let Some(group) = child.id().and_then(|pid| i32::try_from(pid).ok()) else {
-        return interrupted(
+        return Err(interrupted(
             Code::SpawnFailed,
             "The command exited before it could be observed",
-        );
+        ));
     };
 
-    let pid = group;
     let group = Pid::from_raw(group);
 
     // Checks that this is a pipe and makes it non-blocking.
-    let mut pipe = match pipe::Receiver::from_owned_fd(OwnedFd::from(reader)) {
+    let pipe = match pipe::Receiver::from_owned_fd(OwnedFd::from(reader)) {
         Ok(receiver) => receiver,
         Err(error) => {
             signal_group(group, Signal::SIGKILL);
             let _ = child.wait().await;
-            return interrupted(Code::SpawnFailed, error.to_string());
+            return Err(interrupted(Code::SpawnFailed, error.to_string()));
         }
     };
 
+    Ok((child, pipe, group, started))
+}
+
+/// [`run`] with `home` as the helper's home.
+/// size-exception: child exit, pipe closure and cancellation are independent
+/// observations in one supervision loop. The stop-cause, post-exit cancellation
+/// and wait-failure tests protect its precedence and descendant lifetime.
+async fn run_at(
+    argv: &[String],
+    home: Option<PathBuf>,
+    timeout: Duration,
+    events: Sender<Value>,
+    cancel: impl Future<Output = Cancel>,
+) -> Value {
+    let (mut child, mut pipe, group, started) = match spawn(argv, home.as_deref()).await {
+        Ok(spawned) => spawned,
+        Err(refusal) => return refusal,
+    };
     let mut cause = if events
-        .try_send(json!({"event": "started", "pid": pid}))
+        .try_send(json!({"event": "started", "pid": group.as_raw()}))
         .is_err()
     {
         StopCause::Cancelled(Cancel::Left)

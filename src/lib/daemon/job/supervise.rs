@@ -77,7 +77,7 @@ impl Jobs {
     }
 
     /// How long until the next look: sooner while a job is stopping.
-    pub fn interval(&self) -> Result<Duration> {
+    pub(crate) fn interval(&self) -> Result<Duration> {
         Ok(if self.state()?.stopping {
             WATCH_STOPPING
         } else {
@@ -95,7 +95,7 @@ impl Jobs {
                 Found::Record(record) if state.launching.contains(&record.id) => {}
                 Found::Unreadable(id) if state.launching.contains(&id) => {}
                 Found::Record(record) => {
-                    running += usize::from(record.live());
+                    running += usize::from(record.state.live());
                     stopping |= record.state == JobState::Stopping;
                 }
                 Found::Unreadable(_) => unresolved += 1,
@@ -382,7 +382,7 @@ impl Jobs {
             let Found::Record(mut record) = read else {
                 continue;
             };
-            if !record.live() {
+            if !record.state.live() {
                 continue;
             }
             let (verdict, _) = self.judge(&state, &record, None);
@@ -393,15 +393,6 @@ impl Jobs {
                         record.state = JobState::Running;
                     }
                     state.store.put(&record);
-                }
-                Verdict::Ended => {
-                    self.finish(
-                        &mut state,
-                        &mut record,
-                        How::Gone,
-                        processes.as_deref(),
-                        Vec::new(),
-                    );
                 }
                 verdict => {
                     self.settle(
@@ -459,7 +450,7 @@ fn note_seen(record: &mut Record, processes: Option<&[Info]>, jobs: &Jobs) {
 /// Watch `jobs` until stopping: about once a second, five times a second
 /// while one is stopping. A Stop is seen through the input service's
 /// saved `stop_marker`; the helper on screen through `on_console`.
-pub async fn supervise(
+pub(crate) async fn supervise(
     jobs: Arc<Jobs>,
     stop_marker: PathBuf,
     on_console: fn() -> bool,

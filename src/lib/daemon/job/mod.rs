@@ -24,7 +24,7 @@ mod store;
 mod supervise;
 mod verdict;
 
-pub use supervise::supervise;
+pub(super) use supervise::supervise;
 
 use super::protocol::{
     Census, Expected, How, JobFailure, JobId, JobRefusal, JobReply, JobRequest, JobStart, JobState,
@@ -64,7 +64,7 @@ const LOG_LIMIT: u64 = 32 * 1024 * 1024;
 const UNREADABLE: &str = "Atlas cannot tell whether this job's process is running";
 
 /// What the daemon holds of the jobs it supervises.
-pub(super) struct State {
+struct State {
     store: Store,
     /// The leaders this daemon started, held unreaped until their group is
     /// empty so the group's ID stays theirs.
@@ -118,7 +118,7 @@ impl Jobs {
 
     /// [`Jobs::open_with`], reading processes and signalling through
     /// `kernel`, in the boot `boot`.
-    pub fn open_in(
+    fn open_in(
         daemon: &Path,
         launcher: PathBuf,
         uid: u32,
@@ -164,7 +164,7 @@ impl Jobs {
     /// are launching, and how many records it cannot read, whose jobs may
     /// still run too.
     /// Returns an error when supervision is unavailable; unknown jobs never become zero.
-    pub fn census(&self) -> Result<Census> {
+    pub(crate) fn census(&self) -> Result<Census> {
         let state = self.state()?;
         Ok(Census {
             running: state.running,
@@ -176,20 +176,8 @@ impl Jobs {
     /// Carry out `request`, the reply its connection gets. What reads the
     /// process table and writes records runs on a blocking thread, so the
     /// daemon's other requests never wait for it.
-    pub async fn serve(self: &Arc<Self>, request: JobRequest) -> Value {
-        let blocking = |answer: Box<dyn FnOnce(&Jobs) -> Value + Send>| {
-            let jobs = self.clone();
-            async move {
-                let worker = jobs.clone();
-                tokio::task::spawn_blocking(move || answer(&worker))
-                    .await
-                    .unwrap_or_else(|_| {
-                        jobs.fail_supervision();
-                        failure(Code::Job, "The helper could not answer about its jobs")
-                    })
-            }
-        };
-        match request {
+    pub(crate) async fn serve(self: &Arc<Self>, request: JobRequest) -> Value {
+        let answer: Box<dyn FnOnce(&Jobs) -> Value + Send> = match request {
             JobRequest::Start { start, uid, .. } => {
                 if uid != self.uid {
                     return failure(
@@ -197,19 +185,22 @@ impl Jobs {
                         "This helper daemon runs as another account than the one asked for",
                     );
                 }
-                self.start(start).await
+                return self.start(start).await;
             }
             JobRequest::Stop { id, expect, grace } => {
-                blocking(Box::new(move |jobs| jobs.stop(&id, &expect, grace))).await
+                Box::new(move |jobs| jobs.stop(&id, &expect, grace))
             }
-            JobRequest::StopAll { reason } => {
-                blocking(Box::new(move |jobs| jobs.stop_all(reason))).await
-            }
-            JobRequest::Show { id } => blocking(Box::new(move |jobs| jobs.show(id.as_ref()))).await,
-            JobRequest::Log { id, bytes } => {
-                blocking(Box::new(move |jobs| jobs.log(&id, bytes))).await
-            }
-        }
+            JobRequest::StopAll { reason } => Box::new(move |jobs| jobs.stop_all(reason)),
+            JobRequest::Show { id } => Box::new(move |jobs| jobs.show(id.as_ref())),
+            JobRequest::Log { id, bytes } => Box::new(move |jobs| jobs.log(&id, bytes)),
+        };
+        let jobs = self.clone();
+        tokio::task::spawn_blocking(move || answer(&jobs))
+            .await
+            .unwrap_or_else(|_| {
+                self.fail_supervision();
+                failure(Code::Job, "The helper could not answer about its jobs")
+            })
     }
 
     /// Start a job: write its record, spawn the launcher, let it go on once

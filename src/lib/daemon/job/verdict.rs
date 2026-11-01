@@ -11,12 +11,12 @@ use crate::{
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(super) struct Observation {
     /// The process with the leader's PID; none when there is none.
-    pub leader: Option<Info>,
+    pub(super) leader: Option<Info>,
     /// Every process in the group, unreaped ones included.
-    pub members: Vec<Info>,
+    pub(super) members: Vec<Info>,
     /// Whether the leader is this daemon's own child, held unreaped: its
     /// PID, and so the group's ID, cannot go to another process.
-    pub own_child: bool,
+    pub(super) own_child: bool,
 }
 
 /// What may be done to a job's group now.
