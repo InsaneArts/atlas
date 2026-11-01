@@ -357,102 +357,18 @@ fn connection_outcome(
     }
 }
 
-/// Buffer one wire value without losing duplicate-member evidence. Input
-/// fields still decode from a sorted JSON object, preserving refusal order.
-struct Members {
-    value: Value,
-    duplicate: Option<String>,
-}
-
-impl<'de> Deserialize<'de> for Members {
-    fn deserialize<D: serde::Deserializer<'de>>(
-        deserializer: D,
-    ) -> std::result::Result<Self, D::Error> {
-        struct Read;
-        impl Read {
-            fn value(value: impl Into<Value>) -> Members {
-                Members {
-                    value: value.into(),
-                    duplicate: None,
-                }
-            }
-        }
-        impl<'de> serde::de::Visitor<'de> for Read {
-            type Value = Members;
-
-            fn expecting(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-                formatter.write_str("a JSON value")
-            }
-
-            fn visit_unit<E: serde::de::Error>(self) -> std::result::Result<Members, E> {
-                Ok(Self::value(Value::Null))
-            }
-
-            fn visit_bool<E: serde::de::Error>(
-                self,
-                value: bool,
-            ) -> std::result::Result<Members, E> {
-                Ok(Self::value(value))
-            }
-
-            fn visit_i64<E: serde::de::Error>(self, value: i64) -> std::result::Result<Members, E> {
-                Ok(Self::value(value))
-            }
-
-            fn visit_u64<E: serde::de::Error>(self, value: u64) -> std::result::Result<Members, E> {
-                Ok(Self::value(value))
-            }
-
-            fn visit_f64<E: serde::de::Error>(self, value: f64) -> std::result::Result<Members, E> {
-                Ok(Self::value(value))
-            }
-
-            fn visit_str<E: serde::de::Error>(
-                self,
-                value: &str,
-            ) -> std::result::Result<Members, E> {
-                Ok(Self::value(value))
-            }
-
-            fn visit_seq<S: serde::de::SeqAccess<'de>>(
-                self,
-                seq: S,
-            ) -> std::result::Result<Members, S::Error> {
-                Value::deserialize(serde::de::value::SeqAccessDeserializer::new(seq))
-                    .map(Self::value)
-            }
-
-            fn visit_map<M: serde::de::MapAccess<'de>>(
-                self,
-                mut map: M,
-            ) -> std::result::Result<Members, M::Error> {
-                let mut value = serde_json::Map::new();
-                let mut duplicate = None;
-                while let Some(key) = map.next_key::<String>()? {
-                    if value.contains_key(&key) && duplicate.is_none() {
-                        duplicate = Some(key.clone());
-                    }
-                    value.insert(key, map.next_value()?);
-                }
-                Ok(Members {
-                    value: Value::Object(value),
-                    duplicate,
-                })
-            }
-        }
-        deserializer.deserialize_any(Read)
-    }
-}
-
+/// Field refusals remain typed until the operation reaches its original guard.
 #[derive(Debug, Deserialize)]
 #[serde(tag = "op", rename_all = "lowercase")]
 enum Request {
     Hello,
     Shutdown {
+        #[serde(default, deserialize_with = "Request::pid")]
         pid: u64,
     },
     Hold {
-        on: bool,
+        #[serde(default = "Request::missing_hold", deserialize_with = "Request::hold")]
+        on: Result<bool>,
     },
     Release {
         #[serde(default, deserialize_with = "Request::owner")]
@@ -463,9 +379,13 @@ enum Request {
         owner: String,
     },
     Acquire {
-        #[serde(default)]
+        #[serde(default, deserialize_with = "Request::owner")]
         owner: String,
-        epoch: InputEpoch,
+        #[serde(
+            default = "Request::missing_epoch",
+            deserialize_with = "Request::input_epoch"
+        )]
+        epoch: Result<InputEpoch>,
         #[serde(
             rename = "person",
             default = "Request::agent",
@@ -474,12 +394,16 @@ enum Request {
         who: Who,
     },
     Reset {
-        epoch: InputEpoch,
+        #[serde(
+            default = "Request::missing_epoch",
+            deserialize_with = "Request::input_epoch"
+        )]
+        epoch: Result<InputEpoch>,
     },
-    // Acquire has always checked service availability before its fields.
-    // Keep that precedence without retaining untyped or authorized input.
     #[serde(skip)]
-    RefusedAcquire(Arc<Error>),
+    Unknown {
+        epoch: Result<InputEpoch>,
+    },
     Input {
         #[serde(default, deserialize_with = "Request::owner")]
         owner: String,
@@ -487,91 +411,76 @@ enum Request {
             default = "Request::missing_epoch",
             deserialize_with = "Request::input_epoch"
         )]
-        epoch: std::result::Result<InputEpoch, Arc<Error>>,
+        epoch: Result<InputEpoch>,
         #[serde(
             default = "Request::missing_actions",
             deserialize_with = "Request::actions"
         )]
-        actions: std::result::Result<Vec<Action>, Arc<Error>>,
+        actions: Result<Vec<Action>>,
         #[serde(default = "Request::no_expect", deserialize_with = "Request::expect")]
-        expect: std::result::Result<Option<Expect>, Arc<Error>>,
-        #[serde(default = "Request::no_app", deserialize_with = "Request::app")]
-        app: std::result::Result<bool, Arc<Error>>,
+        expect: Result<Option<Expect>>,
+        #[serde(default, deserialize_with = "Request::app")]
+        app: bool,
     },
+    #[serde(other)]
+    Unrecognized,
 }
 
 impl Request {
+    fn pid<'de, D: serde::Deserializer<'de>>(
+        deserializer: D,
+    ) -> std::result::Result<u64, D::Error> {
+        Ok(Value::deserialize(deserializer)?
+            .as_u64()
+            .unwrap_or_default())
+    }
+
+    fn hold<'de, D: serde::Deserializer<'de>>(
+        deserializer: D,
+    ) -> std::result::Result<Result<bool>, D::Error> {
+        Ok(Value::deserialize(deserializer)?
+            .as_bool()
+            .ok_or_else(|| Error::new(Code::Input, "Hold requires a boolean on")))
+    }
+
+    fn missing_hold() -> Result<bool> {
+        Err(Error::new(Code::Input, "Hold requires a boolean on"))
+    }
+
     fn app<'de, D: serde::Deserializer<'de>>(
         deserializer: D,
-    ) -> std::result::Result<std::result::Result<bool, Arc<Error>>, D::Error> {
-        use serde::de::Error as _;
-        Ok(bool::deserialize(deserializer)
-            .map_err(|error| Arc::new(Error::from(serde_json::Error::custom(error)))))
+    ) -> std::result::Result<bool, D::Error> {
+        Ok(Value::deserialize(deserializer)? == true)
     }
 
     fn input_epoch<'de, D: serde::Deserializer<'de>>(
         deserializer: D,
-    ) -> std::result::Result<std::result::Result<InputEpoch, Arc<Error>>, D::Error> {
-        let members = Members::deserialize(deserializer)?;
-        Ok(InputEpoch::deserialize(members.value)
-            .map_err(Error::from)
-            .and_then(|epoch| {
-                Self::unique(members.duplicate)?;
-                Ok(epoch)
-            })
-            .map_err(Arc::new))
-    }
-
-    fn unique(duplicate: Option<String>) -> Result<()> {
-        use serde::de::Error as _;
-        match duplicate {
-            Some(key) => Err(serde_json::Error::custom(format!("duplicate field `{key}`")).into()),
-            None => Ok(()),
-        }
+    ) -> std::result::Result<Result<InputEpoch>, D::Error> {
+        Ok(InputEpoch::deserialize(Value::deserialize(deserializer)?).map_err(Error::from))
     }
 
     fn actions<'de, D: serde::Deserializer<'de>>(
         deserializer: D,
-    ) -> std::result::Result<std::result::Result<Vec<Action>, Arc<Error>>, D::Error> {
-        use serde::de::Error as _;
-        let result = Vec::<Members>::deserialize(deserializer)
-            .map_err(|error| Error::from(serde_json::Error::custom(error)))
-            .and_then(|members| {
-                let duplicate = members.iter().find_map(|member| member.duplicate.clone());
-                let wire = Value::Array(members.into_iter().map(|member| member.value).collect());
-                let actions = actions::decode(&wire)?;
-                Self::unique(duplicate)?;
-                Ok(actions)
-            });
-        Ok(result.map_err(Arc::new))
+    ) -> std::result::Result<Result<Vec<Action>>, D::Error> {
+        Ok(actions::decode(&Value::deserialize(deserializer)?))
     }
 
-    fn missing_epoch() -> std::result::Result<InputEpoch, Arc<Error>> {
-        InputEpoch::deserialize(Value::Null).map_err(|error| Arc::new(error.into()))
+    fn missing_epoch() -> Result<InputEpoch> {
+        InputEpoch::deserialize(Value::Null).map_err(Error::from)
     }
 
-    fn missing_actions() -> std::result::Result<Vec<Action>, Arc<Error>> {
-        Vec::<Action>::deserialize(Value::Null).map_err(|error| Arc::new(error.into()))
+    fn missing_actions() -> Result<Vec<Action>> {
+        actions::decode(&Value::Null)
     }
 
-    fn no_expect() -> std::result::Result<Option<Expect>, Arc<Error>> {
+    fn no_expect() -> Result<Option<Expect>> {
         Ok(None)
-    }
-
-    fn no_app() -> std::result::Result<bool, Arc<Error>> {
-        Ok(false)
     }
 
     fn expect<'de, D: serde::Deserializer<'de>>(
         deserializer: D,
-    ) -> std::result::Result<std::result::Result<Option<Expect>, Arc<Error>>, D::Error> {
-        let members = Members::deserialize(deserializer)?;
-        Ok(Expect::from_request(&members.value)
-            .and_then(|expect| {
-                Self::unique(members.duplicate)?;
-                Ok(expect)
-            })
-            .map_err(Arc::new))
+    ) -> std::result::Result<Result<Option<Expect>>, D::Error> {
+        Ok(Expect::from_request(&Value::deserialize(deserializer)?))
     }
 
     fn agent() -> Who {
@@ -581,14 +490,16 @@ impl Request {
     fn who<'de, D: serde::Deserializer<'de>>(
         deserializer: D,
     ) -> std::result::Result<Who, D::Error> {
-        bool::deserialize(deserializer).map(|person| if person { Who::Person } else { Who::Agent })
+        Ok(if Value::deserialize(deserializer)? == true {
+            Who::Person
+        } else {
+            Who::Agent
+        })
     }
 
     fn owner<'de, D: serde::Deserializer<'de>>(
         deserializer: D,
     ) -> std::result::Result<String, D::Error> {
-        // Missing or non-string owners still take the operation's existing
-        // gate refusal, after ordinary checks for renew.
         Ok(Value::deserialize(deserializer)?
             .as_str()
             .unwrap_or_default()
@@ -596,64 +507,31 @@ impl Request {
     }
 
     fn decode(bytes: &[u8]) -> Result<Self> {
-        if !bytes.trim_ascii_start().starts_with(b"{") {
-            let _: Value = serde_json::from_slice(bytes)?;
+        // Parse once to preserve JSON's last-member value and sorted field
+        // refusal order, including within actions, epochs and expectations.
+        let value: Value = serde_json::from_slice(bytes)?;
+        if value.get("op").and_then(Value::as_str).is_none() {
             return Err(Error::new(
                 Code::Input,
                 "Native operation requires a string op",
             ));
         }
-
-        let refusal = match serde_json::from_slice(bytes) {
-            Ok(request) => return Ok(request),
-            Err(error) if !error.is_data() => return Err(error.into()),
-            Err(error) => error,
-        };
-
-        #[derive(Deserialize)]
-        struct Tag {
-            op: String,
-            #[serde(flatten)]
-            fields: serde_json::Map<String, Value>,
-        }
-
-        // Preserve lifecycle-specific refusals, including duplicate-tag
-        // rejection, without admitting any untyped request to execution.
-        let tag: Tag = serde_json::from_slice(bytes).map_err(|error| {
-            if error.is_data() {
-                Error::new(Code::Input, "Native operation requires a string op")
-            } else {
-                error.into()
-            }
-        })?;
-        match tag.op.as_str() {
-            "hello" => Err(refusal.into()),
-            "acquire" | "reset" => {
-                // Preserve sorted-key precedence and Value's epoch errors.
-                // If the old decoder accepts it, keep the typed refusal,
-                // including duplicates that Value would otherwise discard.
-                let error = Error::from(
-                    InputEpoch::deserialize(tag.fields.get("epoch").unwrap_or(&Value::Null))
-                        .err()
-                        .unwrap_or(refusal),
-                );
-                if tag.op == "acquire" {
-                    Ok(Self::RefusedAcquire(Arc::new(error)))
-                } else {
-                    Err(error)
-                }
-            }
-            "shutdown" => Err(Error::new(
-                Code::Identity,
-                "Shutdown names a different input service process",
-            )),
-            "hold" => Err(Error::new(Code::Input, "Hold requires a boolean on")),
-            "release" | "renew" => {
-                Err(Error::new(Code::Input, "Native owner must not be repeated"))
-            }
-            "input" => Err(refusal.into()),
-            _ => Err(Error::new(Code::Input, "Unknown native operation")),
-        }
+        // Every operation must choose whether to retain its fields or bind
+        // an unrecognized tag to the epoch checks, without another name table.
+        Ok(match Self::deserialize(&value)? {
+            Self::Unrecognized => Self::Unknown {
+                epoch: InputEpoch::deserialize(&value["epoch"]).map_err(Error::from),
+            },
+            request @ (Self::Hello
+            | Self::Shutdown { .. }
+            | Self::Hold { .. }
+            | Self::Release { .. }
+            | Self::Renew { .. }
+            | Self::Acquire { .. }
+            | Self::Reset { .. }
+            | Self::Input { .. }
+            | Self::Unknown { .. }) => request,
+        })
     }
 }
 
@@ -726,11 +604,12 @@ impl Service {
         match request {
             Request::Hello => self.hello().await,
             Request::Shutdown { pid } => self.shutdown(pid, phase).await,
-            Request::Hold { on } => self.set_hold(on, phase).await,
+            Request::Hold { on } => self.set_hold(on?, phase).await,
             Request::Release { owner } => self.release(owner, phase).await,
             Request::Renew { owner } => self.renew(owner, phase),
-            Request::RefusedAcquire(error) => self.refused_acquire(error),
-            Request::Reset { epoch } => self.recover(epoch, phase).await,
+            Request::Unknown { epoch } => self.unknown(epoch),
+            Request::Unrecognized => self.unknown(Request::missing_epoch()),
+            Request::Reset { epoch } => self.recover(epoch?, phase).await,
             Request::Acquire { owner, epoch, who } => self.acquire(owner, epoch, who, phase).await,
             Request::Input {
                 owner,
@@ -837,9 +716,21 @@ impl Service {
         Ok(json!({ "ok": true }))
     }
 
-    fn refused_acquire(&self, error: Arc<Error>) -> Result<Value> {
+    fn check_epoch(&self, expected: InputEpoch) -> Result<InputEpoch> {
+        let epoch = self.epoch()?;
+        if expected != epoch {
+            return Err(Error::new(
+                Code::SessionChanged,
+                "Input coordinates belong to a different session or display",
+            ));
+        }
+        Ok(epoch)
+    }
+
+    fn unknown(&self, epoch: Result<InputEpoch>) -> Result<Value> {
         self.check()?;
-        Err(Error::new(error.code, &error.error).with_source(error))
+        self.check_epoch(epoch?)?;
+        Err(Error::new(Code::Input, "Unknown native operation"))
     }
 
     async fn recover(
@@ -877,19 +768,13 @@ impl Service {
     async fn acquire(
         &self,
         owner: String,
-        expected: InputEpoch,
+        expected: Result<InputEpoch>,
         who: Who,
         phase: &watch::Sender<ConnectionPhase>,
     ) -> Result<Value> {
         self.check()?;
 
-        let epoch = self.epoch()?;
-        if expected != epoch {
-            return Err(Error::new(
-                Code::SessionChanged,
-                "Input coordinates belong to a different session or display",
-            ));
-        }
+        self.check_epoch(expected?)?;
         let mut engine = self.engine.lock().await;
         self.operations.check()?;
 
@@ -917,25 +802,16 @@ impl Service {
     async fn input(
         &self,
         owner: String,
-        expected: std::result::Result<InputEpoch, Arc<Error>>,
-        actions: std::result::Result<Vec<Action>, Arc<Error>>,
-        expect: std::result::Result<Option<Expect>, Arc<Error>>,
-        report_app: std::result::Result<bool, Arc<Error>>,
+        expected: Result<InputEpoch>,
+        actions: Result<Vec<Action>>,
+        expect: Result<Option<Expect>>,
+        report_app: bool,
         phase: &watch::Sender<ConnectionPhase>,
     ) -> Result<Value> {
         self.check()?;
-        let expected =
-            expected.map_err(|error| Error::new(error.code, &error.error).with_source(error))?;
-        let epoch = self.epoch()?;
-        if expected != epoch {
-            return Err(Error::new(
-                Code::SessionChanged,
-                "Input coordinates belong to a different session or display",
-            ));
-        }
+        let epoch = self.check_epoch(expected?)?;
         let grant = self.gate.grant(&owner)?;
-        let actions =
-            actions.map_err(|error| Error::new(error.code, &error.error).with_source(error))?;
+        let actions = actions?;
         actions::check(
             &actions,
             &Display {
@@ -945,10 +821,7 @@ impl Service {
             },
         )?;
         let count = actions.len();
-        let expect =
-            expect.map_err(|error| Error::new(error.code, &error.error).with_source(error))?;
-        let report_app =
-            report_app.map_err(|error| Error::new(error.code, &error.error).with_source(error))?;
+        let expect = expect?;
         agent_target(&self.gate, expect.as_ref())?;
         phase.send_replace(ConnectionPhase::Mutation("input"));
         let mut cancellation = Cancellation {
@@ -1477,7 +1350,8 @@ async fn handle(
         | Request::Release { .. }
         | Request::Renew { .. }
         | Request::Acquire { .. }
-        | Request::RefusedAcquire(_)
+        | Request::Unknown { .. }
+        | Request::Unrecognized
         | Request::Reset { .. } => (ConnectionPhase::Refusal, None, false),
     };
     phase.send_replace(initial);
@@ -1588,7 +1462,7 @@ mod tests {
             assert_eq!(owner, "a".repeat(48));
             assert_eq!(epoch.unwrap().width, display.width);
             assert_eq!(actions.unwrap().len(), 1);
-            assert_eq!(app.unwrap(), options.contains("true"));
+            assert_eq!(app, options.contains("true"));
             assert_eq!(expect.unwrap().is_some(), options.contains("812"));
         }
         for actions in [
@@ -1641,12 +1515,13 @@ mod tests {
                 panic!("expected typed input");
             };
             let error = expect.unwrap_err();
-            assert_eq!(json!(*error), json!(old), "{body}");
+            assert_eq!(json!(error), json!(old), "{body}");
         }
     }
 
     #[tokio::test]
-    async fn a_malformed_final_action_rejects_the_complete_batch_before_its_first_event() {
+    async fn input_fields_preserve_legacy_acceptance_and_reject_the_complete_invalid_batch()
+    -> std::result::Result<(), Box<dyn std::error::Error>> {
         let display = crate::session::Display {
             width: 800.0,
             height: 600.0,
@@ -1664,7 +1539,7 @@ mod tests {
             json!({"type":"wait","ms":0}),
         ];
         for action in alternatives {
-            let fields = action.as_object().unwrap();
+            let fields = action.as_object().ok_or("expected as_object")?;
             for (name, value) in fields {
                 let mut missing = fields.clone();
                 missing.remove(name);
@@ -1696,7 +1571,7 @@ mod tests {
                 ("dx", json!(0)),
                 ("dy", json!(1)),
             ] {
-                let applies = match fields["type"].as_str().unwrap() {
+                let applies = match fields["type"].as_str().ok_or("expected as_str")? {
                     "pointer" | "click" => ["button", "count", "modifiers"].contains(&name),
                     "drag" => name == "button",
                     "scroll" => ["dx", "dy"].contains(&name),
@@ -1727,8 +1602,8 @@ mod tests {
         for actions in [
             "null".to_owned(),
             "[]".into(),
-            serde_json::to_string(&vec![json!({"type":"key","key":"a"}); 33]).unwrap(),
-            serde_json::to_string(&vec![json!({"type":"wait","ms":250}); 9]).unwrap(),
+            serde_json::to_string(&vec![json!({"type":"key","key":"a"}); 33])?,
+            serde_json::to_string(&vec![json!({"type":"wait","ms":250}); 9])?,
         ] {
             cases.push(input_body(&format!(r#""actions":{actions}"#)));
         }
@@ -1750,14 +1625,20 @@ mod tests {
             )));
         }
         let base: Value =
-            serde_json::from_str(&input_body(r#""actions":[{"type":"key","key":"a"}]"#)).unwrap();
-        for (field, value) in base["epoch"].as_object().unwrap() {
-            let mut members = base["epoch"].as_object().unwrap().clone();
+            serde_json::from_str(&input_body(r#""actions":[{"type":"key","key":"a"}]"#))?;
+        for (field, value) in base["epoch"].as_object().ok_or("expected as_object")? {
+            let mut members = base["epoch"]
+                .as_object()
+                .ok_or("expected as_object")?
+                .clone();
             members.remove(field);
             let rest = json!(members).to_string();
             let rest = rest.trim_start_matches('{').trim_end_matches('}');
             let mut missing = base.clone();
-            missing["epoch"].as_object_mut().unwrap().remove(field);
+            missing["epoch"]
+                .as_object_mut()
+                .ok_or("expected as_object_mut")?
+                .remove(field);
             cases.push(missing.to_string());
             for wrong in [
                 Value::Null,
@@ -1781,15 +1662,14 @@ mod tests {
         for field in ["op", "owner", "epoch", "actions", "expect", "app"] {
             let base: Value = serde_json::from_str(&input_body(
                 r#""actions":[{"type":"key","key":"a"}],"expect":{"pid":812},"app":false"#,
-            ))
-            .unwrap();
+            ))?;
             let value = &base[field];
             for (first, second) in [
                 (value.to_string(), value.to_string()),
                 ("null".into(), value.to_string()),
                 (value.to_string(), "null".into()),
             ] {
-                let mut members = base.as_object().unwrap().clone();
+                let mut members = base.as_object().ok_or("expected as_object")?.clone();
                 members.remove(field);
                 let rest = json!(members).to_string();
                 cases.push(format!(
@@ -1801,7 +1681,7 @@ mod tests {
         for field in ["pid", "start", "window", "field"] {
             let values = json!({"pid":812,"start":[1,0],"window":42,"field":"Search"});
             let value = &values[field];
-            let mut rest = values.as_object().unwrap().clone();
+            let mut rest = values.as_object().ok_or("expected as_object")?.clone();
             rest.remove(field);
             let rest = json!(rest).to_string();
             cases.push(input_body(&format!(r#""actions":[{{"type":"key","key":"a"}}],"expect":{{{rest},"{field}":{value},"{field}":{value}}}"#, rest=rest.trim_start_matches('{').trim_end_matches('}'))));
@@ -1812,7 +1692,19 @@ mod tests {
             )));
         }
         for body in cases {
-            let stand = Stand::locked(&[]);
+            let wire: Value = serde_json::from_str(&body)?;
+            let legacy = (|| -> Result<Vec<Action>> {
+                if wire["op"].as_str() != Some("input") {
+                    return Err(Error::new(
+                        Code::Input,
+                        "Native operation requires a string op",
+                    ));
+                }
+                crate::session::InputEpoch::deserialize(&wire["epoch"])?;
+                let actions = crate::actions::parse(&wire["actions"], &display)?;
+                Expect::from_request(&wire["expect"])?;
+                Ok(actions)
+            })();
             let result = (|| -> Result<Vec<Action>> {
                 let Request::Input {
                     epoch,
@@ -1822,30 +1714,41 @@ mod tests {
                     ..
                 } = Request::decode(body.as_bytes())?
                 else {
-                    panic!("expected input");
+                    return Err(Error::new(
+                        Code::Input,
+                        "Native operation requires a string op",
+                    ));
                 };
-                if let Some(error) = [epoch.err(), expect.err(), app.err()]
-                    .into_iter()
-                    .flatten()
-                    .next()
-                {
-                    return Err(Error::new(error.code, &error.error));
-                }
-                let actions = actions.map_err(|error| Error::new(error.code, &error.error))?;
+                epoch?;
+                let actions = actions?;
                 crate::actions::check(&actions, &display)?;
+                expect?;
+                assert_eq!(app, wire["app"] == true, "{body}");
                 Ok(actions)
             })();
-            let mut engine = stand.lock().await;
-            if let Ok(actions) = result {
-                run(&mut *engine, &Gate::default(), actions, None)
-                    .await
-                    .unwrap();
-                panic!("malformed input reached execution: {body}");
+            match legacy {
+                Ok(expected) => {
+                    let actual = result?;
+                    assert_eq!(format!("{actual:?}"), format!("{expected:?}"), "{body}");
+                }
+                Err(expected) => {
+                    let stand = Stand::locked(&[]);
+                    let mut engine = stand.lock().await;
+                    let actual = match result {
+                        Err(error) => error,
+                        Ok(actions) => {
+                            let outcome = run(&mut *engine, &Gate::default(), actions, None).await;
+                            panic!("invalid input reached execution for {body}: {outcome:?}");
+                        }
+                    };
+                    assert_eq!(json!(actual), json!(expected), "{body}");
+                    assert_eq!(engine.posted, 0, "{body}");
+                    assert!(engine.log.is_empty(), "{body}");
+                    assert_eq!(engine.releases, 0, "{body}");
+                }
             }
-            assert_eq!(engine.posted, 0, "{body}");
-            assert!(engine.log.is_empty(), "{body}");
-            assert_eq!(engine.releases, 0, "{body}");
         }
+        Ok(())
     }
 
     #[tokio::test]
@@ -1883,8 +1786,16 @@ mod tests {
         }
     }
 
-    #[test]
-    fn unknown_operations_are_refused_before_epoch_execution_checks() {
+    #[tokio::test]
+    async fn unknown_operations_keep_availability_and_epoch_refusals()
+    -> std::result::Result<(), Box<dyn std::error::Error>> {
+        let directory = tempfile::tempdir()?;
+        let service = service(&directory.path().join("stopped"));
+        let (phase, observed) = super::watch::channel(super::ConnectionPhase::Refusal);
+        service
+            .operations
+            .failed
+            .store(true, super::Ordering::Relaxed);
         for fields in [
             "",
             r#", "epoch":null"#,
@@ -1892,40 +1803,77 @@ mod tests {
             r#", "epoch":{}, "epoch":false"#,
         ] {
             let body = format!(r#"{{"op":"unknown"{fields}}}"#);
-            let error = Request::decode(body.as_bytes()).unwrap_err();
+            let request = Request::decode(body.as_bytes())?;
+            let error = service
+                .dispatch(request, &phase)
+                .await
+                .err()
+                .ok_or("expected refusal")?;
+            assert_eq!(json!(error), json!(super::worker_failed()), "{body}");
+            assert!(matches!(
+                *observed.borrow(),
+                super::ConnectionPhase::Refusal
+            ));
+        }
+        service
+            .operations
+            .failed
+            .store(false, super::Ordering::Relaxed);
+        for epoch in [Value::Null, json!(false), json!({})] {
+            let body = json!({"op":"unknown","epoch":epoch}).to_string();
+            let Request::Unknown { epoch: actual } = Request::decode(body.as_bytes())? else {
+                panic!("expected unknown operation");
+            };
+            let expected = crate::session::InputEpoch::deserialize(&epoch)
+                .err()
+                .ok_or("expected refusal")?;
             assert_eq!(
-                json!(error),
-                json!({"ok":false,"code":"input","error":"Unknown native operation","uncertain":false})
+                json!(actual.err().ok_or("expected refusal")?),
+                json!(Error::from(expected))
             );
         }
+        let mut stale = service.epoch()?;
+        stale.display_id += 1;
+        let error = service.check_epoch(stale).err().ok_or("expected refusal")?;
+        assert_eq!(error.code, Code::SessionChanged);
+        assert!(!error.uncertain);
+        Ok(())
     }
 
     #[test]
-    fn a_present_malformed_person_flag_never_grants_control() {
-        let directory = tempfile::tempdir().unwrap();
+    fn only_a_literal_true_person_flag_selects_personal_control()
+    -> std::result::Result<(), Box<dyn std::error::Error>> {
+        let directory = tempfile::tempdir()?;
         let service = service(&directory.path().join("stopped"));
-        let epoch = serde_json::to_string(&service.epoch().unwrap()).unwrap();
-        for person in ["null", r#""true""#, "0", "1", "[]", "{}"] {
+        let epoch = serde_json::to_string(&service.epoch()?)?;
+        for person in ["null", r#""true""#, "0", "1", "[]", "{}", "false", "true"] {
             let body = format!(
                 r#"{{"op":"acquire","owner":"{}","epoch":{epoch},"person":{person}}}"#,
                 "a".repeat(48)
             );
-            assert!(
-                matches!(
-                    Request::decode(body.as_bytes()).unwrap(),
-                    Request::RefusedAcquire(_)
-                ),
-                "{body}"
+            let Request::Acquire { who, epoch, .. } = Request::decode(body.as_bytes())? else {
+                panic!("expected acquire");
+            };
+            assert_eq!(epoch?, service.epoch()?);
+            assert_eq!(
+                who,
+                if person == "true" {
+                    super::Who::Person
+                } else {
+                    super::Who::Agent
+                }
             );
-            assert!(!service.gate.active().unwrap());
+            assert!(!service.gate.active()?);
         }
+        Ok(())
     }
 
     #[test]
-    fn an_absent_person_flag_remains_an_agent() {
-        let directory = tempfile::tempdir().unwrap();
+    fn an_absent_person_flag_remains_an_agent()
+    -> std::result::Result<(), Box<dyn std::error::Error>> {
+        let directory = tempfile::tempdir()?;
         let service = service(&directory.path().join("stopped"));
-        let epoch = serde_json::to_string(&service.epoch().unwrap()).unwrap();
+        let epoch = serde_json::to_string(&service.epoch()?)?;
         let owner = "a".repeat(48);
         for (person, expected) in [
             ("", super::Who::Agent),
@@ -1937,40 +1885,44 @@ mod tests {
                 owner,
                 epoch: actual,
                 who,
-            } = Request::decode(body.as_bytes()).unwrap()
+            } = Request::decode(body.as_bytes())?
             else {
                 panic!("expected typed acquire");
             };
-            assert_eq!(actual, service.epoch().unwrap());
+            assert_eq!(actual?, service.epoch()?);
             assert_eq!(who, expected);
             let gate = Arc::new(Gate::default());
-            gate.hold(true).unwrap();
+            gate.hold(true)?;
             let grant = gate.acquire(&owner, who);
             if who == super::Who::Agent {
-                assert_eq!(grant.err().unwrap().code, Code::Stopped);
-                assert!(!gate.active().unwrap());
+                assert_eq!(
+                    grant.err().ok_or("expected stopped grant")?.code,
+                    Code::Stopped
+                );
+                assert!(!gate.active()?);
             } else {
-                assert!(grant.unwrap().authorize().is_ok());
-                assert_eq!(gate.holder().unwrap(), Some(crate::error::Holder::Person));
+                assert!(grant?.authorize().is_ok());
+                assert_eq!(gate.holder()?, Some(crate::error::Holder::Person));
             }
         }
+        Ok(())
     }
 
     #[test]
-    fn acquire_and_reset_ignore_only_unrelated_extensions() {
+    fn acquire_and_reset_ignore_only_unrelated_extensions()
+    -> std::result::Result<(), Box<dyn std::error::Error>> {
         let epoch = r#"{"uid":501,"securitySessionId":1,"displayId":2,"width":800,"height":600,"processId":1}"#;
         let body = format!(
             r#"{{"op":"acquire","epoch":{epoch},"other":1,"other":2,"on":null,"on":false}}"#
         );
-        let Request::Acquire { owner, who, .. } = Request::decode(body.as_bytes()).unwrap() else {
+        let Request::Acquire { owner, who, .. } = Request::decode(body.as_bytes())? else {
             panic!("expected typed acquire");
         };
         assert_eq!(owner, "");
         assert_eq!(who, super::Who::Agent);
         for owner in ["", "not-an-owner", &"a".repeat(48)] {
             let body = format!(r#"{{"op":"acquire","owner":"{owner}","epoch":{epoch}}}"#);
-            let Request::Acquire { owner: actual, .. } = Request::decode(body.as_bytes()).unwrap()
-            else {
+            let Request::Acquire { owner: actual, .. } = Request::decode(body.as_bytes())? else {
                 panic!("the gate checks token identity");
             };
             assert_eq!(actual, owner);
@@ -1979,25 +1931,23 @@ mod tests {
             r#"{{"op":"reset","epoch":{epoch},"owner":null,"owner":false,"person":[],"person":{{}},"other":1,"other":2}}"#
         );
         assert!(matches!(
-            Request::decode(body.as_bytes()).unwrap(),
+            Request::decode(body.as_bytes())?,
             Request::Reset { .. }
         ));
         // InputEpoch's existing sequence representation remains compatible.
         for op in ["acquire", "reset"] {
             let body = format!(r#"{{"op":"{op}","epoch":[501,1,2,800,600,1]}}"#);
             let (Request::Acquire { epoch: actual, .. } | Request::Reset { epoch: actual }) =
-                Request::decode(body.as_bytes()).unwrap()
+                Request::decode(body.as_bytes())?
             else {
                 panic!("expected a typed epoch");
             };
             assert_eq!(
-                actual,
-                crate::session::InputEpoch::deserialize(
-                    serde_json::from_str::<Value>(epoch).unwrap()
-                )
-                .unwrap()
+                actual?,
+                crate::session::InputEpoch::deserialize(serde_json::from_str::<Value>(epoch)?)?
             );
         }
+        Ok(())
     }
 
     #[test]
@@ -2033,7 +1983,12 @@ mod tests {
                 let body = format!(r#"{{"op":"{op}","epoch":{epoch}}}"#);
                 let error = match Request::decode(body.as_bytes()) {
                     Err(error) => json!(error),
-                    Ok(Request::RefusedAcquire(error)) => json!(&*error),
+                    Ok(
+                        Request::Acquire {
+                            epoch: Err(error), ..
+                        }
+                        | Request::Reset { epoch: Err(error) },
+                    ) => json!(error),
                     request => panic!("expected an epoch refusal for {body}: {request:?}"),
                 };
                 actual.push((body.clone(), error));
@@ -2074,10 +2029,10 @@ mod tests {
                 for request in [
                     Request::Acquire {
                         owner: "wrong-owner".into(),
-                        epoch: stale.clone(),
+                        epoch: Ok(stale.clone()),
                         who,
                     },
-                    Request::Reset { epoch: stale },
+                    Request::Reset { epoch: Ok(stale) },
                 ] {
                     let error = service.dispatch(request, &phase).await.unwrap_err();
                     assert_eq!(error.code, Code::Identity);
@@ -2292,9 +2247,22 @@ mod tests {
                 let (phase, observed) = super::watch::channel(super::ConnectionPhase::Refusal);
                 for body in malformed_acquire_and_reset_requests() {
                     match Request::decode(body.as_bytes()) {
-                        Ok(request @ Request::RefusedAcquire(_)) => {
+                        Ok(request) => {
                             let error = service.dispatch(request, &phase).await.unwrap_err();
-                            assert_eq!(json!(error), json!(service.check().unwrap_err()), "{body}");
+                            let Ok(wire) = serde_json::from_str::<Value>(&body) else {
+                                panic!("invalid fixture");
+                            };
+                            if wire["op"] == "acquire" {
+                                assert_eq!(
+                                    json!(error),
+                                    json!(service.check().unwrap_err()),
+                                    "{body}"
+                                );
+                            } else if let Err(expected) =
+                                crate::session::InputEpoch::deserialize(&wire["epoch"])
+                            {
+                                assert_eq!(json!(error), json!(Error::from(expected)), "{body}");
+                            }
                         }
                         Err(error) => {
                             assert!(
@@ -2303,7 +2271,6 @@ mod tests {
                             );
                             assert!(!error.uncertain, "{body}");
                         }
-                        Ok(_) => panic!("malformed fields reached dispatch: {body}"),
                     }
                     assert!(grant.authorize().is_ok(), "{body}");
                     assert!(!service.gate.held().unwrap(), "{body}");
@@ -2336,26 +2303,12 @@ mod tests {
         }
     }
 
-    // Field         | Presence/type             | Duplicates | Admission
-    // op            | required string           | refuse     | boundary
-    // shutdown pid  | required u64, bound PID    | refuse     | before controller checks
-    // hold on       | required boolean          | refuse     | before ordinary checks
-    // release owner | non-string becomes empty  | refuse     | existing gate refusal
-    // renew owner   | non-string becomes empty  | refuse     | ordinary checks, then gate
-    // extensions    | ignored                   | ignore     | no effects
-    // acquire owner | absent becomes empty      | refuse     | gate checks token identity
-    // acquire person| absent/false Agent, true Person; present non-bool refused
-    // epoch         | required InputEpoch       | refuse     | fresh authority checks in dispatch
     #[tokio::test]
-    async fn a_duplicate_lifecycle_member_is_refused_before_state_changes() {
-        let directory = tempfile::tempdir().unwrap();
+    async fn lifecycle_members_preserve_last_value_refusals_and_effects()
+    -> std::result::Result<(), Box<dyn std::error::Error>> {
+        let directory = tempfile::tempdir()?;
         let marker = directory.path().join("stopped");
-        let service = service(&marker);
         let (phase, observed) = super::watch::channel(super::ConnectionPhase::Refusal);
-        let grant = service
-            .gate
-            .acquire(&"a".repeat(48), super::Who::Person)
-            .unwrap();
         let pid = std::process::id();
         let mut cases = Vec::new();
         for fields in [
@@ -2372,11 +2325,7 @@ mod tests {
             r#""op":"hello","op":null"#,
             r#""op":"hello","\u006fp":"hello""#,
         ] {
-            cases.push((
-                format!("{{{fields}}}\n"),
-                Code::Input,
-                "Native operation requires a string op",
-            ));
+            cases.push(format!("{{{fields}}}\n"));
         }
         for fields in [
             "",
@@ -2388,11 +2337,7 @@ mod tests {
             r#", "pid":[]"#,
             r#", "pid":{}"#,
         ] {
-            cases.push((
-                format!(r#"{{"op":"shutdown"{fields}}}"#),
-                Code::Identity,
-                "Shutdown names a different input service process",
-            ));
+            cases.push(format!(r#"{{"op":"shutdown"{fields}}}"#));
         }
         for fields in [
             format!(r#""pid":{pid},"pid":0"#),
@@ -2400,11 +2345,7 @@ mod tests {
             format!(r#""pid":{pid},"pid":{pid}"#),
             format!(r#""pid":{pid},"\u0070id":{pid}"#),
         ] {
-            cases.push((
-                format!(r#"{{"op":"shutdown",{fields}}}"#),
-                Code::Identity,
-                "Shutdown names a different input service process",
-            ));
+            cases.push(format!(r#"{{"op":"shutdown",{fields}}}"#));
         }
         for operation in ["release", "renew"] {
             for fields in [
@@ -2415,41 +2356,65 @@ mod tests {
                 r#""owner":"a","owner":null"#,
                 r#""owner":"a","\u006fwner":"a""#,
             ] {
-                cases.push((
-                    format!(r#"{{"op":"{operation}",{fields}}}"#),
-                    Code::Input,
-                    "Native owner must not be repeated",
-                ));
+                cases.push(format!(r#"{{"op":"{operation}",{fields}}}"#));
             }
         }
         for stopped in [false, true] {
-            service.gate.hold(stopped).unwrap();
-            if stopped {
-                std::fs::write(&marker, b"stop").unwrap();
-            }
-            for (body, code, message) in &cases {
-                let result = match deliver(format!("{body}\n").into_bytes(), 64).await {
-                    Ok(request) => service.dispatch(request, &phase).await,
+            for body in &cases {
+                let parsed: Value = serde_json::from_str(body)?;
+                let canonical = parsed.to_string();
+                let reference_marker = directory.path().join("reference");
+                let reference = self::service(&reference_marker);
+                let actual = self::service(&marker);
+                for (instance, path) in [(&reference, &reference_marker), (&actual, &marker)] {
+                    instance.gate.acquire(&"a".repeat(48), super::Who::Person)?;
+                    instance.gate.hold(stopped)?;
+                    if stopped {
+                        std::fs::write(path, b"stop")?;
+                    } else if path.exists() {
+                        std::fs::remove_file(path)?;
+                    }
+                }
+                let (reference_phase, _) = super::watch::channel(super::ConnectionPhase::Refusal);
+                let reference_result = match Request::decode(canonical.as_bytes()) {
+                    Ok(request) => reference.dispatch(request, &reference_phase).await,
                     Err(error) => Err(error),
                 };
-                let error = result.unwrap_err();
-                assert_eq!(error.code, *code, "{body}");
-                assert_eq!(error.error, *message, "{body}");
-                assert!(!error.uncertain, "{body}");
-                assert!(
-                    matches!(*observed.borrow(), super::ConnectionPhase::Refusal),
-                    "{body}"
-                );
-                assert!(grant.authorize().is_ok(), "{body}");
-                assert_eq!(service.gate.held().unwrap(), stopped, "{body}");
-                assert_eq!(service.engine.lock().await.posted, 0, "{body}");
-                if stopped {
-                    assert_eq!(std::fs::read(&marker).unwrap(), b"stop", "{body}");
-                } else {
-                    assert!(!marker.exists(), "{body}");
+                let actual_result = match deliver(format!("{body}\n").into_bytes(), 64).await {
+                    Ok(request) => actual.dispatch(request, &phase).await,
+                    Err(error) => Err(error),
+                };
+                let refusal = match parsed["op"].as_str() {
+                    None => Some((Code::Input, "Native operation requires a string op")),
+                    Some("shutdown") if parsed["pid"].as_u64() != Some(u64::from(pid)) => Some((
+                        Code::Identity,
+                        "Shutdown names a different input service process",
+                    )),
+                    _ => None,
+                };
+                if let Some((code, message)) = refusal {
+                    let Err(error) = &actual_result else {
+                        panic!("invalid lifecycle field was accepted: {body}");
+                    };
+                    assert_eq!(error.code, code, "{body}");
+                    assert_eq!(error.error, message, "{body}");
+                    assert!(!error.uncertain, "{body}");
                 }
+                assert_eq!(json!(actual_result), json!(reference_result), "{body}");
+                assert_eq!(actual.gate.active()?, reference.gate.active()?, "{body}");
+                assert_eq!(actual.gate.held()?, reference.gate.held()?, "{body}");
+                assert_eq!(marker.exists(), reference_marker.exists(), "{body}");
+                let engine = actual.engine.lock().await;
+                assert_eq!(engine.posted, 0, "{body}");
+                assert!(!engine.held_input(), "{body}");
+                if matches!(*observed.borrow(), super::ConnectionPhase::Refusal) {
+                    assert!(actual.gate.active()?, "{body}");
+                    assert_eq!(actual.gate.held()?, stopped, "{body}");
+                }
+                phase.send_replace(super::ConnectionPhase::Refusal);
             }
         }
+        Ok(())
     }
 
     #[tokio::test]
@@ -2574,7 +2539,7 @@ mod tests {
         ));
         assert!(matches!(
             Request::decode(br#"{"on":true,"pid":null,"pid":false,"op":"hold"}"#).unwrap(),
-            Request::Hold { on: true }
+            Request::Hold { on: Ok(true) }
         ));
         for op in ["release", "renew"] {
             let body = format!(
@@ -2739,7 +2704,7 @@ mod tests {
     async fn lifecycle_replies_keep_their_exact_line_framing() {
         for (result, expected) in [
             (Ok(json!({"ok":true,"held":true,"kept":true})), b"{\"held\":true,\"kept\":true,\"ok\":true}\n".as_slice()),
-            (Err(Request::decode(br#"{"op":"hold","on":null}"#).unwrap_err()), b"{\"code\":\"input\",\"error\":\"Hold requires a boolean on\",\"ok\":false,\"uncertain\":false}\n".as_slice()),
+            (Request::decode(br#"{"op":"hold","on":null}"#).and_then(|request| match request { Request::Hold { on } => on.map(|_| json!({})), _ => panic!("expected hold") }), b"{\"code\":\"input\",\"error\":\"Hold requires a boolean on\",\"ok\":false,\"uncertain\":false}\n".as_slice()),
         ] {
             let (mut client, mut server) = UnixStream::pair().unwrap();
             super::reply(&mut server, result).await.unwrap();
@@ -2797,38 +2762,46 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn a_failed_refusal_reply_does_not_degrade_the_service() {
-        let operations = super::Operations::default();
-        let gate = Arc::new(Gate::default());
-        let directory = tempfile::tempdir().unwrap();
+    async fn a_failed_refusal_reply_does_not_degrade_the_service()
+    -> std::result::Result<(), Box<dyn std::error::Error>> {
+        let directory = tempfile::tempdir()?;
         let marker = directory.path().join("stopped");
-        let (mut client, mut server) = UnixStream::pair().unwrap();
-        client
-            .write_all(b"{\"op\":\"hold\",\"on\":null}\n")
-            .await
-            .unwrap();
+        let service = Arc::new(service(&marker));
+        let (mut client, mut server) = UnixStream::pair()?;
+        client.write_all(b"{\"op\":\"hold\",\"on\":null}\n").await?;
         drop(client);
         let (phase, observed) = super::watch::channel(super::ConnectionPhase::Refusal);
         let mut tasks = super::JoinSet::new();
+        let serving = service.clone();
         let task = tasks.spawn(async move {
-            let _phase = phase;
-            let refusal = read_request(&mut server).await.unwrap_err();
-            assert_eq!(refusal.code, Code::Input);
-            assert_eq!(refusal.error, "Hold requires a boolean on");
-            assert!(!refusal.uncertain);
-            super::reply(&mut server, Err(refusal)).await
+            let request = read_request(&mut server).await?;
+            let refusal = serving.dispatch(request, &phase).await;
+            let Err(error) = &refusal else {
+                panic!("expected a hold refusal");
+            };
+            assert_eq!(error.code, Code::Input);
+            assert_eq!(error.error, "Hold requires a boolean on");
+            assert!(!error.uncertain);
+            assert!(matches!(*phase.borrow(), super::ConnectionPhase::Refusal));
+            super::reply(&mut server, refusal).await
         });
-        operations
+        service
+            .operations
             .connections
             .lock()
-            .unwrap()
+            .map_err(|_| "connection tracking failed")?
             .insert(task.id(), (observed, false));
-        let outcome = tasks.join_next_with_id().await.unwrap();
+        let outcome = tasks
+            .join_next_with_id()
+            .await
+            .ok_or("connection missing")?;
         assert!(matches!(outcome, Ok((_, Err(_)))));
-        super::connection_outcome(outcome, &operations, false).unwrap();
-        operations.check().unwrap();
-        assert!(!gate.held().unwrap());
+        super::connection_outcome(outcome, &service.operations, false)?;
+        service.operations.check()?;
+        assert!(!service.gate.held()?);
         assert!(!marker.exists());
+        assert_eq!(service.engine.lock().await.posted, 0);
+        Ok(())
     }
 
     #[tokio::test]
@@ -3143,17 +3116,18 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn repeated_stop_fields_never_change_the_stop() {
-        let dir = tempfile::tempdir().unwrap();
+    async fn stop_fields_use_the_last_boolean_and_invalid_values_leave_the_stop_unchanged()
+    -> std::result::Result<(), Box<dyn std::error::Error>> {
+        let dir = tempfile::tempdir()?;
         let marker = dir.path().join("stopped");
         let gate = Gate::default();
         let (phase, observed) = super::watch::channel(super::ConnectionPhase::Refusal);
 
         for stopped in [true, false] {
-            let reply = hold(&gate, &marker, stopped, &phase).unwrap();
+            let reply = hold(&gate, &marker, stopped, &phase)?;
             assert_eq!(reply, json!({"ok": true, "held": stopped, "kept": true}));
             if stopped {
-                std::fs::write(&marker, b"stop").unwrap();
+                std::fs::write(&marker, b"stop")?;
             }
             for fields in [
                 r#", "on": true, "on": false"#,
@@ -3174,11 +3148,22 @@ mod tests {
                 let body = format!("{{\"op\":\"hold\"{fields}}}\n");
                 phase.send_replace(super::ConnectionPhase::Refusal);
                 let result = match deliver(body.clone().into_bytes(), 64).await {
-                    Ok(Request::Hold { on }) => hold(&gate, &marker, on, &phase),
+                    Ok(Request::Hold { on }) => on.and_then(|on| hold(&gate, &marker, on, &phase)),
                     Ok(_) => panic!("expected hold"),
                     Err(error) => Err(error),
                 };
-                let error = result.unwrap_err();
+                let wire: Value = serde_json::from_str(&body)?;
+                if let Some(on) = wire["on"].as_bool() {
+                    assert_eq!(result?, json!({"ok":true,"held":on,"kept":true}), "{body}");
+                    assert_eq!(gate.held()?, on, "{body}");
+                    assert_eq!(marker.exists(), on, "{body}");
+                    hold(&gate, &marker, stopped, &phase)?;
+                    if stopped {
+                        std::fs::write(&marker, b"stop")?;
+                    }
+                    continue;
+                }
+                let error = result.err().ok_or("expected refusal")?;
                 assert_eq!(error.code, Code::Input, "{body}");
                 assert_eq!(error.error, "Hold requires a boolean on");
                 assert!(!error.uncertain, "{body}");
@@ -3186,9 +3171,9 @@ mod tests {
                     *observed.borrow(),
                     super::ConnectionPhase::Refusal
                 ));
-                assert_eq!(gate.held().unwrap(), stopped, "{body}");
+                assert_eq!(gate.held()?, stopped, "{body}");
                 if stopped {
-                    assert_eq!(std::fs::read(&marker).unwrap(), b"stop", "{body}");
+                    assert_eq!(std::fs::read(&marker)?, b"stop", "{body}");
                 } else {
                     assert!(!marker.exists(), "{body}");
                 }
@@ -3197,14 +3182,16 @@ mod tests {
 
         for on in [true, false] {
             let body = format!("{{\"op\":\"hold\",\"on\":{on},\"other\":1,\"other\":2}}\n");
-            let Request::Hold { on } = deliver(body.into_bytes(), 64).await.unwrap() else {
+            let Request::Hold { on } = deliver(body.into_bytes(), 64).await? else {
                 panic!("expected hold");
             };
-            let reply = hold(&gate, &marker, on, &phase).unwrap();
+            let on = on?;
+            let reply = hold(&gate, &marker, on, &phase)?;
             assert_eq!(reply, json!({"ok": true, "held": on, "kept": true}));
-            assert_eq!(gate.held().unwrap(), on);
+            assert_eq!(gate.held()?, on);
             assert_eq!(marker.exists(), on);
         }
+        Ok(())
     }
 
     /// What a stand-in engine does at one action.

@@ -621,9 +621,9 @@ fn lost_install_acknowledgement_uses_the_prepared_inode_not_just_its_hash() {
     let mut transaction = store.transaction(&plan.id).unwrap().unwrap();
     // This is the on-disk boundary after rename and before ledger acknowledgement.
     transaction.phase = Phase::Applying;
-    let prepared = transaction.progress[0].prepared().clone().unwrap();
+    let prepared = transaction.progress[0].prepared.clone().unwrap();
     transaction.progress[0] = Progress::default();
-    transaction.progress[0].record_prepared(prepared);
+    transaction.progress[0].prepared = Some(prepared);
     store.save(&transaction).unwrap();
     store.save_ledger(&Ledger::default()).unwrap();
     store.activate(&plan.id).unwrap();
@@ -702,11 +702,11 @@ fn an_untouched_rollback_needs_no_applied_or_reverting_flag() {
     let store = state::Store::open(&sandbox.home, Lock::Shared).unwrap();
     let transaction = store.transaction(&plan.id).unwrap().unwrap();
     let progress = &transaction.progress[0];
-    assert!(progress.restored());
-    assert!(!progress.applied());
-    assert!(!progress.reverting());
-    assert!(!progress.kept());
-    assert!(progress.prepared().is_none());
+    assert!(progress.restored);
+    assert!(!progress.applied);
+    assert!(!progress.reverting);
+    assert!(!progress.kept);
+    assert!(progress.prepared.is_none());
     assert!(!sandbox.home.join("file").exists());
 }
 
@@ -752,7 +752,7 @@ fn file_progress_at(sandbox: &Sandbox, operation: Operation, boundary: &str) -> 
         if boundary == "unrecorded prepared inode" {
             return plan;
         }
-        transaction.progress[0].record_prepared(fingerprint(&install).unwrap().unwrap());
+        transaction.progress[0].prepared = Some(fingerprint(&install).unwrap().unwrap());
         store.save(&transaction).unwrap();
         if boundary == "prepared evidence" {
             return plan;
@@ -775,7 +775,7 @@ fn file_progress_at(sandbox: &Sandbox, operation: Operation, boundary: &str) -> 
     if boundary == "apply ledger" {
         return plan;
     }
-    transaction.progress[0].acknowledge_applied();
+    transaction.progress[0].applied = true;
     store.save(&transaction).unwrap();
     if boundary == "applied acknowledgement" {
         return plan;
@@ -805,7 +805,7 @@ fn file_progress_at(sandbox: &Sandbox, operation: Operation, boundary: &str) -> 
             }
             super::fingerprint(&restore).unwrap().unwrap()
         };
-        transaction.progress[0].record_restore(Some(restore));
+        transaction.progress[0].restore = Some(restore);
         if operation != Operation::Unchanged {
             store.save(&transaction).unwrap();
             if boundary == "restore evidence" {
@@ -814,7 +814,7 @@ fn file_progress_at(sandbox: &Sandbox, operation: Operation, boundary: &str) -> 
         }
     }
     if boundary != "kept ledger" && boundary != "kept acknowledgement" {
-        transaction.progress[0].begin_reverting();
+        transaction.progress[0].reverting = true;
         store.save(&transaction).unwrap();
         if boundary == "reverting intent" {
             return plan;
@@ -835,7 +835,7 @@ fn file_progress_at(sandbox: &Sandbox, operation: Operation, boundary: &str) -> 
         Some(Entry::Managed { generation, .. }) => Some(Entry::Managed {
             generation: generation.clone(),
             fingerprint: transaction.progress[0]
-                .restore()
+                .restore
                 .clone()
                 .unwrap_or_else(|| plan.files[0].before.clone().unwrap()),
         }),
@@ -853,7 +853,7 @@ fn file_progress_at(sandbox: &Sandbox, operation: Operation, boundary: &str) -> 
     if boundary == "kept acknowledgement" {
         transaction.progress[0].complete_kept();
     } else {
-        transaction.progress[0].acknowledge_restored();
+        transaction.progress[0].restored = true;
     }
     store.save(&transaction).unwrap();
     plan
@@ -1009,10 +1009,10 @@ fn rollback_progress_rejects_only_proven_impossible_evidence_pairs() {
         let store = state::Store::open(&sandbox.home, Lock::Exclusive).unwrap();
         let mut transaction = store.transaction(&plan.id).unwrap().unwrap();
         if operation == Operation::Create {
-            let prepared = transaction.progress[0].prepared().clone();
-            transaction.progress[0].record_restore(prepared);
+            let prepared = transaction.progress[0].prepared.clone();
+            transaction.progress[0].restore = prepared;
         } else {
-            transaction.progress[0].record_restore(None);
+            transaction.progress[0].restore = None;
         }
         let record = store.folder(&plan.id).join("transaction.json");
         let original = fs::read(&record).unwrap();
@@ -1042,8 +1042,8 @@ fn reverting_files_can_be_kept_after_drift() {
         assert_eq!(result["keptTargets"], json!(["file"]));
         let store = state::Store::open(&sandbox.home, Lock::Shared).unwrap();
         let transaction = store.transaction(&plan.id).unwrap().unwrap();
-        assert!(transaction.progress[0].reverting());
-        assert!(transaction.progress[0].kept());
+        assert!(transaction.progress[0].reverting);
+        assert!(transaction.progress[0].kept);
         assert_eq!(fs::read(sandbox.home.join("file")).unwrap(), b"helper edit");
     }
 }
@@ -1067,9 +1067,9 @@ fn legacy_progress_keeps_optional_fingerprints_and_kept_defaults() {
         let bytes = serde_json::to_vec_pretty(&record).unwrap();
         atomic_write(&path, &bytes, 0o600).unwrap();
         let transaction = store.transaction(&plan.id).unwrap().unwrap();
-        assert!(!transaction.progress[0].kept());
-        assert!(transaction.progress[0].prepared().is_none());
-        assert!(transaction.progress[0].restore().is_none());
+        assert!(!transaction.progress[0].kept);
+        assert!(transaction.progress[0].prepared.is_none());
+        assert!(transaction.progress[0].restore.is_none());
         assert_eq!(fs::read(&path).unwrap(), bytes);
         drop(store);
         assert_eq!(sandbox.rollback(&plan, true)["rolledBack"], true);
@@ -3473,8 +3473,8 @@ fn rolled_back_plans_never_push_an_older_applied_one_out_of_the_list() {
         .unwrap();
     let mut undone = store.transaction(&applied.id).unwrap().unwrap();
     undone.phase = Phase::RolledBack;
-    undone.progress[0].begin_reverting();
-    undone.progress[0].acknowledge_restored();
+    undone.progress[0].reverting = true;
+    undone.progress[0].restored = true;
     for _ in 0..210 {
         undone.plan.id = crate::files::token();
         fs::create_dir(store.folder(&undone.plan.id)).unwrap();

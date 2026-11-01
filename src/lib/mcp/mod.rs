@@ -19,6 +19,7 @@ use crate::{
     },
     host_session::{Host, HostSession, Key, names::names, record, store::Store},
 };
+use serde::Deserialize;
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 use std::{
@@ -62,7 +63,6 @@ const SHOTS: usize = 30;
 /// The most actions one input request carries, as the helper takes them.
 const ACTIONS: usize = 32;
 /// The input actions the view may send.
-const KINDS: [&str; 5] = ["pointer", "move", "scroll", "type", "key"];
 /// What the server needs to answer: the helper's client, and where to open
 /// Atlas's viewer from.
 struct Server {
@@ -1189,10 +1189,9 @@ fn checked(actions: &Value) -> Result<&Value> {
         .filter(|list| (1..=ACTIONS).contains(&list.len()))
         .ok_or_else(|| refused("Send 1 to 32 actions"))?;
 
-    if list
-        .iter()
-        .any(|action| !KINDS.contains(&action["type"].as_str().unwrap_or_default()))
-    {
+    if list.iter().any(|action| {
+        !crate::actions::Kind::deserialize(action).is_ok_and(crate::actions::Kind::personal)
+    }) {
         return Err(refused("Only clicks, scrolls, typing and keys may be sent"));
     }
 

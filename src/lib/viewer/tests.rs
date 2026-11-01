@@ -249,7 +249,7 @@ async fn the_person_stops_and_resumes_agents_through_the_viewer() {
 }
 
 #[tokio::test]
-async fn repeated_stop_fields_never_change_the_stop() {
+async fn stop_fields_use_the_last_boolean_and_invalid_values_leave_the_stop_unchanged() {
     let dir = tempfile::tempdir().unwrap();
     let viewer = http::configured(client(dir.path()), "127.0.0.1:0".into(), None);
     let client = viewer.client();
@@ -293,6 +293,21 @@ async fn repeated_stop_fields_never_change_the_stop() {
                 r#"{"on":{}}"#,
             ] {
                 let (status, reply) = posted_raw(&viewer, "control/hold", body).await;
+                let Ok(wire) = serde_json::from_str::<serde_json::Value>(body) else {
+                    panic!("invalid stop fixture");
+                };
+                if let Some(on) = wire["on"].as_bool() {
+                    assert_eq!(status, 200, "{body}: {reply}");
+                    assert_eq!(reply["held"], on, "{body}");
+                    assert_eq!(client.controller.stop_noted(), on, "{body}");
+                    let (status, reply) =
+                        posted(&viewer, "control/hold", &json!({"on": stopped})).await;
+                    assert_eq!(status, 200, "{reply}");
+                    if stopped {
+                        assert!(std::fs::write(&marker, b"stop").is_ok());
+                    }
+                    continue;
+                }
                 assert_eq!(status, 400, "{body}: {reply}");
                 assert_eq!(reply["code"], "input");
                 assert_eq!(reply["error"], "Hold requires a boolean on");

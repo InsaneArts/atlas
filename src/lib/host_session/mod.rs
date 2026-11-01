@@ -31,27 +31,28 @@ pub(crate) const ID_MAX: usize = 128;
 /// apart.
 const ANCESTORS: usize = 32;
 
-/// Where each host names its session, the first plain value winning. A
-/// name given with `ATLAS_SESSION` is read only when none of these is.
-const SOURCES: [(Host, &[&str]); 5] = [
-    (Host::Claude, &["CLAUDE_CODE_SESSION_ID"]),
-    (Host::Codex, &["CODEX_SESSION_ID", "CODEX_THREAD_ID"]),
-    (Host::Opencode, &["ATLAS_OPENCODE_SESSION"]),
-    (Host::Pi, &["PI_SESSION_ID"]),
-    (Host::Cursor, &["ATLAS_CURSOR_SESSION"]),
-];
+/// Each identity declares its ordered environment sources. The declaration
+/// also generates the complete scan, so a new host cannot omit attribution.
+macro_rules! hosts {
+    ($($(#[$attr:meta])* $host:ident => [$($source:literal),*]),* $(,)?) => {
+        /// An agent host Atlas can tell a session of.
+        #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
+        #[serde(rename_all = "lowercase")]
+        pub enum Host { $($(#[$attr])* $host),* }
 
-/// An agent host Atlas can tell a session of.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
-#[serde(rename_all = "lowercase")]
-pub enum Host {
-    Claude,
-    Codex,
-    Opencode,
-    Pi,
-    Cursor,
+        const SOURCES: &[(Host, &[&str])] = &[$((Host::$host, &[$($source),*])),*];
+    };
+}
+
+// The first plain value wins. Named sessions are read only after this scan.
+hosts! {
+    Claude => ["CLAUDE_CODE_SESSION_ID"],
+    Codex => ["CODEX_SESSION_ID", "CODEX_THREAD_ID"],
+    Opencode => ["ATLAS_OPENCODE_SESSION"],
+    Pi => ["PI_SESSION_ID"],
+    Cursor => ["ATLAS_CURSOR_SESSION"],
     /// A name given with ATLAS_SESSION, outside any host Atlas knows.
-    Named,
+    Named => [],
 }
 
 impl Host {
@@ -60,7 +61,7 @@ impl Host {
             Self::Claude => Some("CLAUDE_PID"),
             Self::Opencode => Some("ATLAS_OPENCODE_PID"),
             Self::Pi => Some("ATLAS_PI_PID"),
-            _ => None,
+            Self::Codex | Self::Cursor | Self::Named => None,
         }
     }
 

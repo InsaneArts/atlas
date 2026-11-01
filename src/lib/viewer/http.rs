@@ -374,7 +374,7 @@ pub(super) async fn respond(viewer: Arc<Viewer>, request: Request) -> Response {
         }
     };
 
-    let (raw_body, body) = match read_body(request).await {
+    let body = match read_body(request).await {
         Ok(body) => body,
         Err(response) => return response,
     };
@@ -399,17 +399,10 @@ pub(super) async fn respond(viewer: Arc<Viewer>, request: Request) -> Response {
         Change::Recover => viewer.recover().await,
         Change::Cleanup => viewer.clean_up(body["session"].as_str()).await,
         // Control a viewer holds is left alone either way.
-        Change::Hold => {
-            #[derive(serde::Deserialize)]
-            struct Hold {
-                on: bool,
-            }
-
-            match serde_json::from_slice(&raw_body) {
-                Ok(Hold { on }) => viewer.client().hold(on).await,
-                Err(_) => Err(Error::new(Code::Input, "Hold requires a boolean on")),
-            }
-        }
+        Change::Hold => match body["on"].as_bool() {
+            Some(on) => viewer.client().hold(on).await,
+            None => Err(Error::new(Code::Input, "Hold requires a boolean on")),
+        },
         Change::Input => {
             viewer
                 .control(Control::Input {
@@ -435,8 +428,8 @@ pub(super) async fn respond(viewer: Arc<Viewer>, request: Request) -> Response {
     mutation_reply(&viewer, owner, outcome).await
 }
 
-/// Read one bounded JSON object, retaining its bytes for field duplicate checks.
-async fn read_body(request: Request) -> std::result::Result<(Bytes, Value), Response> {
+/// Read one bounded JSON object with the existing last-member interpretation.
+async fn read_body(request: Request) -> std::result::Result<Value, Response> {
     if request.headers().contains_key("transfer-encoding")
         || header(request.headers(), "content-type").and_then(|kind| kind.split(';').next())
             != Some("application/json")
@@ -472,8 +465,7 @@ async fn read_body(request: Request) -> std::result::Result<(Bytes, Value), Resp
         }
     };
 
-    let raw_body = body;
-    let body = match serde_json::from_slice(&raw_body) {
+    let body = match serde_json::from_slice(&body) {
         Ok(value @ Value::Object(_)) => value,
         _ => {
             return Err(json_response(
@@ -483,7 +475,7 @@ async fn read_body(request: Request) -> std::result::Result<(Bytes, Value), Resp
         }
     };
 
-    Ok((raw_body, body))
+    Ok(body)
 }
 
 /// Map a mutation's outcome and finish only the lease that request named.

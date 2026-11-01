@@ -1,4 +1,4 @@
-//! Time-limited commands with owned process groups and bounded output.
+//! Time-limited commands with owned process groups and complete output.
 use nix::{
     fcntl::{FcntlArg, OFlag, fcntl},
     poll::{PollFd, PollFlags, poll},
@@ -40,14 +40,13 @@ const POLL: Duration = Duration::from_millis(5);
 /// How long output may keep arriving after its command ended.
 const DRAIN: Duration = Duration::from_millis(500);
 
-/// Each stream retains at most 8 MiB, for at most 16 MiB combined.
-const STREAM_LIMIT: usize = 8 * 1024 * 1024;
-
-/// Run with no input in an isolated process group. Timeouts, oversized
-/// output and I/O failures stop the group and reap the child; a cleanup
+/// Run with no input in an isolated process group. Timeouts and I/O
+/// failures stop the group and reap the child; a cleanup
 /// failure retains both causes and reports which termination is unknown.
 pub(crate) fn output(command: &mut Command, limit: Duration) -> io::Result<Output> {
-    output_with_limit(command, limit, STREAM_LIMIT)
+    // Complete directory listings have no byte ceiling. A completed large
+    // network-directory response must still participate in UID selection.
+    output_with_limit(command, limit, usize::MAX)
 }
 
 fn output_with_limit(command: &mut Command, limit: Duration, cap: usize) -> io::Result<Output> {
@@ -443,6 +442,21 @@ mod tests {
     };
 
     const WATCHDOG: Duration = Duration::from_secs(20);
+
+    #[test]
+    fn complete_output_larger_than_eight_mebibytes_is_still_accepted() -> io::Result<()> {
+        watched(|| {
+            let output = output(
+                Command::new("/bin/dd").args(["if=/dev/zero", "bs=1048576", "count=9"]),
+                WATCHDOG / 2,
+            )?;
+            assert!(output.status.success());
+            assert_eq!(output.stdout.len(), 9 * 1024 * 1024);
+            assert!(output.stdout.iter().all(|byte| *byte == 0));
+            assert_output_reaped();
+            Ok(())
+        })
+    }
 
     fn assert_output_reaped() {
         assert_eq!(

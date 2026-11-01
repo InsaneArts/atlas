@@ -6,12 +6,13 @@ use super::{
     windows::{DockRead, window_snapshot},
 };
 use crate::{
-    actions::{self, Action, Expect, Target as ActionTarget},
+    actions::{self, Expect, Target as ActionTarget},
     client::{Client, Verified},
     error::{Code, Error, Result},
     last_capture::{Observation, recorded_epoch},
     screen::windows::{DOCK_LAYER, HitWindow, Window},
 };
+use serde::Deserialize;
 use serde_json::Value;
 
 /// Send `actions` as one batch. With an expectation, the app is found once
@@ -20,17 +21,25 @@ use serde_json::Value;
 /// window and field when named, have keyboard focus, pointer actions where
 /// the app's own window, or the named one, is the top one.
 pub async fn act(client: &Client, expected: Option<&Expected>, actions: &Value) -> Result<Value> {
-    let actions = actions::Batch::decode(actions);
-    // Explicit targets and anonymous input never consult window memory.
-    // Keep their action refusals behind the existing client guards.
-    let (actions, remembered) = match actions {
-        Ok(actions) => {
-            let remembered = Expected::remembered(client, expected, actions.actions())?;
-            (Ok(actions), remembered)
-        }
-        Err(error) if expected.is_some() || client.host_session.is_none() => (Err(error), None),
-        Err(error) => return Err(error),
+    let decoded = actions::Batch::decode(actions);
+    let point = match &decoded {
+        Ok(batch) => match batch.actions() {
+            [action] => match action.target() {
+                ActionTarget::Point(x, y) => Some((x, y)),
+                ActionTarget::Drag { from, .. } => Some(from),
+                ActionTarget::Keys | ActionTarget::Nothing | ActionTarget::Pointer(..) => None,
+            },
+            _ => None,
+        },
+        Err(_) => actions.as_array().and_then(|list| match list.as_slice() {
+            [action] => actions::Kind::deserialize(action)
+                .ok()?
+                .remembered_point(action),
+            _ => None,
+        }),
     };
+    let remembered = Expected::remembered(client, expected, point)?;
+    let actions = decoded;
     let inferred;
     let expected = match (&remembered, expected) {
         (None, None) => {
@@ -107,20 +116,13 @@ impl Expected {
     fn remembered(
         client: &Client,
         expected: Option<&Self>,
-        actions: &[Action],
+        point: Option<(f64, f64)>,
     ) -> Result<Option<(HitWindow, Value)>> {
         if expected.is_some() {
             return Ok(None);
         }
-        let [action] = actions else {
+        let Some((x, y)) = point else {
             return Ok(None);
-        };
-        let (x, y) = match action.target() {
-            ActionTarget::Point(x, y) => (x, y),
-            ActionTarget::Drag { from, .. } => from,
-            ActionTarget::Keys | ActionTarget::Nothing | ActionTarget::Pointer(..) => {
-                return Ok(None);
-            }
         };
         let Some(session) = client.host_session.as_ref() else {
             return Ok(None);
@@ -297,7 +299,13 @@ mod tests {
         expected: Option<&Expected>,
         actions: &Value,
     ) -> Result<Option<(HitWindow, Value)>> {
-        Expected::remembered(client, expected, &actions::decode(actions)?)
+        let point = actions.as_array().and_then(|list| match list.as_slice() {
+            [action] => actions::Kind::deserialize(action)
+                .ok()?
+                .remembered_point(action),
+            _ => None,
+        });
+        Expected::remembered(client, expected, point)
     }
 
     fn number(client: &Client, expected: Option<&Expected>, actions: &Value) -> Option<i64> {
@@ -356,7 +364,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn a_malformed_action_is_refused_before_unreadable_window_memory() {
+    async fn malformed_point_fields_keep_the_unreadable_window_refusal_first() {
         let directory = tempfile::tempdir().unwrap();
         let client = session(&crate::test_support::client(directory.path()), "one");
         remember(&client, &[window(42, 10.0)]);
@@ -366,9 +374,10 @@ mod tests {
         ));
         std::fs::write(path, "unreadable json").unwrap();
         let actions = json!([{"type":"click","x":30,"y":40,"count":"two"}]);
-        let expected = actions::decode(&actions).unwrap_err();
+        let expected = remembered(&client, None, &actions).unwrap_err();
         let error = act(&client, None, &actions).await.unwrap_err();
         assert_eq!(json!(error), json!(expected));
+        assert_eq!(error.code, Code::Windows);
         assert!(!error.uncertain);
         assert!(client.controller.pending().unwrap().is_empty());
     }
@@ -381,14 +390,45 @@ mod tests {
         let explicit = Expected::new(None, Some(42), None).unwrap();
         let claim = anonymous.controller.quarantine().unwrap();
         let pending = anonymous.controller.pending().unwrap();
-        let actions = json!([{"type":"click","x":30,"y":40,"count":"two"}]);
-        for (client, target) in [(&anonymous, None), (&named, explicit.as_ref())] {
-            let expected = client.controller.acquire_beside_commands().unwrap_err();
-            let error = act(client, target, &actions).await.unwrap_err();
-            assert_eq!(json!(error), json!(expected));
-            assert_eq!(client.controller.pending().unwrap(), pending);
+        for actions in [
+            json!([{"type":"click","x":30,"y":40,"count":"two"}]),
+            json!([{"type":"unknown"}]),
+            json!([{"type":"key","key":false}]),
+        ] {
+            for (client, target) in [
+                (&anonymous, None),
+                (&named, None),
+                (&named, explicit.as_ref()),
+            ] {
+                let expected = client.controller.acquire_beside_commands().unwrap_err();
+                let error = act(client, target, &actions).await.unwrap_err();
+                assert_eq!(json!(error), json!(expected));
+                assert_eq!(client.controller.pending().unwrap(), pending);
+            }
         }
         drop(claim);
+    }
+
+    #[tokio::test]
+    async fn a_named_malformed_batch_keeps_another_controllers_busy_refusal() -> Result<()> {
+        let directory = tempfile::tempdir()?;
+        let client = session(&crate::test_support::client(directory.path()), "one");
+        let _ownership = client.controller.acquire_beside_commands()?;
+        for actions in [
+            json!([{"type":"unknown"}]),
+            json!([{"type":"click","x":30,"y":40,"count":"two"}]),
+        ] {
+            let Err(expected) = client.controller.acquire_beside_commands() else {
+                panic!("the other controller must keep exclusion");
+            };
+            let Err(error) = act(&client, None, &actions).await else {
+                panic!("a malformed batch cannot execute under another controller");
+            };
+            assert_eq!(error.code, Code::Busy);
+            assert_eq!(json!(error), json!(expected));
+            assert!(client.controller.pending()?.is_empty());
+        }
+        Ok(())
     }
 
     #[test]

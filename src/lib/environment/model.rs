@@ -226,62 +226,18 @@ pub(super) struct Directory {
 #[derive(Clone, Debug, Serialize, Deserialize, Default)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub(super) struct Progress {
-    prepared: Option<Fingerprint>,
-    applied: bool,
-    restore: Option<Fingerprint>,
-    reverting: bool,
-    restored: bool,
+    pub(super) prepared: Option<Fingerprint>,
+    pub(super) applied: bool,
+    pub(super) restore: Option<Fingerprint>,
+    pub(super) reverting: bool,
+    pub(super) restored: bool,
     /// Undoing left the file as the helper changed it. Written only when
     /// set, so records stay readable by earlier versions.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
-    kept: bool,
+    pub(super) kept: bool,
 }
 
 impl Progress {
-    pub(super) fn prepared(&self) -> &Option<Fingerprint> {
-        &self.prepared
-    }
-
-    pub(super) fn applied(&self) -> bool {
-        self.applied
-    }
-
-    pub(super) fn restore(&self) -> &Option<Fingerprint> {
-        &self.restore
-    }
-
-    pub(super) fn reverting(&self) -> bool {
-        self.reverting
-    }
-
-    pub(super) fn restored(&self) -> bool {
-        self.restored
-    }
-
-    pub(super) fn kept(&self) -> bool {
-        self.kept
-    }
-
-    pub(super) fn record_prepared(&mut self, fingerprint: Fingerprint) {
-        self.prepared = Some(fingerprint);
-    }
-
-    pub(super) fn acknowledge_applied(&mut self) {
-        self.applied = true;
-    }
-
-    pub(super) fn record_restore(&mut self, fingerprint: Option<Fingerprint>) {
-        self.restore = fingerprint;
-    }
-
-    pub(super) fn begin_reverting(&mut self) {
-        self.reverting = true;
-    }
-
-    pub(super) fn acknowledge_restored(&mut self) {
-        self.restored = true;
-    }
-
     pub(super) fn complete_kept(&mut self) {
         self.kept = true;
         self.restored = true;

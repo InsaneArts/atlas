@@ -10,9 +10,29 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::time::Duration;
 
-#[derive(Debug, Deserialize)]
-#[serde(tag = "type", rename_all = "lowercase", deny_unknown_fields)]
-pub(crate) enum Action {
+/// One declaration owns wire names and personal-input permission, including
+/// for malformed fields that must retain their later admission order.
+macro_rules! actions {
+    ($($kind:ident { $($(#[$attr:meta])* $field:ident: $ty:ty),* $(,)? } => $personal:expr),* $(,)?) => {
+        #[derive(Debug, Deserialize)]
+        #[serde(tag = "type", rename_all = "lowercase", deny_unknown_fields)]
+        pub(crate) enum Action {
+            $($kind { $($(#[$attr])* $field: $ty),* }),*
+        }
+
+        #[derive(Deserialize)]
+        #[serde(tag = "type", rename_all = "lowercase")]
+        pub(crate) enum Kind { $($kind),* }
+
+        impl Kind {
+            pub(crate) fn personal(self) -> bool {
+                match self { $(Self::$kind => $personal),* }
+            }
+        }
+    };
+}
+
+actions! {
     Pointer {
         phase: PointerPhase,
         x: f64,
@@ -23,11 +43,11 @@ pub(crate) enum Action {
         modifiers: Vec<String>,
         #[serde(default = "one")]
         count: u8,
-    },
+    } => true,
     Move {
         x: f64,
         y: f64,
-    },
+    } => true,
     Click {
         x: f64,
         y: f64,
@@ -37,7 +57,7 @@ pub(crate) enum Action {
         count: u8,
         #[serde(default)]
         modifiers: Vec<String>,
-    },
+    } => false,
     Drag {
         #[serde(rename = "fromX")]
         from_x: f64,
@@ -49,7 +69,7 @@ pub(crate) enum Action {
         to_y: f64,
         #[serde(default)]
         button: Button,
-    },
+    } => false,
     Scroll {
         x: f64,
         y: f64,
@@ -57,16 +77,16 @@ pub(crate) enum Action {
         dx: i32,
         #[serde(default)]
         dy: i32,
-    },
+    } => true,
     Type {
         text: String,
-    },
+    } => true,
     Key {
         key: String,
-    },
+    } => true,
     Wait {
         ms: u32,
-    },
+    } => false,
 }
 
 /// The destination an action must reach before it can send input.
@@ -103,6 +123,19 @@ impl Action {
             },
             Self::Wait { .. } => Target::Nothing,
         }
+    }
+}
+
+impl Kind {
+    /// A malformed action can still name a point in remembered windows.
+    /// Other field failures must wait behind that inference and admission.
+    pub(crate) fn remembered_point(self, wire: &Value) -> Option<(f64, f64)> {
+        let (x, y) = match self {
+            Self::Click | Self::Scroll | Self::Move => ("x", "y"),
+            Self::Drag => ("fromX", "fromY"),
+            Self::Pointer | Self::Type | Self::Key | Self::Wait => return None,
+        };
+        Some((wire[x].as_f64()?, wire[y].as_f64()?))
     }
 }
 

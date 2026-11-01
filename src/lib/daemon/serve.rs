@@ -429,7 +429,7 @@ pub(crate) async fn serve(uid: u32, controller_uid: u32, socket: PathBuf) -> Res
     consent.abort();
     recording.abort();
     if let Some(supervision) = supervision {
-        let supervised = supervisor_outcome(supervision.await, true);
+        let supervised = drain_supervision(supervision, deadline).await;
         if supervised.is_err() {
             if let Some(jobs) = &daemon.jobs {
                 jobs.fail_supervision();
@@ -438,6 +438,21 @@ pub(crate) async fn serve(uid: u32, controller_uid: u32, socket: PathBuf) -> Res
         }
     }
     outcome.and(drained).and(runs)
+}
+
+async fn drain_supervision(
+    mut task: tokio::task::JoinHandle<Result<()>>,
+    deadline: tokio::time::Instant,
+) -> Result<()> {
+    match tokio::time::timeout_at(deadline, &mut task).await {
+        Ok(outcome) => supervisor_outcome(outcome, true),
+        Err(error) => {
+            // Aborting the async owner cannot acknowledge any blocking
+            // record work. Its durable facts remain for the next daemon.
+            task.abort();
+            Err(Jobs::unavailable().uncertain().with_source(error))
+        }
+    }
 }
 
 fn supervisor_outcome(
@@ -2268,6 +2283,27 @@ mod tests {
                     .contains("private supervisor cause")
             );
         }
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn shutdown_bounds_a_supervisor_that_does_not_finish() -> Result<()> {
+        let task = tokio::spawn(std::future::pending::<Result<()>>());
+        let aborted = task.abort_handle();
+        let started = tokio::time::Instant::now();
+        let outcome = drain_supervision(task, started + STOP).await;
+        let Err(error) = outcome else {
+            panic!("unfinished supervision must remain unknown");
+        };
+        assert_eq!(tokio::time::Instant::now(), started + STOP);
+        assert_eq!(error.code, Code::Job);
+        assert!(error.uncertain);
+        tokio::task::yield_now().await;
+        assert!(aborted.is_finished());
+
+        let complete = tokio::spawn(async { Ok(()) });
+        tokio::task::yield_now().await;
+        drain_supervision(complete, started).await?;
+        Ok(())
     }
 
     #[tokio::test]

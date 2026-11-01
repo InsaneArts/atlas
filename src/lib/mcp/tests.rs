@@ -812,6 +812,36 @@ fn only_clicks_scrolls_typing_and_keys_go_to_the_helper_as_many_as_it_takes_at_o
     }
 }
 
+#[test]
+fn personal_permission_is_decided_before_action_field_validation() {
+    for action in [
+        json!({"type":"pointer"}),
+        json!({"type":"move","x":null}),
+        json!({"type":"scroll","dy":"invalid"}),
+        json!({"type":"type","text":false}),
+        json!({"type":"key"}),
+    ] {
+        assert!(checked(&json!([action])).is_ok());
+    }
+    for action in [
+        json!({"type":"click","x":1,"y":2}),
+        json!({"type":"drag","fromX":1,"fromY":2,"toX":3,"toY":4}),
+        json!({"type":"wait","ms":0}),
+        json!({"type":"future"}),
+        json!({"type":null}),
+        json!({}),
+    ] {
+        let Err(error) = checked(&json!([action])) else {
+            panic!("an excluded action must be refused");
+        };
+        assert_eq!(error.code, Code::Input);
+        assert_eq!(
+            error.error,
+            "Only clicks, scrolls, typing and keys may be sent"
+        );
+    }
+}
+
 #[tokio::test]
 async fn a_screenshot_is_read_only_by_a_name_a_capture_wrote() {
     let dir = tempfile::tempdir().unwrap();
