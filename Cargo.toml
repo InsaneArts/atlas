@@ -48,7 +48,7 @@ strip = true
 [target.'cfg(target_os = "macos")'.dependencies]
 objc2 = "0.6.5"
 objc2-app-kit = { version = "0.3.2", default-features = false, features = ["std", "NSImage", "NSRunningApplication", "NSWorkspace", "libc"] }
-objc2-foundation = { version = "0.3.2", default-features = false, features = ["std", "NSEnumerator", "NSString"] }
+objc2-foundation = { version = "0.3.2", default-features = false, features = ["std", "NSEnumerator", "NSString", "NSUserDefaults"] }
 objc2-application-services = { version = "0.3.2", default-features = false, features = ["std", "HIServices", "AXError", "AXUIElement", "AXValue", "libc"] }
 objc2-core-foundation = { version = "0.3.2", default-features = false, features = ["std", "CFArray", "CFBase", "CFCGTypes", "CFData", "CFDictionary", "CFError", "CFNumber", "CFRunLoop", "CFString", "CFURL"] }
 objc2-core-graphics = { version = "0.3.2", default-features = false, features = ["std", "CGBase", "CGBitmapContext", "CGColorSpace", "CGContext", "CGDirectDisplay", "CGEvent", "CGEventSource", "CGEventTypes", "CGImage", "CGRemoteOperation", "CGSession", "CGWindow"] }
