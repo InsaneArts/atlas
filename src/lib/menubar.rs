@@ -65,6 +65,7 @@ pub async fn launch(config: &Path, port: u16, output: &Path) -> Result<(bool, se
         port,
         lock: None,
         child: None,
+        child_identity_lost: false,
         #[cfg(test)]
         test: None,
     })
@@ -108,6 +109,7 @@ struct Startup {
     port: u16,
     lock: Option<crate::files::LockFile>,
     child: Option<std::process::Child>,
+    child_identity_lost: bool,
     #[cfg(test)]
     test: Option<tests::StartupTest>,
 }
@@ -150,7 +152,8 @@ impl Startup {
                     // A missing receiver never releases the pending child or lock.
                     let _ = reply.send(Err(error));
                 }
-                // Keep the exact unreaped Child and exclusion until a checked reap.
+                // Keep the Child and exclusion until a checked reap. ECHILD loses
+                // signal authority permanently; its numeric PID may be reused.
                 // Even after reporting uncertainty, this worker owns recovery.
                 loop {
                     std::thread::sleep(Duration::from_millis(100));
@@ -286,16 +289,34 @@ impl Startup {
 
     fn poll(&mut self) -> std::io::Result<Option<std::process::ExitStatus>> {
         #[cfg(test)]
-        self.operation("poll")?;
-        self.child
-            .as_mut()
-            .map_or(Ok(None), |child| child.try_wait())
+        let result = self.operation("poll");
+        #[cfg(not(test))]
+        let result = Ok(());
+        let result = result.and_then(|()| {
+            self.child
+                .as_mut()
+                .map_or(Ok(None), |child| child.try_wait())
+        });
+        if result
+            .as_ref()
+            .is_err_and(|error| error.raw_os_error() == Some(libc::ECHILD))
+        {
+            self.child_identity_lost = true;
+        }
+        result
     }
 
     fn cleanup(&mut self) -> std::result::Result<(), CleanupFailure> {
         let Some(pid) = self.child.as_ref().map(std::process::Child::id) else {
             return Ok(());
         };
+        if self.child_identity_lost {
+            return Err(CleanupFailure {
+                pid,
+                kill: None,
+                wait: std::io::Error::from_raw_os_error(libc::ECHILD),
+            });
+        }
         let killed = self.kill();
         // Never perform a blocking wait after a failed kill. A failed signal
         // alone says nothing about whether the child ended.
@@ -327,11 +348,20 @@ impl Startup {
 
     fn wait(&mut self) -> std::io::Result<std::process::ExitStatus> {
         #[cfg(test)]
-        self.operation("wait")?;
-        match &mut self.child {
+        let result = self.operation("wait");
+        #[cfg(not(test))]
+        let result = Ok(());
+        let result = result.and_then(|()| match &mut self.child {
             Some(child) => child.wait(),
             None => Err(std::io::Error::other("The child is not owned")),
+        });
+        if result
+            .as_ref()
+            .is_err_and(|error| error.raw_os_error() == Some(libc::ECHILD))
+        {
+            self.child_identity_lost = true;
         }
+        result
     }
 
     /// Hold the menu bar's start lock, waiting up to 30 seconds for another start.
@@ -933,6 +963,16 @@ while IFS= read -r line; do printf '%s\n' "$line"; done > "$directory/rest"
             .expect("the owned child must be reaped within the watchdog");
             self.owned.set(None);
         }
+
+        fn assert_reaped(&self) {
+            let instance = self.owned.get().unwrap();
+            assert_eq!(
+                waitpid(Pid::from_raw(instance.pid), Some(WaitPidFlag::WNOHANG)),
+                Err(Errno::ECHILD),
+                "the startup worker must reap its child before releasing exclusion"
+            );
+            self.owned.set(None);
+        }
     }
 
     impl Drop for Recording {
@@ -1022,6 +1062,7 @@ while IFS= read -r line; do printf '%s\n' "$line"; done > "$directory/rest"
             port: 12345,
             lock: None,
             child: None,
+            child_identity_lost: false,
             test: Some(StartupTest {
                 command: Some(command),
                 operation,
@@ -1109,7 +1150,7 @@ while IFS= read -r line; do printf '%s\n' "$line"; done > "$directory/rest"
             }
             let _lock = wait_for_start_lock(recording.directory.path()).await;
             if point != "before spawn" {
-                recording.reaped().await;
+                recording.assert_reaped();
             } else {
                 assert!(!recording.directory.path().join("started").exists());
                 assert!(!recording.directory.path().join("menubar.log").exists());
@@ -1147,8 +1188,10 @@ while IFS= read -r line; do printf '%s\n' "$line"; done > "$directory/rest"
                 );
                 // The accepted stand-in is ours; the service would keep running.
                 kill(Pid::from_raw(identity.pid), Signal::SIGKILL).unwrap();
+                recording.reaped().await;
+            } else {
+                recording.assert_reaped();
             }
-            recording.reaped().await;
         }
     }
 
@@ -1220,7 +1263,7 @@ while IFS= read -r line; do printf '%s\n' "$line"; done > "$directory/rest"
             assert!(crate::process::info(identity.pid).unwrap().is_some());
             recover.send(()).unwrap();
             let _lock = wait_for_start_lock(recording.directory.path()).await;
-            recording.reaped().await;
+            recording.assert_reaped();
         }
     }
 
@@ -1304,7 +1347,8 @@ while IFS= read -r line; do printf '%s\n' "$line"; done > "$directory/rest"
                 "error": format!("The menu bar did not start in time; see {}", recording.directory.path().join("menubar.log").display())
             })
         );
-        recording.reaped().await;
+        let _lock = wait_for_start_lock(recording.directory.path()).await;
+        recording.assert_reaped();
     }
 
     #[tokio::test]
@@ -1328,7 +1372,7 @@ while IFS= read -r line; do printf '%s\n' "$line"; done > "$directory/rest"
         assert_eq!(error.error, "The menu bar start worker stopped");
         assert!(!error.uncertain);
         let _lock = wait_for_start_lock(recording.directory.path()).await;
-        recording.reaped().await;
+        recording.assert_reaped();
     }
 
     #[tokio::test]
@@ -1502,7 +1546,64 @@ while IFS= read -r line; do printf '%s\n' "$line"; done > "$directory/rest"
             Some(libc::EIO)
         );
         let _lock = wait_for_start_lock(recording.directory.path()).await;
-        recording.reaped().await;
+        recording.assert_reaped();
+    }
+
+    #[tokio::test]
+    async fn losing_the_child_identity_stops_cleanup_signals_and_retains_exclusion() {
+        for fail in ["poll", "wait"] {
+            let recording = hung_startup();
+            let (mut gate, arrival, release) = Gate::new("after spawn");
+            let mut failed = false;
+            let mut owner = startup(
+                &recording,
+                Box::new(move |point| {
+                    assert!(
+                        !failed,
+                        "lost identity must prevent further child operations"
+                    );
+                    gate.visit(point);
+                    if point == fail {
+                        failed = true;
+                        return Err(std::io::Error::from_raw_os_error(libc::ECHILD));
+                    }
+                    Ok(())
+                }),
+            );
+            owner.test.as_mut().unwrap().timeout = Duration::ZERO;
+            let worker = tokio::task::spawn_blocking(move || {
+                let (ready, _result) = tokio::sync::oneshot::channel();
+                let error = owner.prepare(&ready).unwrap_err();
+                if fail == "poll" {
+                    assert_eq!(error.code, "io");
+                    assert_eq!(
+                        error.error,
+                        std::io::Error::from_raw_os_error(libc::ECHILD).to_string()
+                    );
+                } else {
+                    assert!(error.error.contains("did not start in time"));
+                }
+                let cleanup = owner.cleanup().unwrap_err();
+                assert_eq!(cleanup.wait.raw_os_error(), Some(libc::ECHILD));
+                owner
+            });
+            arrived(arrival).await;
+            let identity = recording.started().await;
+            release.send(()).unwrap();
+            let mut owner = worker.await.unwrap();
+            assert!(owner.child_identity_lost);
+            assert_eq!(owner.child.as_ref().unwrap().id(), identity.pid as u32);
+            for _ in 0..2 {
+                let cleanup = owner.cleanup().unwrap_err();
+                assert_eq!(cleanup.pid, identity.pid as u32);
+                assert!(cleanup.kill.is_none());
+                assert_eq!(cleanup.wait.raw_os_error(), Some(libc::ECHILD));
+                assert_start_is_excluded(recording.directory.path());
+            }
+            // Only the fixture may clean up this simulated loss of identity.
+            drop(owner);
+            drop(recording);
+        }
     }
 
     #[tokio::test]
