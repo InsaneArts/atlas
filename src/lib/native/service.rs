@@ -15,7 +15,7 @@ use crate::{
 use serde::Deserialize;
 use serde_json::{Value, json};
 use std::{
-    collections::BTreeSet,
+    collections::{BTreeSet, HashMap},
     error::Error as StdError,
     fmt,
     path::{Path, PathBuf},
@@ -29,8 +29,8 @@ use tokio::{
     io::{AsyncRead, AsyncReadExt, AsyncWriteExt},
     net::UnixStream,
     signal::unix::{SignalKind, signal},
-    sync::{Mutex, Semaphore},
-    task::JoinSet,
+    sync::{Mutex, Semaphore, watch},
+    task::{Id, JoinError, JoinSet},
 };
 
 /// Twice the controller's 32 KiB action limit, leaving room for the owner,
@@ -277,15 +277,73 @@ async fn reset<E>(
 /// drain boundary, including TERM and internal failures.
 async fn finish(
     gate: &Gate,
-    requests: &mut JoinSet<()>,
+    requests: &mut JoinSet<Result<()>>,
+    phases: &mut HashMap<Id, watch::Receiver<ConnectionPhase>>,
     operations: &Operations,
     engine: &Mutex<impl Perform>,
 ) -> Result<()> {
     let closed = gate.close();
+    let stopping = closed.is_ok();
     requests.abort_all();
-    while requests.join_next().await.is_some() {}
+    let mut connections = Ok(());
+    while let Some(outcome) = requests.join_next_with_id().await {
+        connections = combine_cleanup(
+            connections,
+            connection_outcome(outcome, phases, operations, stopping),
+        );
+    }
     let cleanup = drain_and_release(operations, engine, gate).await;
-    combine_cleanup(closed, cleanup)
+    combine_cleanup(closed, combine_cleanup(connections, cleanup))
+}
+
+#[derive(Clone, Copy, Debug)]
+enum ConnectionPhase {
+    Refusal,
+    Read,
+    Mutation(&'static str),
+}
+
+fn connection_outcome(
+    outcome: std::result::Result<(Id, Result<()>), JoinError>,
+    phases: &mut HashMap<Id, watch::Receiver<ConnectionPhase>>,
+    operations: &Operations,
+    stopping: bool,
+) -> Result<()> {
+    let id = match &outcome {
+        Ok((id, _)) => *id,
+        Err(error) => error.id(),
+    };
+    let phase = phases
+        .remove(&id)
+        .map(|phase| *phase.borrow())
+        .unwrap_or(ConnectionPhase::Mutation("connection"));
+    match outcome {
+        Ok((_, Ok(()))) => Ok(()),
+        // Refusals have no effects, and a read client need not receive its
+        // reply. Neither transport failure degrades the input engine.
+        Ok((_, Err(_))) if matches!(phase, ConnectionPhase::Refusal | ConnectionPhase::Read) => {
+            Ok(())
+        }
+        Err(error) if stopping && error.is_cancelled() => Ok(()),
+        outcome => {
+            operations.failed.store(true, Ordering::Relaxed);
+            let operation = match phase {
+                ConnectionPhase::Refusal => "refusal",
+                ConnectionPhase::Read => "hello",
+                ConnectionPhase::Mutation(operation) => operation,
+            };
+            let error = Error::new(
+                Code::Uncertain,
+                format!("Native {operation} connection outcome is unknown; recovery pending"),
+            )
+            .uncertain();
+            match outcome {
+                Ok((_, Err(cause))) => Err(error.with_source(cause)),
+                Err(cause) => Err(error.with_source(cause)),
+                Ok((_, Ok(()))) => Ok(()),
+            }
+        }
+    }
 }
 
 /// The operations the input service answers, by their `op` string.
@@ -379,7 +437,11 @@ impl Service {
         drain_and_release(&self.operations, &self.engine, &self.gate).await
     }
 
-    async fn dispatch(&self, request: &Value) -> Result<Value> {
+    async fn dispatch(
+        &self,
+        request: &Value,
+        phase: &watch::Sender<ConnectionPhase>,
+    ) -> Result<Value> {
         let owner = request["owner"].as_str().unwrap_or_default();
         let operation = Operation::of(request);
         if operation == Operation::Hello {
@@ -439,6 +501,7 @@ impl Service {
                 ));
             }
 
+            phase.send_replace(ConnectionPhase::Mutation("shutdown"));
             if let Err(error) = engine.release() {
                 return Err(Error::new(
                     Code::Uncertain,
@@ -454,12 +517,13 @@ impl Service {
         // A stop is the person's: it works whatever the session or
         // permission, and resuming only lets agents ask again.
         if operation == Operation::Hold {
-            let reply = hold(&self.gate, &self.stop_marker, request)?;
+            let reply = hold(&self.gate, &self.stop_marker, request, phase)?;
             self.cleanup().await?;
             return Ok(reply);
         }
 
         if operation == Operation::Release {
+            phase.send_replace(ConnectionPhase::Mutation("release"));
             self.gate.cancel(Some(owner))?;
             self.cleanup().await?;
             return Ok(json!({ "ok": true, "released": true }));
@@ -475,6 +539,7 @@ impl Service {
                 ));
             }
 
+            phase.send_replace(ConnectionPhase::Mutation("reset"));
             reset(&self.operations, &self.engine, &self.gate, |engine| {
                 let rebound = engine.rebind(current);
 
@@ -496,6 +561,7 @@ impl Service {
         self.check()?;
 
         if operation == Operation::Renew {
+            phase.send_replace(ConnectionPhase::Mutation("renew"));
             self.gate.renew(owner)?;
             return Ok(json!({ "ok": true }));
         }
@@ -528,6 +594,7 @@ impl Service {
             }
 
             engine.check()?;
+            phase.send_replace(ConnectionPhase::Mutation("acquire"));
             engine.release()?;
             let who = if request["person"] == true {
                 Who::Person
@@ -556,6 +623,7 @@ impl Service {
         // check is never ignored.
         let expect = Expect::from_request(&request["expect"])?;
         agent_target(&self.gate, expect.as_ref())?;
+        phase.send_replace(ConnectionPhase::Mutation("input"));
         let mut cancellation = Cancellation {
             gate: self.gate.clone(),
             owner: owner.to_owned(),
@@ -623,10 +691,16 @@ impl Service {
     }
 }
 
-fn hold(gate: &Gate, stop_marker: &Path, request: &Value) -> Result<Value> {
+fn hold(
+    gate: &Gate,
+    stop_marker: &Path,
+    request: &Value,
+    phase: &watch::Sender<ConnectionPhase>,
+) -> Result<Value> {
     let on = request["on"]
         .as_bool()
         .ok_or_else(|| Error::new(Code::Input, "Hold requires a boolean on"))?;
+    phase.send_replace(ConnectionPhase::Mutation("hold"));
     let kept = if on {
         use std::os::unix::fs::OpenOptionsExt;
         std::fs::OpenOptions::new()
@@ -939,6 +1013,7 @@ pub async fn serve(uid: u32, controller_uid: u32, socket: PathBuf) -> Result<()>
 
     let slots = Arc::new(Semaphore::new(16));
     let mut tasks = JoinSet::new();
+    let mut phases = HashMap::new();
 
     // Both listeners exist before the loop, so a signal that arrives between
     // two passes is still delivered.
@@ -977,7 +1052,11 @@ pub async fn serve(uid: u32, controller_uid: u32, socket: PathBuf) -> Result<()>
                     Err(error) => break Err(error),
                 }
             }
-            Some(_) = tasks.join_next(), if !tasks.is_empty() => {}
+            Some(outcome) = tasks.join_next_with_id(), if !tasks.is_empty() => {
+                if let Err(error) = connection_outcome(outcome, &mut phases, &service.operations, false) {
+                    eprintln!("{}", error.error);
+                }
+            }
             accepted = listener.accept() => {
                 // Accept and peer lookup failures (for example descriptor
                 // exhaustion) concern one connection, not the service.
@@ -1001,10 +1080,12 @@ pub async fn serve(uid: u32, controller_uid: u32, socket: PathBuf) -> Result<()>
                 };
 
                 let service = service.clone();
-                tasks.spawn(async move {
+                let (phase, observed) = watch::channel(ConnectionPhase::Refusal);
+                let task = tasks.spawn(async move {
                     let _slot = slot;
-                    let _ = handle(stream, service).await;
+                    handle(stream, service, phase).await
                 });
+                phases.insert(task.id(), observed);
             }
         }
     };
@@ -1012,6 +1093,7 @@ pub async fn serve(uid: u32, controller_uid: u32, socket: PathBuf) -> Result<()>
     let cleanup = finish(
         &service.gate,
         &mut tasks,
+        &mut phases,
         &service.operations,
         &service.engine,
     )
@@ -1035,7 +1117,11 @@ async fn read_request<R: AsyncRead + Unpin>(stream: &mut R) -> Result<Value> {
     Ok(serde_json::from_slice(&line)?)
 }
 
-async fn handle(mut stream: UnixStream, service: Arc<Service>) -> Result<()> {
+async fn handle(
+    mut stream: UnixStream,
+    service: Arc<Service>,
+    phase: watch::Sender<ConnectionPhase>,
+) -> Result<()> {
     // Nothing was dispatched yet, so answer definitively. A silent hang-up
     // would look like an unacknowledged mutation to the controller.
     let request = match read_request(&mut stream).await {
@@ -1044,20 +1130,25 @@ async fn handle(mut stream: UnixStream, service: Arc<Service>) -> Result<()> {
     };
 
     let operation = Operation::of(&request);
+    phase.send_replace(match operation {
+        Operation::Hello => ConnectionPhase::Read,
+        _ => ConnectionPhase::Refusal,
+    });
     let result = if operation == Operation::Input {
-        let mut dispatch = std::pin::pin!(service.dispatch(&request));
+        let mut dispatch = std::pin::pin!(service.dispatch(&request, &phase));
         let mut extra = [0; 1];
         tokio::select! {
             reply = &mut dispatch => reply,
             _ = stream.read(&mut extra) => {
                 if let Some(owner) = request["owner"].as_str() {
+                    phase.send_replace(ConnectionPhase::Mutation("input"));
                     let _ = service.gate.cancel(Some(owner));
                 }
                 dispatch.await
             }
         }
     } else {
-        service.dispatch(&request).await
+        service.dispatch(&request, &phase).await
     };
 
     let stopping = operation == Operation::Shutdown && result.is_ok();
@@ -1092,13 +1183,246 @@ mod tests {
     use std::sync::{Arc, Weak};
     use tokio::{io::AsyncWriteExt, net::UnixStream, sync::Mutex};
 
+    #[tokio::test]
+    async fn an_abandoned_read_does_not_degrade_the_service() {
+        let operations = super::Operations::default();
+        let slots = Arc::new(tokio::sync::Semaphore::new(1));
+        for malformed in [false, true] {
+            let (mut client, mut server) = UnixStream::pair().unwrap();
+            client
+                .write_all(if malformed {
+                    b"{\n"
+                } else {
+                    b"{\"op\":\"hello\"}\n"
+                })
+                .await
+                .unwrap();
+            drop(client);
+            let (phase, observed) = super::watch::channel(super::ConnectionPhase::Refusal);
+            let slot = slots.clone().acquire_owned().await.unwrap();
+            let mut tasks = super::JoinSet::new();
+            let task = tasks.spawn(async move {
+                let _slot = slot;
+                let result = match read_request(&mut server).await {
+                    Ok(request) => {
+                        assert_eq!(request["op"], "hello");
+                        phase.send_replace(super::ConnectionPhase::Read);
+                        Ok(json!({"ok": true}))
+                    }
+                    Err(error) => Err(error),
+                };
+                super::reply(&mut server, result).await
+            });
+            let mut phases = super::HashMap::from([(task.id(), observed)]);
+            let outcome = tasks.join_next_with_id().await.unwrap();
+            assert!(matches!(outcome, Ok((_, Err(_)))));
+            super::connection_outcome(outcome, &mut phases, &operations, false).unwrap();
+            assert!(phases.is_empty());
+            assert_eq!(slots.available_permits(), 1);
+            operations.check().unwrap();
+        }
+        operations.start(async { 42 }).await.unwrap().await.unwrap();
+        operations.drain().await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn a_failed_refusal_reply_does_not_degrade_the_service() {
+        let operations = super::Operations::default();
+        let gate = Arc::new(Gate::default());
+        let directory = tempfile::tempdir().unwrap();
+        let marker = directory.path().join("stopped");
+        let checked = marker.clone();
+        let holding = gate.clone();
+        let (mut client, mut server) = UnixStream::pair().unwrap();
+        client
+            .write_all(b"{\"op\":\"hold\",\"on\":null}\n")
+            .await
+            .unwrap();
+        drop(client);
+        let (phase, observed) = super::watch::channel(super::ConnectionPhase::Refusal);
+        let mut tasks = super::JoinSet::new();
+        let task = tasks.spawn(async move {
+            let request = read_request(&mut server).await?;
+            let refusal = hold(&holding, &checked, &request, &phase).unwrap_err();
+            assert_eq!(refusal.code, Code::Input);
+            assert_eq!(refusal.error, "Hold requires a boolean on");
+            assert!(!refusal.uncertain);
+            super::reply(&mut server, Err(refusal)).await
+        });
+        let mut phases = super::HashMap::from([(task.id(), observed)]);
+        let outcome = tasks.join_next_with_id().await.unwrap();
+        assert!(matches!(outcome, Ok((_, Err(_)))));
+        super::connection_outcome(outcome, &mut phases, &operations, false).unwrap();
+        operations.check().unwrap();
+        assert!(!gate.held().unwrap());
+        assert!(!marker.exists());
+    }
+
+    #[tokio::test]
+    async fn a_handler_panic_is_observed() {
+        for stopping in [false, true] {
+            let operations = super::Operations::default();
+            let mut tasks = super::JoinSet::<Result<()>>::new();
+            let (phase, observed) =
+                super::watch::channel(super::ConnectionPhase::Mutation("input"));
+            let task = tasks.spawn(async move {
+                let _phase = phase;
+                panic!("private owner and typed text");
+            });
+            let mut phases = super::HashMap::from([(task.id(), observed)]);
+            let outcome = tasks.join_next_with_id().await.unwrap();
+            assert!(outcome.as_ref().unwrap_err().is_panic());
+            let error =
+                super::connection_outcome(outcome, &mut phases, &operations, stopping).unwrap_err();
+            assert_eq!(error.code, Code::Uncertain);
+            assert!(error.uncertain);
+            assert!(operations.check().unwrap_err().uncertain);
+            assert!(operations.drain().await.unwrap_err().uncertain);
+            assert!(phases.is_empty());
+            for diagnostic in [json!(error).to_string(), format!("{error:?}")] {
+                assert!(!diagnostic.contains("private owner and typed text"));
+                assert!(diagnostic.len() < 256);
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn a_lost_mutation_reply_keeps_recovery_pending() {
+        let operations = Arc::new(super::Operations::default());
+        let gate = Arc::new(Gate::default());
+        let owner = "a".repeat(48);
+        let grant = gate.acquire(&owner, super::Who::Agent).unwrap();
+        let engine = Stand::locked(&[]);
+        let mut tasks = super::JoinSet::new();
+        let (mut client, mut server) = UnixStream::pair().unwrap();
+        let (effect, effected) = tokio::sync::oneshot::channel();
+        let (deliver, delivery) = tokio::sync::oneshot::channel::<()>();
+        let (phase, observed) = super::watch::channel(super::ConnectionPhase::Refusal);
+        let performed = engine.clone();
+        let granted = grant.clone();
+        let working = operations.clone();
+        let task = tasks.spawn(async move {
+            let request = read_request(&mut server).await?;
+            assert_eq!(request["op"], "input");
+            phase.send_replace(super::ConnectionPhase::Mutation("input"));
+            let work = working
+                .start(async move {
+                    drop(granted.authorize().unwrap());
+                    let mut engine = performed.lock().await;
+                    engine.posted += 1;
+                    engine.held = true;
+                })
+                .await?;
+            work.await.unwrap();
+            effect.send(()).unwrap();
+            delivery.await.unwrap();
+            super::reply(&mut server, Ok(json!({"ok": true, "performed": 1}))).await
+        });
+        let mut phases = super::HashMap::from([(task.id(), observed)]);
+        assert_eq!(engine.lock().await.posted, 0);
+        client.write_all(b"{\"op\":\"input\"}\n").await.unwrap();
+        effected.await.unwrap();
+        drop(client);
+        deliver.send(()).unwrap();
+        let error = super::connection_outcome(
+            tasks.join_next_with_id().await.unwrap(),
+            &mut phases,
+            &operations,
+            false,
+        )
+        .unwrap_err();
+        assert!(error.uncertain);
+        assert!(gate.active().unwrap());
+        assert!(grant.authorize().is_ok());
+        assert!(operations.start(async {}).await.unwrap_err().uncertain);
+        assert_eq!(engine.lock().await.posted, 1);
+        gate.cancel(Some(&owner)).unwrap();
+        assert!(
+            super::drain_and_release(&operations, &engine, &gate)
+                .await
+                .unwrap_err()
+                .uncertain
+        );
+        assert!(!engine.lock().await.held);
+        assert!(operations.check().unwrap_err().uncertain);
+        super::reset(&operations, &engine, &gate, Perform::release)
+            .await
+            .unwrap();
+        operations.check().unwrap();
+        assert_eq!(
+            engine.lock().await.posted,
+            1,
+            "recovery never replays input"
+        );
+    }
+
+    #[tokio::test]
+    async fn shutdown_classifies_cancelled_handlers_and_joins_owned_work() {
+        for lost_reply in [false, true] {
+            let operations = super::Operations::default();
+            let gate = Arc::new(Gate::default());
+            let _grant = gate.acquire(&"a".repeat(48), super::Who::Agent).unwrap();
+            let engine = Stand::locked(&[]);
+            let held = engine.clone().lock_owned().await;
+            let (resume, barrier) = tokio::sync::oneshot::channel::<()>();
+            let work = operations
+                .start(async move {
+                    let mut held = held;
+                    barrier.await.unwrap();
+                    held.held = true;
+                })
+                .await
+                .unwrap();
+            let mut tasks = super::JoinSet::new();
+            let mut phases = super::HashMap::new();
+            let (phase, observed) =
+                super::watch::channel(super::ConnectionPhase::Mutation("input"));
+            let idle = tasks.spawn(async move {
+                let _phase = phase;
+                std::future::pending::<Result<()>>().await
+            });
+            phases.insert(idle.id(), observed);
+            if lost_reply {
+                let (finished, received) = tokio::sync::oneshot::channel();
+                let (phase, observed) =
+                    super::watch::channel(super::ConnectionPhase::Mutation("release"));
+                let task = tasks.spawn(async move {
+                    let _phase = phase;
+                    finished.send(()).unwrap();
+                    Err(Error::new(Code::Transport, "private transport cause"))
+                });
+                phases.insert(task.id(), observed);
+                received.await.unwrap();
+            }
+            let cleanup = super::finish(&gate, &mut tasks, &mut phases, &operations, &engine);
+            tokio::pin!(cleanup);
+            std::future::poll_fn(|cx| {
+                assert!(std::future::Future::poll(cleanup.as_mut(), cx).is_pending());
+                std::task::Poll::Ready(())
+            })
+            .await;
+            assert!(!gate.active().unwrap());
+            assert!(gate.acquire(&"b".repeat(48), super::Who::Agent).is_err());
+            assert!(engine.try_lock().is_err());
+            resume.send(()).unwrap();
+            let result = cleanup.await;
+            assert_eq!(result.is_err(), lost_reply);
+            assert_eq!(operations.check().is_err(), lost_reply);
+            work.await.unwrap();
+            assert!(operations.tasks.lock().unwrap().is_empty());
+            assert!(!engine.lock().await.held);
+            assert_eq!(engine.lock().await.releases, 1);
+        }
+    }
+
     #[test]
     fn hold_requires_a_boolean_before_changing_the_stop() {
         let dir = tempfile::tempdir().unwrap();
         let marker = dir.path().join("stopped");
         let gate = Gate::default();
+        let (phase, observed) = super::watch::channel(super::ConnectionPhase::Refusal);
 
-        let reply = hold(&gate, &marker, &json!({"on": true})).unwrap();
+        let reply = hold(&gate, &marker, &json!({"on": true}), &phase).unwrap();
         assert_eq!(reply["held"], true);
         assert!(gate.held().unwrap());
         assert!(marker.exists());
@@ -1112,13 +1436,19 @@ mod tests {
             json!({"on": []}),
             json!({"on": {}}),
         ] {
-            let error = hold(&gate, &marker, &request).unwrap_err();
+            phase.send_replace(super::ConnectionPhase::Refusal);
+            let error = hold(&gate, &marker, &request, &phase).unwrap_err();
             assert_eq!(error.code, Code::Input, "{request}");
+            assert!(!error.uncertain, "{request}");
+            assert!(matches!(
+                *observed.borrow(),
+                super::ConnectionPhase::Refusal
+            ));
             assert!(gate.held().unwrap(), "{request}");
             assert_eq!(std::fs::read(&marker).unwrap(), b"stop", "{request}");
         }
 
-        let reply = hold(&gate, &marker, &json!({"on": false})).unwrap();
+        let reply = hold(&gate, &marker, &json!({"on": false}), &phase).unwrap();
         assert_eq!(reply["held"], false);
         assert!(!gate.held().unwrap());
         assert!(!marker.exists());
@@ -1804,6 +2134,7 @@ mod tests {
                 let reply = outcome.await.unwrap();
                 cancel.armed = false;
                 *observed.lock().unwrap() = Some(reply);
+                Ok(())
             })
         };
         entered.await.unwrap();
@@ -1837,7 +2168,14 @@ mod tests {
         {
             let cleanup = async {
                 if shutdown {
-                    super::finish(&gate, &mut requests, &operations, &engine).await
+                    super::finish(
+                        &gate,
+                        &mut requests,
+                        &mut std::collections::HashMap::new(),
+                        &operations,
+                        &engine,
+                    )
+                    .await
                 } else {
                     super::drain_and_release(&operations, &engine, &gate).await
                 }
@@ -1881,7 +2219,7 @@ mod tests {
         assert!(engine.releases >= 1);
         assert!(operations.tasks.lock().unwrap().is_empty());
         if matches!(ending, Ending::Stop | Ending::Cancel) {
-            requests.join_next().await.unwrap().unwrap();
+            requests.join_next().await.unwrap().unwrap().unwrap();
             let reply = observed.lock().unwrap().take().unwrap().unwrap_err();
             let (code, instruction) = if matches!(ending, Ending::Stop) {
                 (Code::Stopped, crate::error::STOPPED)
@@ -2211,9 +2549,15 @@ mod tests {
         assert!(operations.check().unwrap_err().uncertain);
         drop(engine);
         let mut requests = tokio::task::JoinSet::new();
-        let error = super::finish(&gate, &mut requests, &operations, &stand)
-            .await
-            .unwrap_err();
+        let error = super::finish(
+            &gate,
+            &mut requests,
+            &mut std::collections::HashMap::new(),
+            &operations,
+            &stand,
+        )
+        .await
+        .unwrap_err();
         assert_eq!(error.code, Code::Native, "closing failed first");
         assert!(error.uncertain);
         let pair = error
