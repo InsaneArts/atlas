@@ -404,6 +404,14 @@ impl Request {
     }
 
     fn decode(bytes: &[u8]) -> Result<Self> {
+        if !bytes.trim_ascii_start().starts_with(b"{") {
+            let _: Value = serde_json::from_slice(bytes)?;
+            return Err(Error::new(
+                Code::Input,
+                "Native operation requires a string op",
+            ));
+        }
+
         let refusal = match serde_json::from_slice(bytes) {
             Ok(request) => return Ok(request),
             Err(error) if !error.is_data() => return Err(error.into()),
@@ -1390,6 +1398,64 @@ mod tests {
                     assert_eq!(std::fs::read(&marker).unwrap(), b"stop", "{body}");
                 } else {
                     assert!(!marker.exists(), "{body}");
+                }
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn array_shaped_lifecycle_requests_are_refused_without_effects() {
+        let owner = "a".repeat(48);
+        let cases = [
+            r#"["hello"]"#.to_owned(),
+            format!(r#"["shutdown",{}]"#, std::process::id()),
+            r#"["hold",true]"#.to_owned(),
+            r#"["hold",false]"#.to_owned(),
+            format!(r#"["release","{owner}"]"#),
+            format!(r#"["renew","{owner}"]"#),
+        ];
+        for owned in [false, true] {
+            for stopped in [false, true] {
+                let directory = tempfile::tempdir().unwrap();
+                let marker = directory.path().join("stopped");
+                let service = service(&marker);
+                let grant =
+                    owned.then(|| service.gate.acquire(&owner, super::Who::Person).unwrap());
+                service.gate.hold(stopped).unwrap();
+                if stopped {
+                    std::fs::write(&marker, b"stop").unwrap();
+                }
+                let epoch = service.epoch().unwrap();
+                let (phase, observed) = super::watch::channel(super::ConnectionPhase::Refusal);
+                for body in &cases {
+                    let result = match deliver(format!(" \t{body}\n").into_bytes(), 1).await {
+                        Ok(request) => service.dispatch(&request, &phase).await,
+                        Err(error) => Err(error),
+                    };
+                    let error = result.unwrap_err();
+                    assert_eq!(error.code, Code::Input, "{body}");
+                    assert_eq!(
+                        error.error, "Native operation requires a string op",
+                        "{body}"
+                    );
+                    assert!(!error.uncertain, "{body}");
+                    assert!(
+                        matches!(*observed.borrow(), super::ConnectionPhase::Refusal),
+                        "{body}"
+                    );
+                    assert_eq!(service.gate.active().unwrap(), owned, "{body}");
+                    if let Some(grant) = &grant {
+                        assert!(grant.authorize().is_ok(), "{body}");
+                    }
+                    assert_eq!(service.gate.held().unwrap(), stopped, "{body}");
+                    assert_eq!(service.epoch().unwrap(), epoch, "{body}");
+                    assert_eq!(service.engine.lock().await.posted, 0, "{body}");
+                    assert!(service.operations.check().is_ok(), "{body}");
+                    if stopped {
+                        assert_eq!(std::fs::read(&marker).unwrap(), b"stop", "{body}");
+                    } else {
+                        assert!(!marker.exists(), "{body}");
+                    }
                 }
             }
         }
