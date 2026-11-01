@@ -25,7 +25,7 @@ const NOT_VERIFIED: [&str; 2] = ["application launch", "application sign-in"];
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "lowercase")]
-pub(crate) enum ItemState {
+enum ItemState {
     Ready,
     Installed,
     Missing,
@@ -35,7 +35,10 @@ pub(crate) enum ItemState {
 
 impl ItemState {
     fn ready(self) -> bool {
-        matches!(self, Self::Ready | Self::Installed)
+        match self {
+            Self::Ready | Self::Installed => true,
+            Self::Missing | Self::Failing | Self::Unknown => false,
+        }
     }
 }
 
@@ -57,7 +60,7 @@ fn first_line(output: &[u8]) -> String {
 /// Classify a present tool from its `--version` invocation. Completion is
 /// judged before the exit status; a probe the tool does not understand
 /// still shows the tool runs, which is what matters.
-pub(crate) fn tool_status(reply: &Value, output: &[u8]) -> (ItemState, String) {
+fn tool_status(reply: &Value, output: &[u8]) -> (ItemState, String) {
     let text = String::from_utf8_lossy(output).to_lowercase();
 
     if reply["timedOut"] == true || !reply["signal"].is_null() {
@@ -99,19 +102,6 @@ pub(crate) fn tool_status(reply: &Value, output: &[u8]) -> (ItemState, String) {
     }
 }
 
-/// Run `name --version` in the helper's selected environment, or with the
-/// helper PATH when no environment profile is installed.
-async fn probe(client: &Client, home: &str, name: &str) -> Result<(Value, &'static str)> {
-    let argv = vec![name.to_owned(), "--version".to_owned()];
-    probe_using(
-        client,
-        home,
-        name,
-        environment_run(client, argv, crate::client::RUN_TIMEOUT),
-    )
-    .await
-}
-
 async fn probe_using(
     client: &Client,
     home: &str,
@@ -141,7 +131,14 @@ async fn probe_using(
 }
 
 async fn tool(client: &Client, home: &str, name: &str) -> Result<(ItemState, Value)> {
-    let (reply, context) = probe(client, home, name).await?;
+    let argv = vec![name.to_owned(), "--version".to_owned()];
+    let (reply, context) = probe_using(
+        client,
+        home,
+        name,
+        environment_run(client, argv, crate::client::RUN_TIMEOUT),
+    )
+    .await?;
     let (status, detail) = match run_output(&reply, 16384) {
         Ok(output) => tool_status(&reply, &output),
         Err(_) => (
@@ -173,7 +170,7 @@ fn bundle_identifier(text: &str) -> bool {
 }
 
 /// Parse the app probe's `key=value` lines; anything unexpected is None.
-pub(crate) fn app_facts(output: &str) -> Option<(String, Vec<String>)> {
+fn app_facts(output: &str) -> Option<(String, Vec<String>)> {
     let mut identifier = None;
     let mut state = Vec::new();
 
@@ -192,7 +189,7 @@ pub(crate) fn app_facts(output: &str) -> Option<(String, Vec<String>)> {
 
 /// Helper-side facts about an app bundle: its identifier and whether the
 /// helper account has preferences or a container for it.
-async fn app(client: &Client, name: &str, bundle: &str) -> Result<(ItemState, Value)> {
+async fn app(client: &Client, name: &str, bundle: &str) -> (ItemState, Value) {
     let script = concat!(
         "id=$(/usr/bin/plutil -extract CFBundleIdentifier raw -o - \"$1/Contents/Info.plist\") ",
         "|| exit 3; ",
@@ -222,7 +219,7 @@ async fn app(client: &Client, name: &str, bundle: &str) -> Result<(ItemState, Va
         .flatten()
         .and_then(|output| app_facts(&String::from_utf8_lossy(&output)));
     let Some((identifier, state)) = facts else {
-        return Ok((
+        return (
             ItemState::Unknown,
             json!({
                 "kind": "application",
@@ -231,10 +228,10 @@ async fn app(client: &Client, name: &str, bundle: &str) -> Result<(ItemState, Va
                 "bundle": bundle,
                 "detail": "The bundle could not be inspected in the helper",
             }),
-        ));
+        );
     };
 
-    Ok((
+    (
         ItemState::Installed,
         json!({
             "kind": "application",
@@ -247,7 +244,7 @@ async fn app(client: &Client, name: &str, bundle: &str) -> Result<(ItemState, Va
             "signIn": "unknown",
             "detail": "Account data and sign-ins belong to the helper; check the app itself.",
         }),
-    ))
+    )
 }
 
 /// The first helper candidate discovery found usable: a readable,
@@ -291,7 +288,7 @@ pub async fn readiness(client: &Client, tools: &[String], apps: &[String]) -> Re
         let (state, report) = match (item.kind, item.available()) {
             (Kind::Tool, true) => tool(client, &home, name).await?,
             (Kind::Application, true) => match usable_bundle(&item.helper_candidates) {
-                Some(bundle) => app(client, name, bundle).await?,
+                Some(bundle) => app(client, name, bundle).await,
                 None => (
                     ItemState::Unknown,
                     json!({ "kind": kind, "name": name, "status": ItemState::Unknown }),

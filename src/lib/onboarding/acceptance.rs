@@ -1,5 +1,6 @@
 //! Allow records consent; the requesting Atlas owns and drives setup.
-use super::{Pairing, problem, request, signed_executable};
+use super::{Pairing, problem, request};
+use crate::setup::installed_app::signed_executable;
 use crate::{
     control::{Controller, ExecutorClaims},
     error::Result,

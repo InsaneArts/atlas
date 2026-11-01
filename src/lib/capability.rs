@@ -34,13 +34,13 @@ const SKEW: u64 = 60;
 /// What must be unchanged for an observation to still describe this session.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub struct Generation {
-    pub capture_pid: u32,
-    pub input_pid: u32,
-    pub security_session_id: u64,
-    pub display_id: u64,
-    pub display: Display,
-    pub boot: u64,
+struct Generation {
+    capture_pid: u32,
+    input_pid: u32,
+    security_session_id: u64,
+    display_id: u64,
+    display: Display,
+    boot: u64,
 }
 
 impl Generation {
@@ -59,21 +59,21 @@ impl Generation {
 /// One native operation's outcome and, if it failed, where.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub struct Check {
-    pub kind: String,
-    pub passed: bool,
-    pub stage: Option<String>,
-    pub error: Option<String>,
+struct Check {
+    kind: String,
+    passed: bool,
+    stage: Option<String>,
+    error: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub struct Record {
-    pub observed_at: u64,
-    pub passed: bool,
-    pub checks: Vec<Check>,
-    pub generation: Generation,
-    pub evidence: Vec<PathBuf>,
+struct Record {
+    observed_at: u64,
+    passed: bool,
+    checks: Vec<Check>,
+    generation: Generation,
+    evidence: Vec<PathBuf>,
 }
 
 impl Record {
@@ -138,11 +138,6 @@ fn boot_time() -> Option<u64> {
     (status == 0).then(|| u64::try_from(boot.tv_sec).unwrap_or_default())
 }
 
-/// The generation a status snapshot describes, if it shows a ready helper.
-pub fn generation(status: &Value, uid: u32) -> Option<Generation> {
-    generation_at(status, uid, boot_time()?)
-}
-
 /// The generation a status snapshot describes on a machine booted at `boot`.
 fn generation_at(status: &Value, uid: u32, boot: u64) -> Option<Generation> {
     let session = require_hidden(status, uid).ok().filter(|s| s.input)?;
@@ -150,7 +145,8 @@ fn generation_at(status: &Value, uid: u32, boot: u64) -> Option<Generation> {
 }
 
 /// Doctor's view of native dialogs: unknown, stale, passed or failed.
-pub fn assess(record: Option<&Record>, current: Option<&Generation>, at: u64) -> Value {
+#[cfg(test)]
+fn assess(record: Option<&Record>, current: Option<&Generation>, at: u64) -> Value {
     assessment(record, current, at).value()
 }
 
@@ -233,12 +229,6 @@ fn assessment<'a>(
 /// Static guidance, not a test of the page or remote connection.
 const WEB_CONTENT: &str = "Safari/WebKit can stay blank without authenticated Screen Sharing. \
                            Use Chrome/Firefox for web pages; do not retry a blank page.";
-
-/// Doctor's native-dialog assessment for a status snapshot.
-pub fn native_dialogs(status: &Value, uid: u32) -> Value {
-    let record = read_record(uid);
-    assess(record.as_ref(), generation(status, uid).as_ref(), now())
-}
 
 fn read_record(uid: u32) -> Option<Record> {
     record_path(uid)

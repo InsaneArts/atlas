@@ -39,6 +39,11 @@ pub async fn status(config_path: &Path) -> Result<Value> {
         }));
     }
 
+    configured(config_path, uid, me, app).await
+}
+
+/// Observe the configured controller and its helper without repeating role selection.
+async fn configured(config_path: &Path, uid: u32, me: Value, app: Value) -> Result<Value> {
     let config = Config::load(config_path)?;
     let (leftovers, blockers) = logins(Some(config.helper_uid));
     let Some(helper) = setup::account_with_uid(config.helper_uid)? else {

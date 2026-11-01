@@ -12,13 +12,13 @@
 //! under the helper's user ID is closed while its account exists, and only
 //! while that account is still the one Atlas recorded, by asking launchd to
 //! end it, never by killing its processes.
-use super::signed_executable;
 #[cfg(test)]
 use crate::setup::executor::converse;
 use crate::setup::executor::{
     APPROVAL, BECOME_ROOT, EXECUTOR, MARK, finish_executor, last_words, staging, start_executor,
     tracked_output, wait_until_ended,
 };
+use crate::setup::installed_app::signed_executable;
 use crate::{
     approval::{self, Refusal},
     setup::{self, identity::Identity},
@@ -619,11 +619,12 @@ fn closed_all(text: &str, targets: &[Target], exited: bool) -> Result<Vec<u32>, 
 /// still that account, and close anything of it macOS leaves running.
 pub(crate) fn remove_helper(helper: &Identity, via: Via) -> Result<(), Refusal> {
     let uid = helper.uid.to_string();
-    let text = run(
+    let text = run_to_end(
         via,
         &["remove-helper", &uid, &helper.name, &helper.generated_uid],
         None,
-    )?;
+    )
+    .0?;
     refused(&text)?;
 
     text.contains(&format!("{MARK}removed {uid}"))
@@ -642,14 +643,7 @@ fn numbers(uids: &[u32]) -> Vec<String> {
     uids.iter().map(u32::to_string).collect()
 }
 
-/// Run the steps with `arguments` as root, reached `via` the approval or
-/// sudo, answering any password question with `secret` (the approval's
-/// channel only). What the steps said.
-fn run(via: Via, arguments: &[&str], secret: Option<&[u8]>) -> Result<String, Refusal> {
-    run_to_end(via, arguments, secret).0
-}
-
-/// [`run`], and whether the steps are known to have ended: they never
+/// Run the steps and report whether they are known to have ended: they never
 /// started, or their process was seen to exit. Atlas waits for that exit
 /// even after it gave up on their reply, so a run cut short is never left
 /// acting behind a claim Atlas settled or control it let go.
@@ -662,7 +656,6 @@ fn run_to_end(
 
     match via {
         Via::Approval(prompt) => {
-            let approved_script = [EXECUTOR, BECOME_ROOT, &steps()].concat();
             let mut argv = vec![
                 "-i",
                 "PATH=/usr/bin:/bin:/usr/sbin:/sbin",
@@ -670,7 +663,7 @@ fn run_to_end(
                 "-p",
                 "-f",
                 "-c",
-                &approved_script,
+                &script,
                 "zsh",
             ];
             argv.extend_from_slice(arguments);

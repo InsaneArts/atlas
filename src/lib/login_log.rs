@@ -16,7 +16,7 @@ const CATEGORY: &str = "Login";
 
 /// Note `marker` in the unified log, where macOS keeps it with its own
 /// messages of the same moment.
-pub(crate) fn mark(marker: &str) {
+pub fn mark(marker: &str) {
     // Tests never write to this Mac's log.
     if cfg!(test) {
         return;
@@ -28,7 +28,7 @@ pub(crate) fn mark(marker: &str) {
 }
 
 /// Seconds as a marker writes them: `12.3s`.
-pub(crate) fn seconds(duration: std::time::Duration) -> String {
+pub fn seconds(duration: std::time::Duration) -> String {
     format!("{:.1}s", duration.as_secs_f64())
 }
 

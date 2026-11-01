@@ -414,17 +414,7 @@ fn dist(options: &Options) -> Result<()> {
 
     // Without resource forks: unzip would otherwise leave ._ files inside the
     // bundle and break its seal.
-    exec(
-        "/usr/bin/ditto",
-        &[
-            "-c",
-            "-k",
-            "--norsrc",
-            "--keepParent",
-            text(&app)?,
-            text(&zip)?,
-        ],
-    )?;
+    archive(&app, &zip)?;
 
     let sums = format!("{}  {name}\n", sha256(&zip)?);
     fs::write(&sums_path, &sums).map_err(|error| error.to_string())?;
@@ -444,6 +434,20 @@ fn dist(options: &Options) -> Result<()> {
     Ok(())
 }
 
+fn archive(app: &Path, zip: &Path) -> Result<()> {
+    exec(
+        "/usr/bin/ditto",
+        &[
+            "-c",
+            "-k",
+            "--norsrc",
+            "--keepParent",
+            text(app)?,
+            text(zip)?,
+        ],
+    )
+}
+
 /// The SHA-256 of the file at `path`, read in pieces.
 fn sha256(path: &Path) -> Result<String> {
     let mut file = fs::File::open(path).map_err(|error| error.to_string())?;
@@ -456,7 +460,14 @@ fn sha256(path: &Path) -> Result<String> {
 /// `upload` when asked): the app, ready to publish.
 fn build(options: &Options, stage: &Path, upload: &Path) -> Result<PathBuf> {
     let root = root();
-    let version = atlas::VERSION;
+    let app = compile_executables(&root, stage)?;
+    assemble_resources(&root, &app, stage)?;
+    sign_and_verify(options, &app, upload)?;
+    Ok(app)
+}
+
+/// Compile both architectures and assemble the universal app executables.
+fn compile_executables(root: &Path, stage: &Path) -> Result<PathBuf> {
     let cargo = env::var("CARGO").unwrap_or_else(|_| "cargo".into());
     // Exactly this package's binary, into a target directory of our own.
     let manifest = root.join("Cargo.toml");
@@ -509,13 +520,19 @@ fn build(options: &Options, stage: &Path, upload: &Path) -> Result<PathBuf> {
 
     fs::create_dir_all(&macos).map_err(|error| error.to_string())?;
     fs::create_dir_all(app.join("Contents/Resources")).map_err(|error| error.to_string())?;
-    fs::write(app.join("Contents/Info.plist"), info_plist(version))
+    fs::write(app.join("Contents/Info.plist"), info_plist(atlas::VERSION))
         .map_err(|error| error.to_string())?;
 
     universal(&cli, &macos.join("atlas"))?;
     fs::copy(&executable, macos.join(APP_EXECUTABLE)).map_err(|error| error.to_string())?;
     check_universal(&macos.join(APP_EXECUTABLE))?;
-    compile_icon(&package.join("Resources/AppIcon.icon"), &app, stage)?;
+    Ok(app)
+}
+
+/// Package the app's maintained resources and matching committed agent plugin.
+fn assemble_resources(root: &Path, app: &Path, stage: &Path) -> Result<()> {
+    let package = root.join("app");
+    compile_icon(&package.join("Resources/AppIcon.icon"), app, stage)?;
 
     // The app icon for macOS before 26 and the helper account's picture,
     // both drawn by app/Resources/AppIcon.swift, plus original agent logos
@@ -542,7 +559,7 @@ fn build(options: &Options, stage: &Path, upload: &Path) -> Result<PathBuf> {
     // ships, and not its tests.
     let tracked = output(
         "/usr/bin/git",
-        &["-C", text(&root)?, "ls-files", "--", "agents"],
+        &["-C", text(root)?, "ls-files", "--", "agents"],
     )?;
     for file in tracked
         .lines()
@@ -562,6 +579,11 @@ fn build(options: &Options, stage: &Path, upload: &Path) -> Result<PathBuf> {
     fs::write(agents.join(format!("{LOGIN_JOB}.plist")), menubar_agent())
         .map_err(|error| error.to_string())?;
 
+    Ok(())
+}
+
+/// Sign inside out and verify before any build is published.
+fn sign_and_verify(options: &Options, app: &Path, upload: &Path) -> Result<()> {
     // Inside out: the Swift executable carries its own identifier, then the app
     // (whose main executable is the consented `atlas`) seals it.
     let sign = |identifier: Option<&str>, path: &Path| -> Result<()> {
@@ -575,33 +597,23 @@ fn build(options: &Options, stage: &Path, upload: &Path) -> Result<PathBuf> {
 
     sign(
         Some(atlas::setup::APP_IDENTIFIER),
-        &macos.join(APP_EXECUTABLE),
+        &app.join("Contents/MacOS").join(APP_EXECUTABLE),
     )?;
-    sign(None, &app)?;
+    sign(None, app)?;
 
     exec(
         "/usr/bin/codesign",
-        &["--verify", "--strict", "--deep", text(&app)?],
+        &["--verify", "--strict", "--deep", text(app)?],
     )?;
 
-    if !atlas::setup::developer_id(&macos.join("atlas")) {
+    if !atlas::setup::developer_id(&app.join("Contents/MacOS/atlas")) {
         return Err(
             "the app does not satisfy setup's Developer ID requirement (identity and team)".into(),
         );
     }
 
     if let Some(profile) = &options.notarize {
-        exec(
-            "/usr/bin/ditto",
-            &[
-                "-c",
-                "-k",
-                "--norsrc",
-                "--keepParent",
-                text(&app)?,
-                text(upload)?,
-            ],
-        )?;
+        archive(app, upload)?;
 
         exec(
             "/usr/bin/xcrun",
@@ -615,14 +627,14 @@ fn build(options: &Options, stage: &Path, upload: &Path) -> Result<PathBuf> {
             ],
         )?;
 
-        exec("/usr/bin/xcrun", &["stapler", "staple", text(&app)?])?;
+        exec("/usr/bin/xcrun", &["stapler", "staple", text(app)?])?;
         exec(
             "/usr/sbin/spctl",
-            &["--assess", "--type", "execute", "-vv", text(&app)?],
+            &["--assess", "--type", "execute", "-vv", text(app)?],
         )?;
     }
 
-    Ok(app)
+    Ok(())
 }
 
 #[cfg(test)]

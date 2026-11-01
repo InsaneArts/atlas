@@ -561,3 +561,56 @@ pub(crate) fn staging() -> String {
             &crate::setup::requirement_for(crate::setup::APP_IDENTIFIER),
         )
 }
+
+/// Keep the administrator rights from `sudo -v` fresh while init waits
+/// for the person (sudo forgets them after five minutes otherwise).
+fn keep_sudo_alive() {
+    std::thread::spawn(|| {
+        loop {
+            std::thread::sleep(Duration::from_secs(60));
+            let _ = Command::new("/usr/bin/sudo").args(["-n", "-v"]).output();
+        }
+    });
+}
+
+/// Request normal sudo consent and refresh it while attended setup waits.
+/// Returns an init error when sudo refuses administrator rights.
+pub fn request_administrator_rights() -> AtlasResult<()> {
+    let status = Command::new("/usr/bin/sudo").arg("-v").status()?;
+    if !status.success() {
+        return Err(super::account::problem(
+            "Administrator rights were not granted",
+        ));
+    }
+    keep_sudo_alive();
+    Ok(())
+}
+
+/// Check cached rights without prompting after a long first-login wait.
+pub fn administrator_rights_current() -> bool {
+    Command::new("/usr/bin/sudo")
+        .args(["-n", "-v"])
+        .output()
+        .is_ok_and(|output| output.status.success())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    #[test]
+    fn quiet_commands_hide_log_lines_and_keep_their_outcome() {
+        let script = "echo '2026-10-11 14:28:19.767 sysadminctl[1:2] noise' >&2; \
+                      printf 'User password:' >&2; sleep 0.4; echo >&2; exit $0";
+        let run = |status| {
+            Command::new("/bin/sh")
+                .args(["-c", script, status])
+                .stderr(std::process::Stdio::piped())
+                .spawn()
+                .unwrap()
+        };
+        assert!(quietly_attended(run("0"), "failed").is_ok());
+
+        let failed = quietly_attended(run("3"), "it failed").unwrap_err();
+        assert_eq!(failed.error, "it failed");
+    }
+}

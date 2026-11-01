@@ -2,8 +2,10 @@ mod cli;
 mod dispatch;
 mod doctor;
 mod help;
+mod init;
 mod output;
 mod policy;
+mod uninstall;
 mod update;
 
 use atlas::{

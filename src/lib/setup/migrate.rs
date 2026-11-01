@@ -9,9 +9,10 @@
 //! rolls back without blind replays. The job carrying a reply is never the one
 //! being unloaded, and only artifacts this migration created are undone.
 use super::{
-    Account, account_with_uid, endpoint, executable_of,
+    Account, account_with_uid, endpoint,
     helper::{Agent, LABEL, Layout, Request, plist, text_sha256},
-    helper_job, running_developer_id, signature,
+    helper_job,
+    signature::signed_daemon,
 };
 use crate::{
     client::{Client, Run, timestamp},
@@ -32,32 +33,32 @@ use std::{
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub struct Plan {
-    pub uid: u32,
-    pub controller: String,
-    pub home: PathBuf,
-    pub old_label: String,
-    pub old_plist_sha256: String,
+struct Plan {
+    uid: u32,
+    controller: String,
+    home: PathBuf,
+    old_label: String,
+    old_plist_sha256: String,
     /// The managed label. Empty in logs from before the own daemon, whose
     /// managed job ran the previous capture daemon.
     #[serde(default)]
-    pub label: String,
+    label: String,
     #[serde(default)]
-    pub controller_uid: u32,
-    pub program: PathBuf,
-    pub cdhash: String,
-    pub config_path: PathBuf,
-    pub old_config: String,
-    pub new_config: String,
+    controller_uid: u32,
+    program: PathBuf,
+    cdhash: String,
+    config_path: PathBuf,
+    old_config: String,
+    new_config: String,
     /// A first setup (by `atlas init`): no earlier capture job, so
     /// nothing is moved or retired and there is nothing to roll back to.
     #[serde(default)]
-    pub fresh: bool,
+    fresh: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
-pub enum State {
+enum State {
     Applying,
     Applied,
     RollingBack,
@@ -66,14 +67,14 @@ pub enum State {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub struct Log {
-    pub version: u32,
-    pub plan: Plan,
-    pub state: State,
+struct Log {
+    version: u32,
+    plan: Plan,
+    state: State,
     /// Pending-mutation generations this migration recorded and still owns.
-    pub pending: Vec<String>,
+    pending: Vec<String>,
     /// Completed actions with nanosecond timestamps, for evidence only.
-    pub history: Vec<(String, String)>,
+    history: Vec<(String, String)>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -82,9 +83,7 @@ enum Endpoint {
     New,
 }
 
-fn problem(message: impl Into<String>) -> Error {
-    Error::new(Code::Setup, message)
-}
+use super::problem;
 
 fn log_path(uid: u32) -> Result<PathBuf> {
     Ok(home()?
@@ -111,7 +110,7 @@ fn carried_over(log: Result<Option<Log>>) -> bool {
 /// Whether helper `uid`'s setup is in effect (as [`in_effect`]) for the
 /// account whose home is `home`. A record left by a deleted account whose
 /// user ID was reused does not count; one that cannot be read does.
-pub fn in_effect_for(uid: u32, home: &Path) -> bool {
+pub(crate) fn in_effect_for(uid: u32, home: &Path) -> bool {
     log_path(uid).is_ok_and(|path| in_effect_with(load_log(&path), home))
 }
 
@@ -141,7 +140,7 @@ pub fn archive_foreign(uid: u32, home: &Path) -> Result<bool> {
 /// it describes, as `setup-<uid>.<time>.uninstalled.json`: kept as evidence,
 /// but no longer read as a setup (neither here nor by install.sh). Whether a
 /// record was archived.
-pub fn archive_uninstalled(uid: u32) -> Result<bool> {
+pub(crate) fn archive_uninstalled(uid: u32) -> Result<bool> {
     archive_as(&log_path(uid)?, "uninstalled")
 }
 
@@ -184,20 +183,12 @@ fn save_log(path: &Path, log: &Log) -> Result<()> {
 }
 
 /// The configuration with sockets moved into the private layout.
-pub fn managed(config: &Config, layout: &Layout) -> Config {
+pub(crate) fn managed(config: &Config, layout: &Layout) -> Config {
     Config {
         socket_path: layout.socket(),
         input_socket: layout.input_socket(),
         ..config.clone()
     }
-}
-
-fn helper_argv(client: &Client, request: &Request) -> Result<Vec<String>> {
-    helper_argv_with(
-        client,
-        request,
-        setup_identity(client.config.helper_uid, None)?,
-    )
 }
 
 /// A legacy helper needs provenance before its identity can guard workers.
@@ -397,11 +388,7 @@ impl Migration {
     }
 
     fn layout(&self) -> Layout {
-        Layout {
-            uid: self.log.plan.uid,
-            home: self.log.plan.home.clone(),
-            guard: None,
-        }
+        Layout::new(self.log.plan.uid, self.log.plan.home.clone())
     }
 
     fn agent(&self) -> Agent {
@@ -547,24 +534,7 @@ impl Migration {
                 problem("The helper did not say which process it is. Run atlas restart.")
             })?;
 
-        // The file it runs must be the planned build, and its loaded code
-        // must be valid, Atlas's, and still that file.
-        let installed = executable_of(pid)
-            .and_then(|path| signature(&path))
-            .and_then(|signature| signature.cdhash);
-        if installed.as_deref() != Some(self.log.plan.cdhash.as_str()) {
-            return Err(problem(
-                "The helper is not running the signed Atlas build that was expected. Run \
-                 atlas restart.",
-            ));
-        }
-
-        if !running_developer_id(pid) {
-            return Err(problem(
-                "The helper still runs an older build. Run atlas restart, then \
-                 atlas setup --apply.",
-            ));
-        }
+        super::signature::require_current(pid, &self.log.plan.cdhash)?;
 
         let controller = nix::unistd::getuid().as_raw();
         if endpoint(&self.new.config.socket_path, self.log.plan.uid, controller).private
@@ -751,47 +721,15 @@ impl Migration {
         Ok(())
     }
 
-    /// A first setup: the managed daemon is already running (init started
-    /// it); prepare and install idempotently through it, verify it and the
-    /// input service, and record the result.
-    async fn apply_fresh(&mut self) -> Result<()> {
-        let plan = self.log.plan.clone();
-        let uid = plan.uid;
-        let controller = plan.controller.clone();
-        self.helper(Endpoint::New, Request::Prepare { uid, controller })
-            .await?;
-
-        if signed_daemon(&plan.program)? != plan.cdhash {
-            return Err(problem(
-                "Atlas.app changed since setup was planned; run atlas init again",
-            ));
-        }
-
-        let agent = self.agent();
-        self.helper(Endpoint::New, Request::Install { agent })
-            .await?;
-        self.verify_new().await?;
-
-        if !self.input_ready(Endpoint::New).await {
-            return Err(problem("Input is not ready; run atlas start-input"));
-        }
-
-        self.settle_all()?;
-        self.log.state = State::Applied;
-
-        save_log(&self.path, &self.log)
-    }
-
     async fn apply(&mut self) -> Result<()> {
-        if self.log.plan.fresh {
-            return self.apply_fresh().await;
-        }
-
         let plan = self.log.plan.clone();
         let uid = plan.uid;
-        let via = self
-            .reachable_endpoint([Endpoint::Old, Endpoint::New])
-            .await?;
+        let via = if plan.fresh {
+            Endpoint::New
+        } else {
+            self.reachable_endpoint([Endpoint::Old, Endpoint::New])
+                .await?
+        };
         let controller = plan.controller.clone();
         self.helper(via, Request::Prepare { uid, controller })
             .await?;
@@ -799,42 +737,51 @@ impl Migration {
         // The app may have changed since planning: install only the binary
         // that was planned, still validly signed.
         if signed_daemon(&plan.program)? != plan.cdhash {
-            return Err(problem(
+            return Err(problem(if plan.fresh {
+                "Atlas.app changed since setup was planned; run atlas init again"
+            } else {
                 "Atlas.app changed since setup was planned; run setup --rollback, then \
-                 setup --apply again",
-            ));
+                 setup --apply again"
+            }));
         }
 
         let agent = self.agent();
         self.helper(via, Request::Install { agent }).await?;
         self.verify_new().await?;
-        self.move_input(Endpoint::Old, Endpoint::New).await?;
-        self.switch_config(&plan.old_config, &plan.new_config)?;
-
-        // The fallback goes only once its replacement is verified again.
-        self.verify_new().await?;
-
-        if !self.input_ready(Endpoint::New).await {
-            return Err(problem("Input is not ready on the managed endpoint"));
+        if !plan.fresh {
+            self.move_input(Endpoint::Old, Endpoint::New).await?;
+            self.switch_config(&plan.old_config, &plan.new_config)?;
+            // The fallback goes only once its replacement is verified again.
+            self.verify_new().await?;
         }
 
-        let (label, sha256) = (plan.old_label.clone(), plan.old_plist_sha256.clone());
-        self.helper(
-            Endpoint::New,
-            Request::Retire {
-                uid,
-                label,
-                sha256,
-                missing_ok: false,
-            },
-        )
-        .await?;
+        if !self.input_ready(Endpoint::New).await {
+            return Err(problem(if plan.fresh {
+                "Input is not ready; run atlas start-input"
+            } else {
+                "Input is not ready on the managed endpoint"
+            }));
+        }
 
-        let jobs = self.jobs(Endpoint::New).await?;
-        if jobs[&plan.old_label]["loaded"] != false || jobs[&plan.label]["loaded"] != true {
-            return Err(problem(
-                "launchd does not show the expected jobs after retiring",
-            ));
+        if !plan.fresh {
+            let (label, sha256) = (plan.old_label.clone(), plan.old_plist_sha256.clone());
+            self.helper(
+                Endpoint::New,
+                Request::Retire {
+                    uid,
+                    label,
+                    sha256,
+                    missing_ok: false,
+                },
+            )
+            .await?;
+
+            let jobs = self.jobs(Endpoint::New).await?;
+            if jobs[&plan.old_label]["loaded"] != false || jobs[&plan.label]["loaded"] != true {
+                return Err(problem(
+                    "launchd does not show the expected jobs after retiring",
+                ));
+            }
         }
 
         self.settle_all()?;
@@ -890,27 +837,6 @@ impl Migration {
     }
 }
 
-/// The code directory hash of `program`, once it is shown to be validly
-/// signed as Atlas with a Developer ID.
-fn signed_daemon(program: &Path) -> Result<String> {
-    if !super::developer_id(program) {
-        return Err(problem(format!(
-            "{} is not Atlas signed with a Developer ID, so macOS consent would not \
-             persist",
-            program.display()
-        )));
-    }
-
-    signature(program)
-        .and_then(|signature| signature.cdhash)
-        .ok_or_else(|| problem("The helper app's signature could not be read"))
-}
-
-/// The stable installed executable the helper daemon runs.
-fn daemon_program() -> Result<PathBuf> {
-    super::installed_app::app_executable()
-}
-
 /// What every plan starts from: the configuration (its canonical path,
 /// meaning and text), both accounts, and the helper's managed layout.
 struct Basis {
@@ -930,11 +856,7 @@ fn basis(config_path: &Path) -> Result<Basis> {
         .ok_or_else(|| problem("The configured helper account does not exist"))?;
     let controller = account_with_uid(nix::unistd::getuid().as_raw())?
         .ok_or_else(|| problem("The controller account cannot be resolved"))?;
-    let layout = Layout {
-        uid: config.helper_uid,
-        home: account.home.clone(),
-        guard: None,
-    };
+    let layout = Layout::new(config.helper_uid, account.home.clone());
 
     Ok(Basis {
         config_path,
@@ -972,7 +894,7 @@ async fn plan_fresh(config_path: &Path) -> Result<Plan> {
         )
     })?;
 
-    let program = daemon_program()?;
+    let program = super::installed_app::app_executable()?;
     let cdhash = signed_daemon(&program)?;
 
     Ok(Plan {
@@ -1136,7 +1058,11 @@ pub(crate) async fn managed_job(client: &Client) -> Result<Value> {
 
     let reply = client
         .run(
-            helper_argv(client, &request)?,
+            helper_argv_with(
+                client,
+                &request,
+                setup_identity(client.config.helper_uid, None)?,
+            )?,
             Run::pending().within(Duration::from_secs(20)),
         )
         .await?;
@@ -1186,7 +1112,7 @@ async fn plan(config_path: &Path) -> Result<Plan> {
         .as_u64()
         .and_then(|pid| u32::try_from(pid).ok())
         .ok_or_else(|| problem("The helper did not say which process it is. Run atlas restart."))?;
-    let program = daemon_program()?;
+    let program = super::installed_app::app_executable()?;
     let cdhash = signed_daemon(&program)?;
 
     let old_label = helper_job(&client, pid).await["label"]
@@ -1582,11 +1508,7 @@ mod tests {
 
     #[test]
     fn the_managed_layout_only_moves_sockets() {
-        let layout = Layout {
-            uid: 502,
-            home: "/Users/atlastest".into(),
-            guard: None,
-        };
+        let layout = Layout::new(502, "/Users/atlastest".into());
         let target = managed(&config(), &layout);
         assert_eq!(
             target.socket_path,

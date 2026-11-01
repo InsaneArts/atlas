@@ -1,3 +1,5 @@
+use super::problem;
+use crate::error::Result;
 use serde::Serialize;
 use std::{
     fs,
@@ -9,7 +11,7 @@ use std::{
 #[serde(rename_all = "camelCase")]
 pub(super) struct Signature {
     identifier: Option<String>,
-    pub(super) cdhash: Option<String>,
+    cdhash: Option<String>,
     kind: Option<String>,
     team: Option<String>,
 }
@@ -49,7 +51,7 @@ pub(super) fn signature(path: &Path) -> Option<Signature> {
 pub const IDENTIFIER: &str = "com.insanearts.atlas";
 
 /// The Developer ID team that signs Atlas; consent follows it.
-pub const TEAM: &str = "A474HM679A";
+pub(crate) const TEAM: &str = "A474HM679A";
 
 /// The identifier the app's executable inside Atlas.app is signed as.
 pub const APP_IDENTIFIER: &str = "com.insanearts.atlas.bar";
@@ -65,14 +67,6 @@ pub(crate) fn requirement_for(identifier: &str) -> String {
     )
 }
 
-/// Whether `target` (a path, or a PID as text) validly satisfies a
-/// Developer ID Application signature for Atlas by its team, the
-/// requirement under which macOS consent persists. For a running process
-/// this also checks that its loaded code still matches the file on disk.
-fn satisfies_developer_id(target: &std::ffi::OsStr) -> bool {
-    satisfies(target, IDENTIFIER)
-}
-
 /// Whether `target` validly satisfies the requirement for `identifier`.
 fn satisfies(target: &std::ffi::OsStr, identifier: &str) -> bool {
     Command::new("/usr/bin/codesign")
@@ -85,12 +79,12 @@ fn satisfies(target: &std::ffi::OsStr, identifier: &str) -> bool {
 
 /// Whether the file at `path` is Atlas signed by its Developer ID.
 pub fn developer_id(path: &Path) -> bool {
-    satisfies_developer_id(path.as_os_str())
+    satisfies(path.as_os_str(), IDENTIFIER)
 }
 
 /// Whether the file at `path` is the app's executable signed by Atlas's
 /// Developer ID.
-pub fn app_signed(path: &Path) -> bool {
+pub(crate) fn app_signed(path: &Path) -> bool {
     satisfies(path.as_os_str(), APP_IDENTIFIER)
 }
 
@@ -98,13 +92,13 @@ pub fn app_signed(path: &Path) -> bool {
 /// its loaded code is exactly the file now on disk. (`codesign -d` on a PID
 /// describes the file at its path, so only verification proves this.)
 pub(super) fn running_developer_id(pid: u32) -> bool {
-    satisfies_developer_id(pid.to_string().as_ref())
+    satisfies(pid.to_string().as_ref(), IDENTIFIER)
 }
 
 /// Whether helper daemon `pid` runs `executable` exactly as it is on disk
 /// now. False for a daemon still running a build an update replaced: its
 /// file moved aside, or its loaded code no longer matches the file.
-pub fn runs_current(pid: u32, executable: &Path) -> bool {
+pub(crate) fn runs_current(pid: u32, executable: &Path) -> bool {
     let running = executable_of(pid).and_then(|path| fs::canonicalize(path).ok());
 
     running.is_some() && running == fs::canonicalize(executable).ok() && running_developer_id(pid)
@@ -122,6 +116,46 @@ pub(super) fn executable_of(pid: u32) -> Option<PathBuf> {
     buffer.truncate(length);
 
     Some(PathBuf::from(String::from_utf8_lossy(&buffer).into_owned()))
+}
+
+/// The code directory hash of `program`, once it is shown to be validly
+/// signed as Atlas with a Developer ID.
+pub(super) fn signed_daemon(program: &Path) -> Result<String> {
+    if !developer_id(program) {
+        return Err(problem(format!(
+            "{} is not Atlas signed with a Developer ID, so macOS consent would not \
+             persist",
+            program.display()
+        )));
+    }
+
+    signature(program)
+        .and_then(|signature| signature.cdhash)
+        .ok_or_else(|| problem("The helper app's signature could not be read"))
+}
+
+/// Require the planned on-disk build before verifying its loaded Developer ID.
+pub(super) fn require_current(pid: u32, expected: &str) -> Result<()> {
+    // The file it runs must be the planned build, and its loaded code
+    // must be valid, Atlas's, and still that file.
+    let installed = executable_of(pid)
+        .and_then(|path| signature(&path))
+        .and_then(|signature| signature.cdhash);
+    if installed.as_deref() != Some(expected) {
+        return Err(problem(
+            "The helper is not running the signed Atlas build that was expected. Run \
+                 atlas restart.",
+        ));
+    }
+
+    if !running_developer_id(pid) {
+        return Err(problem(
+            "The helper still runs an older build. Run atlas restart, then \
+                 atlas setup --apply.",
+        ));
+    }
+
+    Ok(())
 }
 
 #[cfg(test)]

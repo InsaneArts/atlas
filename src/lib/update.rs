@@ -438,11 +438,6 @@ fn record_path() -> Result<PathBuf> {
     Ok(crate::config::home()?.join("Library/Application Support/Atlas/update.json"))
 }
 
-/// The update whose helper handover has not completed, if any.
-pub fn unfinished() -> Result<Option<Value>> {
-    read_record(&record_path()?)
-}
-
 /// The record at `path`, if any. One that cannot be read is an error that
 /// asks to inspect it, never a reason to skip the handover it describes.
 fn read_record(path: &Path) -> Result<Option<Value>> {
@@ -479,7 +474,7 @@ fn finish_record(path: &Path) -> Result<Value> {
     let installed = record["installed"].as_str().map(Path::new);
     // Only a staging copy beside the installed app is ever removed.
     let removed = previous.as_ref().is_some_and(|previous| {
-        staged_beside(previous, installed) && fs::remove_dir_all(previous).is_ok()
+        beside(previous, installed, update_copy) && fs::remove_dir_all(previous).is_ok()
     });
 
     fs::remove_file(path)?;
@@ -537,12 +532,6 @@ fn beside(path: &Path, installed: Option<&Path>, named: fn(&str) -> bool) -> boo
             .is_some_and(|installed| installed.is_absolute() && installed.parent() == path.parent())
 }
 
-/// Whether `previous` is a copy `atlas update` staged in the folder that
-/// holds `installed`.
-fn staged_beside(previous: &Path, installed: Option<&Path>) -> bool {
-    beside(previous, installed, update_copy)
-}
-
 /// The copies beside `installed` whose names `named` accepts.
 fn copies(installed: &Path, named: fn(&str) -> bool) -> Vec<PathBuf> {
     let Some(entries) = installed
@@ -559,11 +548,6 @@ fn copies(installed: &Path, named: fn(&str) -> bool) -> Vec<PathBuf> {
         .collect()
 }
 
-/// The copies `atlas update` staged beside `installed`.
-fn staged_copies(installed: &Path) -> Vec<PathBuf> {
-    copies(installed, update_copy)
-}
-
 /// Every copy Atlas staged beside `installed`, by `atlas update` or by
 /// install.sh: what uninstall clears.
 pub(crate) fn atlas_copies(installed: &Path) -> Vec<PathBuf> {
@@ -573,6 +557,7 @@ pub(crate) fn atlas_copies(installed: &Path) -> Vec<PathBuf> {
 /// Put `new` in place of `installed` with one atomic exchange, keeping
 /// the previous app beside it (and recording where) until the helper's
 /// handover succeeds.
+#[cfg(test)]
 async fn swap(
     new: &Path,
     installed: &Path,
@@ -607,7 +592,7 @@ async fn swap_using(
 
     // A staging copy an earlier update left when it was stopped (no record
     // names it, or this update would be finishing it) goes first.
-    for path in staged_copies(installed) {
+    for path in copies(installed, update_copy) {
         let _ = fs::remove_dir_all(&path);
     }
 
@@ -670,7 +655,7 @@ fn resume_source(record: &Value, installed: &Path) -> Option<PathBuf> {
     let expected = record["executable"].as_str()?;
 
     let previous = record["previous"].as_str().map(Path::new);
-    let previous = previous.filter(|previous| staged_beside(previous, Some(installed)))?;
+    let previous = previous.filter(|previous| beside(previous, Some(installed), update_copy))?;
 
     let sha256 = |app: &Path| crate::digest::file_sha256(&app.join(EXECUTABLE));
     (sha256(installed).as_deref() != Some(expected)
@@ -681,7 +666,7 @@ fn resume_source(record: &Value, installed: &Path) -> Option<PathBuf> {
 /// Whether other accounts (the helper) can reach and run `executable`:
 /// every directory above it searchable and the file readable and executable
 /// by others. ACLs are not counted, so this errs on the side of refusing.
-pub fn reachable_by_others(executable: &Path) -> bool {
+pub(crate) fn reachable_by_others(executable: &Path) -> bool {
     use std::os::unix::fs::PermissionsExt;
 
     let mode = |path: &Path| fs::metadata(path).map(|metadata| metadata.permissions().mode());
@@ -754,7 +739,7 @@ async fn install_in(
 
         curl(&format!("{}/{name}", source.base), &work.join(&name))?;
         let app = verify(&work, &name, allow_unnotarized)?;
-        swap(&app, installed, &name, record, preflight).await?;
+        swap_using(&app, installed, &name, record, preflight, stage).await?;
 
         Ok(json!({
             "ok": true,
@@ -1012,7 +997,7 @@ mod tests {
                     async |program| {
                         checked = true;
                         assert_eq!(fs::read_to_string(program).unwrap(), "new");
-                        assert_eq!(program, staged_copies(&installed)[0].join(EXECUTABLE));
+                        assert_eq!(program, copies(&installed, update_copy)[0].join(EXECUTABLE));
                         assert!(!record.exists());
                         assert_eq!(
                             client.controller.acquire(false).unwrap_err().code,
@@ -1044,7 +1029,7 @@ mod tests {
                 "old"
             );
             assert!(!record.exists());
-            assert!(staged_copies(&installed).is_empty());
+            assert!(copies(&installed, update_copy).is_empty());
             assert!(
                 client
                     .controller
@@ -1079,7 +1064,7 @@ mod tests {
             async |program| {
                 assert_ne!(program, new.join(EXECUTABLE));
                 assert_eq!(fs::read_to_string(program).unwrap(), "new");
-                assert_eq!(program, staged_copies(&installed)[0].join(EXECUTABLE));
+                assert_eq!(program, copies(&installed, update_copy)[0].join(EXECUTABLE));
                 assert_eq!(
                     fs::read_to_string(installed.join(EXECUTABLE)).unwrap(),
                     "old"
@@ -1095,7 +1080,7 @@ mod tests {
         );
         assert_eq!(fs::read_to_string(new.join(EXECUTABLE)).unwrap(), "new");
         assert!(!record.exists());
-        assert!(staged_copies(&installed).is_empty());
+        assert!(copies(&installed, update_copy).is_empty());
     }
 
     #[test]
@@ -1317,7 +1302,7 @@ mod tests {
             "{}",
             previous.display()
         );
-        assert_eq!(staged_copies(&installed), vec![previous.clone()]);
+        assert_eq!(copies(&installed, update_copy), vec![previous.clone()]);
         assert_eq!(fs::read_to_string(previous.join("version")).unwrap(), "old");
         assert_eq!(
             plan["executable"],
@@ -1398,12 +1383,12 @@ mod tests {
         }
 
         let staged = root.join(format!("Applications/.Atlas.app.update-{token}"));
-        assert!(staged_beside(&staged, Some(&installed)));
-        assert!(!staged_beside(&staged, None));
+        assert!(beside(&staged, Some(&installed), update_copy));
+        assert!(!beside(&staged, None, update_copy));
 
         // A record an earlier Atlas wrote names its copy without the prefix.
         let legacy = root.join(format!("Applications/.Atlas.app.{token}"));
-        assert!(staged_beside(&legacy, Some(&installed)));
+        assert!(beside(&legacy, Some(&installed), update_copy));
 
         for name in [
             ".Atlas.app.",
@@ -1415,7 +1400,7 @@ mod tests {
             &format!(".Atlas.app.update-{token}0"),
         ] {
             let path = root.join("Applications").join(name);
-            assert!(!staged_beside(&path, Some(&installed)), "{name}");
+            assert!(!beside(&path, Some(&installed), update_copy), "{name}");
         }
     }
 
@@ -1454,7 +1439,7 @@ mod tests {
         expected.sort();
         assert_eq!(found, expected);
         assert_eq!(
-            staged_copies(&installed).len(),
+            copies(&installed, update_copy).len(),
             2,
             "update sweeps only its own"
         );

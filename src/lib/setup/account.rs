@@ -201,7 +201,7 @@ pub(crate) fn problem(message: impl Into<String>) -> Error {
 }
 
 /// Whether `name` can be a new account's short name.
-pub(crate) fn valid_account_name(name: &str) -> std::result::Result<(), String> {
+pub fn validate_account_name(name: &str) -> std::result::Result<(), String> {
     if name.chars().any(char::is_whitespace) {
         return Err("Account names can't have spaces.".into());
     }
@@ -301,7 +301,7 @@ pub(crate) fn free_uid() -> Result<u32> {
 
 /// Directory services can list negative system IDs, which cannot collide
 /// with the helper. Any unreadable ID still makes the whole list unusable.
-pub(crate) fn used_uids(listing: &str) -> Result<Vec<u32>> {
+fn used_uids(listing: &str) -> Result<Vec<u32>> {
     let mut uids = Vec::new();
     for line in listing.lines() {
         let unreadable = || problem("Could not read a user ID in use");
@@ -317,7 +317,7 @@ pub(crate) fn used_uids(listing: &str) -> Result<Vec<u32>> {
     Ok(uids)
 }
 
-pub(crate) fn available_uid(
+fn available_uid(
     accounts: &[u32],
     running: &[u32],
     mut resolves: impl FnMut(u32) -> Result<bool>,
@@ -328,6 +328,73 @@ pub(crate) fn available_uid(
         }
     }
     Err(problem("No free user ID for the helper account"))
+}
+
+/// Create the selected standard account under claims for every affected UID.
+/// Errors preserve incomplete creation and orphan cleanup for recovery.
+pub fn create_helper(name: &str, full_name: &str) -> Result<Account> {
+    let orphans = crate::session::sessions(None)
+        .map(|sessions| sessions.leftover_uids(crate::session::Kind::Orphan))
+        .ok_or_else(|| problem("macOS could not list its logins, so no account was made"))?;
+    let uid = free_uid()?;
+    crate::onboarding::closing_first(uid, &orphans, || {
+        crate::onboarding::as_root::create_in_terminal(name, uid, full_name, &orphans)
+    })?
+    .map_err(|refusal| {
+        problem(format!(
+            "The helper account could not be created: {refusal:?}"
+        ))
+    })?;
+
+    setup::account_named(name)?.ok_or_else(|| problem("The new account was not found"))
+}
+
+/// Close the logins deleted accounts left open, once the person agrees:
+/// under sudo, which asks for their password here, all in one run as root.
+/// Root checks each user ID again itself; only a login the helper's user ID
+/// (`uid`, its account as just recorded: `helper`) was given after is closed
+/// while its account exists, and then without killing anything.
+pub fn close_leftovers(
+    uid: u32,
+    helper: Option<&crate::setup::identity::Identity>,
+    approve: impl FnOnce() -> Result<()>,
+) -> Result<bool> {
+    use crate::onboarding;
+
+    let Some(sessions) = crate::session::sessions(Some(uid)) else {
+        return Ok(false);
+    };
+    let still_open =
+        || problem("It's still open. Close it before you switch: run atlas init again.");
+    let failed = |refusal| match refusal {
+        crate::approval::Refusal::Failed(reason) => problem(format!(
+            "macOS didn't close it: {reason}. Restart the Mac to clear it, then run atlas init again."
+        )),
+        _ => still_open(),
+    };
+    let targets = onboarding::leftover_targets(&sessions, helper).map_err(failed)?;
+    if targets.is_empty() {
+        return Ok(false);
+    }
+    approve()?;
+    let uids: Vec<u32> = targets.iter().map(|target| target.uid()).collect();
+    onboarding::close_batch(
+        &onboarding::controllers_of(&uids)?,
+        &targets,
+        |targets| {
+            crate::onboarding::as_root::close(
+                targets,
+                crate::onboarding::as_root::Via::Sudo { ask: false },
+            )
+        },
+        crate::session::confirm_gone,
+    )
+    .map_err(|held| match held {
+        onboarding::Held::State(error) => error,
+        onboarding::Held::Refused(refusal) => failed(refusal),
+    })?;
+
+    Ok(true)
 }
 
 #[cfg(test)]
@@ -365,5 +432,65 @@ mod tests {
         );
         assert_eq!(parse_real_name(b"RealName:\n"), None);
         assert_eq!(parse_real_name(b"No such key: RealName\n"), None);
+    }
+    #[test]
+    fn uid_lists_ignore_negative_system_ids_and_keep_nonnegative_ids() {
+        let accounts = used_uids(
+            "nobody                  -2\ndaemon                   1\n_unknown                99\nme                     501\n",
+        )
+        .unwrap();
+        assert_eq!(accounts, [1, 99, 501]);
+        let running = used_uids("   -2\n     1\n    99\n   502\n").unwrap();
+        assert_eq!(running, [1, 99, 502]);
+        assert_eq!(
+            available_uid(&accounts, &running, |_| Ok(false)).unwrap(),
+            503
+        );
+        assert_eq!(
+            used_uids("root 0\nhigh 4294967295\n").unwrap(),
+            [0, u32::MAX]
+        );
+    }
+
+    #[test]
+    fn uid_lists_refuse_garbage_missing_ids_and_out_of_range_numbers() {
+        for line in [
+            "garbage",
+            "broken NaN",
+            "",
+            "large 4294967296",
+            "huge 9223372036854775808",
+        ] {
+            let listing = format!("nobody -2\ndaemon 1\n_unknown 99\n{line}\nme 501\n");
+            let error = used_uids(&listing).unwrap_err();
+            assert_eq!(
+                error.to_string(),
+                "Could not read a user ID in use",
+                "{line}"
+            );
+        }
+    }
+
+    #[test]
+    fn uid_allocation_skips_directory_accounts_and_processes_and_refuses_lookup_errors() {
+        let uid = available_uid(&[501], &[502], |uid| Ok(uid == 503)).unwrap();
+        assert_eq!(uid, 504);
+        let error = available_uid(&[], &[], |_| Err(problem("lookup failed")));
+        assert!(error.is_err());
+    }
+
+    #[test]
+    fn new_account_names_are_short_and_plain() {
+        assert!(validate_account_name("atlas").is_ok());
+        assert!(validate_account_name("qa_helper-2").is_ok());
+        assert!(validate_account_name("").is_err());
+        assert!(validate_account_name("has space").is_err());
+        assert!(validate_account_name("-dash").is_err());
+        assert!(
+            validate_account_name("503").is_err(),
+            "macOS reads digits alone as a user ID"
+        );
+        assert!(validate_account_name("503a").is_ok());
+        assert!(validate_account_name(&"x".repeat(32)).is_err());
     }
 }

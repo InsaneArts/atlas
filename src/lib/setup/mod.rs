@@ -11,16 +11,29 @@ pub(crate) mod installed_app;
 pub mod migrate;
 
 pub(crate) mod account;
-pub use account::FULL_NAME;
 pub use account::{
-    Account, FIRST_USER_UID, account_named, account_with_uid, administrator, real_name,
+    Account, FIRST_USER_UID, FULL_NAME, account_named, account_with_uid, administrator,
+    close_leftovers, create_helper, real_name, validate_account_name,
 };
+pub use configuration::configure_helper;
+pub use executor::{administrator_rights_current, request_administrator_rights};
+pub use helper::{first_login_setup, prepare_helper, refresh_helper, restart_helper};
+pub use installed_app::link_installed_command as link_command;
+
+/// Notices emitted while a complete helper operation retains ownership.
+pub enum Progress<'a> {
+    Administrator(&'a str),
+    Waiting(&'a str),
+    Done(&'a str, &'a str),
+}
+
 pub(crate) use account::{Title, asked_real_name};
 pub(crate) mod executor;
 mod signature;
 pub(crate) use signature::requirement_for;
-pub use signature::{APP_IDENTIFIER, IDENTIFIER, TEAM, app_signed, developer_id, runs_current};
-use signature::{executable_of, running_developer_id, signature};
+pub use signature::{APP_IDENTIFIER, IDENTIFIER, developer_id};
+pub(crate) use signature::{app_signed, runs_current};
+use signature::{executable_of, signature};
 
 use crate::{
     acl::Acl,
@@ -39,6 +52,10 @@ use std::{
     path::{Path, PathBuf},
     process::Command,
 };
+
+fn problem(message: impl Into<String>) -> Error {
+    Error::new(Code::Setup, message)
+}
 
 /// The privileged dispatcher checks the chosen account after authorization,
 /// immediately before entering its launchd session. The worker repeats the
@@ -62,69 +79,31 @@ fi
 exit $?
 "##;
 
-/// Run one `setup-helper` request as `helper`, inside its own login, through
-/// sudo: with the administrator rights already held (`cached_rights`, as
-/// init holds them), or letting sudo ask. The reply is whether the command
-/// succeeded and the JSON it printed (null when it printed none).
+/// Where setup runs and whether sudo already holds administrator consent.
+#[derive(Clone, Copy)]
+pub(crate) enum Invocation {
+    CachedLogin,
+    Login,
+    BeforeLogin,
+    LoggedOut,
+}
+
+/// Run an identity-bound worker through the selected login/consent route.
+/// Logged-out routes never create a graphical session; the worker rechecks
+/// the account and absence of a login immediately before every mutation.
 pub(crate) fn request_as_helper(
     executable: &Path,
     helper: &Account,
     request: &helper::Request,
-    cached_rights: bool,
+    invocation: Invocation,
     expected: &identity::Identity,
 ) -> Result<(bool, Value)> {
-    run_as_helper(
-        executable,
-        helper,
-        request,
-        cached_rights,
-        true,
-        expected,
-        false,
-    )
-}
-
-/// Run one `setup-helper` request as `helper` while it is logged out (no
-/// desktop): plainly through sudo, with the administrator rights already
-/// held, so nothing (no per-user launchd session) starts in the account.
-/// The reply as [`request_as_helper`] gives it.
-pub(crate) fn request_before_login(
-    executable: &Path,
-    helper: &Account,
-    request: &helper::Request,
-    expected: &identity::Identity,
-) -> Result<(bool, Value)> {
-    run_as_helper(executable, helper, request, true, false, expected, true)
-}
-
-/// Run one `setup-helper` request as the logged-out `helper`, recorded as
-/// `expected`: plainly through sudo, which may ask for the person's
-/// password, so nothing starts a login of the account again. Once sudo lets
-/// it run, the request itself refuses unless its account is still that one
-/// and still logged out, so nothing changes in another account or in a
-/// login that started meanwhile. The reply as [`request_as_helper`] gives
-/// it.
-pub(crate) fn request_logged_out_as(
-    executable: &Path,
-    helper: &Account,
-    request: &helper::Request,
-    expected: &identity::Identity,
-) -> Result<(bool, Value)> {
-    run_as_helper(executable, helper, request, false, false, expected, true)
-}
-
-/// Run one `setup-helper` request as `helper` through sudo, inside its login
-/// (`in_login`, through `launchctl asuser`) or plainly, with what the
-/// request checks of its account first (`guard`).
-fn run_as_helper(
-    executable: &Path,
-    helper: &Account,
-    request: &helper::Request,
-    cached_rights: bool,
-    in_login: bool,
-    expected: &identity::Identity,
-    logged_out: bool,
-) -> Result<(bool, Value)> {
+    let (cached_rights, mode, last) = match invocation {
+        Invocation::CachedLogin => (true, "login", "--"),
+        Invocation::Login => (false, "login", "--"),
+        Invocation::BeforeLogin => (true, "plain", "--logged-out"),
+        Invocation::LoggedOut => (false, "plain", "--logged-out"),
+    };
     if expected.uid != helper.uid || expected.name != helper.name {
         return Err(Error::new(
             Code::Setup,
@@ -158,11 +137,11 @@ fn run_as_helper(
             &helper.name,
             &expected.generated_uid,
         ])
-        .arg(if in_login { "login" } else { "plain" })
+        .arg(mode)
         .arg(executable)
         .arg(serde_json::to_string(request)?)
         .arg(serde_json::to_string(expected)?)
-        .arg(if logged_out { "--logged-out" } else { "--" })
+        .arg(last)
         .stderr(std::process::Stdio::piped());
     let output = crate::setup::executor::tracked_output(&mut command).map_err(|refusal| {
         Error::new(
@@ -186,7 +165,7 @@ fn worker_reply(output: &std::process::Output) -> (bool, Value) {
 }
 
 /// Parse `launchctl print-disabled` output for one service.
-pub fn parse_disabled(text: &str, service: &str) -> Option<bool> {
+fn parse_disabled(text: &str, service: &str) -> Option<bool> {
     let key = format!("\"{service}\" =>");
     text.lines().find_map(|line| {
         let state = line.trim().strip_prefix(&key)?.trim();
@@ -240,7 +219,7 @@ struct Endpoint {
 
 /// Whether every allow entry in `acl_to_text` lines (`tag:uuid:name:id:allow:rights`)
 /// grants access to one of `users` only. Deny entries never widen access.
-pub fn grants_only(lines: &[String], users: &[u32]) -> bool {
+fn grants_only(lines: &[String], users: &[u32]) -> bool {
     lines.iter().all(|line| {
         let fields: Vec<&str> = line.split(':').collect();
         match fields.as_slice() {
@@ -296,7 +275,7 @@ fn binary(path: &Path) -> Value {
 }
 
 /// The label of the `launchctl list` row (`PID\tStatus\tLabel`) for `pid`.
-pub fn job_label(list: &str, pid: u32) -> Option<String> {
+fn job_label(list: &str, pid: u32) -> Option<String> {
     list.lines().find_map(|line| {
         let mut columns = line.split('\t');
         let row = columns.next()?.trim().parse::<u32>().ok()?;
@@ -307,7 +286,7 @@ pub fn job_label(list: &str, pid: u32) -> Option<String> {
 }
 
 /// The definition path launchd recorded for a job (`path = …` in `launchctl print`).
-pub fn job_path(print: &str) -> Option<PathBuf> {
+fn job_path(print: &str) -> Option<PathBuf> {
     print.lines().find_map(|line| {
         let path = line.trim().strip_prefix("path = ")?;
         path.starts_with('/').then(|| PathBuf::from(path))
@@ -603,7 +582,7 @@ fn next_steps(report: &Value) -> Vec<String> {
 }
 
 /// The permissions the helper still lacks, by their System Settings names.
-pub(crate) fn missing(status: &Value) -> Vec<&'static str> {
+pub fn missing(status: &Value) -> Vec<&'static str> {
     [
         ("screenCapture", "Screen & System Audio Recording"),
         ("accessibility", "Accessibility"),

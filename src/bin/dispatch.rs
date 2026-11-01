@@ -322,7 +322,7 @@ async fn carry_out(
         }
         Command::Init => {
             as_yourself("init")?;
-            atlas::init::run(config, allow_disrupt).await
+            super::init::run(config, allow_disrupt).await
         }
         Command::Onboarding { step } => onboarding(config, step).await,
         Command::Agents { action } => {
@@ -339,7 +339,7 @@ async fn carry_out(
             remove_helper,
         } => {
             as_yourself("uninstall")?;
-            atlas::uninstall::run(config, keep_config, yes, remove_helper).await
+            super::uninstall::run(config, keep_config, yes, remove_helper).await
         }
         Command::Menubar {
             login: Some(login), ..

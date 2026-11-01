@@ -5,7 +5,7 @@
 //! already has, follows a link, or writes preferences while the account runs
 //! anything (cfprefsd would hold the old ones).
 use super::helper::{File, Layout, escape, file, text_sha256};
-use crate::error::{Code, Error, Result};
+use crate::error::Result;
 use serde_json::{Value, json};
 use std::{
     fs,
@@ -69,9 +69,7 @@ const BUILD_STAMPED: &[&str] = &[
     "PreviousBuildVersion",
 ];
 
-fn problem(message: impl Into<String>) -> Error {
-    Error::new(Code::Setup, message)
-}
+use super::problem;
 
 /// A plist document around `body`, a dictionary's entries.
 fn document(body: &str) -> String {
@@ -261,6 +259,7 @@ struct Readied {
 /// `version` and `build` are macOS's. An account with Atlas settings of its
 /// own is no helper, so it gets no opener, and a home others may write to
 /// gets nothing.
+#[cfg(test)]
 fn ready(
     layout: &Layout,
     logged_in: bool,
@@ -356,12 +355,18 @@ fn ready_with(
 pub(super) fn first_login(layout: &Layout, opener: bool) -> Result<Value> {
     let logged_in = crate::session::login(layout.uid).is_some();
     let program = if opener {
-        Some(crate::onboarding::signed_executable()?)
+        Some(crate::setup::installed_app::signed_executable()?)
     } else {
         None
     };
     let (version, build) = macos()?;
-    let readied = ready(layout, logged_in, program.as_deref(), (&version, &build))?;
+    let readied = ready_with(
+        layout,
+        logged_in,
+        program.as_deref(),
+        (&version, &build),
+        write_if_absent,
+    )?;
 
     // Without an opener asked for (atlas init sets the account up itself),
     // one a window left would only race it.
@@ -468,11 +473,7 @@ pub fn open_at_login() -> Result<()> {
     use crate::login_log::{mark, seconds};
 
     let uid = nix::unistd::getuid().as_raw();
-    let layout = Layout {
-        uid,
-        home: crate::config::home()?,
-        guard: None,
-    };
+    let layout = Layout::new(uid, crate::config::home()?);
     mark(&format!("opener.start uid={uid}"));
 
     let deadline = Instant::now() + REQUEST_PATIENCE;
@@ -565,11 +566,7 @@ mod tests {
 
     fn layout() -> (tempfile::TempDir, Layout) {
         let dir = tempfile::tempdir().unwrap();
-        let layout = Layout {
-            uid: nix::unistd::getuid().as_raw(),
-            home: dir.path().to_path_buf(),
-            guard: None,
-        };
+        let layout = Layout::new(nix::unistd::getuid().as_raw(), dir.path().to_path_buf());
         (dir, layout)
     }
 
@@ -659,7 +656,7 @@ mod tests {
             true
         })
         .unwrap();
-        let program = crate::onboarding::signed_executable_using(program, |path| {
+        let program = crate::setup::installed_app::signed_executable_using(program, |path| {
             assert_eq!(path, installed);
             true
         })
@@ -671,16 +668,16 @@ mod tests {
         assert_eq!(opened, installed);
 
         let (allowed, approvals) = crate::approval::without_authorization(|| {
-            crate::onboarding::signed_executable_using(opened, |path| path == installed)
+            crate::setup::installed_app::signed_executable_using(opened, |path| path == installed)
         });
         assert_eq!(allowed.unwrap(), installed);
         assert_eq!(approvals, 0);
         assert!(
-            crate::onboarding::signed_executable_using(program, |_| false).is_err(),
+            crate::setup::installed_app::signed_executable_using(program, |_| false).is_err(),
             "the installed app must still pass signature verification"
         );
         assert!(
-            crate::onboarding::signed_executable_using(running, |_| true).is_err(),
+            crate::setup::installed_app::signed_executable_using(running, |_| true).is_err(),
             "a staged copy is never accepted as the installed identity"
         );
     }

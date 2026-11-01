@@ -20,9 +20,9 @@ use std::{
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct Identity {
-    pub uid: u32,
-    pub name: String,
-    pub generated_uid: String,
+    pub(crate) uid: u32,
+    pub(crate) name: String,
+    pub(crate) generated_uid: String,
 }
 
 /// Where the identity of helper `uid` is kept, in the home `home`.
@@ -70,7 +70,7 @@ pub fn current(account: &Account) -> Option<Identity> {
 
 /// What is on file for one helper user ID.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub enum OnFile {
+pub(crate) enum OnFile {
     /// Nothing: set up before Atlas recorded it, or never.
     Nothing,
     /// The helper's identity, as recorded.
@@ -81,7 +81,7 @@ pub enum OnFile {
 
 /// How the account with a helper's user ID stands against its record.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub enum Standing {
+pub(crate) enum Standing {
     /// Nothing is recorded, and the account can be read: it may be recorded.
     Unrecorded(Identity),
     /// It is the account recorded.
@@ -94,7 +94,7 @@ pub enum Standing {
 }
 
 /// How the account read now (`now`) stands against what is on file.
-pub fn standing(on_file: &OnFile, now: Option<&Identity>) -> Standing {
+pub(crate) fn standing(on_file: &OnFile, now: Option<&Identity>) -> Standing {
     match (on_file, now) {
         (OnFile::Unreadable, _) | (_, None) => Standing::Unknown,
         (OnFile::Nothing, Some(now)) => Standing::Unrecorded(now.clone()),
@@ -105,26 +105,10 @@ pub fn standing(on_file: &OnFile, now: Option<&Identity>) -> Standing {
     }
 }
 
-/// Record `account` as the helper, read now. Only a helper the person has
-/// just chosen (`chosen`) replaces a record of another account; otherwise
-/// a record is only ever written where there is none, and a different one
-/// is refused.
-pub fn remember(account: &Account, chosen: bool) -> Result<Identity> {
-    let identity = current(account).ok_or_else(|| {
-        crate::error::Error::new(
-            Code::Setup,
-            format!("macOS could not say which account {} is", account.name),
-        )
-    })?;
-    remember_in(&config::home()?, &identity, chosen)?;
-
-    Ok(identity)
-}
-
 /// Record the identity the person chose, refusing a replacement discovered
 /// after authorization. The record always contains `expected`, never a newer
 /// directory entry observed while this call was running.
-pub fn remember_as(account: &Account, expected: &Identity, chosen: bool) -> Result<()> {
+pub(crate) fn remember_as(account: &Account, expected: &Identity, chosen: bool) -> Result<()> {
     if current(account).as_ref() != Some(expected)
         || account.uid != expected.uid
         || account.name != expected.name
@@ -162,7 +146,7 @@ fn remember_in(home: &Path, identity: &Identity, chosen: bool) -> Result<()> {
 }
 
 /// What is on file for helper `uid`.
-pub fn on_file(uid: u32) -> OnFile {
+pub(crate) fn on_file(uid: u32) -> OnFile {
     match config::home() {
         Ok(home) => on_file_in(&home, uid),
         Err(_) => OnFile::Unreadable,
@@ -183,14 +167,14 @@ fn on_file_in(home: &Path, uid: u32) -> OnFile {
 }
 
 /// How the account with helper `uid`'s user ID, `account`, stands now.
-pub fn standing_of(account: &Account) -> Standing {
+pub(crate) fn standing_of(account: &Account) -> Standing {
     standing(&on_file(account.uid), current(account).as_ref())
 }
 
 /// The helper `uid` as recorded, while the account with that user ID is
 /// still that one; `None` when nothing is recorded, the account is gone or
 /// another, or it cannot be read.
-pub fn verified(uid: u32) -> Option<Identity> {
+pub(crate) fn verified(uid: u32) -> Option<Identity> {
     let account = super::account_with_uid(uid).ok().flatten()?;
 
     match standing_of(&account) {

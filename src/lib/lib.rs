@@ -25,7 +25,6 @@ mod fs_move;
 pub(crate) mod handoff;
 pub(crate) mod helper_info;
 pub mod host_session;
-pub mod init;
 pub mod install_app;
 pub mod interrupt;
 pub mod jobs;

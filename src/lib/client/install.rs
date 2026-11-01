@@ -56,7 +56,7 @@ impl Client {
     }
 
     /// Repair the probe under recovery exclusion without settling previous work.
-    pub(crate) fn bootstrap_probe(&self) -> Result<Value> {
+    pub fn bootstrap_probe(&self) -> Result<Value> {
         self.install_probe(true)
     }
 

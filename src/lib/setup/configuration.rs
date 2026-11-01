@@ -1,23 +1,17 @@
 //! Shared configuration construction and persistence for setup workflows.
 use crate::{
     config::{self, Config},
-    error::{Code, Error, Result},
+    error::Result,
     setup::{self, helper::Layout},
     ui::text,
 };
 use std::{fs, io::Write, os::unix::fs::DirBuilderExt, path::Path};
 
-fn problem(message: impl Into<String>) -> Error {
-    Error::new(Code::Init, message)
-}
+use super::account::problem;
 
 /// The configuration for `helper` in the managed private layout.
 pub(crate) fn proposed(helper: &setup::Account) -> Result<Config> {
-    let layout = Layout {
-        uid: helper.uid,
-        home: helper.home.clone(),
-        guard: None,
-    };
+    let layout = Layout::new(helper.uid, helper.home.clone());
 
     Ok(Config {
         helper_uid: helper.uid,
@@ -77,9 +71,201 @@ pub(crate) fn replace_config(path: &Path, previous: &Config, config: &Config) ->
     )
 }
 
+/// Keep the selected account through configuration, refusing UID reassignment
+/// before recording it. The recorder also checks its permanent identity.
+fn record_selected(
+    helper: &setup::Account,
+    expected: &setup::identity::Identity,
+    lookup: impl FnOnce(u32) -> Result<Option<setup::Account>>,
+    record: impl FnOnce(&setup::Account, &setup::identity::Identity) -> Result<()>,
+) -> Result<()> {
+    if lookup(helper.uid)?.as_ref() != Some(helper) {
+        return Err(problem(
+            "The chosen helper account changed; choose it again",
+        ));
+    }
+    record(helper, expected)
+}
+
+/// The settings and the standard helper account they name: chosen (or
+/// created) when there are none or their account is gone, retaining its
+/// permanent identity throughout configuration and setup.
+pub fn configure_helper(
+    config_path: &Path,
+    mut choose_helper: impl FnMut() -> Result<(setup::Account, setup::identity::Identity)>,
+    say: impl Fn(&str),
+) -> Result<(Config, setup::Account, setup::identity::Identity)> {
+    // The path is the one the command line resolved (the installed one by
+    // default); a configuration is created only where none exists, and an
+    // existing one that does not load is reported, never replaced.
+    let absent = matches!(
+        fs::symlink_metadata(config_path),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound
+    );
+    // Whether the person chose the helper in this run: only then may its
+    // record replace one of another account.
+    let mut choice = None;
+    let mut config = if absent {
+        let (helper, identity) = choose_helper()?;
+        let config = proposed(&helper)?;
+        choice = Some((helper, identity));
+        write_config(config_path, &config)?;
+        config
+    } else {
+        Config::load(config_path)?
+    };
+
+    // The account the settings name was deleted, or its user ID now belongs
+    // to another account than the helper Atlas recorded: choose (or create)
+    // another, before anything is changed or recorded.
+    let account = setup::account_with_uid(config.helper_uid)?;
+    let gone = account.is_none();
+    let other = match &account {
+        Some(account) if choice.is_none() => replaced(account)?,
+        _ => false,
+    };
+    if choice.is_none() && (gone || other) {
+        say(&format!(
+            "  {} (user ID {}) {}.",
+            if gone {
+                format!("The helper account in {}", text::tilde(config_path))
+            } else {
+                "The account".to_owned()
+            },
+            config.helper_uid,
+            if gone {
+                "no longer exists"
+            } else {
+                "is not the helper Atlas set up"
+            }
+        ));
+
+        let (helper, identity) = choose_helper()?;
+        let replacement = proposed(&helper)?;
+        replace_config(config_path, &config, &replacement)?;
+        config = replacement;
+        choice = Some((helper, identity));
+    }
+
+    let chosen = choice.is_some();
+    let (helper, identity) = match choice {
+        Some(selected) => selected,
+        None => {
+            let helper = account.ok_or_else(|| problem("The helper account was not created"))?;
+            let identity = match setup::identity::standing_of(&helper) {
+                setup::identity::Standing::Same(identity) => identity,
+                _ => {
+                    return Err(problem(
+                        "Choose the helper account again before setting it up",
+                    ));
+                }
+            };
+            (helper, identity)
+        }
+    };
+    record_selected(
+        &helper,
+        &identity,
+        setup::account_with_uid,
+        |helper, identity| setup::identity::remember_as(helper, identity, chosen),
+    )?;
+
+    // Keep the socket paths in the selected account's home.
+    if !config.socket_path.starts_with(&helper.home) {
+        let fresh = proposed(&helper)?;
+        let current = Config {
+            socket_path: fresh.socket_path,
+            input_socket: fresh.input_socket,
+            ..config.clone()
+        };
+        replace_config(config_path, &config, &current)?;
+        config = current;
+    }
+
+    let name = &helper.name;
+    match setup::administrator(name) {
+        Some(false) => {}
+        Some(true) => {
+            return Err(problem(format!(
+                "{name} administers this Mac, and the helper must be a standard account. Make it \
+                 a standard account in System Settings › Users & Groups, then run atlas init again."
+            )));
+        }
+        None => {
+            return Err(problem(format!(
+                "macOS could not say whether {name} is an administrator; run atlas init again"
+            )));
+        }
+    }
+
+    // Which account this is, so nothing later acts on another account that
+    // is given its user ID. Unrecorded, nothing later ends a login under
+    // its user ID or deletes it.
+    setup::identity::remember_as(&helper, &identity, chosen)?;
+
+    Ok((config, helper, identity))
+}
+
+/// Whether the account with the helper's user ID is not the helper Atlas
+/// recorded: another account took the user ID. A record that cannot be
+/// compared stops init before anything changes.
+fn replaced(account: &setup::Account) -> Result<bool> {
+    use setup::identity::{OnFile, Standing};
+
+    match setup::identity::standing_of(account) {
+        Standing::Replaced | Standing::Unrecorded(_) => Ok(true),
+        Standing::Unknown if setup::identity::on_file(account.uid) != OnFile::Nothing => {
+            Err(problem(format!(
+                "macOS could not say whether {} is still the helper Atlas set up; run atlas init \
+                 again",
+                account.name
+            )))
+        }
+        Standing::Same(_) | Standing::Unknown => Ok(false),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn a_selected_account_is_never_replaced_while_its_configuration_is_written() {
+        let dir = tempfile::tempdir().unwrap();
+        let helper = setup::Account {
+            uid: 7001,
+            name: "selected".into(),
+            home: dir.path().join("selected"),
+        };
+        let expected = setup::identity::Identity {
+            uid: helper.uid,
+            name: helper.name.clone(),
+            generated_uid: "6DB4B7AF-BE3C-486C-BD46-1B4558946919".into(),
+        };
+        let configuration = proposed(&helper).unwrap();
+        write_config(&dir.path().join("atlas.toml"), &configuration).unwrap();
+        let replacement = setup::Account {
+            name: "replacement".into(),
+            home: dir.path().join("replacement"),
+            ..helper.clone()
+        };
+        let recorded = std::cell::RefCell::new(None);
+        let record = |_: &setup::Account, identity: &setup::identity::Identity| {
+            recorded.replace(Some(identity.clone()));
+            Ok(())
+        };
+        let outcome = record_selected(&helper, &expected, |_| Ok(Some(replacement)), record);
+        assert!(
+            outcome.is_err(),
+            "a reused UID must require another explicit selection"
+        );
+        assert!(
+            recorded.borrow().is_none(),
+            "a replacement must never be recorded"
+        );
+        record_selected(&helper, &expected, |_| Ok(Some(helper.clone())), record).unwrap();
+        assert_eq!(recorded.into_inner(), Some(expected));
+    }
+
     use std::path::PathBuf;
 
     /// A configuration is written once, privately, and never over another.

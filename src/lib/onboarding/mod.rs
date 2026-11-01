@@ -34,6 +34,7 @@ use crate::{
 };
 use as_root::Target;
 use serde_json::{Value, json};
+use setup::installed_app::signed_executable;
 use std::{
     fs,
     io::Read,
@@ -45,23 +46,23 @@ use std::{
 
 /// Where the person's account names the helper it chose, for Atlas in the
 /// helper to find. It holds no secret; the helper's owner confirms it.
-pub const REQUEST: &str = "/Users/Shared/Atlas/onboarding.json";
+pub(crate) const REQUEST: &str = "/Users/Shared/Atlas/onboarding.json";
 
 /// The onboarding window in the helper, while it is open: the helper's
 /// daemon then leaves telling the person to the window.
-pub const WINDOW_MARKER: &str = "onboarding-window";
+pub(crate) const WINDOW_MARKER: &str = "onboarding-window";
 
 /// An account (the controller) asking another one to be its helper.
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct Pairing {
     /// A fresh request identity; old acceptance never grants a new request.
-    pub ticket: String,
-    pub controller_uid: u32,
-    pub controller_name: String,
+    pub(crate) ticket: String,
+    pub(crate) controller_uid: u32,
+    pub(crate) controller_name: String,
     pub helper_uid: u32,
-    pub helper_name: String,
+    pub(crate) helper_name: String,
     /// The account chosen before any authorization or login wait.
-    pub helper_identity: setup::identity::Identity,
+    pub(crate) helper_identity: setup::identity::Identity,
 }
 
 /// Read the shared request, trusting it only when it is a plain file the
@@ -214,11 +215,7 @@ impl Asked {
 /// init` does just before installing the helper's background job there.
 /// Only the account it was prepared for may look inside it.
 fn prepared(helper: &setup::Account) -> bool {
-    let layout = Layout {
-        uid: helper.uid,
-        home: helper.home.clone(),
-        guard: None,
-    };
+    let layout = Layout::new(helper.uid, helper.home.clone());
 
     fs::metadata(layout.daemon()).is_ok_and(|metadata| metadata.is_dir())
 }
@@ -870,7 +867,7 @@ pub fn forget(config_path: &Path) -> Result<Value> {
 /// readied for its first login (see `as_root`); on a macOS without that
 /// approval, sysadminctl asks for it in its own dialog instead.
 pub fn create(config_path: &Path, name: &str, full_name: &str) -> Result<Value> {
-    setup::account::valid_account_name(name).map_err(problem)?;
+    setup::validate_account_name(name).map_err(problem)?;
 
     if full_name.is_empty()
         || full_name.chars().count() > 64
@@ -985,32 +982,6 @@ pub fn accept(controller_uid: u32, controller_name: &str) -> Result<Value> {
     )
 }
 
-/// The installed Atlas.app's executable, refused unless its developer signed it.
-pub(crate) fn signed_executable() -> Result<PathBuf> {
-    signed_executable_using(setup::installed_app::app_executable()?, setup::developer_id)
-}
-
-pub(crate) fn signed_executable_using(
-    executable: PathBuf,
-    developer_id: impl FnOnce(&Path) -> bool,
-) -> Result<PathBuf> {
-    // Installation location for the shared app. The approved executor
-    // independently protects and verifies its own copy before using it.
-    if !executable.starts_with("/Applications") {
-        return Err(problem(
-            "Atlas.app must be in Applications to set up the helper. Move it there, then open it again.",
-        ));
-    }
-
-    if !developer_id(&executable) {
-        return Err(problem(
-            "This Atlas.app is not signed by Atlas's developer. Install it again.",
-        ));
-    }
-
-    Ok(executable)
-}
-
 /// The background job Atlas installs in this account for `controller_uid`.
 fn expected_agent(layout: &Layout, controller_uid: u32) -> Result<Agent> {
     Ok(Agent {
@@ -1041,7 +1012,7 @@ pub fn window(open: bool) -> Result<Value> {
 
 /// Whether this account's onboarding window is open: the process it names
 /// still lives and is Atlas's window (a reused process ID is not).
-pub fn window_open(home: &Path) -> bool {
+pub(crate) fn window_open(home: &Path) -> bool {
     let Some(pid) = read_text(&home.join(setup::helper::ROOT).join(WINDOW_MARKER), 64)
         .and_then(|text| text.trim().parse::<i32>().ok())
         .filter(|pid| *pid > 1)
@@ -1527,11 +1498,7 @@ mod tests {
         };
         assert!(!prepared(&helper), "nothing prepared");
 
-        let layout = Layout {
-            uid: helper.uid,
-            home: helper.home.clone(),
-            guard: None,
-        };
+        let layout = Layout::new(helper.uid, helper.home.clone());
         fs::create_dir_all(layout.root()).unwrap();
         assert!(!prepared(&helper), "only its root");
 

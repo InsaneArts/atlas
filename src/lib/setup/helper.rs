@@ -6,7 +6,7 @@ use super::account_with_uid;
 use crate::{
     acl::Acl,
     digest::file_sha256,
-    error::{Code, Error, Result},
+    error::{Error, Result},
 };
 use crate::{
     client::Client,
@@ -24,10 +24,10 @@ use std::{
 };
 
 /// Private Atlas directory in the helper home and its entries.
-pub const ROOT: &str = ".atlas";
+pub(crate) const ROOT: &str = ".atlas";
 /// Where the helper daemon's socket lives.
-pub const DAEMON: &str = "helper";
-pub const INPUT: &str = "input";
+pub(crate) const DAEMON: &str = "helper";
+pub(crate) const INPUT: &str = "input";
 const LOGS: &str = "logs";
 const BACKUP: &str = "backup";
 /// Label of the managed LaunchAgent running Atlas's own helper daemon.
@@ -35,17 +35,17 @@ pub const LABEL: &str = "com.insanearts.atlas.helper";
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
-pub struct Agent {
-    pub label: String,
-    pub program: PathBuf,
-    pub uid: u32,
-    pub controller_uid: u32,
-    pub socket: PathBuf,
+pub(crate) struct Agent {
+    pub(crate) label: String,
+    pub(crate) program: PathBuf,
+    pub(crate) uid: u32,
+    pub(crate) controller_uid: u32,
+    pub(crate) socket: PathBuf,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "action", rename_all = "kebab-case", deny_unknown_fields)]
-pub enum Request {
+pub(crate) enum Request {
     /// Report the given launchd labels and their plists.
     Inspect { uid: u32, labels: Vec<String> },
     /// Create or repair the private layout with controller search access.
@@ -100,9 +100,7 @@ impl Request {
     }
 }
 
-fn problem(message: impl Into<String>) -> Error {
-    Error::new(Code::Setup, message)
-}
+use super::problem;
 
 /// A refusal that changed nothing, as the worker reports it: `unchanged`
 /// tells the caller it is certain, so no pending marker waits on it.
@@ -112,7 +110,7 @@ fn refused(message: impl Into<String>) -> Value {
 
 /// launchd labels and account names stay within a conservative charset; they
 /// become file names and launchctl service targets.
-pub fn valid_name(name: &str) -> bool {
+pub(crate) fn valid_name(name: &str) -> bool {
     !name.is_empty()
         && name.len() <= 128
         && !name.starts_with(['.', '-'])
@@ -147,7 +145,7 @@ pub(super) fn escape(text: &str) -> String {
 }
 
 /// The LaunchAgent definition that runs the helper daemon `agent` describes.
-pub fn plist(agent: &Agent, logs: &Path) -> String {
+pub(crate) fn plist(agent: &Agent, logs: &Path) -> String {
     let string = |value: &str| format!("<string>{}</string>", escape(value));
     let arguments = [
         agent.program.to_string_lossy().into_owned(),
@@ -184,21 +182,21 @@ pub fn plist(agent: &Agent, logs: &Path) -> String {
 }
 
 /// SHA-256 of text, as recorded for plists.
-pub fn text_sha256(text: &str) -> String {
+pub(crate) fn text_sha256(text: &str) -> String {
     format!("{:x}", Sha256::digest(text.as_bytes()))
 }
 
 /// The managed layout inside one helper home.
-pub struct Layout {
-    pub uid: u32,
-    pub home: PathBuf,
+pub(crate) struct Layout {
+    pub(crate) uid: u32,
+    pub(crate) home: PathBuf,
     /// Expected account for a setup worker; ordinary read-only layouts have none.
     pub(crate) guard: Option<Guard>,
 }
 
 impl Layout {
     /// Describe an account's paths without granting permission to mutate them.
-    pub fn new(uid: u32, home: PathBuf) -> Self {
+    pub(crate) fn new(uid: u32, home: PathBuf) -> Self {
         Self {
             uid,
             home,
@@ -225,35 +223,35 @@ impl Layout {
         Ok(())
     }
 
-    pub fn root(&self) -> PathBuf {
+    pub(crate) fn root(&self) -> PathBuf {
         self.home.join(ROOT)
     }
 
-    pub fn logs(&self) -> PathBuf {
+    pub(crate) fn logs(&self) -> PathBuf {
         self.root().join(LOGS)
     }
 
-    pub fn daemon(&self) -> PathBuf {
+    pub(crate) fn daemon(&self) -> PathBuf {
         self.root().join(DAEMON)
     }
 
     /// The input service's socket, which the configuration names.
-    pub fn input_socket(&self) -> PathBuf {
+    pub(crate) fn input_socket(&self) -> PathBuf {
         self.root().join(INPUT).join("input.sock")
     }
 
     /// The input service's saved stop, beside its socket: present while the
     /// person has stopped agents.
-    pub fn stop_marker(&self) -> PathBuf {
+    pub(crate) fn stop_marker(&self) -> PathBuf {
         self.input_socket().with_extension("stopped")
     }
 
     /// The managed daemon's socket.
-    pub fn socket(&self) -> PathBuf {
+    pub(crate) fn socket(&self) -> PathBuf {
         self.daemon().join(format!("{}.sock", self.uid))
     }
 
-    pub fn agent_plist(&self, label: &str) -> PathBuf {
+    pub(crate) fn agent_plist(&self, label: &str) -> PathBuf {
         self.home
             .join("Library/LaunchAgents")
             .join(format!("{label}.plist"))
@@ -577,7 +575,10 @@ fn search_only(rights: &str) -> bool {
 /// Check an ACL against the policy: shared directories may hold one
 /// search-only allow entry for `controller`; private ones hold none. Returns
 /// whether the controller entry is present; anything else is refused.
-pub fn acl_policy(lines: &[String], controller: Option<u32>) -> std::result::Result<bool, String> {
+pub(crate) fn acl_policy(
+    lines: &[String],
+    controller: Option<u32>,
+) -> std::result::Result<bool, String> {
     let mut granted = false;
 
     for line in lines {
@@ -871,11 +872,7 @@ fn restore(layout: &Layout, label: &str, sha256: &str) -> Result<Value> {
 pub(crate) fn helper_agent(helper: &setup::Account, executable: &Path) -> Result<(Agent, Layout)> {
     let controller = setup::account_with_uid(nix::unistd::getuid().as_raw())?
         .ok_or_else(|| setup::account::problem("This account cannot be resolved"))?;
-    let layout = Layout {
-        uid: helper.uid,
-        home: helper.home.clone(),
-        guard: None,
-    };
+    let layout = Layout::new(helper.uid, helper.home.clone());
 
     let agent = Agent {
         label: LABEL.to_owned(),
@@ -896,7 +893,13 @@ pub(crate) fn as_helper(
     request: &Request,
     expected: &setup::identity::Identity,
 ) -> Result<Value> {
-    let (succeeded, reply) = setup::request_as_helper(executable, helper, request, true, expected)?;
+    let (succeeded, reply) = setup::request_as_helper(
+        executable,
+        helper,
+        request,
+        setup::Invocation::CachedLogin,
+        expected,
+    )?;
     if !succeeded || reply["ok"] != true {
         return Err(setup::account::problem(format!(
             "Setting up the helper failed: {}",
@@ -990,8 +993,210 @@ pub(crate) async fn prepare_and_install(
     })
 }
 
+/// Restart the helper daemon (launchd starts a fresh process) and wait for
+/// the new one to answer. No other controller may act meanwhile, and the
+/// restart stays pending until a new daemon is seen; if that never happens
+/// it is left for recovery, like any action of unknown outcome.
+pub async fn restart_helper(client: &Client) -> Result<()> {
+    let _exclusion = client.service_change(true).await?;
+    let before = client.status().await["daemon"]["pid"].clone();
+    let transport = crate::transport::Transport {
+        path: client.config.socket_path.clone(),
+        timeout: Duration::from_secs(10),
+        peer_uid: client.config.helper_uid,
+    };
+
+    let pending = client.controller.quarantine()?;
+    let reply = transport.call(&json!({"op": "restart"})).await?;
+    if reply["ok"] != true {
+        // A refusal changed nothing, unless the helper says it may have.
+        let uncertain = reply["uncertain"] == true;
+        if !uncertain {
+            client.controller.clear_if(&pending)?;
+        }
+
+        let error = setup::account::problem(format!(
+            "The helper did not restart: {}",
+            reply["error"].as_str().unwrap_or("no reason given")
+        ));
+
+        return Err(if uncertain { error.uncertain() } else { error });
+    }
+
+    if !new_daemon_answers(client, &before).await {
+        // The restart stays pending: its outcome is unknown.
+        return Err(setup::account::problem(
+            "The helper did not start again after a restart. Run atlas doctor.",
+        )
+        .uncertain());
+    }
+
+    client.controller.clear_if(&pending)?;
+    Ok(())
+}
+
+/// Whether a daemon other than the one whose pid was `before` answers
+/// within 30 seconds.
+async fn new_daemon_answers(client: &Client, before: &Value) -> bool {
+    let deadline = Instant::now() + Duration::from_secs(30);
+
+    loop {
+        tokio::time::sleep(Duration::from_millis(500)).await;
+        let pid = client.status().await["daemon"]["pid"].clone();
+        if pid.is_number() && pid != *before {
+            return true;
+        }
+
+        if Instant::now() >= deadline {
+            return false;
+        }
+    }
+}
+
+/// Replace the helper's background job an earlier Atlas wrote with this
+/// version's, from outside the daemon it runs (through sudo, as installing
+/// it does): the earlier definition is kept as a backup, and comes back if
+/// the new one cannot go in. Pending until a new daemon answers, like a
+/// restart.
+async fn replace_job(
+    client: &Client,
+    helper: &setup::Account,
+    agent: Agent,
+    layout: &Layout,
+    run: impl Fn(&Request) -> Result<Value>,
+) -> Result<()> {
+    let _exclusion = client.service_change(true).await?;
+    let before = client.status().await["daemon"]["pid"].clone();
+    let pending = client.controller.quarantine()?;
+
+    {
+        let _executors = crate::control::ExecutorClaims::new(std::slice::from_ref(&pending))?;
+        install_job(run, helper.uid, agent, &layout.logs()).map_err(Error::uncertain)?;
+    }
+
+    if !new_daemon_answers(client, &before).await {
+        return Err(setup::account::problem(format!(
+            "The helper's background job was replaced but the helper did not start again. Its \
+             log is {} in {}'s account; run atlas init again after checking it.",
+            layout.logs().join(format!("{LABEL}.log")).display(),
+            helper.name
+        ))
+        .uncertain());
+    }
+
+    client.controller.clear_if(&pending)?;
+    Ok(())
+}
+
+/// Put the helper's daemon on this version before checking it: its
+/// background job replaced when another version of Atlas wrote it, else
+/// the daemon restarted when it still runs an earlier build (an update
+/// whose handover did not finish).
+pub async fn refresh_helper(
+    client: &Client,
+    helper: &setup::Account,
+    expected: &setup::identity::Identity,
+    mut progress: impl FnMut(setup::Progress<'_>) -> Result<()>,
+) -> Result<Option<Value>> {
+    let executable = Path::new(setup::installed_app::EXECUTABLE);
+    let (agent, layout) = helper_agent(helper, executable)?;
+    let expected_hash = setup::helper::text_sha256(&setup::helper::plist(&agent, &layout.logs()));
+    let job = setup::migrate::managed_job(client).await?;
+
+    if outdated_job(&job, &expected_hash) {
+        progress(setup::Progress::Administrator(
+            "  macOS asks for your password once, to replace the helper's background job with \
+             this version's.",
+        ))?;
+
+        progress(setup::Progress::Waiting(
+            "Replacing the helper's background job…",
+        ))?;
+        replace_job(client, helper, agent, &layout, |request| {
+            as_helper(executable, helper, request, expected)
+        })
+        .await?;
+        progress(setup::Progress::Done(
+            "Helper job",
+            "replaced with this version's",
+        ))?;
+        return Ok(Some(
+            json!({"step": "daemon", "label": LABEL, "replaced": true}),
+        ));
+    }
+
+    let pid = client.status().await["daemon"]["pid"]
+        .as_u64()
+        .and_then(|pid| u32::try_from(pid).ok());
+    if pid.is_some_and(|pid| !setup::runs_current(pid, executable)) {
+        progress(setup::Progress::Waiting(
+            "Restarting the helper on this version…",
+        ))?;
+        client.restart().await?;
+        progress(setup::Progress::Done("Helper", "restarted on this version"))?;
+        return Ok(Some(json!({"step": "restart"})));
+    }
+
+    Ok(None)
+}
+
+/// Whether the managed job's definition, as inspected (`job`), is a file
+/// another version of Atlas wrote, not the `expected` one.
+fn outdated_job(job: &Value, expected: &str) -> bool {
+    job["plistKind"] == "regular" && job["plistSha256"].as_str() != Some(expected)
+}
+
+/// Prepare and install the chosen helper under exclusion and one executor claim.
+/// Refusals and missing acknowledgements preserve the pending generation.
+pub async fn prepare_helper(
+    client: &Client,
+    helper: &setup::Account,
+    expected: &setup::identity::Identity,
+) -> Result<PathBuf> {
+    let executable = Path::new(setup::installed_app::EXECUTABLE);
+    let controller = setup::account_with_uid(nix::unistd::getuid().as_raw())?
+        .ok_or_else(|| setup::account::problem("This account cannot be resolved"))?;
+    let (agent, layout) = helper_agent(helper, executable)?;
+    prepare_and_install(client, &controller.name, agent, &layout.logs(), |request| {
+        as_helper(executable, helper, request, expected)
+    })
+    .await?;
+    Ok(layout.logs().join(format!("{LABEL}.log")))
+}
+
+/// Ready first-login preferences only while the chosen helper is logged out.
+/// An incomplete reply retains its executor-bound pending mutation.
+pub fn first_login_setup(
+    client: &Client,
+    helper: &setup::Account,
+    expected: &setup::identity::Identity,
+) -> Result<Value> {
+    let executable = Path::new(setup::installed_app::EXECUTABLE);
+    setup::executor::setup_transaction(&client.controller, || {
+        let request = Request::FirstLogin {
+            uid: helper.uid,
+            opener: false,
+        };
+        let (succeeded, reply) = setup::request_as_helper(
+            executable,
+            helper,
+            &request,
+            setup::Invocation::BeforeLogin,
+            expected,
+        )?;
+        if !succeeded || reply["ok"] != true {
+            return Err(setup::account::problem(
+                "The helper did not acknowledge first-login setup",
+            )
+            .uncertain());
+        }
+        Ok(reply)
+    })
+}
+
 #[cfg(test)]
 mod tests {
+    use crate::error::Code;
     #[test]
     fn an_expected_identity_is_checked_again_even_without_a_logout_wait() {
         let identity = super::super::identity::Identity {
@@ -1435,11 +1640,7 @@ mod tests {
 
     #[test]
     fn install_accepts_only_the_managed_agent() {
-        let layout = Layout {
-            uid: nix::unistd::getuid().as_raw(),
-            home: "/nonexistent-home".into(),
-            guard: None,
-        };
+        let layout = Layout::new(nix::unistd::getuid().as_raw(), "/nonexistent-home".into());
 
         let agent = |label: &str, socket: PathBuf| Agent {
             label: label.into(),
@@ -1491,11 +1692,10 @@ mod tests {
 
     fn sandbox() -> (tempfile::TempDir, Layout, String) {
         let dir = tempfile::tempdir().unwrap();
-        let layout = Layout {
-            uid: nix::unistd::getuid().as_raw(),
-            home: fs::canonicalize(dir.path()).unwrap(),
-            guard: None,
-        };
+        let layout = Layout::new(
+            nix::unistd::getuid().as_raw(),
+            fs::canonicalize(dir.path()).unwrap(),
+        );
         fs::create_dir_all(layout.home.join("Library/LaunchAgents")).unwrap();
         // A label launchd has never seen: inspection is real and read-only.
         let label = format!("dev.atlas.test.{}", &crate::files::token()[..12]);
@@ -1634,5 +1834,254 @@ mod tests {
             0o755,
             "nothing changes when validation fails"
         );
+    }
+
+    #[test]
+    fn replacing_a_job_keeps_its_executor_claim_after_the_caller_dies() {
+        if !crate::test_support::isolated(
+            "setup::helper::tests::replacing_a_job_keeps_its_executor_claim_after_the_caller_dies",
+        ) {
+            return;
+        }
+        for mode in ["retire", "install", "restore"] {
+            crate::test_support::interrupted_executor(
+                "setup::helper::tests::a_job_installation_test_caller",
+                mode,
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn helper_installation_and_restarts_defer_before_dispatching_active_work() {
+        use crate::host_session::{Host, HostSession, store::Store};
+
+        let directory = tempfile::tempdir().unwrap();
+        let client = crate::test_support::client(directory.path());
+        let host = HostSession::new(Host::Named, "worker").unwrap();
+        Store::at(client.output_dir().unwrap())
+            .update(
+                &host,
+                crate::host_session::now_ms(),
+                &client.controller,
+                |_| {},
+            )
+            .unwrap();
+        let helper = setup::Account {
+            uid: 7001,
+            name: "helper".into(),
+            home: directory.path().join("home"),
+        };
+        let layout = Layout::new(helper.uid, helper.home.clone());
+        let agent = Agent {
+            label: LABEL.into(),
+            program: directory.path().join("atlas"),
+            uid: helper.uid,
+            controller_uid: nix::unistd::getuid().as_raw(),
+            socket: layout.socket(),
+        };
+        let checked = async {
+            let error =
+                prepare_and_install(&client, "controller", agent.clone(), &layout.logs(), |_| {
+                    panic!("dispatched setup while active")
+                })
+                .await
+                .unwrap_err();
+            assert_eq!(error.error, "worker is active in the helper.");
+            let error = replace_job(&client, &helper, agent, &layout, |_| {
+                panic!("replaced a job while active")
+            })
+            .await
+            .unwrap_err();
+            assert_eq!(error.code, Code::Busy);
+            assert_eq!(restart_helper(&client).await.unwrap_err().code, Code::Busy);
+        };
+        tokio::time::timeout(Duration::from_secs(1), checked)
+            .await
+            .unwrap();
+        assert!(client.controller.pending().unwrap().is_empty());
+    }
+
+    #[test]
+    fn preparing_and_installing_a_helper_excludes_teardown_after_the_caller_dies() {
+        if !crate::test_support::isolated(
+            "setup::helper::tests::preparing_and_installing_a_helper_excludes_teardown_after_the_caller_dies",
+        ) {
+            return;
+        }
+        for mode in ["prepare", "fresh-install"] {
+            crate::test_support::interrupted_executor(
+                "setup::helper::tests::a_job_installation_test_caller",
+                mode,
+            );
+        }
+    }
+
+    /// A subprocess entry point; all effects stay in its explicit temporary directory.
+    #[tokio::test]
+    async fn a_job_installation_test_caller() {
+        let Some(directory) = crate::test_support::directory() else {
+            return;
+        };
+        let client = crate::test_support::client(&directory);
+        let helper = setup::Account {
+            uid: 7001,
+            name: "helper".into(),
+            home: directory.join("home"),
+        };
+        let layout = Layout::new(helper.uid, helper.home.clone());
+        let agent = Agent {
+            label: LABEL.into(),
+            program: directory.join("atlas"),
+            uid: helper.uid,
+            controller_uid: nix::unistd::getuid().as_raw(),
+            socket: layout.socket(),
+        };
+        let mode = std::env::var("ATLAS_MUTATION_TEST_MODE").unwrap();
+        let run = |request: &Request| {
+            let pause = matches!(
+                (mode.as_str(), request),
+                ("retire", Request::Retire { .. })
+                    | ("install" | "fresh-install", Request::Install { .. })
+                    | ("restore", Request::Restore { .. })
+                    | ("prepare", Request::Prepare { .. })
+            );
+            if pause {
+                crate::test_support::pause_executor(&directory);
+            }
+            if mode == "restore" && matches!(request, Request::Install { .. }) {
+                return Err(setup::account::problem("installation was refused"));
+            }
+            Ok(json!({"ok": true, "jobs": {LABEL: {"plistSha256": "b".repeat(64)}}}))
+        };
+        if matches!(mode.as_str(), "prepare" | "fresh-install") {
+            let _ = prepare_and_install(&client, "controller", agent, &layout.logs(), run).await;
+        } else {
+            let _ = replace_job(&client, &helper, agent, &layout, run).await;
+        }
+    }
+
+    #[test]
+    fn installation_acknowledgements_settle_only_their_own_setup_mutations() {
+        if !crate::test_support::isolated(
+            "setup::helper::tests::installation_acknowledgements_settle_only_their_own_setup_mutations",
+        ) {
+            return;
+        }
+        let directory = tempfile::tempdir().unwrap();
+        let client = crate::test_support::client(directory.path());
+        let controller = &client.controller;
+        let other = controller.quarantine().unwrap();
+        drop(other);
+        setup_transaction(controller, || Ok(())).unwrap();
+        assert_eq!(controller.pending().unwrap().len(), 1);
+        let outcome: Result<()> = setup_transaction(controller, || {
+            Err(setup::account::problem("reply lost").uncertain())
+        });
+        assert!(outcome.is_err());
+        assert_eq!(controller.pending().unwrap().len(), 2);
+    }
+
+    use setup::executor::setup_transaction;
+
+    /// An earlier job is retired only when its definition differs, and
+    /// restored when the new one cannot go in.
+    #[test]
+    fn an_earlier_job_is_set_aside_and_restored_on_failure() {
+        let agent = Agent {
+            label: LABEL.to_owned(),
+            program: "/Applications/Atlas.app/Contents/MacOS/atlas".into(),
+            uid: 503,
+            controller_uid: 501,
+            socket: "/Users/atlas/.atlas/helper/503.sock".into(),
+        };
+        let logs = Path::new("/Users/atlas/.atlas/logs");
+        let ours = setup::helper::text_sha256(&setup::helper::plist(&agent, logs));
+
+        let attempt_with = |earlier: Option<&str>, install_fails: bool, restore_fails: bool| {
+            let actions = std::cell::RefCell::new(Vec::new());
+            let run = |request: &Request| -> Result<Value> {
+                let action = serde_json::to_value(request).unwrap()["action"].clone();
+                actions
+                    .borrow_mut()
+                    .push(action.as_str().unwrap().to_owned());
+
+                match request {
+                    Request::Inspect { .. } => {
+                        Ok(json!({"ok": true, "jobs": {LABEL: {"plistSha256": earlier}}}))
+                    }
+                    Request::Install { .. } if install_fails => {
+                        Err(setup::account::problem("refused"))
+                    }
+                    Request::Restore { .. } if restore_fails => {
+                        Err(setup::account::problem("no backup"))
+                    }
+                    _ => Ok(json!({"ok": true})),
+                }
+            };
+            let outcome = install_job(run, 503, agent.clone(), logs);
+            (outcome.map_err(|error| error.error), actions.into_inner())
+        };
+        let attempt = |earlier: Option<&str>, install_fails: bool| {
+            let (outcome, actions) = attempt_with(earlier, install_fails, false);
+            (outcome.is_ok(), actions)
+        };
+
+        assert_eq!(
+            attempt(None, false),
+            (true, vec!["inspect".into(), "install".into()])
+        );
+        assert_eq!(
+            attempt(Some(&ours), false),
+            (true, vec!["inspect".into(), "install".into()])
+        );
+
+        let other = "0".repeat(64);
+        assert_eq!(
+            attempt(Some(&other), false),
+            (
+                true,
+                vec!["inspect".into(), "retire".into(), "install".into()]
+            )
+        );
+        assert_eq!(
+            attempt(Some(&other), true),
+            (
+                false,
+                vec![
+                    "inspect".into(),
+                    "retire".into(),
+                    "install".into(),
+                    "retire".into(),
+                    "restore".into()
+                ]
+            )
+        );
+
+        // A job that cannot be put back is said, not dropped.
+        let (outcome, _) = attempt_with(Some(&other), true, true);
+        let error = outcome.unwrap_err();
+        assert!(error.starts_with("refused;"), "{error}");
+        assert!(
+            error.ends_with("could not be put back: no backup"),
+            "{error}"
+        );
+    }
+
+    /// Only a definition file with other bytes is replaced; none there (a
+    /// job from an older label) or the expected one is left alone.
+    #[test]
+    fn only_another_versions_definition_is_replaced() {
+        let ours = "a".repeat(64);
+        let earlier = "b".repeat(64);
+        let job = |kind: &str, sha: Option<&str>| json!({"plistKind": kind, "plistSha256": sha});
+
+        assert!(outdated_job(&job("regular", Some(&earlier)), &ours));
+        assert!(!outdated_job(&job("regular", Some(&ours)), &ours));
+        assert!(!outdated_job(&job("absent", None), &ours));
+        assert!(
+            !outdated_job(&job("other", None), &ours),
+            "a link is never replaced"
+        );
+        assert!(!outdated_job(&Value::Null, &ours));
     }
 }

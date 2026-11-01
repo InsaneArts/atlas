@@ -17,16 +17,26 @@ use crate::{
         helper::{Agent, LABEL, Layout, Request, plist, text_sha256},
         identity::{Identity, Standing},
     },
-    ui::{
-        progress::{done, say, skipped},
-        prompt, text,
-    },
+    ui::text,
 };
 use serde_json::{Value, json};
 use std::{
     fs,
     path::{Path, PathBuf},
 };
+
+/// A decision made while teardown retains its current ownership.
+pub enum Question {
+    Remove,
+    ForceLogout,
+}
+
+/// Progress from the owned teardown, rendered by its caller.
+pub enum Progress<'a> {
+    Say(&'a str),
+    Done(&'a str, &'a str),
+    Skipped(&'a str, &'a str),
+}
 
 fn problem(message: impl Into<String>) -> Error {
     Error::new(Code::Uninstall, message)
@@ -82,8 +92,13 @@ fn retire_helper_job(
     // account recorded, and still logged out.
     let ask = |request: &Request, failed: &str| -> Result<Value> {
         retirement_request(controller, request, || {
-            let (succeeded, reply) =
-                setup::request_logged_out_as(executable, &account, request, helper)?;
+            let (succeeded, reply) = setup::request_as_helper(
+                executable,
+                &account,
+                request,
+                setup::Invocation::LoggedOut,
+                helper,
+            )?;
             if reply.is_null() {
                 return Err(problem(failed));
             }
@@ -113,11 +128,7 @@ fn retire_helper_job(
     let sha256 = match inspected["jobs"][LABEL]["plistSha256"].as_str() {
         Some(sha256) => sha256.to_owned(),
         None => {
-            let layout = Layout {
-                uid: helper.uid,
-                home: account.home.clone(),
-                guard: None,
-            };
+            let layout = Layout::new(helper.uid, account.home.clone());
 
             let agent = Agent {
                 label: LABEL.to_owned(),
@@ -160,20 +171,8 @@ fn retirement_request(
     if matches!(request, Request::Inspect { .. }) {
         ask()
     } else {
-        claimed_mutation(controller, ask)
+        setup::executor::setup_transaction_held(controller, ask)
     }
-}
-
-/// Keep an uninstall mutation pending until its dispatcher acknowledges the
-/// complete outcome. Executor liveness survives death of the calling process.
-fn claimed_mutation<T>(controller: &Controller, act: impl FnOnce() -> Result<T>) -> Result<T> {
-    let claim = controller.quarantine()?;
-    let _executors = crate::control::ExecutorClaims::new(std::slice::from_ref(&claim))?;
-    let outcome = act();
-    if outcome.is_ok() {
-        controller.clear_if(&claim)?;
-    }
-    outcome
 }
 
 /// What uninstall knows of the helper before it changes anything. Only the
@@ -352,6 +351,8 @@ pub async fn run(
     keep_config: bool,
     yes: bool,
     remove_helper: bool,
+    ask: &dyn Fn(Question) -> Result<bool>,
+    progress: &dyn Fn(Progress<'_>),
 ) -> Result<Value> {
     let found = survey(config_path)?;
     let uid = found.client.as_ref().map(|client| client.config.helper_uid);
@@ -373,7 +374,7 @@ pub async fn run(
     }
 
     if !yes {
-        confirm(&found, config_path, keep_config, &facts)?;
+        confirm(&found, config_path, keep_config, &facts, ask, progress)?;
     }
 
     let mut live = Live {
@@ -385,19 +386,27 @@ pub async fn run(
         warnings: Vec::new(),
         hint: None,
         exclusion: None,
+        progress,
+        ask,
     };
 
     if let Some(error) = &found.unloaded {
-        skipped("Helper job", "left in place: the settings do not load");
+        progress(Progress::Skipped(
+            "Helper job",
+            "left in place: the settings do not load",
+        ));
         live.warnings
             .push(format!("Helper job left in place: {error}"));
     }
     if let Some(Known::Unrecorded(identity)) = &found.known {
         let message = unrecorded_message(&identity.name);
-        skipped("Helper account", &message);
+        progress(Progress::Skipped("Helper account", &message));
         live.warnings.push(message);
     } else if other {
-        skipped("Helper", "left alone: another account has its user ID now");
+        progress(Progress::Skipped(
+            "Helper",
+            "left alone: another account has its user ID now",
+        ));
         live.warnings.push(
             "The account with the helper's user ID is not the helper Atlas set up, so it was \
              left alone"
@@ -449,16 +458,8 @@ struct Live<'a> {
     hint: Option<String>,
     /// Control of the helper, from [`Step::Settle`] to the end.
     exclusion: Option<Ownership>,
-}
-
-impl Live<'_> {
-    /// The helper as recorded, while it is still that account.
-    fn identity(&self) -> Option<&Identity> {
-        match &self.found.known {
-            Some(Known::Verified(identity)) => Some(identity),
-            _ => None,
-        }
-    }
+    progress: &'a dyn Fn(Progress<'_>),
+    ask: &'a dyn Fn(Question) -> Result<bool>,
 }
 
 impl Teardown for Live<'_> {
@@ -472,7 +473,7 @@ impl Teardown for Live<'_> {
             self.exclusion = Some(client.controller.acquire(true)?);
             return Ok(());
         }
-        self.exclusion = Some(settle(client, &mut self.warnings).await?);
+        self.exclusion = Some(settle(client, &mut self.warnings, self.progress).await?);
 
         // Background jobs are stopped first, so none outlives Atlas in the
         // helper. One that could not be stopped is said, never a failure.
@@ -481,10 +482,10 @@ impl Teardown for Live<'_> {
         let mut said = json!({});
         jobs.say(&mut said);
         if jobs.asked > 0 {
-            done(
+            (self.progress)(Progress::Done(
                 "Background jobs",
                 &format!("stopped {}", said["jobsStopped"].as_u64().unwrap_or(0)),
-            );
+            ));
         }
         for warning in said["warnings"].as_array().into_iter().flatten() {
             if let Some(warning) = warning.as_str() {
@@ -506,20 +507,20 @@ impl Teardown for Live<'_> {
         let (Some(client), Some(ownership)) = (&self.found.client, &self.exclusion) else {
             return Err(problem("Atlas lost control of the helper"));
         };
-        let target = match (&self.found.helper, self.identity()) {
+        let target = match (&self.found.helper, retiring(self.found.known.as_ref())) {
             (None, _) => Some(Target::Orphan(client.config.helper_uid)),
             (Some(_), Some(identity)) => Some(Target::Helper(identity.clone())),
             (Some(_), None) => None,
         };
 
-        log_out_helper(client, ownership, self.yes, target).await
+        log_out_helper(client, ownership, self.yes, target, self.ask, self.progress).await
     }
 
     fn retire(&mut self) -> Result<()> {
         let Some(client) = &self.found.client else {
             return Ok(());
         };
-        let job = retiring(self.found.known.as_ref())?;
+        let job = retiring(self.found.known.as_ref());
         let _ownership = self
             .exclusion
             .as_ref()
@@ -531,6 +532,7 @@ impl Teardown for Live<'_> {
             job,
             &mut self.removed,
             &mut self.warnings,
+            self.progress,
         )
     }
 
@@ -541,6 +543,7 @@ impl Teardown for Live<'_> {
             self.keep_config,
             &mut self.removed,
             &mut self.warnings,
+            self.progress,
         )
     }
 
@@ -548,11 +551,11 @@ impl Teardown for Live<'_> {
         let Some(name) = &self.found.helper else {
             return;
         };
-        let Some(identity) = self.identity().cloned() else {
-            skipped(
+        let Some(identity) = retiring(self.found.known.as_ref()).cloned() else {
+            (self.progress)(Progress::Skipped(
                 "Helper account",
                 "kept: Atlas can't tell it is still the helper",
-            );
+            ));
             self.warnings.push(format!(
                 "The helper account {name} was kept: Atlas can't tell it is still the helper"
             ));
@@ -569,12 +572,16 @@ impl Teardown for Live<'_> {
             &identity,
             &mut self.removed,
             &mut self.warnings,
+            self.progress,
         );
     }
 
     fn keep_helper(&mut self) {
         if let Some(name) = &self.found.helper {
-            skipped("Helper account", "kept: it is still logged in");
+            (self.progress)(Progress::Skipped(
+                "Helper account",
+                "kept: it is still logged in",
+            ));
             self.warnings.push(format!(
                 "The helper account {name} was kept: it is still logged in"
             ));
@@ -604,7 +611,7 @@ impl Teardown for Live<'_> {
         };
 
         let caches = home.join("Library/Caches/Atlas");
-        match remove_caches(&caches, &mut self.removed) {
+        match remove_caches(&caches, &mut self.removed, self.progress) {
             Ok(false) => {}
             Ok(true) => self.warnings.push(format!(
                 "The last action's outcome is unknown, so its record stays in {} until Atlas \
@@ -633,24 +640,32 @@ fn rest(
     keep_config: bool,
     removed: &mut Vec<Value>,
     warnings: &mut Vec<String>,
+    progress: &dyn Fn(Progress<'_>),
 ) -> Result<()> {
     forget_requested_opener(&found.executable, found.client.as_ref(), removed, warnings);
-    stop_menubar(found.client.as_ref());
-    disconnect(&found.executable, removed, warnings)?;
+    stop_menubar(found.client.as_ref(), progress);
+    disconnect(&found.executable, removed, warnings, progress)?;
 
     // Stopped while the agents were changed: the app and settings stay.
     if crate::agents::stopping() {
         return Err(problem("Stopped before Atlas.app was removed"));
     }
 
-    trash(&found.app, &found.leftovers, removed)?;
-    remove_settings(config_path, keep_config, &found.data, removed)?;
+    trash(&found.app, &found.leftovers, removed, progress)?;
+    remove_settings(config_path, keep_config, &found.data, removed, progress)?;
 
     Ok(())
 }
 
 /// Say what goes and what stays, and ask.
-fn confirm(found: &Found, config_path: &Path, keep_config: bool, facts: &Facts) -> Result<()> {
+fn confirm(
+    found: &Found,
+    config_path: &Path,
+    keep_config: bool,
+    facts: &Facts,
+    ask: &dyn Fn(Question) -> Result<bool>,
+    progress: &dyn Fn(Progress<'_>),
+) -> Result<()> {
     let Found {
         app,
         client,
@@ -683,10 +698,10 @@ fn confirm(found: &Found, config_path: &Path, keep_config: bool, facts: &Facts) 
         ));
     }
 
-    say("This removes from this Mac:");
+    progress(Progress::Say("This removes from this Mac:"));
 
     for part in parts {
-        say(&format!("  · {part}"));
+        progress(Progress::Say(&format!("  · {part}")));
     }
 
     if let Some(name) = helper {
@@ -695,26 +710,28 @@ fn confirm(found: &Found, config_path: &Path, keep_config: bool, facts: &Facts) 
         } else {
             ""
         };
-        say(&if matches!(found.known, Some(Known::Unrecorded(_))) {
-            unrecorded_message(name)
-        } else if facts.remove_helper && !facts.other {
-            format!("{first}Then the helper account {name} and its files are deleted.")
-        } else if facts.logged_in {
-            format!("{first}The account and its files stay.")
-        } else {
-            format!("The helper account {name} and its files stay.")
-        });
-    }
-
-    if unloaded.is_some() {
-        say(&format!(
-            "The settings in {} do not load, so the helper's background job stays.",
-            text::tilde(config_path)
+        progress(Progress::Say(
+            &if matches!(found.known, Some(Known::Unrecorded(_))) {
+                unrecorded_message(name)
+            } else if facts.remove_helper && !facts.other {
+                format!("{first}Then the helper account {name} and its files are deleted.")
+            } else if facts.logged_in {
+                format!("{first}The account and its files stay.")
+            } else {
+                format!("The helper account {name} and its files stay.")
+            },
         ));
     }
 
-    if !prompt::confirm("Remove Atlas?", false, "pass --yes")? {
-        return Err(prompt::cancelled());
+    if unloaded.is_some() {
+        progress(Progress::Say(&format!(
+            "The settings in {} do not load, so the helper's background job stays.",
+            text::tilde(config_path)
+        )));
+    }
+
+    if !ask(Question::Remove)? {
+        return Err(Error::new(Code::Cancelled, "Stopped."));
     }
 
     Ok(())
@@ -739,7 +756,11 @@ fn cannot_settle(account_exists: bool, logged_in: Option<bool>) -> Option<&'stat
 /// first (atlas restart), unless the helper cannot settle it: retiring its
 /// job then replays nothing, and the report says so. The control taken,
 /// held until the job is retired.
-async fn settle(client: &Client, warnings: &mut Vec<String>) -> Result<Ownership> {
+async fn settle(
+    client: &Client,
+    warnings: &mut Vec<String>,
+    progress: &dyn Fn(Progress<'_>),
+) -> Result<Ownership> {
     settle_with(
         &client.controller,
         warnings,
@@ -753,6 +774,7 @@ async fn settle(client: &Client, warnings: &mut Vec<String>) -> Result<Ownership
             Ok((exists, crate::session::logged_in(uid), pid))
         },
         |pid| client.stop_input(pid),
+        progress,
     )
     .await
 }
@@ -762,6 +784,7 @@ async fn settle_with<F>(
     warnings: &mut Vec<String>,
     observe: impl std::future::Future<Output = Result<(bool, Option<bool>, Option<u32>)>>,
     stop: impl FnOnce(u32) -> F,
+    progress: &dyn Fn(Progress<'_>),
 ) -> Result<Ownership>
 where
     F: std::future::Future<Output = Result<()>>,
@@ -771,7 +794,10 @@ where
     match cannot_settle(exists, logged_in) {
         None => controller.require_known()?,
         Some(why) if controller.require_known().is_err() => {
-            skipped("Last action", &format!("outcome unknown; {why}"));
+            progress(Progress::Skipped(
+                "Last action",
+                &format!("outcome unknown; {why}"),
+            ));
             warnings.push(format!(
                 "The last action's outcome is unknown and {why}, so it was not checked"
             ));
@@ -864,12 +890,14 @@ async fn log_out_helper(
     ownership: &Ownership,
     yes: bool,
     target: Option<Target>,
+    ask: &dyn Fn(Question) -> Result<bool>,
+    progress: &dyn Fn(Progress<'_>),
 ) -> Result<()> {
     let uid = client.config.helper_uid;
     let before = client.controller.pending()?;
     let mut way = Way::Ask;
 
-    say("Logging out the helper…");
+    progress(Progress::Say("Logging out the helper…"));
     loop {
         let came = match way {
             Way::Ask | Way::Force => match client.logout_held(ownership, way == Way::Force).await {
@@ -878,8 +906,10 @@ async fn log_out_helper(
                 _ => Came::Stayed,
             },
             Way::Root => {
-                say("The helper's Atlas could not log it out; macOS may ask for your password.");
-                root_log_out(client, ownership, target.clone())
+                progress(Progress::Say(
+                    "The helper's Atlas could not log it out; macOS may ask for your password.",
+                ));
+                root_log_out(client, ownership, target.clone(), progress)
             }
         };
         let came = strictly(came, logged_out_twice(uid));
@@ -887,11 +917,7 @@ async fn log_out_helper(
         match after(way, came, yes) {
             Next::Done => break,
             Next::AskToForce => {
-                if !prompt::confirm(
-                    "An app in the helper is holding up the log-out. Log out anyway?",
-                    false,
-                    "pass --yes",
-                )? {
+                if !ask(Question::ForceLogout)? {
                     return Err(still_logged_in());
                 }
                 way = Way::Force;
@@ -908,7 +934,7 @@ async fn log_out_helper(
         }
     }
 
-    done("Helper", "logged out");
+    progress(Progress::Done("Helper", "logged out"));
     Ok(())
 }
 
@@ -917,10 +943,10 @@ async fn log_out_helper(
 /// recorded. Another account's is never touched, only Atlas's own records
 /// of the helper go; one never recorded is not taken for the helper, and
 /// its account and job stay while Atlas itself can be removed.
-fn retiring(known: Option<&Known>) -> Result<Option<&Identity>> {
+fn retiring(known: Option<&Known>) -> Option<&Identity> {
     match known {
-        Some(Known::Verified(identity)) => Ok(Some(identity)),
-        Some(Known::Other | Known::Unrecorded(_)) | None => Ok(None),
+        Some(Known::Verified(identity)) => Some(identity),
+        Some(Known::Other | Known::Unrecorded(_)) | None => None,
     }
 }
 
@@ -967,11 +993,18 @@ fn strictly(came: Came, logged_out: bool) -> Came {
 /// itself. A helper account that still exists, as recorded (`target`), is
 /// only booted out by launchd; one already deleted is closed as any deleted
 /// account's login. Without a target root is not asked.
-fn root_log_out(client: &Client, ownership: &Ownership, target: Option<Target>) -> Came {
+fn root_log_out(
+    client: &Client,
+    ownership: &Ownership,
+    target: Option<Target>,
+    progress: &dyn Fn(Progress<'_>),
+) -> Came {
     let uid = client.config.helper_uid;
     let me = nix::unistd::getuid().as_raw();
     let Some(target) = target else {
-        say("Atlas can't tell that the account with the helper's user ID is still its helper.");
+        progress(Progress::Say(
+            "Atlas can't tell that the account with the helper's user ID is still its helper.",
+        ));
         return Came::Stayed;
     };
     if uid == me || crate::session::console_owner() == Some(uid) {
@@ -999,19 +1032,25 @@ fn remove_account(
     helper: &Identity,
     removed: &mut Vec<Value>,
     warnings: &mut Vec<String>,
+    progress: &dyn Fn(Progress<'_>),
 ) {
     let (uid, name) = (helper.uid, &helper.name);
     let me = nix::unistd::getuid().as_raw();
     if uid == me || crate::session::console_owner() == Some(uid) {
-        skipped("Helper account", "kept: it is still logged in");
+        progress(Progress::Skipped(
+            "Helper account",
+            "kept: it is still logged in",
+        ));
         warnings.push(format!(
             "The helper account {name} was kept: it is still logged in"
         ));
         return;
     }
 
-    say("Deleting the helper account (macOS may ask for your password)…");
-    match claimed_mutation(controller, || {
+    progress(Progress::Say(
+        "Deleting the helper account (macOS may ask for your password)…",
+    ));
+    match setup::executor::setup_transaction_held(controller, || {
         as_root::remove_helper(helper, Via::Sudo { ask: true }).map_err(|refusal| {
             problem(match refusal {
                 Refusal::Failed(why) => why,
@@ -1023,11 +1062,14 @@ fn remove_account(
     }) {
         Ok(()) => {
             removed.push(json!(format!("helper account {name}")));
-            done("Helper account", &format!("{name} deleted"));
+            progress(Progress::Done("Helper account", &format!("{name} deleted")));
         }
         Err(error) => {
             let why = error.error;
-            skipped("Helper account", &format!("deletion not confirmed: {why}"));
+            progress(Progress::Skipped(
+                "Helper account",
+                &format!("deletion not confirmed: {why}"),
+            ));
             warnings.push(format!("Deletion of the helper account {name} was not confirmed: {why}. Its outcome stays pending until Atlas recovers it."));
         }
     }
@@ -1043,21 +1085,27 @@ fn retire(
     job: Option<&Identity>,
     removed: &mut Vec<Value>,
     warnings: &mut Vec<String>,
+    progress: &dyn Fn(Progress<'_>),
 ) -> Result<()> {
     let config = &client.config;
 
     if let Some(helper) = job {
-        say("Stopping the helper's background job (macOS may ask for your password)…");
+        progress(Progress::Say(
+            "Stopping the helper's background job (macOS may ask for your password)…",
+        ));
         if let Some(opener) = retire_helper_job(executable, helper, &client.controller)? {
             removed.push(json!("helper job"));
-            done("Helper job", "stopped");
+            progress(Progress::Done("Helper job", "stopped"));
             match opener {
                 Ok(true) => removed.push(json!("Atlas's one-time start in the helper")),
                 Ok(false) => {}
                 Err(why) => warnings.push(why),
             }
         } else {
-            skipped("Helper job", "the helper account no longer exists");
+            progress(Progress::Skipped(
+                "Helper job",
+                "the helper account no longer exists",
+            ));
             warnings.push(format!(
                 "The helper account (user ID {}) no longer exists, so no job was stopped",
                 config.helper_uid
@@ -1085,7 +1133,7 @@ fn retire(
 /// not the person's choice: unless they had turned it off themselves, the
 /// record of a choice goes, so setting Atlas up again turns it on again
 /// (settings kept with --keep-config keep that record otherwise).
-fn stop_menubar(client: Option<&Client>) {
+fn stop_menubar(client: Option<&Client>, progress: &dyn Fn(Progress<'_>)) {
     let stopped = client
         .and_then(|client| client.output_dir().ok().map(Path::to_path_buf))
         .and_then(|output| crate::menubar::stop(&output))
@@ -1109,7 +1157,7 @@ fn stop_menubar(client: Option<&Client>) {
         (false, false) => return,
     };
 
-    done("Menu bar", said);
+    progress(Progress::Done("Menu bar", said));
 }
 
 /// Whether the record of an Open at Login choice stays once uninstall turns
@@ -1124,6 +1172,7 @@ fn disconnect(
     executable: &Path,
     removed: &mut Vec<Value>,
     warnings: &mut Vec<String>,
+    progress: &dyn Fn(Progress<'_>),
 ) -> Result<()> {
     // An error here means no agent is installed, so there is nothing to remove.
     if let Ok(reply) = crate::agents::change(&[], crate::agents::Change::Disconnect) {
@@ -1136,24 +1185,24 @@ fn disconnect(
         if reply["ok"] == true {
             if changed {
                 removed.push(json!("agent plugins"));
-                done("Agent plugins", "removed");
+                progress(Progress::Done("Agent plugins", "removed"));
             }
         } else {
             let failed = failed_agents(&reply);
-            skipped(
+            progress(Progress::Skipped(
                 "Agent plugins",
                 &format!("not removed from {failed}; run atlas agents remove"),
-            );
+            ));
             warnings.push(format!(
                 "The plugin was not removed from {failed}; run atlas agents remove"
             ));
         }
 
         for (agent, place) in kept_agents(&reply) {
-            skipped(
+            progress(Progress::Skipped(
                 "Agent plugins",
                 &format!("left in {agent}: its atlas marketplace is from {place}"),
-            );
+            ));
             warnings.push(format!(
                 "{agent}'s marketplace named atlas is from {place}, not Atlas, so it was left alone"
             ));
@@ -1231,8 +1280,13 @@ fn forget_requested_opener(
     };
     let outcome = Controller::new(account.uid).and_then(|controller| {
         forget_opener(&controller, || {
-            let (succeeded, reply) =
-                setup::request_as_helper(executable, &account, &request, false, &expected)?;
+            let (succeeded, reply) = setup::request_as_helper(
+                executable,
+                &account,
+                &request,
+                setup::Invocation::Login,
+                &expected,
+            )?;
             if !succeeded || reply["ok"] != true {
                 return Err(problem(reply["error"].as_str().unwrap_or("no reply")));
             }
@@ -1256,7 +1310,7 @@ fn forget_requested_opener(
 /// both exclusion and an executor-bound claim until removal is acknowledged.
 fn forget_opener(controller: &Controller, ask: impl FnOnce() -> Result<Value>) -> Result<Value> {
     let _ownership = controller.acquire(true)?;
-    claimed_mutation(controller, ask)
+    setup::executor::setup_transaction_held(controller, ask)
 }
 
 /// The name a person knows an agent by, from its name in a reply.
@@ -1266,7 +1320,12 @@ fn shown(name: &str) -> &str {
 
 /// The app goes to the Trash, where it can be recovered; what it left for
 /// the helper goes with it.
-fn trash(app: &Path, leftovers: &[PathBuf], removed: &mut Vec<Value>) -> Result<()> {
+fn trash(
+    app: &Path,
+    leftovers: &[PathBuf],
+    removed: &mut Vec<Value>,
+    progress: &dyn Fn(Progress<'_>),
+) -> Result<()> {
     let trash = config::home()?
         .join(".Trash")
         .join(format!("Atlas-{}.app", crate::files::token()));
@@ -1279,7 +1338,7 @@ fn trash(app: &Path, leftovers: &[PathBuf], removed: &mut Vec<Value>) -> Result<
     })?;
 
     removed.push(json!(app));
-    done("Atlas.app", "moved to the Trash");
+    progress(Progress::Done("Atlas.app", "moved to the Trash"));
 
     // Copies an unfinished update or install.sh staged beside it, by their
     // reserved names only.
@@ -1298,7 +1357,7 @@ fn trash(app: &Path, leftovers: &[PathBuf], removed: &mut Vec<Value>) -> Result<
     }
 
     if cleared {
-        done("Copies for the helper", "removed");
+        progress(Progress::Done("Copies for the helper", "removed"));
     }
 
     // The request naming the helper, when this account made it.
@@ -1357,6 +1416,7 @@ fn remove_settings(
     keep_config: bool,
     data: &Path,
     removed: &mut Vec<Value>,
+    progress: &dyn Fn(Progress<'_>),
 ) -> Result<()> {
     // Only the installed settings; a checkout's own file is never removed.
     let installed = config::installed_path().ok();
@@ -1366,13 +1426,13 @@ fn remove_settings(
     {
         fs::remove_file(config_path)?;
         removed.push(json!(config_path));
-        done("Settings", "removed");
+        progress(Progress::Done("Settings", "removed"));
     }
 
     if !keep_config && data.exists() {
         fs::remove_dir_all(data)?;
         removed.push(json!(data));
-        done("Logs and records", "removed");
+        progress(Progress::Done("Logs and records", "removed"));
     }
 
     Ok(())
@@ -1390,7 +1450,11 @@ fn keeps_control(name: &str) -> bool {
 /// Atlas's caches, but what keeps control of a helper ([`keeps_control`]):
 /// update's scratch and the like. A linked folder is refused before cleanup.
 /// Whether the record of an action whose outcome is unknown stays.
-fn remove_caches(caches: &Path, removed: &mut Vec<Value>) -> Result<bool> {
+fn remove_caches(
+    caches: &Path,
+    removed: &mut Vec<Value>,
+    progress: &dyn Fn(Progress<'_>),
+) -> Result<bool> {
     let Ok(metadata) = fs::symlink_metadata(caches) else {
         return Ok(false);
     };
@@ -1404,7 +1468,7 @@ fn remove_caches(caches: &Path, removed: &mut Vec<Value>) -> Result<bool> {
     if !metadata.is_dir() {
         fs::remove_file(caches)?;
         removed.push(json!(caches));
-        done("Caches", "removed");
+        progress(Progress::Done("Caches", "removed"));
         return Ok(false);
     }
 
@@ -1428,10 +1492,10 @@ fn remove_caches(caches: &Path, removed: &mut Vec<Value>) -> Result<bool> {
     }
 
     if kept {
-        done("Caches", "removed; Atlas's locks stay");
+        progress(Progress::Done("Caches", "removed; Atlas's locks stay"));
     } else {
         fs::remove_dir(caches)?;
-        done("Caches", "removed");
+        progress(Progress::Done("Caches", "removed"));
     }
     removed.push(json!(caches));
 
@@ -1636,7 +1700,7 @@ mod tests {
         let stand_in = dir.path().join("account");
         fs::write(&stand_in, b"temporary stand-in").unwrap();
         let claimed_before_dispatch = std::cell::Cell::new(false);
-        let outcome: Result<()> = claimed_mutation(&controller, || {
+        let outcome: Result<()> = setup::executor::setup_transaction_held(&controller, || {
             claimed_before_dispatch.set(controller.pending().unwrap().len() == 1);
             fs::remove_file(&stand_in).unwrap();
             Err(problem(
@@ -1648,7 +1712,7 @@ mod tests {
         assert_eq!(controller.unresolved().unwrap().len(), 1);
         assert!(claimed_before_dispatch.get());
         let other = controller.quarantine().unwrap();
-        claimed_mutation(&controller, || Ok(())).unwrap();
+        setup::executor::setup_transaction_held(&controller, || Ok(())).unwrap();
         assert_eq!(
             controller.pending().unwrap().len(),
             2,
@@ -1699,13 +1763,15 @@ mod tests {
             warnings: vec![],
             hint: None,
             exclusion: None,
+            progress: &silent,
+            ask: &agree,
         };
         live.settle().await.unwrap();
         assert!(live.exclusion.is_some());
         let controller = &live.found.client.as_ref().unwrap().controller;
         assert_eq!(controller.pending().unwrap(), [generation]);
         assert_eq!(controller.acquire(true).unwrap_err().code, "busy");
-        assert!(live.identity().is_none());
+        assert!(retiring(live.found.known.as_ref()).is_none());
         assert!(live.removed.is_empty());
         live.hint();
         let hint = live.hint.unwrap();
@@ -1722,7 +1788,7 @@ mod tests {
         let claim = controller.quarantine().unwrap();
         let caches = dir.path().join("Atlas");
         std::os::unix::fs::symlink(&target, &caches).unwrap();
-        let error = remove_caches(&caches, &mut Vec::new()).unwrap_err();
+        let error = remove_caches(&caches, &mut Vec::new(), &silent).unwrap_err();
         assert!(error.error.contains("symbolic link"));
         assert!(
             fs::symlink_metadata(&caches)
@@ -1742,6 +1808,10 @@ mod tests {
     }
 
     use super::*;
+    fn silent(_: Progress<'_>) {}
+    fn agree(_: Question) -> Result<bool> {
+        Ok(true)
+    }
 
     #[test]
     fn only_links_to_the_app_are_removed() {
@@ -1811,12 +1881,12 @@ mod tests {
         let caches = dir.path().join("Caches/Atlas");
         let mut removed = Vec::new();
 
-        remove_caches(&caches, &mut removed).unwrap();
+        remove_caches(&caches, &mut removed, &silent).unwrap();
         assert!(removed.is_empty(), "nothing there");
 
         fs::create_dir_all(caches.join("update")).unwrap();
         fs::write(caches.join("scratch"), b"").unwrap();
-        assert!(!remove_caches(&caches, &mut removed).unwrap());
+        assert!(!remove_caches(&caches, &mut removed, &silent).unwrap());
         assert!(!caches.exists());
         assert_eq!(removed, vec![json!(caches)]);
 
@@ -1824,7 +1894,7 @@ mod tests {
         fs::create_dir(&target).unwrap();
         fs::write(target.join("keep"), b"").unwrap();
         std::os::unix::fs::symlink(&target, &caches).unwrap();
-        assert!(remove_caches(&caches, &mut removed).is_err());
+        assert!(remove_caches(&caches, &mut removed, &silent).is_err());
         assert!(target.join("keep").exists());
     }
 
@@ -1842,7 +1912,7 @@ mod tests {
         fs::create_dir_all(caches.join("update/staging")).unwrap();
         fs::write(caches.join("update/staging/Atlas.zip"), b"").unwrap();
 
-        assert!(!remove_caches(&caches, &mut Vec::new()).unwrap());
+        assert!(!remove_caches(&caches, &mut Vec::new(), &silent).unwrap());
         assert!(!caches.join("update").exists(), "the scratch goes");
         let other = crate::control::Controller::at(60001, &caches);
         assert_eq!(
@@ -1865,7 +1935,7 @@ mod tests {
         drop(lost);
         let running = controller.quarantine().unwrap();
 
-        assert!(remove_caches(&caches, &mut Vec::new()).unwrap());
+        assert!(remove_caches(&caches, &mut Vec::new(), &silent).unwrap());
         let pending = controller.pending().unwrap();
         assert!(pending.contains(&generation), "{pending:?}");
         assert!(pending.contains(&running.generation().to_owned()));
@@ -2075,11 +2145,11 @@ mod tests {
             generated_uid: "6DB4B7AF-BE3C-486C-BD46-1B4558946919".into(),
         };
         let verified = Known::Verified(opie.clone());
-        assert_eq!(retiring(Some(&verified)).unwrap(), Some(&opie));
-        assert_eq!(retiring(Some(&Known::Other)).unwrap(), None, "left alone");
-        assert_eq!(retiring(None).unwrap(), None, "gone");
+        assert_eq!(retiring(Some(&verified)), Some(&opie));
+        assert_eq!(retiring(Some(&Known::Other)), None, "left alone");
+        assert_eq!(retiring(None), None, "gone");
         assert_eq!(
-            retiring(Some(&Known::Unrecorded(opie))).unwrap(),
+            retiring(Some(&Known::Unrecorded(opie))),
             None,
             "never taken for the helper unrecorded"
         );
@@ -2139,6 +2209,7 @@ mod tests {
                     &mut self.warnings,
                     async { Ok((true, Some(true), Some(4242))) },
                     |_| async { outcome },
+                    &silent,
                 )
                 .await?
             } else {
@@ -2183,7 +2254,7 @@ mod tests {
 
         fn caches(&mut self) {
             self.note("caches");
-            remove_caches(&self.state, &mut Vec::new()).unwrap();
+            remove_caches(&self.state, &mut Vec::new(), &silent).unwrap();
         }
 
         fn release(&mut self) {

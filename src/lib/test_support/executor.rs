@@ -191,8 +191,10 @@ fn wait_child(child: &mut Child) -> io::Result<ExitStatus> {
         FilterFlag::NOTE_EXIT,
     ) {
         Ok(exit) => exit,
-        // The child can exit between try_wait and registering the watch.
-        Err(error) => return child.try_wait()?.ok_or(error),
+        // Darwin can stop accepting a watch before an exiting child is
+        // waitable. This unreaped child is still ours; wait for its status.
+        Err(error) if error.raw_os_error() == Some(libc::ESRCH) => return child.wait(),
+        Err(error) => return Err(error),
     };
     observed(&exit, LIMIT)?;
     child.wait()
@@ -393,7 +395,10 @@ mod tests {
 
     #[test]
     fn an_executor_reports_readiness_before_its_caller_is_killed() {
-        interrupted_executor("init::tests::a_job_installation_test_caller", "install");
+        interrupted_executor(
+            "setup::helper::tests::a_job_installation_test_caller",
+            "install",
+        );
     }
 
     #[test]
@@ -529,6 +534,23 @@ mod tests {
         fixture.finish().unwrap();
         fixture.wait().unwrap();
         assert_eq!(crate::process::info(pid).unwrap(), None);
+    }
+
+    #[test]
+    fn a_child_exiting_during_watch_registration_is_still_reaped() -> io::Result<()> {
+        for _ in 0..256 {
+            let mut fixture = Fixture {
+                caller: Command::new("/usr/bin/true").spawn()?,
+                requester: None,
+                listener: None,
+                channel: None,
+                executor: None,
+            };
+            let pid = fixture.caller.id() as i32;
+            fixture.wait()?;
+            assert_eq!(crate::process::info(pid).map_err(io::Error::other)?, None);
+        }
+        Ok(())
     }
 
     #[test]
