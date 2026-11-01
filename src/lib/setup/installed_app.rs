@@ -75,6 +75,11 @@ fn replaceable(link: &Path) -> bool {
 
 /// Verify the installed app and link its command for attended setup.
 /// Returns the existing init refusal if the location, signature or link is unsuitable.
+///
+/// # Errors
+///
+/// Rejects an unavailable or unsuitable installed Atlas app and returns command-link
+/// filesystem failures.
 pub fn link_installed_command() -> Result<Value> {
     let executable = app_executable()?;
     if !crate::setup::developer_id(&executable) {

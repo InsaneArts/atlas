@@ -609,7 +609,7 @@ fn a_checked_input_is_confirmed_only_with_its_expectation_echoed() {
             true,
         ),
     ] {
-        let outcome = validate_completion(request, &reply);
+        let outcome = Mutation::Input(Some(2)).validate(request, &reply);
         assert_eq!(outcome.is_ok(), confirmed, "{request} {reply}");
         if let Err(error) = outcome {
             assert_eq!(error.code, "protocol");
@@ -3097,7 +3097,7 @@ fn a_command_terminated_by_a_signal_is_recorded_as_an_exit_failure() {
     let client = client_in(dir.path()).doing(Doing::new("run"));
     let request = json!({"op": "run", "argv": ["tool"]});
     let reply = json!({"ok": true, "exitCode": null, "timedOut": false, "signal": "SIGTERM"});
-    validate_completion(&request, &reply).unwrap();
+    Mutation::Run.validate(&request, &reply).unwrap();
     client.record_start_blocking(&request).unwrap();
     client
         .record_blocking(&request, &reply, Duration::ZERO)

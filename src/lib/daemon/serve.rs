@@ -470,6 +470,12 @@ fn supervisor_outcome(
 /// Serve on a Tokio runtime in a worker thread while this (main) thread runs
 /// the Core Foundation run loop, which AppKit needs to keep its view of
 /// running applications current.
+///
+/// # Errors
+///
+/// Rejects the wrong UID or graphical session, unsafe socket storage and runtime setup
+/// failures. Service termination and unfinished owned work retain their failure or
+/// uncertainty status.
 pub fn serve_blocking(uid: u32, controller_uid: u32, socket: PathBuf) -> Result<()> {
     use objc2_core_foundation::{CFRunLoop, CFString};
 
@@ -2218,7 +2224,9 @@ mod tests {
             (&reply["exitCode"], &reply["timedOut"]),
             (&json!(4), &json!(false))
         );
-        crate::client::validate_completion(&json!({"op": "run"}), &reply).unwrap();
+        crate::client::Mutation::Run
+            .validate(&json!({"op": "run"}), &reply)
+            .unwrap();
 
         let hello = transport.call(&json!({"op": "hello"})).await.unwrap();
         assert_eq!(hello["daemon"]["pid"], std::process::id());

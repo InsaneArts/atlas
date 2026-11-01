@@ -18,6 +18,11 @@ impl Client {
     /// an agent's input under way and refuses its next actions; the person
     /// keeps the viewer. Only the person resumes, through a viewer. An input
     /// service too old to stop is refused.
+    ///
+    /// # Errors
+    ///
+    /// Returns input-service, transport or local stop-marker failures. A partial result may
+    /// have changed one stop marker; follow its uncertainty and recovery information.
     pub async fn hold(&self, on: bool) -> Result<Value> {
         let held = self.hold_input(on).await;
         if !on {
@@ -174,6 +179,12 @@ impl Client {
     /// itself; commands run through the helper daemon, which knows nothing
     /// of a stop. The stop's saved marker counts too, so a stopped helper
     /// whose input service is down still refuses.
+    ///
+    /// # Errors
+    ///
+    /// Returns stopped when a local marker or successful input-service reply reports a hold.
+    /// An unavailable service alone does not establish a hold; later input admission still
+    /// checks the service and its authority.
     pub async fn require_going(&self) -> Result<()> {
         if self.actor == Actor::Viewer {
             return Ok(());

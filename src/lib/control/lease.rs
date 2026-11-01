@@ -80,6 +80,11 @@ impl Lease {
     /// Take control through `controller` for a new token, refused while the
     /// lock is still kept for another viewer or for one still settling. The
     /// token, which the viewer presents to act, renew and release.
+    ///
+    /// # Errors
+    ///
+    /// Refuses unavailable controller exclusion, an unresolved prior outcome or a lease still
+    /// being cleaned up.
     pub fn acquire(&mut self, controller: &Controller) -> Result<String> {
         self.acquire_at(controller, Instant::now(), Instant::now)
     }
@@ -106,6 +111,11 @@ impl Lease {
 
     /// Refuse with `lease-lost` unless `token` is the live token: one that
     /// was released or ran out never acts again.
+    ///
+    /// # Errors
+    ///
+    /// Refuses a missing, expired, revoked or different lease token. An expired lease does not
+    /// by itself prove held input was released.
     pub fn require(&mut self, token: &str) -> Result<()> {
         self.require_at(token, Instant::now())
     }
@@ -179,6 +189,11 @@ impl Lease {
     /// must name when given, is taken and answered, and the lock stays
     /// held until [`Lease::end_release`]. None when there is nothing left
     /// to release.
+    ///
+    /// # Errors
+    ///
+    /// Refuses a requested token that does not own the lease. Successful initiation retains
+    /// exclusion until input and cleanup have ended.
     pub fn begin_release(&mut self, requested: Option<&str>) -> Result<Option<String>> {
         self.begin_release_at(requested, Instant::now())
     }
@@ -258,6 +273,11 @@ impl ActionPermit {
     /// Mark an input under way for the holder of `token`, refused unless it
     /// is the live token and no other input is in flight. The lock stays
     /// held until the permit is dropped.
+    ///
+    /// # Errors
+    ///
+    /// Refuses an invalid or expired token and another input already in flight. The returned
+    /// permit retains exclusion through its operation.
     pub async fn begin(lease: SharedLease, token: &str) -> Result<Self> {
         {
             let mut state = lease.lock().await;

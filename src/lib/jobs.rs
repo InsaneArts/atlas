@@ -46,6 +46,11 @@ const LEADER_GONE: &str =
 /// unless given) that Atlas stops after `lifetime`. Control is held until
 /// the helper acknowledges it with the job's identity, which goes into the
 /// task's record before this returns.
+///
+/// # Errors
+///
+/// Returns argument, ownership, helper-identity or job-start confirmation failures. A
+/// missing acknowledgement can leave a started job pending.
 pub async fn start(
     client: &Client,
     argv: Vec<String>,
@@ -152,6 +157,11 @@ async fn started(
 /// is held only until the helper acknowledges the TERM; the wait for the
 /// job to end takes none. A job of another task is stopped only when
 /// `task` names that task; one of no task by the helper's record alone.
+///
+/// # Errors
+///
+/// Returns job-identity, ownership, transport or stop-confirmation failures. A successful
+/// signal is not proof that all descendants have exited.
 pub async fn stop(
     client: &Client,
     id: &JobId,
@@ -422,6 +432,11 @@ fn stopped(id: &JobId, shown: &Shown, waited: Duration) -> Value {
 /// it works while agents are stopped, while an outcome is unknown and while
 /// another agent acts. When the helper cannot say, the task's record is
 /// shown with every job's state unknown.
+///
+/// # Errors
+///
+/// Returns helper or job-list decoding failures. Unreadable supervision state is not
+/// reported as an empty list.
 pub async fn list(client: &Client, all: bool) -> Result<Value> {
     let mine = client.task.as_ref().map(|task| task.key().clone());
     let store = client.output_dir().ok().map(Store::at);
@@ -533,6 +548,11 @@ fn listed_view(shown: &Shown) -> Value {
 
 /// The end of job `id`'s output, the last `bytes` of it, decoded lossily as
 /// `run`'s output is. Read without control.
+///
+/// # Errors
+///
+/// Returns invalid job, byte-range, helper or log-read failures. The read does not change
+/// the job's lifecycle.
 pub async fn log(client: &Client, id: &JobId, bytes: usize, task: Option<&Key>) -> Result<Value> {
     // Read like a list: only the helper's account serves the socket, and a
     // log is read on screen too. Another task's job's output is read only

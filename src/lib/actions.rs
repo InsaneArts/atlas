@@ -212,6 +212,20 @@ pub struct Expect {
 
 impl Expect {
     /// The expectation for process `pid`, refused unless it can be one.
+    ///
+    /// # Errors
+    ///
+    /// Rejects a process ID outside the positive 32-bit range. This validates a name; it does
+    /// not prove that the process still exists.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use atlas::actions::Expect;
+    /// let expected = Expect::new(812)?.in_window(42)?.in_field("Search")?;
+    /// assert_eq!(expected.pid(), 812);
+    /// # Ok::<(), atlas::error::Error>(())
+    /// ```
     pub fn new(pid: i64) -> Result<Self> {
         i32::try_from(pid)
             .ok()
@@ -228,6 +242,11 @@ impl Expect {
     /// The expectation that window `number` of the app has keyboard focus
     /// (or, for a pointer action, is the one at the point), refused unless
     /// it can be a window number.
+    ///
+    /// # Errors
+    ///
+    /// Rejects a window number outside the positive 32-bit range. Window ownership and
+    /// freshness are checked when input is admitted.
     pub fn in_window(self, number: i64) -> Result<Self> {
         let window = u32::try_from(number)
             .ok()
@@ -241,6 +260,10 @@ impl Expect {
 
     /// The expectation that the focused field is named `name`, refused
     /// unless it names something.
+    ///
+    /// # Errors
+    ///
+    /// Rejects a blank field name or one longer than the supported character limit.
     pub fn in_field(self, name: &str) -> Result<Self> {
         let length = name.chars().count();
         if name.trim().is_empty() || length > FIELD_MAX {
@@ -257,6 +280,11 @@ impl Expect {
     /// `{"pid": N}` naming a process, with an optional start time, window
     /// number and field name, is refused, each member with its own error,
     /// so a member this build does not know is never ignored.
+    ///
+    /// # Errors
+    ///
+    /// Rejects unknown members, malformed identity fields, invalid window numbers and blank or
+    /// oversized field names. A null value means no expectation.
     pub fn from_request(value: &Value) -> Result<Option<Self>> {
         if value.is_null() {
             return Ok(None);
@@ -548,6 +576,21 @@ const TYPE_MS: u32 = 7;
 const _: () = assert!(TYPE_MS * TEXT_MAX as u32 <= BATCH_MS);
 const KEY_MS: u32 = 10;
 
+/// Validate a whole input batch without sending any of it.
+///
+/// # Errors
+///
+/// Rejects malformed actions, unsupported keys or modifiers, off-display points, and
+/// batches that exceed the action or duration limits. Validation sends no input.
+///
+/// # Examples
+///
+/// ```
+/// use atlas::{actions, session::Display};
+/// let display = Display { width: 800.0, height: 600.0, scale: 1.0 };
+/// actions::validate(&serde_json::json!([{"type":"move","x":10,"y":20}]), &display)?;
+/// # Ok::<(), atlas::error::Error>(())
+/// ```
 pub fn validate(value: &Value, display: &Display) -> Result<()> {
     parse(value, display).map(|_| ())
 }

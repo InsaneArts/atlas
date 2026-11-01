@@ -47,6 +47,11 @@ impl Jobs {
     /// person stopped agents, or the helper is on screen), carry stops on,
     /// keep logs within their limit, and prune old records now and then.
     /// What a job is, is read from its record each time, never from a count.
+    ///
+    /// # Errors
+    ///
+    /// Returns unavailable or poisoned supervision-state errors. Individual job observations
+    /// and cleanup failures remain represented in job records.
     pub fn watch_once(&self, forced: Option<How>) -> Result<()> {
         let mut state = self.state()?;
         let now = now_ms();

@@ -116,6 +116,11 @@ pub(super) fn selectable_variable(name: &str) -> bool {
 }
 
 /// Freeze the selected bytes, then preview or apply the resulting plan.
+///
+/// # Errors
+///
+/// Returns manifest, identity, staging or worker failures. Apply may leave a retained
+/// transaction; preview does not authorize later effects.
 pub async fn sync(client: &Client, manifest: &Path, apply_now: bool) -> Result<Value> {
     let manifest = fs::canonicalize(manifest)
         .map_err(|error| Error::new(Code::Io, format!("{}: {error}", manifest.display())))?;
@@ -124,6 +129,11 @@ pub async fn sync(client: &Client, manifest: &Path, apply_now: bool) -> Result<V
 }
 
 /// Apply or resume the same immutable snapshot. Original source files are not read.
+///
+/// # Errors
+///
+/// Rejects an unavailable or incompatible plan, changed identity or unsafe destinations.
+/// Unacknowledged worker effects retain their transaction and pending ownership.
 pub async fn apply(client: &Client, plan_id: &str) -> Result<Value> {
     let helper = helper_name(client.config.helper_uid)?;
     tidy(client);
@@ -131,6 +141,11 @@ pub async fn apply(client: &Client, plan_id: &str) -> Result<Value> {
 }
 
 /// Preview rollback by default; restore only this transaction's unchanged files.
+///
+/// # Errors
+///
+/// Returns transaction, identity, ownership or worker failures. Changed helper files may be
+/// kept, and unknown restoration stays pending.
 pub async fn rollback(client: &Client, transaction_id: &str, apply: bool) -> Result<Value> {
     let stage = stage_path(client, transaction_id)?;
     let helper = helper_name(client.config.helper_uid)?;
@@ -165,6 +180,11 @@ pub async fn rollback(client: &Client, transaction_id: &str, apply: bool) -> Res
 /// Execute a command with the installed helper-local profile, stopping it
 /// after `timeout`. The reply is the actual process result, including its
 /// output, status, signal and timeout.
+///
+/// # Errors
+///
+/// Returns argument, environment-admission, ownership or command-completion failures. A
+/// failed child can be represented in its reply; unknown execution stays pending.
 pub async fn run(client: &Client, argv: Vec<String>, timeout: Duration) -> Result<Value> {
     runner::validate_argv(&argv)?;
 

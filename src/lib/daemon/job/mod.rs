@@ -100,11 +100,21 @@ impl Jobs {
     /// The jobs whose records are in `daemon`'s `jobs` folder, for the
     /// helper account `uid`, started through `launcher`. Every record is
     /// read, and each job still running is found again by its identity.
+    ///
+    /// # Errors
+    ///
+    /// Returns boot-identity, job-storage or adoption failures. Launcher and UID are supplied
+    /// by the daemon owner; this constructor does not independently validate those arguments.
     pub fn open(daemon: &Path, launcher: PathBuf, uid: u32) -> Result<Self> {
         Self::open_with(daemon, launcher, uid, LOG_LIMIT)
     }
 
     /// [`Jobs::open`], emptying a log past `log_limit` bytes.
+    ///
+    /// # Errors
+    ///
+    /// Returns boot-identity, job-storage or adoption failures. The supplied launcher, UID
+    /// and log limit are policy inputs, not values validated by this constructor.
     pub fn open_with(daemon: &Path, launcher: PathBuf, uid: u32, log_limit: u64) -> Result<Self> {
         Self::open_in(
             daemon,
@@ -150,12 +160,21 @@ impl Jobs {
 
     /// The folder the records are in.
     /// Returns an error when supervision is unavailable, until the daemon restarts.
+    ///
+    /// # Errors
+    ///
+    /// Returns a supervision-state error if the job owner cannot be accessed safely.
     pub fn folder(&self) -> Result<PathBuf> {
         Ok(self.state()?.store.directory().to_owned())
     }
 
     /// How many jobs may still run, as the records said last.
     /// Returns an error rather than a count when supervision is unavailable.
+    ///
+    /// # Errors
+    ///
+    /// Returns a supervision-state error rather than reporting zero jobs when supervision is
+    /// unavailable.
     pub fn running(&self) -> Result<usize> {
         Ok(self.state()?.running)
     }

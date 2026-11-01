@@ -123,6 +123,11 @@ fn in_effect_with(log: Result<Option<Log>>, home: &Path) -> bool {
 /// Archive helper `uid`'s setup record if it belongs to another account
 /// (a deleted helper whose UID was reused): it describes nothing here.
 /// Whether a record was archived.
+///
+/// # Errors
+///
+/// Returns identity, ownership or archive failures. An unverified foreign installation is
+/// preserved rather than deleted.
 pub fn archive_foreign(uid: u32, home: &Path) -> Result<bool> {
     let path = log_path(uid)?;
     let Some(log) = load_log(&path)? else {
@@ -1029,6 +1034,11 @@ async fn carry_out(path: PathBuf, log: Log, recheck: bool) -> Result<Value> {
 
 /// Record and verify a first setup (see [`plan_fresh`]). Re-running on an
 /// applied setup re-verifies it, like [`apply`].
+///
+/// # Errors
+///
+/// Returns identity, layout, executor or migration failures. Partial or unknown migration
+/// work retains the saved recovery state.
 pub async fn apply_fresh(
     config_path: &Path,
     client: &Client,
@@ -1203,6 +1213,11 @@ fn report(log: &Log, path: &Path, outcome: Result<()>) -> Value {
 
 /// Migrate, resume, or re-verify the managed private capture endpoint.
 /// Callers prove controller ownership (acquired for recovery) by passing it.
+///
+/// # Errors
+///
+/// Returns admission, account-identity, migration or settlement failures. Pending work is
+/// cleared only after the existing read-back proof succeeds.
 pub async fn apply(config_path: &Path, client: &Client, _ownership: &Ownership) -> Result<Value> {
     client.require_service_idle().await?;
     let (path, log) = recorded_log(config_path)?;
@@ -1220,6 +1235,11 @@ pub async fn apply(config_path: &Path, client: &Client, _ownership: &Ownership) 
 /// Check setup's prerequisites before update replaces the app. Read-only:
 /// no log is created, archived or changed, and no setup mutation is dispatched.
 /// The caller holds controller exclusion through this check and the swap.
+///
+/// # Errors
+///
+/// Rejects unavailable settings, incompatible account identity or an unsuitable replacement
+/// program before migration effects begin.
 pub async fn preflight_apply(config_path: &Path, updated_program: &Path) -> Result<()> {
     let (path, log) = recorded_log(config_path)?;
     let start = apply_start(log, &path)?;
@@ -1249,6 +1269,11 @@ pub async fn preflight_apply(config_path: &Path, updated_program: &Path) -> Resu
 
 /// Undo an applied or interrupted migration recorded in the log.
 /// Callers prove controller ownership (acquired for recovery) by passing it.
+///
+/// # Errors
+///
+/// Returns ownership, identity, rollback or read-back failures. Unknown rollback work
+/// remains pending.
 pub async fn rollback(
     config_path: &Path,
     client: &Client,

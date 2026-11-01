@@ -13,25 +13,6 @@ use serde_json::{Value, json};
 use std::time::{Duration, Instant};
 use tokio::sync::MutexGuard;
 
-pub fn validate_completion(request: &Value, reply: &Value) -> Result<()> {
-    use crate::activity_log::Op;
-    let mutation = match Op::of(request) {
-        Some(Op::Input) => Mutation::Input(request["actions"].as_array().map(|v| v.len() as u64)),
-        Some(Op::Run) => Mutation::Run,
-        Some(Op::Job) => match request["action"].as_str() {
-            Some("start") => Mutation::JobStart,
-            Some("stop") => Mutation::JobStop,
-            _ => return Ok(()),
-        },
-        Some(Op::Restart) => Mutation::Restart,
-        Some(Op::Logout) => Mutation::Logout,
-        Some(Op::Apps | Op::Collect | Op::Read | Op::Screenshot | Op::Other(_)) | None => {
-            return Ok(());
-        }
-    };
-    mutation.validate(request, reply)
-}
-
 /// Completion and ownership are chosen by the producer, independently of the
 /// tolerant activity-log vocabulary and the original wire projection.
 #[derive(Clone, Copy, Debug)]
@@ -45,7 +26,7 @@ pub(crate) enum Mutation {
 }
 
 impl Mutation {
-    fn validate(self, request: &Value, reply: &Value) -> Result<()> {
+    pub(crate) fn validate(self, request: &Value, reply: &Value) -> Result<()> {
         if reply["ok"] != true {
             return Ok(());
         }
@@ -373,5 +354,45 @@ impl Client {
         }
 
         Ok(reply)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn signal_timeout_and_exit_are_distinct_completed_outcomes() {
+        let request = json!({"op":"run"});
+
+        for reply in [
+            json!({"ok":true,"exitCode":0,"timedOut":false,"signal":null}),
+            json!({"ok":true,"exitCode":null,"timedOut":false,"signal":"SIGTERM"}),
+            json!({"ok":true,"exitCode":null,"timedOut":true,"signal":"SIGKILL"}),
+        ] {
+            Mutation::Run.validate(&request, &reply).unwrap();
+        }
+
+        for reply in [
+            json!({"ok":true}),
+            json!({"ok":true,"exitCode":null,"timedOut":false,"signal":15}),
+        ] {
+            assert!(
+                Mutation::Run
+                    .validate(&request, &reply)
+                    .unwrap_err()
+                    .uncertain
+            );
+        }
+
+        assert!(
+            Mutation::Input(Some(1))
+                .validate(
+                    &json!({"op":"input","actions":[{}]}),
+                    &json!({"ok":true,"performed":0})
+                )
+                .unwrap_err()
+                .uncertain
+        );
     }
 }

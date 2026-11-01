@@ -112,6 +112,12 @@ impl Failure {
 /// collected before one that fails stay collected. Nothing here is ever of
 /// unknown outcome: it changes nothing in the helper, and here it either
 /// kept a verified copy or removed what it began.
+///
+/// # Errors
+///
+/// Rejects invalid collection arguments, unavailable helper identity or output-storage
+/// failures. Per-file refusals remain in the reply; only verified size and digest
+/// completion publishes a collected copy.
 pub async fn collect(client: &Client, files: &[String], max_size: u64) -> Result<Value> {
     let started = Instant::now();
     if files.is_empty() || files.len() > MAX_FILES {

@@ -517,6 +517,11 @@ pub(crate) async fn inspect(
 }
 
 /// Inspect selected names and paths without installing, launching or signing in.
+///
+/// # Errors
+///
+/// Rejects invalid tool or app names, unavailable helper identity and incomplete discovery
+/// replies. Discovery reports access facts without executing selected programs.
 pub async fn discover(
     client: &Client,
     tools: &[String],

@@ -469,6 +469,10 @@ fn wanted_here(layout: &Layout) -> bool {
 /// away, which ends this process. An account that is no longer the helper
 /// asked for loses the opener without anything opening; a desktop or window
 /// that never comes leaves it for the next login.
+///
+/// # Errors
+///
+/// Returns failures locating or opening Atlas in the current account's login session.
 pub fn open_at_login() -> Result<()> {
     use crate::login_log::{mark, seconds};
 

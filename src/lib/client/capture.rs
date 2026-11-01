@@ -213,6 +213,12 @@ pub(super) fn capture_name(saved: &Value) -> Option<&str> {
     Path::new(saved["path"].as_str()?).file_name()?.to_str()
 }
 
+/// Read width and height from a PNG header without decoding its pixels.
+///
+/// # Errors
+///
+/// Rejects missing or malformed PNG signature and header dimensions without decoding pixel
+/// data.
 pub fn png_dimensions(png: &[u8]) -> Result<(u32, u32)> {
     let invalid = || Error::new(Code::Capture, "Invalid PNG header or dimensions");
 
@@ -337,6 +343,11 @@ impl Client {
     /// its pixels lie on the display. A capture with the same pixels as the
     /// last one of that target and size names the earlier file and says it
     /// is `unchanged`, unless `new_file` asks for a file anyway.
+    ///
+    /// # Errors
+    ///
+    /// Returns identity, crop, transport, capture or private-output failures. A failed read
+    /// never establishes a successful screenshot.
     pub async fn capture(&self, size: Size, crop: Option<&Crop>, new_file: bool) -> Result<Value> {
         self.capture_expecting(None, size, crop, new_file).await
     }

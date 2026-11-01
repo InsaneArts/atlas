@@ -611,6 +611,11 @@ pub struct Covering {
 /// marketplace named atlas that is Atlas's own is replaced or removed; an
 /// agent whose is someone else's is refused when connecting and left alone
 /// when disconnecting.
+///
+/// # Errors
+///
+/// Returns host-discovery, configuration or installation failures. Earlier hosts may
+/// already have completed their requested change.
 pub fn change(chosen: &[Agent], change: Change) -> Result<Value> {
     // The Claude app comes along when no agent was named: it has no
     // command line of its own to choose it by.
@@ -622,6 +627,11 @@ pub fn change(chosen: &[Agent], change: Change) -> Result<Value> {
 }
 
 /// [`change`] for exactly `chosen` and what `covering` adds.
+///
+/// # Errors
+///
+/// Returns a selected host or app integration failure. Changes completed for earlier
+/// selections are not rolled back automatically.
 pub fn change_these(chosen: &[Agent], covering: Covering, change: Change) -> Result<Value> {
     let remove = change == Change::Disconnect;
     let Covering { every_agent, app } = covering;

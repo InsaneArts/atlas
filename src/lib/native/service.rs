@@ -1170,6 +1170,12 @@ const SESSION_GONE_CHECKS: u32 = 3;
 ///
 /// Returns an error if identity, permission, endpoint creation or cleanup fails.
 /// Cleanup failure preserves uncertainty rather than acknowledging release.
+///
+/// # Errors
+///
+/// Rejects invalid helper identity, permissions or socket ownership, and returns service
+/// setup or shutdown failures. Unknown input and cleanup outcomes remain owned until
+/// recovery.
 pub async fn serve(uid: u32, controller_uid: u32, socket: PathBuf) -> Result<()> {
     let (build, executable) = started_from();
     crate::session::validate_target_uid(uid, controller_uid)?;

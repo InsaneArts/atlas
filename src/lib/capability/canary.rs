@@ -641,6 +641,12 @@ async fn launch(client: &Client, ownership: &Ownership, program: &Path) -> Resul
 }
 
 /// Run the native Save/Open canary and record the dated outcome.
+///
+/// # Errors
+///
+/// Returns fixture, ownership, identity, launch or record-storage failures. Individual
+/// panel checks and archive/cleanup failures are retained in the returned report. This
+/// actively exercises the fixture; inspect passed and cleanupError before claiming proof.
 pub async fn verify(client: &Client, fixture: &Path) -> Result<Value> {
     // A development check: its test app is built from a checkout, never shipped.
     if !fixture.is_file() {

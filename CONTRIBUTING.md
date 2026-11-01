@@ -70,9 +70,13 @@ and Swift package dependencies. Public user guides live in [docs/](docs/README.m
 
 CI runs these on every pull request. Run them first:
 
+Install the pinned dependency checker once with
+`cargo install cargo-machete --version 0.9.2 --locked`.
+
 ```sh
 cargo fmt --all --check
 cargo clippy --all-targets -- -D warnings
+cargo machete --skip-target-dir .
 cargo test
 npm run format:check
 npm test

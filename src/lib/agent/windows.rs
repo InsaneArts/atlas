@@ -70,6 +70,12 @@ pub(super) enum DockRead {
     Read,
 }
 
+/// List the helper windows selected by `filter`, retaining their observed routing facts.
+///
+/// # Errors
+///
+/// Returns identity, window-read or remembered-observation storage failures. Malformed
+/// helper data is never interpreted as an empty window list.
 pub async fn list(client: &Client, filter: &WindowFilter) -> Result<Value> {
     let windows = if client.host_session.is_some() {
         let verified = client.verify().await?;
@@ -91,6 +97,11 @@ pub async fn list(client: &Client, filter: &WindowFilter) -> Result<Value> {
 /// until none remains). The timeout is a deadline for starting a look; the
 /// last look counts even when it finishes after it, and a zero timeout
 /// means one observation.
+///
+/// # Errors
+///
+/// Returns observation failures or a timeout if the requested window state does not arrive.
+/// Waiting does not synthesize that state or send input.
 pub async fn wait(
     client: &Client,
     filter: &WindowFilter,

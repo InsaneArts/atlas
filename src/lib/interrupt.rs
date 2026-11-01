@@ -248,6 +248,12 @@ impl Interrupt {
     /// is dropped where it waits, so its control is let go and a change
     /// still under way stays pending, and the stop's failure is the result.
     /// A result ready at the same moment wins.
+    ///
+    /// # Errors
+    ///
+    /// Propagates the command's error or returns the settled interruption error. Cancellation
+    /// does not prove that in-flight effects were acknowledged; their owners retain cleanup and
+    /// recovery.
     pub async fn unless_stopped<T>(&self, command: impl Future<Output = Result<T>>) -> Result<T> {
         tokio::select! {
             biased;

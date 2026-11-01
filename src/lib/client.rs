@@ -23,7 +23,6 @@ pub(crate) use apps::{AppList, AppRow};
 pub(crate) use capture::prune_captures;
 pub use capture::{Frame, SCREENSHOT_SIDE, Size, png_dimensions};
 pub(crate) use mutate::Mutation;
-pub use mutate::validate_completion;
 pub(crate) use record::PersonInput;
 pub(crate) use run::Run;
 pub use run::{RUN_TIMEOUT, RUN_TIMEOUT_MAX};
@@ -129,6 +128,11 @@ impl Client {
     /// Construction only validates; reads such as status never write; doctor
     /// only probes that Atlas's own folders can be written, making them when
     /// missing.
+    ///
+    /// # Errors
+    ///
+    /// Rejects an invalid or non-distinct helper UID and failures creating the local controller
+    /// identity. Construction does not verify a running helper session.
     pub fn new(config: Config) -> Result<Self> {
         crate::session::validate_uid(config.helper_uid)?;
         Ok(Self {
@@ -167,6 +171,11 @@ impl Client {
     /// The private output directory, created 0700 (with any missing parents)
     /// on first use. An existing directory must already be private; it is
     /// never re-permissioned. The umask can only remove mode bits.
+    ///
+    /// # Errors
+    ///
+    /// Rejects an existing non-private, foreign-owned or non-directory destination, and returns
+    /// directory-creation or inspection failures.
     pub fn output_dir(&self) -> Result<&Path> {
         let path = &self.config.output_dir;
         if !path.exists() {
@@ -284,6 +293,11 @@ impl Client {
     /// Whether this shell may keep Atlas's own files: the controller lock
     /// and the screenshots. An agent's sandbox may forbid both while the
     /// helper itself is fine.
+    ///
+    /// # Errors
+    ///
+    /// Returns failures creating or checking Atlas-owned private output and control storage.
+    /// Existing unsafe storage is refused rather than silently made trustworthy.
     pub fn writable(&self) -> Result<()> {
         self.controller.writable()?;
         crate::files::probe_write(self.output_dir()?)?;

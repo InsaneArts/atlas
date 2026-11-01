@@ -346,6 +346,12 @@ fn known(standing: Standing) -> Known {
 
 /// Undo install and init. `keep_config` keeps settings and logs;
 /// `remove_helper` deletes the helper account too, once it is logged out.
+///
+/// # Errors
+///
+/// Returns confirmation, ownership, account-identity, executor or teardown failures.
+/// Earlier removals may be complete; unknown effects retain recovery state and are not
+/// reported as successful teardown.
 pub async fn run(
     config_path: &Path,
     keep_config: bool,

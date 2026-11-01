@@ -119,6 +119,11 @@ fn signal_using(command: &mut Command) -> Result<Value> {
 
 /// A helper-owned, nonprivileged setup worker. Its only persistent pre-handoff
 /// change is a repeatable consent record; it never opens the person's files.
+///
+/// # Errors
+///
+/// Rejects an invalid, expired or mismatched ticket and returns account, consent or worker
+/// failures. Unknown privileged work retains its recovery claim.
 pub async fn accept_worker(ticket: &str) -> Result<Value> {
     signed_executable()?;
     let pairing = request()

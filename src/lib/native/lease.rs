@@ -54,6 +54,11 @@ impl State {
             .map(|owner| owner.who)
     }
 
+    fn holder_at(&mut self, now: Instant) -> Option<Who> {
+        self.expire_at(now);
+        self.holder()
+    }
+
     /// An action hears its cancellation once; renewal only hears lease loss.
     fn require_at(&mut self, token: &str, acting: bool, now: Instant) -> Result<&mut Owner> {
         self.expire_at(now);
@@ -89,21 +94,11 @@ impl Gate {
     }
 
     pub(super) fn active(&self) -> Result<bool> {
-        self.active_at(self.lock()?, Instant::now())
-    }
-
-    fn active_at(&self, mut state: MutexGuard<'_, State>, now: Instant) -> Result<bool> {
-        state.expire_at(now);
-        Ok(state.holder().is_some())
+        Ok(self.lock()?.holder_at(Instant::now()).is_some())
     }
 
     pub(super) fn holder(&self) -> Result<Option<Who>> {
-        self.holder_at(self.lock()?, Instant::now())
-    }
-
-    fn holder_at(&self, mut state: MutexGuard<'_, State>, now: Instant) -> Result<Option<Who>> {
-        state.expire_at(now);
-        Ok(state.holder())
+        Ok(self.lock()?.holder_at(Instant::now()))
     }
 
     pub(super) fn acquire(self: &Arc<Self>, owner: &str, who: Who) -> Result<Grant> {
@@ -323,16 +318,13 @@ mod tests {
     fn a_second_controller_is_busy() {
         let now = Instant::now();
         let gate = gate();
-        assert_eq!(gate.holder_at(gate.lock().unwrap(), now).unwrap(), None);
+        assert_eq!(gate.lock().unwrap().holder_at(now), None);
         let _grant = gate
             .acquire_at(gate.lock().unwrap(), &owner('a'), Who::Agent, now, || now)
             .unwrap();
 
-        assert!(gate.active_at(gate.lock().unwrap(), now).unwrap());
-        assert_eq!(
-            gate.holder_at(gate.lock().unwrap(), now).unwrap(),
-            Some(Holder::Agent)
-        );
+        assert!(gate.lock().unwrap().holder_at(now).is_some());
+        assert_eq!(gate.lock().unwrap().holder_at(now), Some(Holder::Agent));
         assert_eq!(
             code(gate.acquire_at(gate.lock().unwrap(), &owner('b'), Who::Agent, now, || now)),
             "busy"
@@ -352,10 +344,7 @@ mod tests {
             .acquire_at(gate.lock().unwrap(), &owner('a'), Who::Person, now, || now)
             .unwrap();
 
-        assert_eq!(
-            gate.holder_at(gate.lock().unwrap(), now).unwrap(),
-            Some(Holder::Person)
-        );
+        assert_eq!(gate.lock().unwrap().holder_at(now), Some(Holder::Person));
         let said = |who| {
             gate.acquire_at(gate.lock().unwrap(), &owner('b'), who, now, || now)
                 .err()
@@ -414,7 +403,7 @@ mod tests {
             );
         }
 
-        assert!(!gate.active_at(gate.lock().unwrap(), now).unwrap());
+        assert!(gate.lock().unwrap().holder_at(now).is_none());
         assert_eq!(
             code(gate.acquire_at(
                 gate.lock().unwrap(),
@@ -549,11 +538,11 @@ mod tests {
             (expires + Duration::from_nanos(1), false),
         ] {
             let (gate, _) = acquired();
-            assert_eq!(gate.active_at(gate.lock().unwrap(), now).unwrap(), valid);
+            assert_eq!(gate.lock().unwrap().holder_at(now).is_some(), valid);
 
             let (gate, _) = acquired();
             assert_eq!(
-                gate.holder_at(gate.lock().unwrap(), now).unwrap(),
+                gate.lock().unwrap().holder_at(now),
                 valid.then_some(Holder::Agent)
             );
 
@@ -767,7 +756,7 @@ mod tests {
                     })
                     .unwrap();
                 if expired {
-                    assert!(!gate.active_at(gate.lock().unwrap(), expires).unwrap());
+                    assert!(gate.lock().unwrap().holder_at(expires).is_none());
                 }
                 if stopped {
                     gate.hold(true).unwrap();
@@ -836,7 +825,7 @@ mod tests {
                 "lease-lost"
             );
             assert_eq!(
-                gate.active_at(gate.lock().unwrap(), now).unwrap(),
+                gate.lock().unwrap().holder_at(now).is_some(),
                 ending == "acquire"
             );
             assert_eq!(
@@ -925,7 +914,7 @@ mod tests {
             code(person.authorize_at(person.gate.lock().unwrap(), expires)),
             "lease-lost"
         );
-        assert_eq!(gate.holder_at(gate.lock().unwrap(), expires).unwrap(), None);
+        assert_eq!(gate.lock().unwrap().holder_at(expires), None);
         gate.revoke().unwrap();
         assert!(gate.held().unwrap());
         assert_eq!(
@@ -1005,12 +994,12 @@ mod tests {
             .acquire_at(gate.lock().unwrap(), &owner('b'), Who::Agent, now, || now)
             .unwrap();
         assert_eq!(code(gate.cancel(Some(&owner('a')))), "lease-lost");
-        assert!(gate.active_at(gate.lock().unwrap(), now).unwrap());
+        assert!(gate.lock().unwrap().holder_at(now).is_some());
 
         gate.grant_at(gate.lock().unwrap(), &owner('b'), now)
             .unwrap();
         gate.cancel(Some(&owner('b'))).unwrap();
-        assert!(!gate.active_at(gate.lock().unwrap(), now).unwrap());
+        assert!(gate.lock().unwrap().holder_at(now).is_none());
     }
 
     #[test]
@@ -1072,7 +1061,7 @@ mod tests {
 
         gate.hold(true).unwrap();
         assert!(gate.held().unwrap());
-        assert!(!gate.active_at(gate.lock().unwrap(), now).unwrap());
+        assert!(gate.lock().unwrap().holder_at(now).is_none());
         assert_eq!(
             code(grant.authorize_at(grant.gate.lock().unwrap(), now)),
             "stopped",
@@ -1143,7 +1132,7 @@ mod tests {
             .unwrap();
 
         gate.close().unwrap();
-        assert!(!gate.active_at(gate.lock().unwrap(), now).unwrap());
+        assert!(gate.lock().unwrap().holder_at(now).is_none());
         assert_eq!(
             code(grant.authorize_at(grant.gate.lock().unwrap(), now)),
             "lease-lost"

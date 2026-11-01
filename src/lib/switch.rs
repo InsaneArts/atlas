@@ -49,6 +49,11 @@ fn parse_accounts(listing: &str) -> Result<Vec<(String, u32)>> {
 }
 
 /// Accounts other than this one, the helper first.
+///
+/// # Errors
+///
+/// Returns account-enumeration or identity failures instead of reporting an incomplete list
+/// as complete.
 pub fn accounts(helper: Option<u32>) -> Result<Vec<Account>> {
     let output = crate::bounded::output(
         Command::new("/usr/bin/dscl").args([".", "-list", "/Users", "UniqueID"]),
@@ -100,6 +105,11 @@ fn listed(
 
 /// The other accounts that are standard (not administrators): the ones
 /// that can be the helper.
+///
+/// # Errors
+///
+/// Returns directory-service enumeration failures; only accounts whose standard-account
+/// status is known are offered.
 pub fn standard_accounts() -> Result<Vec<Account>> {
     Ok(accounts(None)?
         .into_iter()
@@ -157,6 +167,11 @@ fn locked_within(seconds: u64) -> bool {
 /// lock screen; confirmed from the window server, not assumed. Only the
 /// lock asked for: the display is never put to sleep instead. Every caller,
 /// including switch-to and lock-only commands, must be on the console.
+///
+/// # Errors
+///
+/// Returns failures locating or invoking macOS's screen-lock operation. The caller must
+/// coordinate this physical transition with the person.
 pub fn lock_screen() -> Result<Value> {
     let lock = login_symbol(c"SACLockScreenImmediate")?;
     lock_screen_using(
@@ -327,6 +342,10 @@ fn target(account: &Account) -> Target {
 
 /// Check that the switch to `account` may go ahead now, as
 /// [`ready_to_switch`] decides, and note the check in the login timing.
+///
+/// # Errors
+///
+/// Rejects a changed, missing or unsuitable account before switching can be requested.
 pub fn check(account: &Account) -> Result<()> {
     let helper = account.helper.then_some(account.uid);
     let blockers = crate::session::blockers_now(helper);
@@ -340,6 +359,11 @@ pub fn check(account: &Account) -> Result<()> {
 
 /// Lock the screen so the person can switch to `account` from it, once
 /// [`check`] lets the switch go ahead.
+///
+/// # Errors
+///
+/// Returns account-validation or macOS switch-request failures. The caller must coordinate
+/// the physical switch with the person.
 pub fn to(account: &Account) -> Result<Value> {
     check(account)?;
     let mut reply = lock_screen()?;

@@ -575,6 +575,11 @@ fn keep_sudo_alive() {
 
 /// Request normal sudo consent and refresh it while attended setup waits.
 /// Returns an init error when sudo refuses administrator rights.
+///
+/// # Errors
+///
+/// Returns missing-terminal, cancelled-authorization or administrator-rights failures.
+/// Authorization uses the operating system's normal consent flow.
 pub fn request_administrator_rights() -> AtlasResult<()> {
     let status = Command::new("/usr/bin/sudo").arg("-v").status()?;
     if !status.success() {

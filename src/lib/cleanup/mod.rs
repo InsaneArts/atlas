@@ -52,6 +52,12 @@ pub enum Mode {
 /// See what a session's tasks left in the helper, or clean it up, as
 /// `mode` says. For an agent, another session's work is cleaned up only
 /// once that session has ended.
+///
+/// # Errors
+///
+/// Rejects unavailable scope, active foreign ownership or unreadable authority records.
+/// Apply can fail after earlier cleanup steps; receipts retain incomplete or unknown work
+/// for recovery.
 pub async fn cleanup(
     client: &Client,
     session: Option<&Key>,

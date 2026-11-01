@@ -21,6 +21,11 @@ use std::{
 };
 
 /// Install the app at `path` into the helper for the current task.
+///
+/// # Errors
+///
+/// Rejects an invalid bundle, unsafe destination or changed helper identity, and returns
+/// copy or registration failures. Unknown installation retains its ownership record.
 pub async fn install(client: &Client, path: &Path) -> Result<Value> {
     let (bundle, name) = bundle(path)?;
     let task = client.task.clone().ok_or_else(|| {

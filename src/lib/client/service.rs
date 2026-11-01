@@ -40,6 +40,12 @@ pub(super) fn require_accessibility(observation: &Observation) -> Result<()> {
 }
 
 impl Client {
+    /// Start the input service for the verified hidden helper and wait for readiness.
+    ///
+    /// # Errors
+    ///
+    /// Returns helper-identity, permission, service-start or readiness failures. Starting a
+    /// service does not settle unrelated pending work.
     pub async fn start_input(&self) -> Result<Value> {
         let _ownership = self.controller.acquire(false)?;
         self.identity().await?;

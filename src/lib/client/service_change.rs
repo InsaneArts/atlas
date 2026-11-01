@@ -28,6 +28,11 @@ impl Client {
     /// Take controller exclusion for service replacement, checking active
     /// work before waiting and again under the lock. Permission to interrupt
     /// sessions never bypasses exclusion or settles pending changes.
+    ///
+    /// # Errors
+    ///
+    /// Without explicit disruption permission, refuses active or unprovable session and job
+    /// state. Controller exclusion and pending-work rules apply even when disruption is allowed.
     pub async fn service_change(&self, recovery: bool) -> Result<Ownership> {
         self.require_service_idle_for(recovery).await?;
         let ownership = self
@@ -40,6 +45,11 @@ impl Client {
     /// Refuse service replacement while another session or background job
     /// is active, unless the person permits disruption. Callers already
     /// holding controller exclusion can check without taking it again.
+    ///
+    /// # Errors
+    ///
+    /// Without explicit disruption permission, refuses a service change while another session
+    /// or job may still be active, including observations too incomplete to prove idleness.
     pub async fn require_service_idle(&self) -> Result<()> {
         self.require_service_idle_for(false).await
     }

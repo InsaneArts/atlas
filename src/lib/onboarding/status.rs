@@ -1,6 +1,11 @@
 use super::*;
 
 /// Everything the window needs to choose its step, read fresh each time.
+///
+/// # Errors
+///
+/// Returns configuration or onboarding-state failures. Status may perform the existing
+/// receipt or listener repair; it never invents successful consent.
 pub async fn status(config_path: &Path) -> Result<Value> {
     let (uid, name, real) = me()?;
     let me = json!({"uid": uid, "name": name, "realName": real});

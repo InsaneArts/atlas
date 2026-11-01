@@ -263,6 +263,11 @@ fn usable_bundle(candidates: &[PathObservation]) -> Option<&str> {
 /// Report readiness for the selected tools and apps. `ready` means every
 /// tool ran and every app is installed; for apps it does not cover
 /// `NOT_VERIFIED`.
+///
+/// # Errors
+///
+/// Rejects invalid tool or app names and returns helper identity or discovery failures.
+/// Availability does not prove authentication or that a program can complete a task.
 pub async fn readiness(client: &Client, tools: &[String], apps: &[String]) -> Result<Value> {
     if tools.is_empty() && apps.is_empty() {
         return Err(Error::new(

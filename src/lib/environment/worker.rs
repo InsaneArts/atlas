@@ -13,6 +13,11 @@ pub(super) const MISSING: &str =
     "Nothing was copied into the helper with this ID, so there is nothing to undo";
 
 /// Internal worker; invoked through the verified helper, never through sudo.
+///
+/// # Errors
+///
+/// Rejects malformed or stale requests and invalid helper identity, paths or ownership.
+/// Partial filesystem effects remain recorded for recovery.
 pub fn worker(path: &Path, apply: bool) -> Result<Value> {
     let packet: Packet = decode(&read_limited(path, MAX_RECORD)?)?;
     if packet.version != 1 {

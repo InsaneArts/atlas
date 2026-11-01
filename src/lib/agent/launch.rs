@@ -13,6 +13,12 @@ use serde_json::{Value, json};
 use std::{path::Path, time::Instant};
 
 /// `open` inside the helper session: an app by name, files or URLs, or both.
+///
+/// # Errors
+///
+/// Returns argument, ownership, identity, launch or recording failures. A lost
+/// acknowledgement may follow a successful launch; an uncertain result must not be
+/// replayed.
 pub async fn open(
     client: &Client,
     app: Option<&str>,

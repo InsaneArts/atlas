@@ -973,7 +973,7 @@ pub(super) fn states(
             };
             said.verified = Some(true);
             said.placed = Some(Placed {
-                path: destination.clone(),
+                path: destination,
                 root: print.root.clone(),
                 present: true,
                 unchanged,

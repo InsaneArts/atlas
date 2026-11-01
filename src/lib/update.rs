@@ -61,6 +61,10 @@ fn problem(message: impl Into<String>) -> Error {
 }
 
 /// The Atlas.app this executable belongs to.
+///
+/// # Errors
+///
+/// Returns an error when Atlas is not running from the supported installed app layout.
 pub fn installed_app() -> Result<PathBuf> {
     let executable = std::env::current_exe().and_then(fs::canonicalize)?;
     app_of(&executable).ok_or_else(|| {
@@ -71,6 +75,11 @@ pub fn installed_app() -> Result<PathBuf> {
 }
 
 /// The `atlas` executable inside the installed Atlas.app.
+///
+/// # Errors
+///
+/// Returns an error when the installed app or its command executable cannot be located
+/// safely.
 pub fn installed_executable() -> Result<PathBuf> {
     Ok(installed_app()?.join(EXECUTABLE))
 }
@@ -223,6 +232,10 @@ pub struct Exclusive {
 }
 
 /// Take the update lock, or say another update is running.
+///
+/// # Errors
+///
+/// Returns update-lock storage failures or refuses a concurrent update owner.
 pub fn exclusive() -> Result<Exclusive> {
     exclusive_in(&caches()?)
 }
@@ -294,6 +307,11 @@ fn newest(source: &Source, work: &Path) -> Result<String> {
 /// Whether a newer release than this one is published, without installing
 /// anything or touching the helper: this version, the newest, and whether
 /// the newest is newer.
+///
+/// # Errors
+///
+/// Returns source, download or release-description failures. Checking does not install the
+/// offered release.
 pub fn newer(source: &Source) -> Result<Value> {
     newer_in(source, &caches()?)
 }
@@ -461,6 +479,11 @@ fn read_record(path: &Path) -> Result<Option<Value>> {
 
 /// The helper is on the new app: drop the previous bundle and the record.
 /// A previous bundle that cannot be removed is reported, not an error.
+///
+/// # Errors
+///
+/// Returns update-handover record or completion failures. An unfinished handover is not
+/// reported as a completed update.
 pub fn finished() -> Result<Value> {
     finish_record(&record_path()?)
 }
@@ -680,6 +703,12 @@ pub(crate) fn reachable_by_others(executable: &Path) -> bool {
 /// Replace the installed app with the release from `source` when it is newer
 /// (or `force`). Reports whether it changed and the versions involved. The
 /// caller holds the update lock throughout.
+///
+/// # Errors
+///
+/// Returns ownership, source, archive, signature, replacement or handover failures. Unknown
+/// effects retain the update recovery record; a verified archive alone does not prove the
+/// running service was replaced.
 pub async fn install(
     source: &Source,
     allow_unnotarized: bool,

@@ -115,6 +115,11 @@ impl Controller {
 
     /// Read one pending snapshot, waiting at most `wait` for its lock.
     /// An absent marker creates neither its directory nor its lock.
+    ///
+    /// # Errors
+    ///
+    /// Returns lock, storage or decoding failures rather than treating unreadable pending
+    /// ownership as empty.
     pub fn pending_causes_within(&self, wait: Duration) -> Result<Vec<Cause>> {
         if !self
             .marker
@@ -148,6 +153,11 @@ impl Controller {
     }
 
     /// Generations of mutations whose outcome is still unknown.
+    ///
+    /// # Errors
+    ///
+    /// Returns failures reading pending mutation records; absence is distinct from an
+    /// unreadable record.
     pub fn pending(&self) -> Result<Vec<String>> {
         let _lock = self.lock_marker()?;
         pending(&self.marker)
@@ -157,6 +167,11 @@ impl Controller {
     /// dropped or lost its claim (an uncertain failure or a crash), or the
     /// entry is not one of ours. For display only; every pending generation
     /// still blocks control until verified recovery.
+    ///
+    /// # Errors
+    ///
+    /// Returns failures reading unresolved mutation ownership. A live claim is not an
+    /// acknowledgement.
     pub fn unresolved(&self) -> Result<Vec<String>> {
         self.pending_snapshot().map(|snapshot| snapshot.unresolved)
     }
@@ -244,6 +259,11 @@ impl Controller {
     }
 
     /// Record a pending mutation this process is carrying out.
+    ///
+    /// # Errors
+    ///
+    /// Returns lock or durable-marker failures before the caller can treat a mutation as
+    /// registered.
     pub fn quarantine(&self) -> Result<Pending> {
         self.quarantine_as(&token())
     }
@@ -260,6 +280,11 @@ impl Controller {
     /// taken before the marker is written, so a marked generation is never
     /// briefly mistaken for an abandoned one. It is never refused after a
     /// signal: what settles or cleans up a change under way still records.
+    ///
+    /// # Errors
+    ///
+    /// Rejects invalid generation names and returns lock or marker-write failures. Registration
+    /// alone never acknowledges an effect.
     pub fn quarantine_as(&self, generation: &str) -> Result<Pending> {
         self.quarantine_marked(generation, Mark::Change)
     }
@@ -345,6 +370,11 @@ impl Controller {
     }
 
     /// Settle one acknowledged mutation; others stay pending.
+    ///
+    /// # Errors
+    ///
+    /// Returns lock, read or write failures while settling only the named acknowledged
+    /// generation. Other pending generations remain.
     pub fn clear_if(&self, generation: &str) -> Result<()> {
         let _lock = self.lock_marker()?;
 
@@ -371,6 +401,11 @@ impl Controller {
     /// and removes every claim file no live mutation holds, listed or not. A
     /// mutation still being carried out (an approved root run among them)
     /// stays pending: only its own end settles it.
+    ///
+    /// # Errors
+    ///
+    /// Returns lock, enumeration or storage failures during verified recovery. Live mutations
+    /// remain pending even when other records are settled.
     pub fn clear(&self) -> Result<()> {
         let _lock = self.lock_marker()?;
         let running: Vec<String> = pending(&self.marker)?

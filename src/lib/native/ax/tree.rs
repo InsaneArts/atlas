@@ -51,6 +51,11 @@ impl Visit {
 /// Depth-first elements of `pid`'s windows, its menu bar titles when it is
 /// the active app, then the menus it has open (a menu bar, status item or
 /// context menu). Closed menus are left out: nothing in them is on screen.
+///
+/// # Errors
+///
+/// Rejects an invalid process and returns accessibility-observation failures. Incomplete
+/// scans retain their truncation reasons instead of claiming complete coverage.
 pub fn elements(pid: i32, limits: Limits) -> Result<Snapshot> {
     // The system-wide element sets this process's global messaging timeout,
     // which covers every read below.

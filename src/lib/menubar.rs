@@ -32,6 +32,11 @@ pub fn started_at_login() -> bool {
 /// Start the menu bar unless it runs already: whether it did, and its
 /// private record (pid and viewer URL). One start runs at a time; a start
 /// that fails is stopped, never left half-running.
+///
+/// # Errors
+///
+/// Returns configuration, lock, spawn, readiness or cleanup failures. Cancellation keeps
+/// the startup worker responsible for its child; unknown termination retains exclusion.
 pub async fn launch(config: &Path, port: u16, output: &Path) -> Result<(bool, serde_json::Value)> {
     launch_startup(Startup {
         config: config.to_owned(),
@@ -546,6 +551,10 @@ fn development() -> Result<PathBuf> {
 
 /// The app's executable: the signed one shipped in Atlas.app, or in a
 /// development checkout the package built here.
+///
+/// # Errors
+///
+/// Returns an error when the supported Atlas app executable cannot be located or validated.
 pub fn executable() -> Result<PathBuf> {
     if let Some(app) = std::env::current_exe()
         .and_then(fs::canonicalize)
@@ -601,6 +610,11 @@ impl Login {
 
 /// Turn "Open at Login" `on` or `off`, or report its `status`, as the
 /// command line names them.
+///
+/// # Errors
+///
+/// Rejects an unsupported login state or returns failures inspecting or changing Atlas's
+/// login item.
 pub fn login(state: &str) -> Result<serde_json::Value> {
     set_login(Login::parse(state)?)
 }
@@ -661,6 +675,11 @@ pub struct Program {
 
 impl Program {
     /// The app for the configuration at `config`.
+    ///
+    /// # Errors
+    ///
+    /// Returns configuration, installed-app or executable-location failures while selecting a
+    /// viewer program.
     pub fn new(config: &Path) -> Result<Self> {
         Ok(Self {
             executable: executable()?,

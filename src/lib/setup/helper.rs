@@ -331,6 +331,12 @@ fn checked_account(
 
 /// Run setup only as the expected account, requiring and revalidating its
 /// identity and home after waits and before each mutation.
+///
+/// # Errors
+///
+/// Rejects malformed requests, changed account identity or an unsuitable login, and returns
+/// layout, ACL or launchd failures. Unknown effects remain recorded by the caller's
+/// executor claim.
 pub fn run_guarded(request: &str, guard: &Guard) -> Result<Value> {
     let request: Request = serde_json::from_str(request)?;
     run_guarded_with(
@@ -997,6 +1003,11 @@ pub(crate) async fn prepare_and_install(
 /// the new one to answer. No other controller may act meanwhile, and the
 /// restart stays pending until a new daemon is seen; if that never happens
 /// it is left for recovery, like any action of unknown outcome.
+///
+/// # Errors
+///
+/// Returns identity, ownership, restart or readiness failures. A timeout does not
+/// acknowledge unfinished helper work.
 pub async fn restart_helper(client: &Client) -> Result<()> {
     let _exclusion = client.service_change(true).await?;
     let before = client.status().await["daemon"]["pid"].clone();
@@ -1092,6 +1103,11 @@ async fn replace_job(
 /// background job replaced when another version of Atlas wrote it, else
 /// the daemon restarted when it still runs an earlier build (an update
 /// whose handover did not finish).
+///
+/// # Errors
+///
+/// Returns account-identity, installed-build, ownership or helper-refresh failures.
+/// Unacknowledged privileged changes retain their claim.
 pub async fn refresh_helper(
     client: &Client,
     helper: &setup::Account,
@@ -1148,6 +1164,11 @@ fn outdated_job(job: &Value, expected: &str) -> bool {
 
 /// Prepare and install the chosen helper under exclusion and one executor claim.
 /// Refusals and missing acknowledgements preserve the pending generation.
+///
+/// # Errors
+///
+/// Returns account, identity, installation or helper-layout preparation failures. Work
+/// already completed remains available to the recovery workflow.
 pub async fn prepare_helper(
     client: &Client,
     helper: &setup::Account,
@@ -1166,6 +1187,11 @@ pub async fn prepare_helper(
 
 /// Ready first-login preferences only while the chosen helper is logged out.
 /// An incomplete reply retains its executor-bound pending mutation.
+///
+/// # Errors
+///
+/// Returns account-identity, privileged-executor or helper-installation failures. An
+/// executor whose exit is unknown retains ownership.
 pub fn first_login_setup(
     client: &Client,
     helper: &setup::Account,

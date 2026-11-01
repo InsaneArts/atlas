@@ -65,12 +65,22 @@ pub enum Durability {
 
 /// Write `bytes` as a file only this account can read, all the way to the
 /// disk.
+///
+/// # Errors
+///
+/// Returns path, ownership, write or synchronization failures. The owned file is truncated
+/// before writing, so an I/O failure can leave partial contents; this is not atomic replacement.
 pub fn write_private(path: &Path, bytes: &[u8]) -> Result<()> {
     write_private_with(path, bytes, Durability::Disk)
 }
 
 /// Write `bytes` as a file only this account can read, as far as
 /// `durability` asks.
+///
+/// # Errors
+///
+/// Returns path, ownership, write or synchronization failures for the requested durability.
+/// Writing starts only after ownership checks, but a later failure can leave partial contents.
 pub fn write_private_with(path: &Path, bytes: &[u8], durability: Durability) -> Result<()> {
     // Emptied only once it is known to be ours.
     let mut file = OpenOptions::new()
@@ -99,6 +109,11 @@ pub fn write_private_with(path: &Path, bytes: &[u8], durability: Durability) -> 
 /// Whether a new private file can be made in `directory` right now: one is
 /// created under a name of its own and removed again. Reopening a file that
 /// is already there would prove nothing about the next one.
+///
+/// # Errors
+///
+/// Returns private-storage or temporary-file write failures. This proves a local write at
+/// the time of the probe, not later mutation authority.
 pub fn probe_write(directory: &Path) -> Result<()> {
     fs::create_dir_all(directory).map_err(|error| Error::writing(directory, error))?;
 

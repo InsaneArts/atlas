@@ -68,6 +68,11 @@ fn failed(error: dialoguer::Error) -> Error {
 }
 
 /// Yes or no. `instead` says how to answer without a terminal.
+///
+/// # Errors
+///
+/// Returns a terminal-required error without an interactive terminal, cancellation when no
+/// answer is chosen, or an input/output failure.
 pub fn confirm(question: &str, default: bool, instead: &str) -> Result<bool> {
     if !interactive() {
         return Err(needs_terminal(instead));
@@ -83,6 +88,11 @@ pub fn confirm(question: &str, default: bool, instead: &str) -> Result<bool> {
 }
 
 /// One of `items`, by index.
+///
+/// # Errors
+///
+/// Returns a terminal-required error without an interactive terminal, cancellation when no
+/// choice is made, or an input/output failure.
 pub fn select(question: &str, items: &[String], default: usize, instead: &str) -> Result<usize> {
     if !interactive() {
         return Err(needs_terminal(instead));
@@ -99,6 +109,11 @@ pub fn select(question: &str, items: &[String], default: usize, instead: &str) -
 }
 
 /// A short answer, checked by `valid` before it is accepted.
+///
+/// # Errors
+///
+/// Returns a terminal-required error, cancellation or input/output failure. Invalid answers
+/// are checked by the supplied validator before acceptance.
 pub fn input(
     question: &str,
     default: &str,

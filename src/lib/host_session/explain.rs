@@ -68,6 +68,11 @@ impl Refusal {
 /// focus-changed, and whose an unknown outcome is on uncertain. `client`
 /// is asked for only when there is a refusal to add to; `own` is this
 /// command's session, if any.
+///
+/// # Errors
+///
+/// Preserves an error already in the supplied result, adding available attribution only.
+/// Attribution lookup failures do not replace the original outcome.
 pub fn reply(
     result: Result<Value>,
     client: impl FnOnce() -> Option<Client>,

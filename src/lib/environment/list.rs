@@ -17,6 +17,11 @@ pub(super) const SHOWN: usize = 50;
 /// labelled with the session and task that made each one. Files are named
 /// by their targets, never their contents. Reads only: it takes no control
 /// and records nothing.
+///
+/// # Errors
+///
+/// Returns private-storage, identity or helper-observation failures rather than dropping
+/// unknown transaction ownership.
 pub async fn list(client: &Client, all: bool) -> Result<Value> {
     let helper = helper_name(client.config.helper_uid)?;
     list_as(client, &helper, all).await

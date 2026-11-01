@@ -12,6 +12,12 @@ pub(crate) const GRANT_TTL: std::time::Duration = std::time::Duration::from_secs
     unsafe_code,
     reason = "FFI: SessionGetInfo reports through out-pointers"
 )]
+/// Observe this process's macOS graphical-session identity and display geometry.
+///
+/// # Errors
+///
+/// Returns missing or unreadable macOS graphical-session facts, or a platform error where
+/// session identity is unsupported. This observation alone does not authorize input.
 pub fn session_info() -> Result<Value> {
     use objc2_core_graphics::{CGDisplayBounds, CGMainDisplayID};
     use objc2_security::{SessionAttributeBits, SessionGetInfo, callerSecuritySession};
@@ -54,6 +60,12 @@ pub fn session_info() -> Result<Value> {
 }
 
 #[cfg(not(target_os = "macos"))]
+/// Report that graphical-session observation is unavailable on this platform.
+///
+/// # Errors
+///
+/// Returns missing or unreadable macOS graphical-session facts, or a platform error where
+/// session identity is unsupported. This observation alone does not authorize input.
 pub fn session_info() -> Result<Value> {
     Err(Error::new(
         Code::Platform,

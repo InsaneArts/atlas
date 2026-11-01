@@ -357,6 +357,11 @@ pub(crate) fn start(pid: i32) -> Result<Start> {
 }
 
 /// `pid` now, whoever's it is; None when no such process exists.
+///
+/// # Errors
+///
+/// Returns kernel-observation failures. A nonpositive PID or absent process is represented
+/// by None.
 pub fn info(pid: i32) -> Result<Option<Info>> {
     if pid <= 0 {
         return Ok(None);
@@ -366,6 +371,11 @@ pub fn info(pid: i32) -> Result<Option<Info>> {
 }
 
 /// Every process in group `pgid`, unreaped ones included.
+///
+/// # Errors
+///
+/// Returns kernel-enumeration failures; an unreadable group is not proved empty. A
+/// nonpositive group ID returns an empty list without querying the kernel.
 pub fn group(pgid: i32) -> Result<Vec<Info>> {
     if pgid <= 0 {
         return Ok(Vec::new());

@@ -65,6 +65,11 @@ type Mark = Option<(u64, SystemTime)>;
 /// Watch until the reader goes away or the process is asked to stop, or
 /// with `once` until the first status is said; `frames`, when given, is a
 /// private folder for the newest screen.
+///
+/// # Errors
+///
+/// Returns configuration, output, listener or watch-service failures. Streaming
+/// observations do not authorize later input against a changed session.
 pub async fn watch(client: Client, port: u16, frames: Option<PathBuf>, once: bool) -> Result<()> {
     // Only a folder this watch made is removed at the end.
     let made = frames.as_ref().is_some_and(|frames| !frames.exists());

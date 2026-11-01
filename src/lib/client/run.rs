@@ -2,7 +2,7 @@
 //! step of a change whose control the caller holds, or a fixed read-only
 //! inspection, each stopped after its timeout. [`Run`] says which, and
 //! [`Client::run`] runs it.
-use super::{Client, Mutation, Verified, validate_completion};
+use super::{Client, Mutation, Verified};
 use crate::{
     control::Ownership,
     error::{Code, Error, Result},
@@ -168,6 +168,12 @@ impl Client {
     /// reaches the helper; while the command runs, its claim keeps
     /// recovery, restart, update and log-out out, and other agents may act.
     /// Its outcome is pending until it ends.
+    ///
+    /// # Errors
+    ///
+    /// Rejects invalid arguments or timeout, unavailable ownership, changed identity or an
+    /// unconfirmed reply. A failed or timed-out child can also be represented in the returned
+    /// reply; unknown execution stays pending.
     pub async fn run_beside(&self, argv: Vec<String>, timeout: Duration) -> Result<Value> {
         self.run(argv, Run::beside().within(timeout)).await
     }
@@ -175,6 +181,11 @@ impl Client {
     /// Execute argv in the verified hidden helper as a recorded mutation
     /// under controller ownership the caller already holds, stopping the
     /// command after `timeout`.
+    ///
+    /// # Errors
+    ///
+    /// Returns argument, identity, transport or completion failures under the supplied
+    /// ownership. An uncertain result does not release the caller from recovery obligations.
     pub async fn run_owned_within(
         &self,
         ownership: &Ownership,
@@ -203,7 +214,7 @@ impl Client {
         transport.timeout = transport.timeout.max(timeout + RUN_MARGIN);
 
         let reply = transport.call(request).await?;
-        validate_completion(request, &reply)?;
+        Mutation::Run.validate(request, &reply)?;
 
         accepted(reply)
     }

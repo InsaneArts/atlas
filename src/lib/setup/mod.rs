@@ -391,6 +391,12 @@ fn preview_account(helper: Option<&str>, config: Option<&Config>) -> Result<Acco
     }
 }
 
+/// Inspect the proposed helper setup without applying it.
+///
+/// # Errors
+///
+/// Returns invalid account selection, configuration, identity or inspection failures.
+/// Preview does not grant permission to apply its observations later.
 pub async fn preview(config_path: &Path, helper: Option<&str>) -> Result<Value> {
     let controller_uid = nix::unistd::getuid().as_raw();
     let controller = account_with_uid(controller_uid)?;

@@ -495,13 +495,9 @@ impl Store {
     }
 }
 
-/// Record what one command did for its session: when it acted, its verb
-/// unless it was refused, and the screenshot, copies and plans its reply
-/// names. Nothing of its arguments, text or output is kept. A command that
-/// acts nowhere in the helper records nothing.
-/// Retained for Value fixtures in `overview::tests`, `watch::tests`,
-/// `viewer::tests`, and `cleanup::tests::{adoption, sessions}`.
-pub fn note(
+/// Construct typed reply facts for session-record test fixtures.
+#[cfg(test)]
+pub(crate) fn note(
     client: &Client,
     session: &HostSession,
     kind: Kind,
@@ -512,6 +508,11 @@ pub fn note(
 }
 
 /// Record the facts decoded by `dispatch::note_outcome`.
+///
+/// # Errors
+///
+/// Returns record-lock, decoding or write failures while recording attribution. These facts
+/// do not acknowledge helper mutations.
 pub fn note_facts(
     client: &Client,
     session: &HostSession,
@@ -552,6 +553,11 @@ fn note_at(
 /// an action. Only a verified ancestor may attach or replace lifetime metadata;
 /// an existing root must be confirmed gone before replacement. Best effort,
 /// with zero-wait locks.
+///
+/// # Errors
+///
+/// Returns private-storage, record-lock or write failures. An unreadable existing session
+/// record is left intact.
 pub fn touch(client: &Client, session: &HostSession) -> Result<()> {
     Store::at(client.output_dir()?).touch(session, session.ancestor(), now_ms(), &client.controller)
 }
@@ -565,6 +571,11 @@ fn forget_rolled_back(client: &Client, kind: Kind, result: &Result<Value>) -> Re
 }
 
 /// Forget the rollback decoded by `dispatch::note_outcome`.
+///
+/// # Errors
+///
+/// Returns record-access or settlement-write failures. Only a confirmed rollback supplies
+/// global settlement facts.
 pub fn forget_rolled_back_facts(client: &Client, facts: &ReplyFacts) -> Result<()> {
     match facts.rolled_back() {
         Some((plan, _)) => Store::at(client.output_dir()?).forget_plan(plan),

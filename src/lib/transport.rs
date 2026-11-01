@@ -124,6 +124,12 @@ impl Transport {
         }
     }
 
+    /// Exchange one request with the verified socket peer within this transport's deadline.
+    ///
+    /// # Errors
+    ///
+    /// Returns peer-UID, connection, framing, timeout or reply failures. A failure after
+    /// dispatch can be uncertain; the transport never makes a lost mutation safe to replay.
     pub async fn call(&self, request: &Value) -> Result<Value> {
         self.connect()
             .await?

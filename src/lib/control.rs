@@ -342,6 +342,11 @@ impl Controller {
     /// Take control. Recovery is refused while any pending change is still
     /// being carried out; anything else while any change is pending at all,
     /// a command an agent started included.
+    ///
+    /// # Errors
+    ///
+    /// Refuses invalid storage, another controller, active commands or pending recovery as
+    /// required by the requested mode.
     pub fn acquire(&self, recovery: bool) -> Result<Ownership> {
         self.acquire_for(if recovery {
             Purpose::Recovery
@@ -372,6 +377,11 @@ impl Controller {
 
     /// [`Controller::acquire`] for an agent's own action, going on beside
     /// commands still running under their own claims.
+    ///
+    /// # Errors
+    ///
+    /// Refuses another input controller or unresolved non-command mutations. Existing
+    /// registered commands may continue beside the acquired ownership.
     pub fn acquire_beside_commands(&self) -> Result<Ownership> {
         self.acquire_for(Purpose::Change(Beside::Commands))
     }
@@ -521,6 +531,10 @@ impl Controller {
     }
 
     /// Note that the person stopped agents (`on`), or let them go on.
+    ///
+    /// # Errors
+    ///
+    /// Returns failures reading or updating this controller identity's private stop marker.
     pub fn note_stop(&self, on: bool) -> Result<()> {
         if fs::symlink_metadata(&self.directory).is_ok() {
             real_directory(&self.directory)?;
@@ -551,6 +565,11 @@ impl Controller {
 
     /// Refuse while any change is pending, a command still running
     /// included.
+    ///
+    /// # Errors
+    ///
+    /// Refuses unresolved earlier mutations or failures reading their ownership records;
+    /// unknown state is never taken as settled.
     pub fn require_known(&self) -> Result<()> {
         self.require_known_beside(Beside::Nothing)
     }

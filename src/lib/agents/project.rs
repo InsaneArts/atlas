@@ -14,6 +14,11 @@ const SECTION_END: &str = "<!-- atlas:end -->";
 /// and to its CLAUDE.md when that is a separate file that does not already
 /// include AGENTS.md. Nothing else in either file changes, and a file is
 /// replaced whole or not at all.
+///
+/// # Errors
+///
+/// Returns project-discovery, installation or file-write failures. Existing unrelated
+/// project configuration is preserved by the host-specific integration.
 pub fn project(dir: &Path) -> Result<Value> {
     if !dir.is_dir() {
         return Err(problem(format!("{} is not a folder", dir.display())));
@@ -78,6 +83,11 @@ pub fn project(dir: &Path) -> Result<Value> {
 /// Take the Atlas section out of a project's AGENTS.md and CLAUDE.md, and
 /// forget the project. Nothing else in either file changes; a file left
 /// with nothing in it was only ever the section, and goes.
+///
+/// # Errors
+///
+/// Returns project-discovery or file-update failures while removing Atlas-owned integration
+/// settings.
 pub fn forget(dir: &Path) -> Result<Value> {
     forget_in(dir, &taught_record()?)
 }

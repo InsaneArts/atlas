@@ -157,6 +157,12 @@ impl ProofObservation {
 }
 
 impl InputEpoch {
+    /// Decode a hidden graphical-session observation into an input epoch.
+    ///
+    /// # Errors
+    ///
+    /// Rejects incomplete, visible, non-graphical or invalid identity and geometry facts, and a
+    /// zero process ID. A decoded proof is a snapshot, never authority for a later session.
     pub fn from_proof(proof: &Value, process_id: u32) -> Result<Self> {
         ProofObservation::decode(proof).input_epoch(process_id)
     }
@@ -515,6 +521,13 @@ pub(crate) fn validate_target_uid(uid: u32, controller_uid: u32) -> Result<()> {
     Ok(())
 }
 
+/// Verify that a status observation describes the configured hidden graphical login.
+///
+/// # Errors
+///
+/// Rejects an invalid or non-distinct helper UID, unavailable status, a visible helper or
+/// incomplete graphical-session proof. Input availability is reported separately on the
+/// returned session.
 pub fn require_hidden(value: &Value, uid: u32) -> Result<Session> {
     Observation::decode(value).require_hidden(uid)
 }

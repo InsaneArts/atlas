@@ -150,6 +150,11 @@ async fn app_elements(client: &Client, verified: &Verified, pid: i64) -> Result<
 
 /// Accessibility elements of the target app's windows that match `filter`,
 /// at most `max` of them, listed compactly unless `full`.
+///
+/// # Errors
+///
+/// Returns identity, target-resolution, transport or accessibility-read failures. An
+/// incomplete window observation cannot establish remembered routing evidence.
 pub async fn elements(
     client: &Client,
     target: &Target,
@@ -169,6 +174,11 @@ pub async fn elements(
 /// Save a screenshot of the whole display, of `target`'s windows, or of
 /// `region`, or name the earlier file when nothing changed (unless
 /// `new_file`). The app is found as `elements` finds it.
+///
+/// # Errors
+///
+/// Rejects conflicting target and region choices, unavailable targets, invalid geometry,
+/// and capture or local-file failures. A read failure does not imply that input was sent.
 pub async fn screenshot(
     client: &Client,
     target: Option<&Target>,

@@ -51,11 +51,22 @@ fn shared_folder(folder: &Path) -> Result<()> {
 }
 
 impl Client {
+    /// Install or refresh the shared helper command from this executable.
+    ///
+    /// # Errors
+    ///
+    /// Returns controller, source-file, ownership or filesystem failures. Refuses a shared
+    /// destination that another account can modify.
     pub fn install(&self) -> Result<Value> {
         self.install_probe(false)
     }
 
     /// Repair the probe under recovery exclusion without settling previous work.
+    ///
+    /// # Errors
+    ///
+    /// Returns recovery-exclusion, installed-app or filesystem failures. Repairing the
+    /// executable never acknowledges earlier pending mutations.
     pub fn bootstrap_probe(&self) -> Result<Value> {
         self.install_probe(true)
     }

@@ -90,6 +90,11 @@ fn record_selected(
 /// The settings and the standard helper account they name: chosen (or
 /// created) when there are none or their account is gone, retaining its
 /// permanent identity throughout configuration and setup.
+///
+/// # Errors
+///
+/// Propagates account-choice, configuration, identity-record and filesystem failures.
+/// Configuration written earlier in the workflow can remain for supported recovery.
 pub fn configure_helper(
     config_path: &Path,
     mut choose_helper: impl FnMut() -> Result<(setup::Account, setup::identity::Identity)>,

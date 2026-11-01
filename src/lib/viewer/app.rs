@@ -33,6 +33,11 @@ impl Viewer {
 /// `ready` receives the redacted startup record after the app launches and its
 /// private record is saved, before accepting requests. Binding, launching or
 /// recording failures are returned without reporting readiness.
+///
+/// # Errors
+///
+/// Returns configuration, listener, app-launch or service failures. Disconnect and shutdown
+/// cleanup retain unknown input outcomes and never acknowledge them from a timeout.
 pub async fn serve(
     client: Client,
     port: u16,
@@ -162,6 +167,11 @@ pub(crate) async fn open_viewer(config: &Path, port: u16, output: &Path) -> Resu
 }
 
 /// [`open_viewer`], saying that the viewer is open.
+///
+/// # Errors
+///
+/// Returns viewer configuration, launch or readiness failures. A failed launch can leave
+/// owned work requiring cleanup.
 pub async fn monitor(config: &Path, port: u16, output: &Path) -> Result<Value> {
     open_viewer(config, port, output).await?;
     Ok(json!({"ok": true, "viewer": "open"}))
@@ -169,6 +179,11 @@ pub async fn monitor(config: &Path, port: u16, output: &Path) -> Result<Value> {
 
 /// Render the menu bar panel, fed by a private viewer on a free port, in the
 /// light and dark appearances. For visual checks; it never takes control.
+///
+/// # Errors
+///
+/// Returns viewer, app-launch, timeout or rendering failures. A successful process exit
+/// alone does not prove a later interactive viewer works.
 pub async fn render_menubar(
     client: Client,
     program: &crate::menubar::Program,

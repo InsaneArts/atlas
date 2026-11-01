@@ -1,6 +1,6 @@
 use atlas::{
     actions,
-    client::{Client, Size, png_dimensions, validate_completion},
+    client::{Client, Size, png_dimensions},
     config::Config,
     control::{Controller, Lease},
     error::Code,
@@ -395,35 +395,6 @@ fn unicode_and_supported_shortcuts_validate() {
             &display()
         )
         .is_ok()
-    );
-}
-
-#[test]
-fn signal_timeout_and_exit_are_distinct_completed_outcomes() {
-    let request = json!({"op":"run"});
-
-    for reply in [
-        json!({"ok":true,"exitCode":0,"timedOut":false,"signal":null}),
-        json!({"ok":true,"exitCode":null,"timedOut":false,"signal":"SIGTERM"}),
-        json!({"ok":true,"exitCode":null,"timedOut":true,"signal":"SIGKILL"}),
-    ] {
-        validate_completion(&request, &reply).unwrap();
-    }
-
-    for reply in [
-        json!({"ok":true}),
-        json!({"ok":true,"exitCode":null,"timedOut":false,"signal":15}),
-    ] {
-        assert!(validate_completion(&request, &reply).unwrap_err().uncertain);
-    }
-
-    assert!(
-        validate_completion(
-            &json!({"op":"input","actions":[{}]}),
-            &json!({"ok":true,"performed":0})
-        )
-        .unwrap_err()
-        .uncertain
     );
 }
 

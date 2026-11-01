@@ -18,6 +18,10 @@ pub(crate) const SETTINGS: &str = ".config/atlas.toml";
 
 /// Where `atlas init` keeps the configuration: `~/.config/atlas.toml`.
 /// Screenshots, logs and records stay in `~/Library/Application Support/Atlas`.
+///
+/// # Errors
+///
+/// Returns a configuration error when this account has no usable home directory.
 pub fn installed_path() -> Result<PathBuf> {
     Ok(home()?.join(SETTINGS))
 }
@@ -102,6 +106,12 @@ impl Config {
             )
     }
 
+    /// Load and validate settings, resolving configured paths beside the settings file.
+    ///
+    /// # Errors
+    ///
+    /// Returns a missing-settings or invalid-settings error for unreadable files, malformed
+    /// TOML, unknown keys, invalid helper identity or unusable paths.
     pub fn load(path: &Path) -> Result<Self> {
         let path = fs::canonicalize(path).map_err(|error| {
             // Only a path with nothing there is "not set up"; a dangling link
@@ -212,6 +222,11 @@ impl Config {
     }
 
     /// The configuration as the TOML a user would save.
+    ///
+    /// # Errors
+    ///
+    /// Returns a configuration error if the current settings cannot be serialized as TOML. This
+    /// does not write a settings file.
     pub fn to_toml(&self) -> Result<String> {
         toml::to_string(self).map_err(|error| Error::new(Code::Config, error.to_string()))
     }

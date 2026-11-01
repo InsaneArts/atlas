@@ -44,6 +44,11 @@ pub enum Scope<'a> {
 /// What a host session did, or every session's, as `scope` says: read
 /// from the activity log, the session records, the copy folders and the
 /// marker; nothing is changed. At most `limit` recent actions are listed.
+///
+/// # Errors
+///
+/// Returns invalid scope or private-record access failures. Unreadable records do not
+/// establish that a session has no remaining work.
 pub fn list(
     client: &Client,
     own: Option<&HostSession>,

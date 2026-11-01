@@ -76,6 +76,11 @@ fn validate(profile: &Profile) -> Result<()> {
 
 /// Freeze only the exported variables explicitly named by the profile. Commands
 /// launched with `environment run` consume them; existing GUI apps do not.
+///
+/// # Errors
+///
+/// Returns profile parsing, discovery, access-validation or staging failures. Applied
+/// selections can retain incomplete transactions and require recovery.
 pub async fn sync(client: &Client, path: &Path, apply: bool) -> Result<Value> {
     let path = fs::canonicalize(path)?;
     let profile = load(&path)?;

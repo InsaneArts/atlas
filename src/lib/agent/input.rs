@@ -119,6 +119,11 @@ pub(super) fn type_parts(batch: &str) -> Vec<String> {
 /// between batches, and a helper that restarts midway is refused rather
 /// than typed into. A signal's stop ends it before the next batch, with
 /// the same report.
+///
+/// # Errors
+///
+/// Rejects invalid text, unavailable control or a changed target. A later failure may
+/// follow earlier text chunks; retain uncertainty and do not replay the text.
 pub async fn type_text(client: &Client, text: &str, expected: Option<&Expected>) -> Result<Value> {
     let batches = type_batches(text)?;
 
@@ -327,6 +332,11 @@ pub(super) fn stopped_typing(
 }
 
 /// Keys pressed in order, as one batch; an unknown key is named.
+///
+/// # Errors
+///
+/// Rejects empty or unsupported key combinations. This only constructs a batch and sends no
+/// input.
 pub fn keys(keys: &[String]) -> Result<Value> {
     if let Some(unknown) = keys.iter().find(|key| !crate::actions::valid_key(key)) {
         return Err(Error::new(

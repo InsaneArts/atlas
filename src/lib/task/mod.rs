@@ -84,6 +84,11 @@ impl Task {
     /// The task `name` names of a command from `session`; none without a
     /// host session, whatever the name: ATLAS_TASK alone makes no session.
     /// A name that is not text is no plainer than any other: a usage error.
+    ///
+    /// # Errors
+    ///
+    /// Rejects a non-plain task name when a host session supplies task ownership. This resolves
+    /// identity without acknowledging or changing helper work.
     pub fn resolve(session: Option<&HostSession>, name: Option<&OsStr>) -> Result<Option<Self>> {
         let Some(session) = session else {
             return Ok(None);
@@ -215,6 +220,11 @@ pub(crate) fn settle_rolled_back(
 }
 
 /// Settle the plan and kept outcome decoded by `dispatch::note_outcome`.
+///
+/// # Errors
+///
+/// Returns task-record lock or write failures while settling a confirmed rollback. A
+/// storage failure is not successful settlement.
 pub fn settle_rolled_back_facts(client: &Client, facts: &ReplyFacts) -> Result<()> {
     let Some((plan_id, state)) = facts.rolled_back() else {
         return Ok(());

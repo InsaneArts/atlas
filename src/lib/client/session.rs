@@ -49,6 +49,12 @@ where
 }
 
 impl Client {
+    /// Restart the verified helper while retaining exclusion and pending-work ownership.
+    ///
+    /// # Errors
+    ///
+    /// Returns admission, permission, service or post-restart identity failures. Unacknowledged
+    /// cleanup remains pending; a timeout is not proof that restart completed.
     pub async fn restart(&self) -> Result<Value> {
         let _ownership = self.service_change(true).await?;
         let before = self.identity().await?;
@@ -189,6 +195,11 @@ impl Client {
     /// it may still happen (an app holding it up, an unconfirmed request).
     /// `force` ends the session without asking the apps, and may run with
     /// outcomes still unknown: it is the person's way out of one.
+    ///
+    /// # Errors
+    ///
+    /// Returns ownership, identity, job-stop or logout failures. Unknown logout or cleanup
+    /// outcomes stay pending and must not be retried blindly.
     pub async fn logout(&self, force: bool) -> Result<Value> {
         let ownership = self.controller.acquire(force)?;
         self.logout_held(&ownership, force).await

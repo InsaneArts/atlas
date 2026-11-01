@@ -89,6 +89,11 @@ fn lookup(key: Lookup) -> Result<Option<Account>> {
 }
 
 /// Resolve an account through directory services by short name.
+///
+/// # Errors
+///
+/// Rejects a name containing NUL and returns directory-service lookup errors. A missing
+/// account is represented by None.
 pub fn account_named(name: &str) -> Result<Option<Account>> {
     let name = CString::new(name)
         .map_err(|_| Error::new(Code::Setup, "Account names cannot contain NUL"))?;
@@ -96,6 +101,11 @@ pub fn account_named(name: &str) -> Result<Option<Account>> {
 }
 
 /// Resolve an account through directory services by UID.
+///
+/// # Errors
+///
+/// Returns directory-service lookup errors. A missing UID is represented by None rather
+/// than an invented account.
 pub fn account_with_uid(uid: u32) -> Result<Option<Account>> {
     lookup(Lookup::Uid(uid))
 }
@@ -201,6 +211,11 @@ pub(crate) fn problem(message: impl Into<String>) -> Error {
 }
 
 /// Whether `name` can be a new account's short name.
+///
+/// # Errors
+///
+/// Rejects names outside the supported account-name syntax or length without performing
+/// account changes.
 pub fn validate_account_name(name: &str) -> std::result::Result<(), String> {
     if name.chars().any(char::is_whitespace) {
         return Err("Account names can't have spaces.".into());
@@ -332,6 +347,11 @@ fn available_uid(
 
 /// Create the selected standard account under claims for every affected UID.
 /// Errors preserve incomplete creation and orphan cleanup for recovery.
+///
+/// # Errors
+///
+/// Rejects an invalid or conflicting account name and returns privilege, account-creation
+/// or verification failures. Never retries an unknown creation outcome blindly.
 pub fn create_helper(name: &str, full_name: &str) -> Result<Account> {
     let orphans = crate::session::sessions(None)
         .map(|sessions| sessions.leftover_uids(crate::session::Kind::Orphan))
@@ -354,6 +374,11 @@ pub fn create_helper(name: &str, full_name: &str) -> Result<Account> {
 /// Root checks each user ID again itself; only a login the helper's user ID
 /// (`uid`, its account as just recorded: `helper`) was given after is closed
 /// while its account exists, and then without killing anything.
+///
+/// # Errors
+///
+/// Returns identity, ownership or cleanup failures for the selected account's Atlas
+/// resources. Unrelated or unverifiable resources are retained.
 pub fn close_leftovers(
     uid: u32,
     helper: Option<&crate::setup::identity::Identity>,

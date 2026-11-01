@@ -189,6 +189,11 @@ pub(super) fn unconfirmed(mut error: Error, names: &[String]) -> Error {
 /// Quit apps in the helper: one by name (every process of it), or with
 /// [`Closing::All`] every app that is not part of macOS or Atlas. Waits
 /// until they are gone, then removes the copies `open` made of them.
+///
+/// # Errors
+///
+/// Returns selection, ownership, identity or close failures. A refusal can follow earlier
+/// completed closes; unknown outcomes retain their recovery records.
 pub async fn close(client: &Client, closing: Closing<'_>) -> Result<Value> {
     close_in(client, closing, Path::new(handoff::ROOT)).await
 }

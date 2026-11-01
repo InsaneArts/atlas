@@ -20,6 +20,12 @@ use serde_json::Value;
 /// unless it lands where expected: text and keys while the app, and the
 /// window and field when named, have keyboard focus, pointer actions where
 /// the app's own window, or the named one, is the top one.
+///
+/// # Errors
+///
+/// Returns admission, identity, target, batch-validation or execution failures. An
+/// uncertain outcome may include delivered input and must be recovered rather than
+/// replayed.
 pub async fn act(client: &Client, expected: Option<&Expected>, actions: &Value) -> Result<Value> {
     let decoded = actions::Batch::decode(actions);
     let point = match &decoded {
@@ -147,6 +153,11 @@ impl Expected {
 
     /// The expectation of `app`, `window` and `field`, as many as are
     /// named; None when none is. A field needs the app or window it is in.
+    ///
+    /// # Errors
+    ///
+    /// Returns a usage error when a field is named without an app or window. Identity,
+    /// window and field validation happens during target resolution, not construction.
     pub fn new(
         app: Option<Target>,
         window: Option<i64>,

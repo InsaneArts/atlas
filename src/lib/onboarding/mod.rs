@@ -329,6 +329,11 @@ fn choosable(name: &str, controller: u32) -> Result<setup::Account> {
 /// answers there for this account), then the shared executable, the request
 /// Atlas in the helper reads, and the settings. Settings for another helper
 /// in use are never replaced.
+///
+/// # Errors
+///
+/// Rejects an unsuitable or changed account and returns configuration or identity-record
+/// failures.
 pub fn choose(config_path: &Path, name: &str) -> Result<Value> {
     let (uid, _, _) = me()?;
     let helper = choosable(name, uid)?;
@@ -384,8 +389,8 @@ fn use_helper(
                 previous.clone()
             } else {
                 Config {
-                    socket_path: fresh.socket_path.clone(),
-                    input_socket: fresh.input_socket.clone(),
+                    socket_path: fresh.socket_path,
+                    input_socket: fresh.input_socket,
                     ..previous.clone()
                 }
             }
@@ -597,6 +602,11 @@ pub(crate) fn controllers_of(uids: &[u32]) -> Result<Vec<Controller>> {
 /// Close the logins deleted accounts left open, the one the helper's user
 /// ID was given after it among them, under the person's one approval; then
 /// check, twice, that they are gone. Root checks each user ID again itself.
+///
+/// # Errors
+///
+/// Returns account-identity or leftover-cleanup failures. Unrelated or unverifiable
+/// resources are not removed.
 pub fn close_leftovers(config_path: &Path) -> Result<Value> {
     let helper = settings(config_path)?.map(|config| config.helper_uid);
     let sessions = crate::session::sessions(helper)
@@ -637,6 +647,11 @@ pub fn close_leftovers(config_path: &Path) -> Result<Value> {
 /// desktop up for minutes, off screen, and with nothing answering at its
 /// socket. Root checks it again itself. Control of the helper is held
 /// throughout, so no other controller starts there meanwhile.
+///
+/// # Errors
+///
+/// Returns identity, active-work or helper-close failures. Unknown cleanup is retained
+/// rather than acknowledged.
 pub fn close_helper(config_path: &Path) -> Result<Value> {
     let config = Config::load(config_path)?;
     let client = Client::new(config.clone())?;
@@ -824,6 +839,11 @@ fn not_closed(refusal: Refusal, uids: &[u32]) -> Error {
 /// answered, was never prepared for this account and has no setup recorded.
 /// The settings stay; choosing another account replaces them. No account is
 /// deleted; the reply says whether the helper's login is still open.
+///
+/// # Errors
+///
+/// Rejects identity or retained-work conflicts and returns failures removing Atlas-owned
+/// onboarding records.
 pub fn forget(config_path: &Path) -> Result<Value> {
     let (uid, _, _) = me()?;
     let config = Config::load(config_path)?;
@@ -866,6 +886,11 @@ pub fn forget(config_path: &Path) -> Result<Value> {
 /// file. macOS asks for one approval, under which the account is also
 /// readied for its first login (see `as_root`); on a macOS without that
 /// approval, sysadminctl asks for it in its own dialog instead.
+///
+/// # Errors
+///
+/// Rejects invalid account names or an unsuitable account and returns privileged
+/// account-creation or identity-record failures.
 pub fn create(config_path: &Path, name: &str, full_name: &str) -> Result<Value> {
     setup::validate_account_name(name).map_err(problem)?;
 
@@ -969,6 +994,11 @@ fn created(name: &str, detail: Option<String>) -> Result<setup::Account> {
 /// or changing jobs. The requesting account drives setup. Only for the
 /// account the person was shown (`controller_uid`, `controller_name`): a
 /// request changed meanwhile is refused.
+///
+/// # Errors
+///
+/// Rejects an invalid controller identity and returns failures preparing or carrying out
+/// the onboarding acceptance workflow.
 pub fn accept(controller_uid: u32, controller_name: &str) -> Result<Value> {
     let (uid, my_name, _) = me()?;
 
@@ -994,6 +1024,11 @@ fn expected_agent(layout: &Layout, controller_uid: u32) -> Result<Agent> {
 }
 
 /// Mark (`true`) or clear the onboarding window being open in this account.
+///
+/// # Errors
+///
+/// Returns failures resolving the current home or writing the open-window marker.
+/// Clearing an absent or unreadable marker is best effort; this does not open a window.
 pub fn window(open: bool) -> Result<Value> {
     let path = home()?.join(setup::helper::ROOT).join(WINDOW_MARKER);
 
@@ -1045,6 +1080,11 @@ fn read_text(path: &Path, limit: u64) -> Option<String> {
 
 /// Back in the person's account: start input, record and check the setup
 /// end to end, as `atlas init` does.
+///
+/// # Errors
+///
+/// Returns configuration, helper-readiness, permission or finalization failures. Missing
+/// consent or incomplete setup never counts as finished.
 pub async fn finish(config_path: &Path) -> Result<Value> {
     let config = Config::load(config_path)?;
     let client = Client::new(config.clone())?;
@@ -1091,6 +1131,10 @@ pub async fn finish(config_path: &Path) -> Result<Value> {
 
 /// Open the menu bar at login, or not, as the person chose. As with `atlas
 /// init`, only for the default settings, the ones the login item uses.
+///
+/// # Errors
+///
+/// Returns configuration, helper-identity or login-item update failures.
 pub fn login(config_path: &Path, on: bool) -> Result<Value> {
     let default = || {
         config::installed_path()

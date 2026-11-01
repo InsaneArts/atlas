@@ -117,6 +117,11 @@ async fn release(held: &Held) {
 }
 
 /// Serve requests from standard input until it closes.
+///
+/// # Errors
+///
+/// Returns stream or protocol-service failures. Individual tool refusals are returned
+/// through MCP, and disconnect cleanup retains unknown mutation outcomes.
 pub async fn serve(
     client: Client,
     config: PathBuf,

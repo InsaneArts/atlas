@@ -175,6 +175,11 @@ impl AppRow {
 impl Client {
     /// The helper's running apps, or why they could not be read. Read
     /// failures are certain; malformed rows never mean nothing is running.
+    ///
+    /// # Errors
+    ///
+    /// Returns helper identity, transport or refusal errors. Malformed app rows are a protocol
+    /// failure, never evidence that no applications are running.
     pub async fn apps(&self) -> Result<Value> {
         self.running_apps().await.map(AppList::project)
     }
