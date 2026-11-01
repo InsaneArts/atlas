@@ -64,7 +64,8 @@ struct CardScroll<Content: View>: View {
 
   /// Scrolls the selected row into view clear of the small screen, only as far as it must
   /// (``CardScrollRoom/revealAnchor(row:viewport:clearance:)``): at once where it stands, else once it reports where
-  /// it stands, scrolling a row the list has not built yet to the edge first, which builds it.
+  /// it stands, scrolling a row the list has not built yet to the edge first, which builds it. Geometry keeps
+  /// correcting the step until the row stands clear, so a lazy list's later layout cannot consume the reveal early.
   ///
   /// - Parameters:
   ///   - row: The selected row's identity.
@@ -77,7 +78,10 @@ struct CardScroll<Content: View>: View {
     let stood = selection.place(row) { frame in
       guard
         let anchor = CardScrollRoom.revealAnchor(row: frame, viewport: selection.viewport, clearance: clearance)
-      else { return }
+      else {
+        selection.cancelPlacement()
+        return
+      }
       // Out of the layout pass that reported the row, as a scroll may lay the list out again.
       selection.queue(row, using: placement) { scroll.scrollTo(row, anchor: anchor) }
     }

@@ -11,12 +11,12 @@ final class CardScrollSelection {
   private(set) var frame: CGRect?
   /// The list's visible height.
   var viewport: CGFloat = .zero
-  /// The row a step waits to place, and how to place it once it stands; nil while no step waits.
+  /// The requested row and its correction, retained until geometry confirms the reveal or the step is cancelled.
   private var waiting: (row: String, place: @MainActor (CGRect) -> Void)?
   /// A placement deferred until after the layout pass that reported the row.
   private var queued: (row: String, task: Task<Void, Never>)?
 
-  /// Notes where the selected row stands now, and places it if a step was waiting for it to stand.
+  /// Notes where the selected row stands now and corrects a reveal that has not yet reached its destination.
   ///
   /// - Parameters:
   ///   - id: Its identity.
@@ -25,7 +25,6 @@ final class CardScrollSelection {
     self.id = id
     self.frame = frame
     guard let waiting, waiting.row == id else { return }
-    self.waiting = nil
     waiting.place(frame)
   }
 
@@ -68,7 +67,7 @@ final class CardScrollSelection {
     queued = (row, placement.schedule(place))
   }
 
-  /// Places `row` with `place` where it stands now, or as soon as it reports where it stands.
+  /// Places `row` where it stands now and on subsequent geometry reports until `cancelPlacement()` ends the reveal.
   ///
   /// - Parameters:
   ///   - row: The row's identity.
@@ -77,11 +76,11 @@ final class CardScrollSelection {
   @discardableResult
   func place(_ row: String, with place: @escaping @MainActor (CGRect) -> Void) -> Bool {
     cancelPlacement()
+    waiting = (row, place)
     if id == row, let frame {
       place(frame)
       return true
     }
-    waiting = (row, place)
     return false
   }
 }
