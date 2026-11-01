@@ -390,11 +390,17 @@ impl Client {
                 let error = match result {
                     Ok(_) => Error::new(
                         Code::Uncertain,
-                        "Input finished but native release was not confirmed",
+                        format!(
+                            "Input finished but native release was not confirmed: {}",
+                            cleanup.error
+                        ),
                     ),
                     Err(error) => Error::new(
                         Code::Uncertain,
-                        format!("{} Native release was not confirmed either.", error.error),
+                        format!(
+                            "{} Native release was not confirmed either: {}",
+                            error.error, cleanup.error
+                        ),
                     ),
                 };
                 return Err(error.uncertain());
