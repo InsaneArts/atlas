@@ -62,6 +62,14 @@ atlas doctor --json
 
 Proceed with helper work when `ready` is true. `update --version TAG` chooses a specific release, and `--force` allows reinstalling a release that is not newer. These are deliberate version-management choices, not fixes for missing permissions or a logged-out helper.
 
+Locally built update bundles must also be readable by the helper account.
+`cargo xtask dist` gives its staged app directories and executable files mode
+`0755`, and non-executable resources mode `0644`, independently of the build's
+umask or cached compiler output modes. It includes the signing-generated files
+and verifies the signature afterward. This applies only to the staged public app
+bundle, not private configuration, evidence or recovery records. Links and other
+non-regular bundle entries are refused rather than followed during this step.
+
 If the app was replaced but moving the helper onto it failed, Atlas keeps a handover record and reports the failed step. Resolve that cause and follow the reported instruction to run `atlas update` again. Do not delete the handover record or staged app to make the error disappear. Never bypass signature checks to get an update installed.
 
 ## Repair without reinstalling

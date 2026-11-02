@@ -12,6 +12,7 @@ use atlas::{
 use sha2::{Digest, Sha256};
 use std::{
     env, fs,
+    os::unix::fs::PermissionsExt,
     path::{Path, PathBuf},
     process::{Command, ExitCode},
 };
@@ -582,6 +583,39 @@ fn assemble_resources(root: &Path, app: &Path, stage: &Path) -> Result<()> {
     Ok(())
 }
 
+/// A distributed app must be readable across logins, independently of the build
+/// umask and cached compiler output modes. Only this fresh staged bundle changes.
+fn bundle_permissions(app: &Path) -> Result<()> {
+    let metadata = fs::symlink_metadata(app)
+        .map_err(|error| format!("Inspect bundle entry {}: {error}", app.display()))?;
+    let mode = if metadata.is_dir() {
+        0o755
+    } else if metadata.is_file() {
+        if metadata.permissions().mode() & 0o111 != 0 {
+            0o755
+        } else {
+            0o644
+        }
+    } else {
+        return Err(format!(
+            "Bundle entry {} is not a plain file or directory",
+            app.display()
+        ));
+    };
+    fs::set_permissions(app, fs::Permissions::from_mode(mode))
+        .map_err(|error| format!("Set bundle permissions on {}: {error}", app.display()))?;
+    if metadata.is_dir() {
+        let entries = fs::read_dir(app)
+            .map_err(|error| format!("Read bundle directory {}: {error}", app.display()))?;
+        for entry in entries {
+            let entry = entry
+                .map_err(|error| format!("Read bundle entry in {}: {error}", app.display()))?;
+            bundle_permissions(&entry.path())?;
+        }
+    }
+    Ok(())
+}
+
 /// Sign inside out and verify before any build is published.
 fn sign_and_verify(options: &Options, app: &Path, upload: &Path) -> Result<()> {
     // Inside out: the Swift executable carries its own identifier, then the app
@@ -600,6 +634,9 @@ fn sign_and_verify(options: &Options, app: &Path, upload: &Path) -> Result<()> {
         &app.join("Contents/MacOS").join(APP_EXECUTABLE),
     )?;
     sign(None, app)?;
+    // Signing may create a private _CodeSignature directory under a restrictive
+    // umask. Normalize it too, then verify the unchanged signed contents.
+    bundle_permissions(app)?;
 
     exec(
         "/usr/bin/codesign",
@@ -677,6 +714,70 @@ mod tests {
                 .unwrap_err()
                 .contains("unknown")
         );
+    }
+
+    #[test]
+    fn bundle_permissions_make_fresh_and_cached_artifacts_readable() {
+        let directory = tempfile::tempdir().unwrap();
+        let app = directory.path().join("Atlas.app");
+        let folders = [
+            "",
+            "Contents",
+            "Contents/MacOS",
+            "Contents/_CodeSignature",
+            "Contents/Resources",
+            "Contents/Resources/agents",
+        ];
+        for folder in folders {
+            let path = app.join(folder);
+            fs::create_dir_all(&path).unwrap();
+            fs::set_permissions(path, fs::Permissions::from_mode(0o700)).unwrap();
+        }
+        let files = [
+            ("Contents/MacOS/atlas", 0o700, 0o755),
+            ("Contents/MacOS/AtlasApp", 0o700, 0o755),
+            ("Contents/Resources/agents/run.sh", 0o700, 0o755),
+            ("Contents/Info.plist", 0o600, 0o644),
+            ("Contents/_CodeSignature/CodeResources", 0o600, 0o644),
+        ];
+        for (name, before, _) in files {
+            let path = app.join(name);
+            fs::write(&path, b"unchanged bundle content").unwrap();
+            fs::set_permissions(path, fs::Permissions::from_mode(before)).unwrap();
+        }
+        bundle_permissions(&app).unwrap();
+        for folder in folders {
+            assert_eq!(
+                fs::metadata(app.join(folder)).unwrap().permissions().mode() & 0o7777,
+                0o755
+            );
+        }
+        for (name, _, after) in files {
+            let path = app.join(name);
+            assert_eq!(
+                fs::metadata(&path).unwrap().permissions().mode() & 0o7777,
+                after,
+                "{name}"
+            );
+            assert_eq!(fs::read(path).unwrap(), b"unchanged bundle content");
+        }
+    }
+
+    #[test]
+    fn bundle_permissions_refuse_links_without_changing_their_targets() {
+        let directory = tempfile::tempdir().unwrap();
+        let app = directory.path().join("Atlas.app");
+        fs::create_dir(&app).unwrap();
+        let target = directory.path().join("not-bundled");
+        fs::write(&target, b"private build evidence").unwrap();
+        fs::set_permissions(&target, fs::Permissions::from_mode(0o600)).unwrap();
+        std::os::unix::fs::symlink(&target, app.join("link")).unwrap();
+        assert!(bundle_permissions(&app).is_err());
+        assert_eq!(
+            fs::metadata(&target).unwrap().permissions().mode() & 0o7777,
+            0o600
+        );
+        assert_eq!(fs::read(target).unwrap(), b"private build evidence");
     }
 
     #[test]
