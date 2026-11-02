@@ -16,7 +16,7 @@ name = "atlas"
 path = "src/bin/main.rs"
 
 [dependencies]
-axum = "0.8"
+axum = { version = "0.8", default-features = false, features = ["http1", "json", "tokio"] }
 base64 = "0.22"
 clap = { version = "4.6", features = ["derive", "env"] }
 console = "0.16"
@@ -24,7 +24,7 @@ dialoguer = { version = "0.12", default-features = false }
 fs2 = "0.4"
 hyper = { version = "1", features = ["http1", "server"] }
 hyper-util = { version = "0.1", features = ["tokio"] }
-indicatif = "0.18"
+indicatif = { version = "0.18", default-features = false, features = ["unicode-width"] }
 libc = "0.2"
 nix = { version = "0.31", features = ["dir", "fs", "poll", "process", "signal", "term", "user"] }
 rand = { version = "0.9", default-features = false, features = ["thread_rng"] }
@@ -51,8 +51,8 @@ objc2 = "0.6.5"
 objc2-app-kit = { version = "0.3.2", default-features = false, features = ["std", "NSImage", "NSRunningApplication", "NSWorkspace", "libc"] }
 objc2-foundation = { version = "0.3.2", default-features = false, features = ["std", "NSEnumerator", "NSString", "NSUserDefaults"] }
 objc2-application-services = { version = "0.3.2", default-features = false, features = ["std", "HIServices", "AXError", "AXUIElement", "AXValue", "libc"] }
-objc2-core-foundation = { version = "0.3.2", default-features = false, features = ["std", "CFArray", "CFBase", "CFCGTypes", "CFData", "CFDictionary", "CFError", "CFNotificationCenter", "CFNumber", "CFRunLoop", "CFString", "CFURL"] }
-objc2-core-graphics = { version = "0.3.2", default-features = false, features = ["std", "CGBase", "CGBitmapContext", "CGColorSpace", "CGContext", "CGDirectDisplay", "CGEvent", "CGEventSource", "CGEventTypes", "CGImage", "CGRemoteOperation", "CGSession", "CGWindow"] }
+objc2-core-foundation = { version = "0.3.2", default-features = false, features = ["std", "CFArray", "CFCGTypes", "CFData", "CFDictionary", "CFError", "CFNotificationCenter", "CFNumber", "CFRunLoop", "CFString", "CFURL"] }
+objc2-core-graphics = { version = "0.3.2", default-features = false, features = ["std", "CGBitmapContext", "CGColorSpace", "CGContext", "CGDirectDisplay", "CGEvent", "CGEventSource", "CGEventTypes", "CGImage", "CGRemoteOperation", "CGSession", "CGWindow"] }
 objc2-image-io = { version = "0.3.2", default-features = false, features = ["std", "CGImageDestination", "CGImageSource", "objc2-core-graphics"] }
 objc2-security = { version = "0.3.2", default-features = false, features = ["std", "AuthSession", "Authorization"] }
 oslog = { version = "0.2", default-features = false }
