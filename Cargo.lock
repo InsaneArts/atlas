@@ -1284,11 +1284,7 @@ dependencies = [
  "atlas-cli",
  "atlas-client",
  "atlas-core",
- "proc-macro2",
- "quote",
- "serde_json",
  "sha2",
- "syn 2.0.119",
  "tempfile",
 ]
 

@@ -233,8 +233,7 @@ Run `cargo fmt --all --check`,
 `node scripts/check-swift.mjs` after relevant changes. The pinned checker install
 is in `CONTRIBUTING.md`. Build both native targets for target-sensitive changes.
 
-`cargo xtask quality --report` inventories review candidates; counts are not
-defect counts or acceptance proof. Keep private inventories, measurements and
+Keep private inventories, measurements and
 investigation evidence outside maintained source. Never ship a generated ledger
 or make CI depend on a private ledger. Compare runtime behavior and agent cost
 against a matching same-day baseline, preserving raw evidence and failed attempts.

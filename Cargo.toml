@@ -47,13 +47,10 @@ objc2-foundation = { version = "0.3.2", default-features = false }
 objc2-image-io = { version = "0.3.2", default-features = false }
 objc2-security = { version = "0.3.2", default-features = false }
 oslog = { version = "0.2", default-features = false }
-proc-macro2 = "1"
-quote = "1"
 rand = { version = "0.9", default-features = false }
 serde = "1"
 serde_json = "1"
 sha2 = "0.10"
-syn = "2"
 tempfile = "3"
 tokio = "1"
 toml = "1.1"
