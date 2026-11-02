@@ -1,0 +1,43 @@
+[package]
+name = "atlas-client"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+description = "The controller side of Atlas: verified requests, control and agents"
+license.workspace = true
+repository.workspace = true
+
+[features]
+# Helpers and hooks for the tests of crates above; never in a shipped build.
+test-support = ["atlas-core/test-support", "dep:tempfile", "nix/event", "nix/socket"]
+
+[dependencies]
+atlas-core.workspace = true
+atlas-daemon.workspace = true
+atlas-native.workspace = true
+base64.workspace = true
+fs2.workspace = true
+libc.workspace = true
+nix = { workspace = true, features = ["dir", "fs", "process", "signal", "user"] }
+rand = { workspace = true, features = ["thread_rng"] }
+serde = { workspace = true, features = ["derive"] }
+serde_json.workspace = true
+sha2.workspace = true
+tempfile = { workspace = true, optional = true }
+tokio = { workspace = true, features = ["io-util", "macros", "net", "rt", "signal", "sync", "time"] }
+toml.workspace = true
+unicode-segmentation.workspace = true
+
+[dev-dependencies]
+atlas-core = { workspace = true, features = ["test-support"] }
+atlas-daemon = { workspace = true, features = ["test-support"] }
+atlas-native = { workspace = true, features = ["test-support"] }
+nix = { workspace = true, features = ["event", "socket"] }
+tempfile.workspace = true
+tokio = { workspace = true, features = ["process", "rt-multi-thread", "test-util"] }
+
+[target.'cfg(target_os = "macos")'.dependencies]
+objc2-core-foundation = { workspace = true, features = ["std", "CFError", "CFString", "CFURL"] }
+
+[lints]
+workspace = true

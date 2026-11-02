@@ -1,0 +1,349 @@
+//! The helper's background job as its controller installs, replaces and
+//! restarts it, each action run by a worker inside the helper login.
+use super::{account::problem, executor::setup_transaction_held, reported_pid};
+use crate::{client::Client, setup};
+use atlas_core::{
+    account::{Account, account_with_uid},
+    app_bundle,
+    error::{Error, Result},
+};
+use atlas_daemon::helper_setup::{Agent, JobReport, LABEL, Layout, Request, identity::Identity};
+use serde_json::{Value, json};
+use std::{
+    path::{Path, PathBuf},
+    time::{Duration, Instant},
+};
+
+fn this_account() -> Result<Account> {
+    account_with_uid(nix::unistd::getuid().as_raw())?
+        .ok_or_else(|| problem("This account cannot be resolved"))
+}
+
+/// The helper's background job as this Atlas writes it, for `helper` and
+/// the app's `executable`, with the layout it lives in.
+fn helper_agent(helper: &Account, executable: &Path) -> Result<(Agent, Layout)> {
+    let controller = this_account()?;
+    let layout = Layout::new(helper.uid, helper.home.clone());
+    let agent = Agent::managed(&layout, executable.to_path_buf(), controller.uid);
+
+    Ok((agent, layout))
+}
+
+/// Run one setup-helper request as the helper, inside its own login, with
+/// the administrator rights init holds.
+fn as_helper(
+    executable: &Path,
+    helper: &Account,
+    request: &Request,
+    expected: &Identity,
+) -> Result<Value> {
+    setup::request_as_helper(
+        executable,
+        helper,
+        request,
+        setup::Invocation::CachedLogin,
+        expected,
+    )?
+    .map_err(|unfinished| {
+        let error = problem(format!(
+            "Setting up the helper failed: {}",
+            unfinished.reason().unwrap_or("no reply")
+        ));
+        unfinished.behind(error)
+    })
+}
+
+/// Install the helper's background job `agent` through `run`, which runs one
+/// setup-helper request as the helper. An earlier Atlas's job (another app,
+/// another account, an older version) is set aside first, its definition
+/// kept as a backup, and comes back when the new one cannot go in.
+///
+/// # Errors
+///
+/// Returns the failure of `run`, or of restoring the earlier job.
+pub fn install_job(
+    run: impl Fn(&Request) -> Result<Value>,
+    agent: Agent,
+    logs: &Path,
+) -> Result<Value> {
+    let uid = agent.uid;
+    let inspected = run(&Request::Inspect {
+        uid,
+        labels: vec![LABEL.to_owned()],
+    })?;
+    let earlier = JobReport::from(&inspected["jobs"][LABEL]);
+    let expected = agent.plist_sha256(logs);
+    // Installation accepts an inspected hash even without plistKind;
+    // refresh separately requires a regular definition.
+    let retired = earlier.sha256.filter(|sha| *sha != expected);
+    if let Some(sha256) = &retired {
+        run(&Request::Retire {
+            uid,
+            label: LABEL.to_owned(),
+            sha256: sha256.clone(),
+            missing_ok: false,
+        })?;
+    }
+
+    let mut error = match run(&Request::Install { agent }) {
+        Ok(installed) => return Ok(installed),
+        Err(error) => error,
+    };
+
+    let Some(sha256) = retired else {
+        return Err(error);
+    };
+
+    // The earlier job comes back when the new one cannot go in. The new
+    // definition install may have written goes first, or it would block
+    // that return.
+    let restored = run(&Request::Retire {
+        uid,
+        label: LABEL.to_owned(),
+        sha256: expected,
+        missing_ok: true,
+    })
+    .and_then(|_| {
+        run(&Request::Restore {
+            uid,
+            label: LABEL.to_owned(),
+            sha256,
+        })
+    });
+
+    if let Err(lost) = restored {
+        error.error = format!(
+            "{}; the earlier helper job could not be put back: {}",
+            error.error, lost.error
+        );
+    }
+
+    Err(error)
+}
+
+/// Prepare and install under one claim, including rollback dispatches.
+async fn prepare_and_install(
+    client: &Client,
+    controller_name: &str,
+    agent: Agent,
+    logs: &Path,
+    run: impl Fn(&Request) -> Result<Value>,
+) -> Result<Value> {
+    let _ownership = client.service_change(true).await?;
+    setup_transaction_held(&client.controller, || {
+        run(&Request::Prepare {
+            uid: agent.uid,
+            controller: controller_name.to_owned(),
+        })?;
+        install_job(run, agent, logs)
+    })
+}
+
+/// Restart the helper daemon (launchd starts a fresh process) and wait for
+/// the new one to answer. No other controller may act meanwhile, and the
+/// restart stays pending until a new daemon is seen; if that never happens
+/// it is left for recovery, like any action of unknown outcome.
+///
+/// # Errors
+///
+/// Returns identity, ownership, restart or readiness failures. A timeout does not
+/// acknowledge unfinished helper work.
+pub async fn restart_helper(client: &Client) -> Result<()> {
+    let _exclusion = client.service_change(true).await?;
+    let before = client.status().await["daemon"]["pid"].clone();
+    let transport = atlas_core::transport::Transport {
+        path: client.config.socket_path.clone(),
+        timeout: Duration::from_secs(10),
+        peer_uid: client.config.helper_uid,
+    };
+
+    let pending = client.controller.quarantine()?;
+    let reply = transport.call(&json!({"op": "restart"})).await?;
+    if reply["ok"] != true {
+        // A refusal changed nothing, unless the helper says it may have.
+        let uncertain = reply["uncertain"] == true;
+        if !uncertain {
+            client.controller.clear_if(&pending)?;
+        }
+
+        let error = problem(format!(
+            "The helper did not restart: {}",
+            reply["error"].as_str().unwrap_or("no reason given")
+        ));
+
+        return Err(if uncertain { error.uncertain() } else { error });
+    }
+
+    if !new_daemon_answers(client, &before).await {
+        // The restart stays pending: its outcome is unknown.
+        return Err(
+            problem("The helper did not start again after a restart. Run atlas doctor.")
+                .uncertain(),
+        );
+    }
+
+    client.controller.clear_if(&pending)?;
+    Ok(())
+}
+
+/// Whether a daemon other than the one whose pid was `before` answers
+/// within 30 seconds.
+async fn new_daemon_answers(client: &Client, before: &Value) -> bool {
+    let deadline = Instant::now() + Duration::from_secs(30);
+
+    loop {
+        tokio::time::sleep(Duration::from_millis(500)).await;
+        let pid = client.status().await["daemon"]["pid"].clone();
+        if pid.is_number() && pid != *before {
+            return true;
+        }
+
+        if Instant::now() >= deadline {
+            return false;
+        }
+    }
+}
+
+/// Replace the helper's background job an earlier Atlas wrote with this
+/// version's, from outside the daemon it runs (through sudo, as installing
+/// it does): the earlier definition is kept as a backup, and comes back if
+/// the new one cannot go in. Pending until a new daemon answers, like a
+/// restart.
+async fn replace_job(
+    client: &Client,
+    helper: &Account,
+    agent: Agent,
+    layout: &Layout,
+    run: impl Fn(&Request) -> Result<Value>,
+) -> Result<()> {
+    let _exclusion = client.service_change(true).await?;
+    let before = client.status().await["daemon"]["pid"].clone();
+    let pending = client.controller.quarantine()?;
+
+    {
+        let _executors = crate::control::ExecutorClaims::new(std::slice::from_ref(&pending))?;
+        install_job(run, agent, &layout.logs()).map_err(Error::uncertain)?;
+    }
+
+    if !new_daemon_answers(client, &before).await {
+        return Err(problem(format!(
+            "The helper's background job was replaced but the helper did not start again. Its \
+             log is {} in {}'s account; run atlas init again after checking it.",
+            layout.logs().join(format!("{LABEL}.log")).display(),
+            helper.name
+        ))
+        .uncertain());
+    }
+
+    client.controller.clear_if(&pending)?;
+    Ok(())
+}
+
+/// Put the helper's daemon on this version before checking it: its
+/// background job replaced when another version of Atlas wrote it, else
+/// the daemon restarted when it still runs an earlier build (an update
+/// whose handover did not finish).
+///
+/// # Errors
+///
+/// Returns account-identity, installed-build, ownership or helper-refresh failures.
+/// Unacknowledged privileged changes retain their claim.
+pub async fn refresh_helper(
+    client: &Client,
+    helper: &Account,
+    expected: &Identity,
+    mut progress: impl FnMut(setup::Progress<'_>) -> Result<()>,
+) -> Result<Option<Value>> {
+    let executable = Path::new(app_bundle::EXECUTABLE);
+    let (agent, layout) = helper_agent(helper, executable)?;
+    let expected_hash = agent.plist_sha256(&layout.logs());
+    let job = setup::migrate::managed_job(client).await?;
+
+    if job.outdated(&expected_hash) {
+        progress(setup::Progress::Administrator(
+            "  macOS asks for your password once, to replace the helper's background job with \
+             this version's.",
+        ))?;
+
+        progress(setup::Progress::Waiting(
+            "Replacing the helper's background job…",
+        ))?;
+        replace_job(client, helper, agent, &layout, |request| {
+            as_helper(executable, helper, request, expected)
+        })
+        .await?;
+        progress(setup::Progress::Done(
+            "Helper job",
+            "replaced with this version's",
+        ))?;
+        return Ok(Some(
+            json!({"step": "daemon", "label": LABEL, "replaced": true}),
+        ));
+    }
+
+    let pid = reported_pid(&client.status().await["daemon"]["pid"]);
+    if pid.is_some_and(|pid| !app_bundle::runs_current(pid, executable)) {
+        progress(setup::Progress::Waiting(
+            "Restarting the helper on this version…",
+        ))?;
+        client.restart().await?;
+        progress(setup::Progress::Done("Helper", "restarted on this version"))?;
+        return Ok(Some(json!({"step": "restart"})));
+    }
+
+    Ok(None)
+}
+
+/// Prepare and install the chosen helper under exclusion and one executor claim.
+/// Refusals and missing acknowledgements preserve the pending generation.
+///
+/// # Errors
+///
+/// Returns account, identity, installation or helper-layout preparation failures. Work
+/// already completed remains available to the recovery workflow.
+pub async fn prepare_helper(
+    client: &Client,
+    helper: &Account,
+    expected: &Identity,
+) -> Result<PathBuf> {
+    let executable = Path::new(app_bundle::EXECUTABLE);
+    let controller = this_account()?;
+    let (agent, layout) = helper_agent(helper, executable)?;
+    prepare_and_install(client, &controller.name, agent, &layout.logs(), |request| {
+        as_helper(executable, helper, request, expected)
+    })
+    .await?;
+    Ok(layout.logs().join(format!("{LABEL}.log")))
+}
+
+/// Ready first-login preferences only while the chosen helper is logged out.
+/// An incomplete reply retains its executor-bound pending mutation.
+///
+/// # Errors
+///
+/// Returns account-identity, privileged-executor or helper-installation failures. An
+/// executor whose exit is unknown retains ownership.
+pub fn first_login_setup(client: &Client, helper: &Account, expected: &Identity) -> Result<Value> {
+    let executable = Path::new(app_bundle::EXECUTABLE);
+    setup::executor::setup_transaction(&client.controller, || {
+        let request = Request::FirstLogin {
+            uid: helper.uid,
+            opener: false,
+        };
+        setup::request_as_helper(
+            executable,
+            helper,
+            &request,
+            setup::Invocation::BeforeLogin,
+            expected,
+        )?
+        .map_err(|unfinished| {
+            unfinished
+                .behind(problem("The helper did not acknowledge first-login setup"))
+                .uncertain()
+        })
+    })
+}
+
+#[cfg(test)]
+mod tests;

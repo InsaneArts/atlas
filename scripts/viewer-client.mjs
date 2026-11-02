@@ -1,4 +1,4 @@
-// A client for the viewer service's JSON endpoints (src/lib/viewer.rs), for
+// A client for the viewer service's JSON endpoints (crates/cli/src/viewer.rs), for
 // the live checks. It sends the same actions the native viewer sends, with
 // Node's own fetch.
 import fs from 'node:fs';

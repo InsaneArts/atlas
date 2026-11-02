@@ -1,5 +1,5 @@
 /// What the helper is doing, as every agent app shows it: the overview's `state`, which the service decides once
-/// (`src/lib/overview.rs`, `kind()`) so the panel, the window and the agent hosts all say the same.
+/// (`crates/client/src/overview.rs`, `kind()`) so the panel, the window and the agent hosts all say the same.
 public enum OverviewState: Equatable, Sendable, Decodable {
   /// An agent is acting in the helper.
   case working

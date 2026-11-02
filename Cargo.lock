@@ -53,9 +53,13 @@ dependencies = [
 ]
 
 [[package]]
-name = "atlas"
+name = "atlas-cli"
 version = "0.1.0"
 dependencies = [
+ "atlas-client",
+ "atlas-core",
+ "atlas-daemon",
+ "atlas-native",
  "axum",
  "base64",
  "clap",
@@ -67,15 +71,28 @@ dependencies = [
  "indicatif",
  "libc",
  "nix",
- "objc2",
- "objc2-app-kit",
- "objc2-application-services",
+ "rand",
+ "serde",
+ "serde_json",
+ "sha2",
+ "tempfile",
+ "tokio",
+ "unicode-segmentation",
+ "unicode-width",
+]
+
+[[package]]
+name = "atlas-client"
+version = "0.1.0"
+dependencies = [
+ "atlas-core",
+ "atlas-daemon",
+ "atlas-native",
+ "base64",
+ "fs2",
+ "libc",
+ "nix",
  "objc2-core-foundation",
- "objc2-core-graphics",
- "objc2-foundation",
- "objc2-image-io",
- "objc2-security",
- "oslog",
  "rand",
  "serde",
  "serde_json",
@@ -84,7 +101,68 @@ dependencies = [
  "tokio",
  "toml",
  "unicode-segmentation",
- "unicode-width",
+]
+
+[[package]]
+name = "atlas-core"
+version = "0.1.0"
+dependencies = [
+ "base64",
+ "fs2",
+ "libc",
+ "nix",
+ "oslog",
+ "rand",
+ "serde",
+ "serde_json",
+ "sha2",
+ "tempfile",
+ "tokio",
+ "toml",
+]
+
+[[package]]
+name = "atlas-daemon"
+version = "0.1.0"
+dependencies = [
+ "atlas-core",
+ "atlas-native",
+ "base64",
+ "libc",
+ "nix",
+ "objc2",
+ "objc2-application-services",
+ "objc2-core-foundation",
+ "objc2-core-graphics",
+ "objc2-foundation",
+ "serde",
+ "serde_json",
+ "sha2",
+ "tempfile",
+ "tokio",
+]
+
+[[package]]
+name = "atlas-native"
+version = "0.1.0"
+dependencies = [
+ "atlas-core",
+ "fs2",
+ "libc",
+ "nix",
+ "objc2",
+ "objc2-app-kit",
+ "objc2-application-services",
+ "objc2-core-foundation",
+ "objc2-core-graphics",
+ "objc2-foundation",
+ "objc2-image-io",
+ "objc2-security",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "tokio",
+ "unicode-segmentation",
 ]
 
 [[package]]
@@ -1170,7 +1248,9 @@ checksum = "1ebf944e87a7c253233ad6766e082e3cd714b5d03812acc24c318f549614536e"
 name = "xtask"
 version = "0.0.0"
 dependencies = [
- "atlas",
+ "atlas-cli",
+ "atlas-client",
+ "atlas-core",
  "proc-macro2",
  "quote",
  "serde_json",

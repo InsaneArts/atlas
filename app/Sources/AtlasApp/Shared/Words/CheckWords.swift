@@ -1,6 +1,6 @@
 import AtlasService
 
-/// The helper's readiness checks in the app's words: each check the service names (`src/lib/session.rs`) gets a plain
+/// The helper's readiness checks in the app's words: each check the service names (`crates/core/src/session.rs`) gets a plain
 /// name and, when it fails, one plain sentence with no command in it, since the viewer offers buttons, not commands.
 enum CheckWords {
   /// A check whose state cannot be observed yet.

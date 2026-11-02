@@ -28,7 +28,7 @@ You need a Mac with:
 ```sh
 git clone https://github.com/InsaneArts/atlas.git
 cd atlas
-cargo build                          # the Rust library and atlas command
+cargo build                          # the Rust crates and atlas command
 swift build --package-path app       # the AtlasApp executable
 npm ci                               # Node tests and repository checks
 ```
@@ -50,18 +50,18 @@ compile is not evidence that the packaged helper passes macOS consent checks.
 
 ## Where things live
 
-| Path                  | What it holds                                                    |
-| --------------------- | ---------------------------------------------------------------- |
-| `src/bin`             | the `atlas` command                                              |
-| `src/lib/daemon`      | the helper daemon and its protocol                               |
-| `src/lib/native`      | capture, accessibility, input and the held-input journal         |
-| `src/lib/environment` | copies into the helper and their rollback                        |
-| `src/lib/setup`       | the helper's launchd jobs and their repair                       |
-| `app/`                | Atlas.app in Swift 6: AtlasApp and its `Packages/`               |
-| `agents/`             | bundled skills, MCP registration and supported host integrations |
-| `scripts/`            | repository checks and live checks against a real helper          |
-| `tests/`              | integration tests and the native test fixture                    |
-| `xtask/`              | release builds (`cargo xtask dist`)                              |
+| Path            | What it holds                                                                  |
+| --------------- | ------------------------------------------------------------------------------ |
+| `crates/core`   | names, errors, time, wire types and what Atlas observes                        |
+| `crates/native` | capture, accessibility, input and the held-input journal                       |
+| `crates/daemon` | the helper daemon, and the helper's layout, launchd jobs and first login       |
+| `crates/client` | requests to the helper, control, copies into it, and setup from the controller |
+| `crates/cli`    | the `atlas` command, viewer, MCP server, menu bar and onboarding               |
+| `app/`          | Atlas.app in Swift 6: AtlasApp and its `Packages/`                             |
+| `agents/`       | bundled skills, MCP registration and supported host integrations               |
+| `scripts/`      | repository checks and live checks against a real helper                        |
+| `tests/`        | Node tests, shared fixtures and the native test fixture                        |
+| `xtask/`        | release builds (`cargo xtask dist`)                                            |
 
 See [Architecture](docs/architecture.md) for the process model, Rust responsibilities
 and Swift package dependencies. Public user guides live in [docs/](docs/README.md).
@@ -75,9 +75,9 @@ Install the pinned dependency checker once with
 
 ```sh
 cargo fmt --all --check
-cargo clippy --all-targets -- -D warnings
+cargo clippy --workspace --all-targets --locked -- -D warnings
 cargo machete --skip-target-dir .
-cargo test
+cargo test --workspace --locked
 npm run format:check
 npm test
 node scripts/check-swift.mjs   # swift test and swift format lint, app/ and app/Packages/*
@@ -112,7 +112,7 @@ These hold everywhere; a change that needs to break one needs an issue first.
 - **Unknown outcomes stay pending.** An action whose result is unknown is
   reported as `uncertain` and blocks further actions until recovery. Never
   retry or replay it.
-- **`unsafe` is denied crate-wide.** Prefer safe bindings (`nix`, `objc2`).
+- **`unsafe` is denied in every crate.** Prefer safe bindings (`nix`, `objc2`).
   FFI without one lives in a module or function marked `allow(unsafe_code)`
   with its reason, and every `unsafe` block has a `SAFETY:` note.
 - **Swift** follows `app/`'s layout: the domain packages under `app/Packages`

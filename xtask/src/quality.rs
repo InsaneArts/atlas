@@ -928,7 +928,13 @@ fn module_contexts(
 
 fn inventory(root: &Path) -> Result<Value> {
     let mut paths = Vec::new();
-    rust_files(&root.join("src"), &mut paths)?;
+    let crates = root.join("crates");
+    for entry in fs::read_dir(&crates).map_err(|e| format!("{}: {e}", crates.display()))? {
+        let source = entry.map_err(|e| e.to_string())?.path().join("src");
+        if source.is_dir() {
+            rust_files(&source, &mut paths)?;
+        }
+    }
     rust_files(&root.join("xtask/src"), &mut paths)?;
     paths.sort();
     let sources = paths
@@ -1064,7 +1070,7 @@ fn external_timing(root: &Path) -> Result<Vec<Value>> {
         Ok(())
     }
     let mut out = Vec::new();
-    for directory in ["tests", "scripts"] {
+    for directory in ["crates/cli/tests", "tests", "scripts"] {
         walk(root, &root.join(directory), &mut out)?;
     }
     out.sort_by_key(|row| {

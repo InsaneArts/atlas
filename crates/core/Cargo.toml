@@ -1,0 +1,34 @@
+[package]
+name = "atlas-core"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+description = "Names, errors, time and wire types shared by every Atlas layer"
+license.workspace = true
+repository.workspace = true
+
+[features]
+# Helpers and hooks for the tests of crates above; never in a shipped build.
+test-support = []
+
+[dependencies]
+base64.workspace = true
+fs2.workspace = true
+libc.workspace = true
+nix = { workspace = true, features = ["fs", "poll", "process", "signal", "user"] }
+rand = { workspace = true, features = ["thread_rng"] }
+serde = { workspace = true, features = ["derive"] }
+serde_json.workspace = true
+sha2.workspace = true
+tokio = { workspace = true, features = ["io-util", "net", "rt", "time"] }
+toml.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true
+tokio = { workspace = true, features = ["macros", "test-util"] }
+
+[target.'cfg(target_os = "macos")'.dependencies]
+oslog.workspace = true
+
+[lints]
+workspace = true

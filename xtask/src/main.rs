@@ -5,10 +5,10 @@
 //! scripts/publish-release.sh puts both on atlas.insanearts.io.
 mod quality;
 
-use atlas::{
+use atlas_cli::menubar::LOGIN_JOB;
+use atlas_core::{
     app_bundle::{APP_EXECUTABLE, IDENTIFIER},
     files::exchange,
-    menubar::LOGIN_JOB,
 };
 use sha2::{Digest, Sha256};
 use std::{
@@ -352,7 +352,7 @@ fn committed_version(root: &Path) -> Result<()> {
 /// A release's version must be plain numbers (`0.2.0`, not `0.2.0-beta`):
 /// `atlas update` reads it from the archive's name and refuses any other.
 fn release_version(version: &str) -> Result<()> {
-    if atlas::update::exact_version(version).is_some() {
+    if atlas_client::update::exact_version(version).is_some() {
         return Ok(());
     }
 
@@ -362,7 +362,7 @@ fn release_version(version: &str) -> Result<()> {
 }
 
 fn dist(options: &Options) -> Result<()> {
-    let version = atlas::VERSION;
+    let version = atlas_core::VERSION;
     release_version(version)?;
     committed_version(&root())?;
     publishable(&options.out)?;
@@ -458,7 +458,7 @@ fn compile_executables(root: &Path, stage: &Path) -> Result<PathBuf> {
                 "--manifest-path",
                 text(&manifest)?,
                 "--package",
-                "atlas",
+                "atlas-cli",
                 "--bin",
                 "atlas",
                 "--release",
@@ -498,7 +498,7 @@ fn compile_executables(root: &Path, stage: &Path) -> Result<PathBuf> {
     io(fs::create_dir_all(app.join("Contents/Resources")))?;
     io(fs::write(
         app.join("Contents/Info.plist"),
-        info_plist(atlas::VERSION),
+        info_plist(atlas_core::VERSION),
     ))?;
 
     universal(&cli, &macos.join("atlas"))?;
@@ -607,7 +607,7 @@ fn sign_and_verify(options: &Options, app: &Path, upload: &Path) -> Result<()> {
     };
 
     sign(
-        Some(atlas::app_bundle::APP_IDENTIFIER),
+        Some(atlas_core::app_bundle::APP_IDENTIFIER),
         &app.join("Contents/MacOS").join(APP_EXECUTABLE),
     )?;
     sign(None, app)?;
@@ -620,7 +620,7 @@ fn sign_and_verify(options: &Options, app: &Path, upload: &Path) -> Result<()> {
         &["--verify", "--strict", "--deep", text(app)?],
     )?;
 
-    if !atlas::app_bundle::developer_id(&app.join("Contents/MacOS/atlas")) {
+    if !atlas_core::app_bundle::developer_id(&app.join("Contents/MacOS/atlas")) {
         return Err(
             "the app does not satisfy setup's Developer ID requirement (identity and team)".into(),
         );

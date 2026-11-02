@@ -118,7 +118,7 @@ fn a_streamed_hash_matches_the_whole_file_hash() {
 
 #[test]
 fn only_plain_numbered_versions_are_released() {
-    for version in ["0.2.0", "1.10.3", atlas::VERSION] {
+    for version in ["0.2.0", "1.10.3", atlas_core::VERSION] {
         assert!(release_version(version).is_ok(), "{version}");
     }
 

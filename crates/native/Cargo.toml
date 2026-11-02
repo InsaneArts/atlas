@@ -1,0 +1,41 @@
+[package]
+name = "atlas-native"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+description = "The macOS calls Atlas makes inside the helper login"
+license.workspace = true
+repository.workspace = true
+
+[features]
+# Helpers and hooks for the tests of crates above; never in a shipped build.
+test-support = []
+
+[dependencies]
+atlas-core.workspace = true
+fs2.workspace = true
+libc.workspace = true
+nix = { workspace = true, features = ["process", "signal", "user"] }
+serde = { workspace = true, features = ["derive"] }
+serde_json.workspace = true
+tokio = { workspace = true, features = ["io-util", "macros", "net", "rt", "signal", "sync", "time"] }
+unicode-segmentation.workspace = true
+
+[dev-dependencies]
+atlas-core = { workspace = true, features = ["test-support"] }
+nix = { workspace = true, features = ["fs"] }
+tempfile.workspace = true
+tokio = { workspace = true, features = ["test-util"] }
+
+[target.'cfg(target_os = "macos")'.dependencies]
+objc2.workspace = true
+objc2-app-kit = { workspace = true, features = ["std", "NSImage", "NSRunningApplication", "NSWorkspace", "libc"] }
+objc2-application-services = { workspace = true, features = ["std", "HIServices", "AXError", "AXUIElement", "AXValue", "libc"] }
+objc2-core-foundation = { workspace = true, features = ["std", "CFArray", "CFCGTypes", "CFData", "CFDictionary", "CFNotificationCenter", "CFNumber", "CFString"] }
+objc2-core-graphics = { workspace = true, features = ["std", "CGBitmapContext", "CGColorSpace", "CGContext", "CGDirectDisplay", "CGEvent", "CGEventSource", "CGEventTypes", "CGImage", "CGRemoteOperation", "CGSession", "CGWindow"] }
+objc2-foundation = { workspace = true, features = ["std", "NSEnumerator", "NSString"] }
+objc2-image-io = { workspace = true, features = ["std", "CGImageDestination", "CGImageSource", "objc2-core-graphics"] }
+objc2-security = { workspace = true, features = ["std", "AuthSession", "Authorization"] }
+
+[lints]
+workspace = true

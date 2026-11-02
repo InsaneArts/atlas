@@ -1,7 +1,7 @@
 import Foundation
 
 /// What a new helper account's short name must be: the rule `atlas onboarding create` applies
-/// (`valid_account_name` in `src/lib/init.rs`), checked here as the person types so the form never sends a name
+/// (`validate_account_name` in `crates/client/src/setup/account.rs`), checked here as the person types so the form never sends a name
 /// the command line refuses. Each problem says what is wrong in plain words and suggests a name that works.
 public enum AccountNameRule {
   /// The longest short name macOS takes: 31 characters.

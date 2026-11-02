@@ -1,4 +1,4 @@
-// The decisions of Atlas's screen view (src/lib/mcp/screen.js), run without
+// The decisions of Atlas's screen view (crates/cli/src/mcp/screen.js), run without
 // a page: the script defines them first and wires the page only when there
 // is a document.
 import assert from 'node:assert/strict';
@@ -6,7 +6,7 @@ import { readFileSync } from 'node:fs';
 import test from 'node:test';
 import vm from 'node:vm';
 
-const source = readFileSync(new URL('../src/lib/mcp/screen.js', import.meta.url), 'utf8');
+const source = readFileSync(new URL('../crates/cli/src/mcp/screen.js', import.meta.url), 'utf8');
 const module = { exports: {} };
 vm.runInNewContext(source, { module });
 const view = module.exports;
@@ -1721,7 +1721,7 @@ test('the view takes the theme the app names, and follows the Mac when it names 
 });
 
 test('every colour of the page follows the theme, and the screen stays dark in either', () => {
-  const page = readFileSync(new URL('../src/lib/mcp/screen.html', import.meta.url), 'utf8');
+  const page = readFileSync(new URL('../crates/cli/src/mcp/screen.html', import.meta.url), 'utf8');
   const style = page.slice(page.indexOf('<style>'), page.indexOf('</style>'));
   assert.match(style, /html \{ color-scheme: light dark; \}/, 'the page is not forced dark');
   assert.match(style, /\.screen \.rim, \.chip \{ color-scheme: dark; \}/);

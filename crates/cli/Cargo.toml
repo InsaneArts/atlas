@@ -1,0 +1,50 @@
+[package]
+name = "atlas-cli"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+description = "Observe and control a prepared background macOS desktop"
+license.workspace = true
+repository.workspace = true
+
+[lib]
+path = "src/lib.rs"
+
+[[bin]]
+name = "atlas"
+path = "src/bin/atlas/main.rs"
+
+[dependencies]
+atlas-client.workspace = true
+atlas-core.workspace = true
+atlas-daemon.workspace = true
+atlas-native.workspace = true
+axum = { workspace = true, features = ["http1", "json", "tokio"] }
+base64.workspace = true
+clap = { workspace = true, features = ["derive", "env"] }
+console.workspace = true
+dialoguer.workspace = true
+fs2.workspace = true
+hyper = { workspace = true, features = ["http1", "server"] }
+hyper-util = { workspace = true, features = ["tokio"] }
+indicatif = { workspace = true, features = ["unicode-width"] }
+libc.workspace = true
+nix = { workspace = true, features = ["process", "signal", "term", "user"] }
+serde = { workspace = true, features = ["derive"] }
+serde_json.workspace = true
+sha2.workspace = true
+tokio = { workspace = true, features = ["io-std", "io-util", "macros", "net", "process", "rt-multi-thread", "signal", "sync", "time"] }
+unicode-segmentation.workspace = true
+unicode-width.workspace = true
+
+[dev-dependencies]
+atlas-client = { workspace = true, features = ["test-support"] }
+atlas-core = { workspace = true, features = ["test-support"] }
+atlas-native = { workspace = true, features = ["test-support"] }
+nix = { workspace = true, features = ["fs", "poll"] }
+rand = { workspace = true, features = ["thread_rng"] }
+tempfile.workspace = true
+tokio = { workspace = true, features = ["test-util"] }
+
+[lints]
+workspace = true

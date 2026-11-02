@@ -1,0 +1,271 @@
+//! Darwin extended ACLs (sys/acl.h) behind one owned, freed-on-drop handle.
+#![allow(
+    unsafe_code,
+    reason = "FFI boundary: macOS ACL functions have no safe binding"
+)]
+use std::{
+    ffi::{CStr, CString, c_char, c_int, c_void},
+    fs::File,
+    io,
+    os::{fd::AsRawFd, unix::ffi::OsStrExt},
+    path::Path,
+};
+
+const ACL_TYPE_EXTENDED: c_int = 0x100;
+const ACL_FIRST_ENTRY: c_int = 0;
+const ACL_NEXT_ENTRY: c_int = -1;
+const ACL_EXTENDED_ALLOW: c_int = 1;
+
+// Permission bits from sys/acl.h.
+const ACL_WRITE_DATA: u64 = 1 << 2;
+const ACL_DELETE: u64 = 1 << 4;
+const ACL_APPEND_DATA: u64 = 1 << 5;
+const ACL_DELETE_CHILD: u64 = 1 << 6;
+const ACL_WRITE_ATTRIBUTES: u64 = 1 << 8;
+const ACL_WRITE_EXTATTRIBUTES: u64 = 1 << 10;
+const ACL_WRITE_SECURITY: u64 = 1 << 12;
+const ACL_CHANGE_OWNER: u64 = 1 << 13;
+
+/// Data, append, delete, attribute, ACL and ownership writes.
+pub const WRITE_RIGHTS: u64 = ACL_WRITE_DATA
+    | ACL_DELETE
+    | ACL_APPEND_DATA
+    | ACL_DELETE_CHILD
+    | ACL_WRITE_ATTRIBUTES
+    | ACL_WRITE_EXTATTRIBUTES
+    | ACL_WRITE_SECURITY
+    | ACL_CHANGE_OWNER;
+
+unsafe extern "C" {
+    fn acl_get_file(path: *const c_char, kind: c_int) -> *mut c_void;
+    fn acl_get_fd(fd: c_int) -> *mut c_void;
+    fn acl_get_entry(acl: *mut c_void, index: c_int, entry: *mut *mut c_void) -> c_int;
+    fn acl_get_tag_type(entry: *mut c_void, tag: *mut c_int) -> c_int;
+    fn acl_get_permset_mask_np(entry: *mut c_void, mask: *mut u64) -> c_int;
+    fn acl_valid(acl: *mut c_void) -> c_int;
+    fn acl_init(count: c_int) -> *mut c_void;
+    fn acl_set_fd(fd: c_int, acl: *mut c_void) -> c_int;
+    fn acl_to_text(acl: *mut c_void, length: *mut isize) -> *mut c_char;
+    fn acl_free(object: *mut c_void) -> c_int;
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Entry {
+    pub allow: bool,
+    pub mask: u64,
+}
+
+pub struct Acl(*mut c_void);
+
+impl Drop for Acl {
+    fn drop(&mut self) {
+        // SAFETY: the handle was returned by acl_get_* or acl_init and is freed once.
+        unsafe { acl_free(self.0) };
+    }
+}
+
+impl Acl {
+    /// The extended ACL of `path` (following a final symlink), or None.
+    ///
+    /// # Errors
+    ///
+    /// Returns the I/O error of reading the ACL, or one for a path holding NUL.
+    pub fn of_path(path: &Path) -> io::Result<Option<Self>> {
+        let path = CString::new(path.as_os_str().as_bytes())
+            .map_err(|_| io::Error::new(io::ErrorKind::InvalidInput, "Path contains NUL"))?;
+        // SAFETY: NUL-terminated path and the documented extended ACL type.
+        Self::wrap(unsafe { acl_get_file(path.as_ptr(), ACL_TYPE_EXTENDED) })
+    }
+
+    /// The extended ACL of an open file, or None.
+    ///
+    /// # Errors
+    ///
+    /// Returns the I/O error of reading the ACL.
+    pub fn of_file(file: &File) -> io::Result<Option<Self>> {
+        // SAFETY: the descriptor stays open for the duration of the call.
+        Self::wrap(unsafe { acl_get_fd(file.as_raw_fd()) })
+    }
+
+    fn wrap(acl: *mut c_void) -> io::Result<Option<Self>> {
+        if !acl.is_null() {
+            return Ok(Some(Self(acl)));
+        }
+
+        let error = io::Error::last_os_error();
+        // macOS reports ENOENT for an existing object without an extended ACL.
+        if error.raw_os_error() == Some(libc::ENOENT) {
+            Ok(None)
+        } else {
+            Err(error)
+        }
+    }
+
+    pub(crate) fn is_valid(&self) -> bool {
+        // SAFETY: live ACL handle.
+        unsafe { acl_valid(self.0) == 0 }
+    }
+
+    /// Every entry. Only the end of the list (EINVAL from the next entry)
+    /// ends it; any other failure is an error, never a shorter list.
+    ///
+    /// # Errors
+    ///
+    /// Returns the I/O error of any read other than the end of the list.
+    pub fn entries(&self) -> io::Result<Vec<Entry>> {
+        let mut entries = Vec::new();
+        let mut index = ACL_FIRST_ENTRY;
+        let mut entry = std::ptr::null_mut();
+
+        loop {
+            // SAFETY: live ACL handle; entries borrow from it and the out
+            // pointer is valid for writes.
+            if unsafe { acl_get_entry(self.0, index, &raw mut entry) } != 0 {
+                let error = io::Error::last_os_error();
+                if error.raw_os_error() == Some(libc::EINVAL) {
+                    break;
+                }
+                return Err(error);
+            }
+
+            index = ACL_NEXT_ENTRY;
+            let (mut tag, mut mask) = (0, 0);
+            // SAFETY: `entry` was just returned for this live ACL; both
+            // outputs are valid for writes.
+            if unsafe { acl_get_tag_type(entry, &raw mut tag) } != 0
+                // SAFETY: as above.
+                || unsafe { acl_get_permset_mask_np(entry, &raw mut mask) } != 0
+            {
+                return Err(io::Error::last_os_error());
+            }
+
+            entries.push(Entry {
+                allow: tag == ACL_EXTENDED_ALLOW,
+                mask,
+            });
+        }
+
+        Ok(entries)
+    }
+
+    /// Text form, one `user:UUID:name:id:allow|deny:rights` line per entry.
+    ///
+    /// # Errors
+    ///
+    /// Returns the I/O error of formatting the ACL.
+    pub fn text(&self) -> io::Result<String> {
+        // SAFETY: live ACL handle; the returned string is freed with acl_free.
+        let text = unsafe { acl_to_text(self.0, std::ptr::null_mut()) };
+        if text.is_null() {
+            return Err(io::Error::last_os_error());
+        }
+
+        // SAFETY: acl_to_text returned a NUL-terminated string (checked non-null).
+        let owned = unsafe { CStr::from_ptr(text) }
+            .to_string_lossy()
+            .into_owned();
+
+        // SAFETY: frees the string acl_to_text allocated, once, after its last use.
+        unsafe { acl_free(text.cast()) };
+
+        Ok(owned)
+    }
+}
+
+/// The extended ACL entries of `path`; an invalid ACL is an error.
+fn entries_of(path: &Path) -> io::Result<Vec<Entry>> {
+    match Acl::of_path(path)? {
+        None => Ok(Vec::new()),
+        Some(acl) if acl.is_valid() => acl.entries(),
+        Some(_) => Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            "Invalid filesystem ACL",
+        )),
+    }
+}
+
+/// Whether `path` carries any extended ACL entry; an invalid ACL is an error.
+///
+/// # Errors
+///
+/// Returns the I/O error of reading the ACL, or one for an invalid ACL.
+pub fn present(path: &Path) -> io::Result<bool> {
+    Ok(!entries_of(path)?.is_empty())
+}
+
+/// Whether any extended ACL entry on `path` allows a write; deny entries are
+/// harmless. An invalid ACL is an error.
+///
+/// # Errors
+///
+/// Returns the I/O error of reading the ACL, or one for an invalid ACL.
+pub fn allows_write(path: &Path) -> io::Result<bool> {
+    Ok(entries_of(path)?
+        .iter()
+        .any(|entry| entry.allow && entry.mask & WRITE_RIGHTS != 0))
+}
+
+/// ACL rights a controller entry may carry: traversal only, no inheritance.
+fn search_only(rights: &str) -> bool {
+    rights
+        .split(',')
+        .all(|right| matches!(right, "search" | "execute"))
+}
+
+/// Check an ACL against the policy: shared directories may hold one
+/// search-only allow entry for `controller`; private ones hold none. Returns
+/// whether the controller entry is present; anything else is refused.
+///
+/// # Errors
+///
+/// Returns why the ACL breaks the policy.
+pub fn acl_policy(lines: &[String], controller: Option<u32>) -> std::result::Result<bool, String> {
+    let mut granted = false;
+
+    for line in lines {
+        let fields: Vec<&str> = line.split(':').collect();
+        match (fields.as_slice(), controller) {
+            (["user", _, _, id, "allow", rights], Some(controller))
+                if id.parse() == Ok(controller) && search_only(rights) && !granted =>
+            {
+                granted = true;
+            }
+            _ => return Err(format!("unexpected access entry {line}")),
+        }
+    }
+
+    Ok(granted)
+}
+
+/// The entries of `path`'s extended ACL, as its text form lists them.
+///
+/// # Errors
+///
+/// Returns the I/O error of reading the ACL.
+pub fn acl_lines(path: &Path) -> io::Result<Vec<String>> {
+    Ok(match Acl::of_path(path)? {
+        None => Vec::new(),
+        Some(acl) => acl.text()?.lines().skip(1).map(str::to_owned).collect(),
+    })
+}
+
+/// Replace an open file's extended ACL with an empty one.
+///
+/// # Errors
+///
+/// Returns the I/O error of allocating or setting the ACL.
+pub fn clear(file: &File) -> io::Result<()> {
+    // SAFETY: acl_init returns an owned handle, freed by Acl's Drop.
+    let empty = Acl::wrap(unsafe { acl_init(0) })?
+        .ok_or_else(|| io::Error::other("Could not allocate an ACL"))?;
+
+    // SAFETY: live descriptor and ACL handle.
+    if unsafe { acl_set_fd(file.as_raw_fd(), empty.0) } != 0 {
+        return Err(io::Error::last_os_error());
+    }
+
+    Ok(())
+}
+
+#[cfg(test)]
+mod tests;

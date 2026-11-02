@@ -1,8 +1,8 @@
 # Working on Atlas
 
-- Use a Rust library/CLI layout and the fmt, clippy and test checks listed
-  below. No Python runtime and no TUI.
-- unsafe code is denied crate-wide. Prefer safe crates (nix, objc2 bindings);
+- Use the Rust workspace under crates/ and the fmt, clippy and test checks
+  listed below. No Python runtime and no TUI.
+- unsafe code is denied in every crate. Prefer safe crates (nix, objc2 bindings);
   FFI that has none lives in a module or function marked
   allow(unsafe_code) with its reason, and every unsafe block has a SAFETY note.
 - All controlled applications, screenshots and injected events belong to the
@@ -19,8 +19,10 @@
 - Public documentation lives in docs/. Preserve investigation evidence in
   internal/, runs/, local configuration and archived experiments, which stay
   untracked. Keep the remote focused on maintained source.
-- Run cargo fmt --all --check, cargo clippy --all-targets -- -D warnings,
-  cargo test, npm run format:check and npm test after relevant changes, and
+- Run cargo fmt --all --check,
+  cargo clippy --workspace --all-targets --locked -- -D warnings,
+  cargo test --workspace --locked, npm run format:check and npm test after
+  relevant changes, and
   node scripts/check-swift.mjs (swift test and swift format lint -rs Sources
   Tests in app/ and every app/Packages/ package; Swift 6 mode).
 - Keep app/ Swift separated by responsibility. The domain packages

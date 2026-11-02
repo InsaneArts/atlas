@@ -1,5 +1,5 @@
 extension OnboardingFacts {
-  /// The reply exactly as `src/lib/onboarding.rs` writes it.
+  /// The reply exactly as `crates/cli/src/onboarding.rs` writes it.
   struct Reply: Decodable {
     /// This account.
     struct Me: Decodable {

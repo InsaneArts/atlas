@@ -3,7 +3,7 @@
 public enum TypedText: Equatable, Sendable {
   /// The most characters one paste may carry: 2048, sixteen full chunks, the most Atlas has ever typed at once.
   public static let pasteLimit = 2048
-  /// The most characters the helper accepts in one `type` action: 256, its own limit (`src/lib/actions.rs`).
+  /// The most characters the helper accepts in one `type` action: 256, its own limit (`crates/core/src/actions.rs`).
   static let chunkLimit = 256
   /// The most characters a chunk of whole graphemes holds: 128, half the helper's ``chunkLimit``, so a chunk stays
   /// well inside it, and a grapheme longer than this still goes whole in a chunk of its own.

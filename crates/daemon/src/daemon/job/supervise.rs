@@ -1,0 +1,451 @@
+//! Supervision: about once a second the daemon looks at every job, ends
+//! what has ended, stops what must stop (its time is up, the person stopped
+//! agents, the helper came on screen), carries stops on from TERM to KILL,
+//! notes descendants to report what left a group, keeps logs within their
+//! limit, and prunes old records now and then.
+use super::{
+    Jobs, State,
+    observe::{as_left, left, observe},
+    record::{Ended, Record, Stopping},
+    signal::Signalled,
+    store::Found,
+    verdict::{Verdict, verdict},
+};
+use crate::daemon::run;
+use atlas_core::{
+    error::Result,
+    process::Info,
+    protocol::{How, JOB_GRACE, JobState, Left},
+    time::now_ms,
+};
+use nix::sys::signal::Signal;
+use std::{
+    os::unix::process::ExitStatusExt,
+    path::PathBuf,
+    sync::Arc,
+    time::{Duration, Instant},
+};
+
+/// How often old records are pruned.
+const PRUNE_EVERY: Duration = Duration::from_secs(60 * 60);
+/// How long KILL has, once sent, before a job is said to be stuck.
+const KILLED: Duration = Duration::from_secs(2);
+/// How often KILL is sent again to a stuck job, and for how long.
+const KILL_AGAIN: Duration = Duration::from_secs(5);
+const KILL_FOR: Duration = Duration::from_secs(60);
+/// How often jobs are looked at while one is stopping, and otherwise.
+const WATCH_STOPPING: Duration = Duration::from_millis(200);
+const WATCH: Duration = Duration::from_secs(1);
+
+impl Jobs {
+    /// Look at every job once: end what has ended, stop what ran past its
+    /// time, everything when `forced` says why every job must stop (the
+    /// person stopped agents, or the helper is on screen), carry stops on,
+    /// keep logs within their limit, and prune old records now and then.
+    /// What a job is, is read from its record each time, never from a count.
+    ///
+    /// # Errors
+    ///
+    /// Returns unavailable or poisoned supervision-state errors. Individual job observations
+    /// and cleanup failures remain represented in job records.
+    pub fn watch_once(&self, forced: Option<How>) -> Result<()> {
+        let mut state = self.state()?;
+        let now = now_ms();
+        let records = state.store.records();
+        let processes = self.processes();
+        for read in records {
+            let Found::Record(mut record) = read else {
+                continue;
+            };
+            if state.left_launched(&record) {
+                self.found_again(&mut state, &mut record, processes.as_deref());
+            }
+            self.look(&mut state, &mut record, processes.as_deref(), forced, now);
+            if state.store.bound_log(&record.id, self.log_limit) {
+                record.log_resets = record.log_resets.saturating_add(1);
+                state.store.put(&record);
+            }
+        }
+        self.count(&mut state);
+        if state
+            .pruned
+            .is_none_or(|pruned| pruned.elapsed() >= PRUNE_EVERY)
+        {
+            state.store.prune(now);
+            state.pruned = Some(Instant::now());
+        }
+        Ok(())
+    }
+
+    /// How long until the next look: sooner while a job is stopping.
+    pub(super) fn interval(&self) -> Result<Duration> {
+        Ok(if self.state()?.stopping {
+            WATCH_STOPPING
+        } else {
+            WATCH
+        })
+    }
+
+    /// Count again, from the records, the jobs that may still run and
+    /// whether one is stopping.
+    pub(super) fn count(&self, state: &mut State) {
+        let (mut running, mut stopping, mut unresolved) = (0, false, 0);
+        for read in state.store.records() {
+            match read {
+                // A job still launching is counted as launching.
+                Found::Record(record) if state.launching.contains(&record.id) => {}
+                Found::Unreadable(id) if state.launching.contains(&id) => {}
+                Found::Record(record) => {
+                    running += usize::from(record.state.live());
+                    stopping |= record.state == JobState::Stopping;
+                }
+                Found::Unreadable(_) => unresolved += 1,
+            }
+        }
+        state.running = running;
+        state.stopping = stopping;
+        state.unresolved = unresolved;
+    }
+
+    /// Look at one job: stop a running one when it must stop (as `forced`
+    /// says, or past its time), note its descendants, end it once nothing
+    /// of it is left, and carry a stop on.
+    pub(super) fn look(
+        &self,
+        state: &mut State,
+        record: &mut Record,
+        processes: Option<&[Info]>,
+        forced: Option<How>,
+        now: u64,
+    ) {
+        match record.state {
+            JobState::Running => {
+                let why = forced.or((now >= record.ends_at).then_some(How::Timeout));
+                if let Some(why) = why {
+                    return self.begin_stop(state, record, why, processes, now);
+                }
+                let verdict = self.judge(state, record, None);
+                if !self.settle(state, record, &verdict, How::Exited, processes)
+                    && verdict.signals()
+                {
+                    let before = record.seen.len();
+                    self.note_seen(record, processes);
+                    if record.seen.len() != before {
+                        state.store.put(record);
+                    }
+                }
+            }
+            JobState::Stopping => self.escalate(state, record, processes, now),
+            JobState::Starting | JobState::Launched | JobState::Ended => {}
+        }
+    }
+
+    /// Settle a job no start is attending to: one still the job's runs on,
+    /// adopted when this daemon did not start it, one that ended is ended,
+    /// and any other is shown as it is and never signalled.
+    pub(super) fn found_again(
+        &self,
+        state: &mut State,
+        record: &mut Record,
+        processes: Option<&[Info]>,
+    ) {
+        let verdict = self.judge(state, record, None);
+        if verdict.signals() {
+            if record.state == JobState::Launched {
+                record.state = JobState::Running;
+            }
+            record.adopted |= !state.children.contains_key(&record.id);
+            state.store.put(record);
+        } else {
+            self.settle(state, record, &verdict, How::Gone, processes);
+        }
+    }
+
+    /// Begin stopping `record` for `why`, with the grace no client asked for.
+    /// A fresh look decides: a job that has ended is ended; one whose
+    /// processes do not match it, or cannot be read, is marked stopping with
+    /// nothing sent, and is looked at again; otherwise the stop is kept
+    /// first, then TERM is sent, after another fresh look.
+    pub(super) fn begin_stop(
+        &self,
+        state: &mut State,
+        record: &mut Record,
+        why: How,
+        processes: Option<&[Info]>,
+        now: u64,
+    ) {
+        let verdict = self.judge(state, record, None);
+        if self.settle(state, record, &verdict, How::Exited, processes) {
+            return;
+        }
+        let mut stopping = Stopping::new(why, now, atlas_core::time::ms(JOB_GRACE));
+        if verdict.signals() {
+            self.note_seen(record, processes);
+        } else {
+            stopping.refused = Some(verdict.refusal().0);
+        }
+        record.state = JobState::Stopping;
+        record.stopping = Some(stopping);
+        state.store.put(record);
+        state.stopping = true;
+        if verdict.signals() {
+            self.send_term(state, record, processes, now);
+        }
+    }
+
+    /// Send the TERM a stop has not yet sent, after a fresh look.
+    fn send_term(
+        &self,
+        state: &mut State,
+        record: &mut Record,
+        processes: Option<&[Info]>,
+        now: u64,
+    ) {
+        let Some(mut stopping) = record.stopping.clone() else {
+            return;
+        };
+        match self.signal(state, record, None, Signal::SIGTERM) {
+            Signalled::Sent => stopping.term_reached(now),
+            Signalled::NotSent(verdict) => {
+                if self.settle(state, record, &verdict, stopping.why, processes) {
+                    return;
+                }
+                stopping.refused = Some(verdict.refusal().0);
+            }
+        }
+        record.stopping = Some(stopping);
+        state.store.put(record);
+    }
+
+    /// Carry a stop on: send the TERM it could not send yet; once its grace
+    /// has passed, KILL; once KILL has had its time, say how many are stuck
+    /// and send it again now and then for a minute; once nothing of it is
+    /// left, end it. Each signal is decided by a fresh look of its own.
+    fn escalate(
+        &self,
+        state: &mut State,
+        record: &mut Record,
+        processes: Option<&[Info]>,
+        now: u64,
+    ) {
+        let Some(mut stopping) = record.stopping.clone() else {
+            return;
+        };
+        if !stopping.term_sent {
+            return self.send_term(state, record, processes, now);
+        }
+        let seen = self.observe(state, record);
+        let verdict = verdict(record, None, &self.boot, self.uid, seen.as_ref());
+        if self.settle(state, record, &verdict, stopping.why, processes) {
+            return;
+        }
+        if !verdict.signals() {
+            let why = verdict.refusal().0;
+            if stopping.refused != Some(why) {
+                stopping.refused = Some(why);
+                record.stopping = Some(stopping);
+                state.store.put(record);
+            }
+            return;
+        }
+        self.note_seen(record, processes);
+        stopping.refused = None;
+
+        let after =
+            |since: u64, wait: Duration| now >= since.saturating_add(atlas_core::time::ms(wait));
+        let kill = match (stopping.killed, stopping.killed_last) {
+            (None, _) => after(stopping.since, Duration::from_millis(stopping.grace_ms)),
+            (Some(first), Some(last)) => {
+                after(first, KILLED) && after(last, KILL_AGAIN) && !after(first, KILL_FOR)
+            }
+            (Some(_), None) => true,
+        };
+        if stopping.killed.is_some_and(|first| after(first, KILLED)) {
+            stopping.stuck = seen
+                .as_ref()
+                .map(|seen| seen.members.iter().filter(|member| !member.zombie).count());
+        }
+        if kill {
+            match self.signal(state, record, None, Signal::SIGKILL) {
+                Signalled::Sent => {
+                    stopping.killed.get_or_insert(now);
+                    stopping.killed_last = Some(now);
+                    stopping.signal = Some("SIGKILL".into());
+                }
+                Signalled::NotSent(verdict) => {
+                    record.stopping = Some(stopping.clone());
+                    if self.settle(state, record, &verdict, stopping.why, processes) {
+                        return;
+                    }
+                    stopping.refused = Some(verdict.refusal().0);
+                }
+            }
+        }
+        if record.stopping.as_ref() != Some(&stopping) {
+            record.stopping = Some(stopping);
+            state.store.put(record);
+        }
+    }
+
+    /// End `record` when `verdict` says nothing of it can be signalled any
+    /// more: ended (`how`), its leader gone (its remaining processes are
+    /// listed, never signalled), its PID used again, or another boot.
+    /// Whether it was a verdict that ends the job.
+    pub(super) fn settle(
+        &self,
+        state: &mut State,
+        record: &mut Record,
+        verdict: &Verdict,
+        how: How,
+        processes: Option<&[Info]>,
+    ) -> bool {
+        match verdict {
+            Verdict::Ended => self.finish(state, record, how, processes, Vec::new()),
+            Verdict::LeaderGone { remaining } => {
+                let remaining = remaining.iter().map(as_left).collect();
+                self.finish(state, record, How::LeaderGone, processes, remaining)
+            }
+            Verdict::Reused => self.finish(state, record, How::Gone, processes, Vec::new()),
+            Verdict::Restarted => self.finish(state, record, How::Restarted, processes, Vec::new()),
+            Verdict::Signal { .. }
+            | Verdict::Identity
+            | Verdict::OtherAccount
+            | Verdict::Unknown => return false,
+        };
+        true
+    }
+
+    /// End `record` `how`: its leader's exit collected when this daemon
+    /// started it, and what left its group, with `remaining`, listed. A
+    /// leader of this daemon's that cannot be collected yet is looked at
+    /// again next time.
+    fn finish(
+        &self,
+        state: &mut State,
+        record: &mut Record,
+        how: How,
+        processes: Option<&[Info]>,
+        remaining: Vec<Left>,
+    ) {
+        let mut exit = None;
+        if let Some(child) = state.children.get_mut(&record.id) {
+            match child.try_wait() {
+                Ok(Some(status)) => exit = Some(status),
+                Ok(None) if ended_by_itself(how) => return,
+                Ok(None) | Err(_) => {}
+            }
+            state.children.remove(&record.id);
+        }
+        let mut left_over = remaining;
+        if let (Some(processes), Some(identity)) = (processes, record.identity()) {
+            for escaped in left(&record.seen, processes, identity.pgid(), self.uid) {
+                if !left_over.iter().any(|known| known.pid == escaped.pid) {
+                    left_over.push(escaped);
+                }
+            }
+        }
+        record.state = JobState::Ended;
+        record.ended = Some(Ended {
+            how,
+            at: now_ms(),
+            signal: record
+                .stopping
+                .as_ref()
+                .and_then(|stopping| stopping.signal.clone()),
+            exit_code: exit.and_then(|status| status.code()),
+            exit_signal: exit
+                .and_then(|status| status.signal())
+                .map(run::signal_name),
+            left: left_over,
+        });
+        state.store.put(record);
+    }
+
+    /// Find again, when the daemon starts, every job its records say may
+    /// still run: one whose leader is still the job's is supervised again,
+    /// one that ended or whose leader is gone is ended, and one whose
+    /// record cannot be read, or whose processes do not match it or cannot
+    /// be read, is shown as it is and never signalled.
+    pub(super) fn adopt(&self) -> Result<()> {
+        let mut state = self.state()?;
+        let processes = self.processes();
+        for read in state.store.records() {
+            let Found::Record(mut record) = read else {
+                continue;
+            };
+            if record.state.live() {
+                self.found_again(&mut state, &mut record, processes.as_deref());
+            }
+        }
+        self.count(&mut state);
+        Ok(())
+    }
+
+    pub(super) fn worker_outcome(
+        &self,
+        outcome: std::result::Result<Result<()>, tokio::task::JoinError>,
+    ) -> Result<()> {
+        let outcome = outcome.unwrap_or_else(|error| Err(Self::unavailable().with_source(error)));
+        if outcome.is_err() {
+            self.fail_supervision();
+        }
+        outcome
+    }
+
+    /// Note `record`'s descendants among `processes`, to report later which
+    /// left its group.
+    fn note_seen(&self, record: &mut Record, processes: Option<&[Info]>) {
+        let leader = record.identity().map(|identity| identity.leader());
+        let (Some(processes), Some(leader)) = (processes, leader) else {
+            return;
+        };
+        observe(&mut record.seen, &leader, processes, |pid| {
+            self.kernel.session(pid)
+        });
+    }
+}
+
+/// Whether a job that ended `how` ended of itself or by a signal, so a leader
+/// of this daemon's that cannot be collected yet is waited for: nothing else
+/// says it is gone.
+fn ended_by_itself(how: How) -> bool {
+    match how {
+        How::Exited | How::Stopped | How::Timeout | How::Person | How::OnConsole => true,
+        How::Gone | How::Restarted | How::LeaderGone => false,
+    }
+}
+
+/// Watch `jobs` until stopping: about once a second, five times a second
+/// while one is stopping. A Stop is seen through the input service's
+/// saved `stop_marker`; the helper on screen through `on_console`.
+pub(in crate::daemon) async fn supervise(
+    jobs: Arc<Jobs>,
+    stop_marker: PathBuf,
+    on_console: fn() -> bool,
+    mut stopping: tokio::sync::watch::Receiver<bool>,
+) -> Result<()> {
+    loop {
+        if *stopping.borrow() {
+            return Ok(());
+        }
+        tokio::select! {
+            _ = tokio::time::sleep(jobs.interval()?) => {}
+            _ = stopping.changed() => return Ok(()),
+        }
+        if *stopping.borrow() {
+            return Ok(());
+        }
+        let watched = jobs.clone();
+        let marker = stop_marker.clone();
+        let outcome = tokio::task::spawn_blocking(move || {
+            let stopped = marker.exists();
+            watched.watch_once(if on_console() {
+                Some(How::OnConsole)
+            } else {
+                stopped.then_some(How::Person)
+            })
+        })
+        .await;
+        jobs.worker_outcome(outcome)?;
+    }
+}

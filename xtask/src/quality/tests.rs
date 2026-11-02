@@ -13,10 +13,16 @@ fn fixture() -> &'static str {
 
 fn fixture_tree(source: &str) -> tempfile::TempDir {
     let directory = tempfile::tempdir().unwrap();
-    for path in ["src", "xtask/src", "tests", "scripts"] {
+    for path in [
+        "crates/fixture/src",
+        "crates/cli/tests",
+        "xtask/src",
+        "tests",
+        "scripts",
+    ] {
         fs::create_dir_all(directory.path().join(path)).unwrap();
     }
-    fs::write(directory.path().join("src/lib.rs"), source).unwrap();
+    fs::write(directory.path().join("crates/fixture/src/lib.rs"), source).unwrap();
     directory
 }
 
@@ -117,7 +123,7 @@ fn associated_test_items_exclude_attributes_and_documentation() {
     let report = inventory(directory.path()).unwrap();
     assert_eq!(report["files"][0]["production"], source.lines().count() - 8);
     let changed = source.replace("#[cfg(test)]", "#[cfg(feature = \"live\")]");
-    fs::write(directory.path().join("src/lib.rs"), &changed).unwrap();
+    fs::write(directory.path().join("crates/fixture/src/lib.rs"), &changed).unwrap();
     let report = inventory(directory.path()).unwrap();
     assert_eq!(report["files"][0]["production"], source.lines().count());
     assert!(
@@ -335,7 +341,7 @@ fn parent_unsafe_allowances_apply_to_child_files() {
     );
     assert!(!contexts[Path::new("src/child.rs")].allowed);
     let directory = fixture_tree(include_str!("../../fixtures/quality/parent.rs"));
-    fs::write(directory.path().join("src/child.rs"), source).unwrap();
+    fs::write(directory.path().join("crates/fixture/src/child.rs"), source).unwrap();
     let report = inventory(directory.path()).unwrap();
     let block = report["sites"]
         .as_array()
