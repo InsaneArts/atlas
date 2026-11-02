@@ -741,121 +741,134 @@ fn file_progress_at(sandbox: &Sandbox, operation: Operation, boundary: &str) -> 
         directories: Vec::new(),
         retained_directories: Vec::new(),
     };
-    store.save(&transaction).unwrap();
-    if boundary == "initial" {
-        return plan;
-    }
-    store.activate(&plan.id).unwrap();
-    let install = sandbox.home.join(format!(".atlas-{}-0-install", plan.id));
-    if operation != Operation::Unchanged {
-        atomic_install(&install, b"after", 0o600, true).unwrap();
-        if boundary == "unrecorded prepared inode" {
-            return plan;
+    let mut pending_ledger = None;
+    let mut active: Option<&str> = None;
+    assert!(store.active().unwrap().is_none());
+    'cut: {
+        assert!(transaction.valid_progress());
+        if boundary == "initial" {
+            break 'cut;
         }
-        transaction.progress[0].prepared = Some(fingerprint(&install).unwrap().unwrap());
-        store.save(&transaction).unwrap();
-        if boundary == "prepared evidence" {
-            return plan;
-        }
-        install_prepared(&install, &path, before.is_none()).unwrap();
-    }
-    if boundary == "installation" {
-        return plan;
-    }
-    let mut ledger = store.ledger().unwrap();
-    ledger.version = 1;
-    ledger.files.insert(
-        "file".into(),
-        Entry::Managed {
-            generation: plan.id.clone(),
-            fingerprint: fingerprint(&path).unwrap().unwrap(),
-        },
-    );
-    store.save_ledger(&ledger).unwrap();
-    if boundary == "apply ledger" {
-        return plan;
-    }
-    transaction.progress[0].applied = true;
-    store.save(&transaction).unwrap();
-    if boundary == "applied acknowledgement" {
-        return plan;
-    }
-    transaction.phase = Phase::Applied;
-    store.save(&transaction).unwrap();
-    store.finish(&plan.id).unwrap();
-    if boundary == "applied phase" {
-        return plan;
-    }
-    store.activate(&plan.id).unwrap();
-    transaction.phase = Phase::RollingBack;
-    store.save(&transaction).unwrap();
-    if boundary == "rollback intent" {
-        return plan;
-    }
-    if boundary == "kept ledger" || boundary == "kept acknowledgement" {
-        atomic_write(&path, b"helper edit", 0o600).unwrap();
-    } else if let Some((fingerprint, bytes)) = &before {
-        let restore = if operation == Operation::Unchanged {
-            fingerprint.clone()
-        } else {
-            let restore = sandbox.home.join(format!(".atlas-{}-0-restore", plan.id));
-            atomic_install(&restore, bytes, fingerprint.mode, true).unwrap();
-            if boundary == "unrecorded restore inode" {
-                return plan;
-            }
-            super::fingerprint(&restore).unwrap().unwrap()
-        };
-        transaction.progress[0].restore = Some(restore);
+        assert!(active.is_none_or(|id| id == plan.id.as_str()));
+        active = Some(plan.id.as_str());
+        let install = sandbox.home.join(format!(".atlas-{}-0-install", plan.id));
         if operation != Operation::Unchanged {
-            store.save(&transaction).unwrap();
-            if boundary == "restore evidence" {
-                return plan;
+            atomic_install(&install, b"after", 0o600, true).unwrap();
+            if boundary == "unrecorded prepared inode" {
+                break 'cut;
             }
+            transaction.progress[0].prepared = Some(fingerprint(&install).unwrap().unwrap());
+            assert!(transaction.valid_progress());
+            if boundary == "prepared evidence" {
+                break 'cut;
+            }
+            install_prepared(&install, &path, before.is_none()).unwrap();
         }
-    }
-    if boundary != "kept ledger" && boundary != "kept acknowledgement" {
-        transaction.progress[0].reverting = true;
-        store.save(&transaction).unwrap();
-        if boundary == "reverting intent" {
-            return plan;
+        if boundary == "installation" {
+            break 'cut;
         }
-        if operation != Operation::Unchanged {
-            if before.is_some() {
-                let restore = sandbox.home.join(format!(".atlas-{}-0-restore", plan.id));
-                install_prepared(&restore, &path, false).unwrap();
+        let ledger = pending_ledger.insert(store.ledger().unwrap());
+        ledger.version = 1;
+        ledger.files.insert(
+            "file".into(),
+            Entry::Managed {
+                generation: plan.id.clone(),
+                fingerprint: fingerprint(&path).unwrap().unwrap(),
+            },
+        );
+        if boundary == "apply ledger" {
+            break 'cut;
+        }
+        transaction.progress[0].applied = true;
+        assert!(transaction.valid_progress());
+        if boundary == "applied acknowledgement" {
+            break 'cut;
+        }
+        transaction.phase = Phase::Applied;
+        assert!(transaction.valid_progress());
+        assert_eq!(active, Some(plan.id.as_str()));
+        active = None;
+        if boundary == "applied phase" {
+            break 'cut;
+        }
+        assert!(active.is_none_or(|id| id == plan.id.as_str()));
+        active = Some(plan.id.as_str());
+        transaction.phase = Phase::RollingBack;
+        assert!(transaction.valid_progress());
+        if boundary == "rollback intent" {
+            break 'cut;
+        }
+        if boundary == "kept ledger" || boundary == "kept acknowledgement" {
+            atomic_write(&path, b"helper edit", 0o600).unwrap();
+        } else if let Some((fingerprint, bytes)) = &before {
+            let restore = if operation == Operation::Unchanged {
+                fingerprint.clone()
             } else {
-                unlink(&path, false).unwrap();
+                let restore = sandbox.home.join(format!(".atlas-{}-0-restore", plan.id));
+                atomic_install(&restore, bytes, fingerprint.mode, true).unwrap();
+                if boundary == "unrecorded restore inode" {
+                    break 'cut;
+                }
+                super::fingerprint(&restore).unwrap().unwrap()
+            };
+            transaction.progress[0].restore = Some(restore);
+            if operation != Operation::Unchanged {
+                assert!(transaction.valid_progress());
+                if boundary == "restore evidence" {
+                    break 'cut;
+                }
             }
         }
-        if boundary == "file restoration" {
-            return plan;
+        if boundary != "kept ledger" && boundary != "kept acknowledgement" {
+            transaction.progress[0].reverting = true;
+            assert!(transaction.valid_progress());
+            if boundary == "reverting intent" {
+                break 'cut;
+            }
+            if operation != Operation::Unchanged {
+                if before.is_some() {
+                    let restore = sandbox.home.join(format!(".atlas-{}-0-restore", plan.id));
+                    install_prepared(&restore, &path, false).unwrap();
+                } else {
+                    unlink(&path, false).unwrap();
+                }
+            }
+            if boundary == "file restoration" {
+                break 'cut;
+            }
         }
-    }
-    let previous = match &plan.files[0].previous {
-        Some(Entry::Managed { generation, .. }) => Some(Entry::Managed {
-            generation: generation.clone(),
-            fingerprint: transaction.progress[0]
-                .restore
-                .clone()
-                .unwrap_or_else(|| plan.files[0].before.clone().unwrap()),
-        }),
-        entry => entry.clone(),
-    };
-    if let Some(previous) = previous {
-        ledger.files.insert("file".into(), previous);
-    } else {
-        ledger.files.remove(Path::new("file"));
-    }
-    store.save_ledger(&ledger).unwrap();
-    if boundary == "restore ledger" || boundary == "kept ledger" {
-        return plan;
-    }
-    if boundary == "kept acknowledgement" {
-        transaction.progress[0].complete_kept();
-    } else {
-        transaction.progress[0].restored = true;
+        let previous = match &plan.files[0].previous {
+            Some(Entry::Managed { generation, .. }) => Some(Entry::Managed {
+                generation: generation.clone(),
+                fingerprint: transaction.progress[0]
+                    .restore
+                    .clone()
+                    .unwrap_or_else(|| plan.files[0].before.clone().unwrap()),
+            }),
+            entry => entry.clone(),
+        };
+        if let Some(previous) = previous {
+            ledger.files.insert("file".into(), previous);
+        } else {
+            ledger.files.remove(Path::new("file"));
+        }
+        if boundary == "restore ledger" || boundary == "kept ledger" {
+            break 'cut;
+        }
+        if boundary == "kept acknowledgement" {
+            transaction.progress[0].complete_kept();
+        } else {
+            transaction.progress[0].restored = true;
+        }
+        assert!(transaction.valid_progress());
     }
     store.save(&transaction).unwrap();
+    if let Some(ledger) = pending_ledger {
+        store.save_ledger(&ledger).unwrap();
+    }
+    if let Some(id) = active {
+        store.activate(id).unwrap();
+    }
     plan
 }
 
