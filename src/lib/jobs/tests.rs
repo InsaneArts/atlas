@@ -242,6 +242,10 @@ async fn a_job_stop_waits_without_control() {
     let client = agent(client_in(dir.path()), "job-stop");
     let shows = Arc::new(Mutex::new(0));
     let counted = shows.clone();
+    let (observed, waiting_for_show) = tokio::sync::oneshot::channel();
+    let observed = Mutex::new(Some(observed));
+    let allow_ended = Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let ending = allow_ended.clone();
     stand_in(&client.config.socket_path, move |request| {
         Some(match request["action"].as_str() {
             Some("stop") => json!({"ok": true, "op": "job", "action": "stop",
@@ -249,8 +253,12 @@ async fn a_job_stop_waits_without_control() {
             _ => {
                 let mut count = counted.lock().unwrap();
                 *count += 1;
-                let mut view = job_view(ID, if *count < 3 { "stopping" } else { "ended" });
-                if *count >= 3 {
+                let ended = *count >= 3 && ending.load(std::sync::atomic::Ordering::Acquire);
+                let mut view = job_view(ID, if ended { "ended" } else { "stopping" });
+                if let Some(observed) = observed.lock().unwrap().take() {
+                    observed.send(()).unwrap();
+                }
+                if ended {
                     view["how"] = json!("stopped");
                     view["signal"] = json!("SIGTERM");
                     view["left"] = json!([]);
@@ -284,8 +292,15 @@ async fn a_job_stop_waits_without_control() {
     );
     let other = client_in(dir.path());
     let (reply, taken) = tokio::join!(waiting, async {
-        tokio::time::sleep(Duration::from_millis(100)).await;
-        other.controller.acquire(false).map(drop)
+        tokio::time::timeout(Duration::from_secs(5), waiting_for_show)
+            .await
+            .expect("The stop must reach its waiting phase")
+            .unwrap();
+        let taken = other.controller.acquire(false).map(drop);
+        // End the fixture even on acquisition failure so the assertion below
+        // reports exclusion, rather than waiting for the job's grace deadline.
+        allow_ended.store(true, std::sync::atomic::Ordering::Release);
+        taken
     });
     assert!(taken.is_ok(), "another agent acts while the stop waits");
     assert_eq!(reply["state"], "ended", "{reply}");

@@ -26,28 +26,42 @@ async fn ask(server: &Server, method: &str, params: Value) -> Value {
     reply.value
 }
 
-#[tokio::test]
+#[tokio::test(start_paused = true)]
 async fn maintenance_ticks_never_lose_a_partially_read_request() {
+    use std::{
+        cell::Cell,
+        future::{Future, poll_fn},
+        task::Poll,
+    };
+
     let (mut writer, reader) = tokio::io::duplex(256);
-    let sending = tokio::spawn(async move {
-        writer.write_all(b"{\"id\":").await.unwrap();
-        tokio::time::sleep(Duration::from_millis(35)).await;
-        writer.write_all(b"1,\"method\":\"ping\"}\n").await.unwrap();
-    });
+    writer.write_all(b"{\"id\":").await.unwrap();
     let mut reader = BufReader::new(reader);
     let mut ticks = tokio::time::interval(Duration::from_millis(5));
-    let mut swept = 0;
-    let line = next_with_maintenance(&mut reader, &mut ticks, || swept += 1)
-        .await
-        .unwrap()
-        .unwrap()
-        .unwrap();
-    assert!(swept >= 2);
+    let swept = Cell::new(0);
+    let next = next_with_maintenance(&mut reader, &mut ticks, || swept.set(swept.get() + 1));
+    tokio::pin!(next);
+    // Consume the prefix before advancing any maintenance deadline.
+    poll_fn(|cx| {
+        assert!(next.as_mut().poll(cx).is_pending());
+        Poll::Ready(())
+    })
+    .await;
+    for _ in 0..2 {
+        tokio::time::advance(Duration::from_millis(5)).await;
+        poll_fn(|cx| {
+            assert!(next.as_mut().poll(cx).is_pending());
+            Poll::Ready(())
+        })
+        .await;
+    }
+    assert!(swept.get() >= 2);
+    writer.write_all(b"1,\"method\":\"ping\"}\n").await.unwrap();
+    let line = next.await.unwrap().unwrap().unwrap();
     assert_eq!(
         serde_json::from_str::<Value>(&line).unwrap(),
         json!({"id":1,"method":"ping"})
     );
-    sending.await.unwrap();
 }
 
 fn names(listed: &Value) -> Vec<String> {

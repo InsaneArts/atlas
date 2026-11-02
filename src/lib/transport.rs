@@ -724,17 +724,25 @@ mod tests {
     #[tokio::test]
     async fn a_refusal_sent_before_the_request_is_heard() {
         let (_dir, listener, transport) = listening();
+        let (refuse, ready_to_refuse) = tokio::sync::oneshot::channel();
+        let (closed, peer_closed) = tokio::sync::oneshot::channel();
         tokio::spawn(async move {
-            while let Ok((stream, _)) = listener.accept().await {
-                crate::native::endpoint::turn_away(
-                    stream,
-                    &crate::daemon::protocol::failure(Code::Busy, "Too many requests"),
-                );
-            }
+            let (stream, _) = listener.accept().await.unwrap();
+            // Keep this exact connection open through peer verification.
+            ready_to_refuse.await.unwrap();
+            crate::native::endpoint::turn_away(
+                stream,
+                &crate::daemon::protocol::failure(Code::Busy, "Too many requests"),
+            );
+            closed.send(()).unwrap();
         });
 
         let pending = transport.connect().await.unwrap();
-        tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+        refuse.send(()).unwrap();
+        tokio::time::timeout(std::time::Duration::from_secs(5), peer_closed)
+            .await
+            .expect("The verified peer must refuse and close before dispatch")
+            .unwrap();
 
         let refused = pending
             .dispatch(&json!({"op": "run", "pad": "x".repeat(512 * 1024)}))
