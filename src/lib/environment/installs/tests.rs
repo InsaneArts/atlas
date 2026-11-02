@@ -349,11 +349,15 @@ fn a_changed_bundle_is_kept_and_reported() {
             fs::write(app.join("Contents/Resources/new.txt"), "new").unwrap();
         }),
         ("a mode changed", |app| {
-            fs::set_permissions(
-                app.join("Contents/Resources/strings.txt"),
-                fs::Permissions::from_mode(0o600),
-            )
-            .unwrap();
+            let resource = app.join("Contents/Resources/strings.txt");
+            let mode = fs::metadata(&resource).unwrap().permissions().mode();
+            assert_ne!(mode & 0o200, 0, "the new resource is owner-writable");
+            // Remove an existing permission: a private umask may already create 0600.
+            fs::set_permissions(&resource, fs::Permissions::from_mode(mode & !0o200)).unwrap();
+            assert_eq!(
+                fs::metadata(resource).unwrap().permissions().mode(),
+                mode & !0o200
+            );
         }),
         ("the executable replaced", |app| {
             let executable = app.join("Contents/MacOS/Probe");
