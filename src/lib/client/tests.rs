@@ -1529,6 +1529,109 @@ async fn a_busy_input_service_says_who_holds_control() {
     }
 }
 
+/// A positive native Stop acknowledgement followed by a controlled job reply.
+async fn stop_with_job_reply(reply: Value) -> (tempfile::TempDir, Client, Value) {
+    let (dir, mut client, input, _session) = native_client();
+    client.actor = Actor::Viewer;
+    let daemon = UnixListener::bind(&client.config.socket_path).unwrap();
+    let mut caller = Box::pin(client.hold(true));
+    let mut hello = dispatched(&mut caller, &input, "hello").await;
+    assert!(client.controller.stop_noted());
+    answer(&mut hello, json!({"ok": true, "capabilities": ["hold"]})).await;
+    let (mut hold, request) = received(&mut caller, &input, "hold").await;
+    assert_eq!(request, json!({"op": "hold", "on": true}));
+    answer(&mut hold, json!({"ok": true, "held": true, "kept": true})).await;
+    let (mut jobs, request) = received(&mut caller, &daemon, "job").await;
+    assert_eq!(
+        request,
+        json!({"op": "job", "action": "stop-all", "reason": "person"})
+    );
+    answer(&mut jobs, reply).await;
+    let result = caller.await.unwrap();
+    assert!(client.controller.stop_noted());
+    assert_eq!(result["ok"], true);
+    assert_eq!(result["held"], true);
+    assert_eq!(result["kept"], true);
+    assert!(result.get("uncertain").is_none());
+    (dir, client, result)
+}
+
+#[tokio::test]
+async fn an_unconfirmed_stop_all_reply_never_fabricates_an_empty_job_summary() {
+    let wrong_variant = json!({"ok": true, "action": "show", "jobs": []});
+    assert!(matches!(
+        serde_json::from_value::<crate::daemon::protocol::JobReply>(wrong_variant.clone()).unwrap(),
+        crate::daemon::protocol::JobReply::Show(_)
+    ));
+    for mut reply in [
+        wrong_variant,
+        json!({"ok": true}),
+        json!({"ok": true, "action": "future-stop", "code": "bad-request"}),
+        json!({"ok": true, "action": "stop-all", "unresolved": false}),
+        json!({"ok": true, "action": "stop-all", "refused": null}),
+        json!({"ok": true, "action": "stop-all", "stopping": -1}),
+        json!({"ok": true, "action": "stop-all", "uncertain": true}),
+    ] {
+        reply["extension"] = json!("private-stop-all-reply-canary");
+        let (_dir, _client, result) = stop_with_job_reply(reply).await;
+        assert!(result.get("jobs").is_none(), "{result}");
+        assert_eq!(
+            result["warnings"],
+            json!(["Atlas could not confirm whether the helper stopped its background jobs"])
+        );
+        assert!(!result.to_string().contains("private-stop-all-reply-canary"));
+    }
+}
+
+#[tokio::test]
+async fn confirmed_stop_all_replies_keep_legacy_defaults_and_partial_job_warnings() {
+    for (reply, expected, warning) in [
+        (
+            json!({"ok": true, "action": "stop-all"}),
+            Some(
+                json!({"stopping": 0, "ended": 0, "refused": [], "unknown": [], "unresolved": []}),
+            ),
+            None,
+        ),
+        (
+            json!({"ok": true, "action": "stop-all", "stopping": 1, "uncertain": false, "extension": "private-stop-all-reply-canary"}),
+            Some(
+                json!({"stopping": 1, "ended": 0, "refused": [], "unknown": [], "unresolved": []}),
+            ),
+            None,
+        ),
+        (
+            json!({"ok": true, "action": "stop-all", "stopping": 1, "ended": 2,
+                "refused": [{"id": "000000000001", "reason": "identity", "extension": "private-stop-all-reply-canary"}],
+                "unknown": [{"id": "000000000002"}], "unresolved": [{"id": "000000000003"}]}),
+            Some(json!({"stopping": 1, "ended": 2,
+                "refused": [{"id": "000000000001", "reason": "identity"}],
+                "unknown": [{"id": "000000000002"}], "unresolved": [{"id": "000000000003"}]})),
+            Some(
+                "The helper did not stop 3 background jobs, as it could not tell they are still Atlas's; atlas job list --all shows them",
+            ),
+        ),
+        (
+            json!({"ok": false, "code": "bad-request", "error": "private-stop-all-reply-canary"}),
+            None,
+            None,
+        ),
+        (
+            json!({"ok": false, "code": "bad-request", "error": "private-stop-all-reply-canary", "uncertain": true}),
+            None,
+            Some("Atlas could not reach the helper to end its background jobs"),
+        ),
+    ] {
+        let (_dir, _client, result) = stop_with_job_reply(reply).await;
+        assert_eq!(result.get("jobs"), expected.as_ref());
+        assert_eq!(
+            result.get("warnings").cloned(),
+            warning.map(|warning| json!([warning]))
+        );
+        assert!(!result.to_string().contains("private-stop-all-reply-canary"));
+    }
+}
+
 /// A status reply sufficient for repinning preflight. It deliberately
 /// lacks the independent proof required by later session verification.
 fn repinnable_status(session: &Session) -> Value {

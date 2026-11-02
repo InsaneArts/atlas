@@ -4,7 +4,7 @@
 //! under way hears of it from either side's saved marker.
 use super::{Actor, Client};
 use crate::{
-    daemon::protocol::{JobReply, StoppedAll},
+    daemon::protocol::JobReply,
     error::{Code, Error, Result},
     session::{HOLD, has_capability},
     transport::Transport,
@@ -64,8 +64,16 @@ impl Client {
             // cannot read may still run.
             Ok(reply) if reply["ok"] == true => {
                 let jobs = match JobReply::deserialize(&reply) {
-                    Ok(JobReply::StopAll(jobs)) => jobs,
-                    _ => StoppedAll::default(),
+                    Ok(JobReply::StopAll(jobs)) if reply["uncertain"] != true => jobs,
+                    _ => {
+                        return (
+                            None,
+                            Some(
+                                "Atlas could not confirm whether the helper stopped its background jobs"
+                                    .to_owned(),
+                            ),
+                        );
+                    }
                 };
                 let left = jobs.refused.len() + jobs.unknown.len() + jobs.unresolved.len();
                 let warning = (left > 0).then(|| {
@@ -77,8 +85,15 @@ impl Client {
                 });
                 (Some(json!(jobs)), warning)
             }
-            Ok(reply) if reply["code"] == "bad-request" => (None, None),
-            Err(error) if error.code == Code::Io && !self.config.socket_path.exists() => {
+            Ok(reply) if reply["code"] == "bad-request" && reply["uncertain"] != true => {
+                (None, None)
+            }
+            // A removed socket does not acknowledge a request already sent.
+            Err(error)
+                if error.code == Code::Io
+                    && !error.uncertain
+                    && !self.config.socket_path.exists() =>
+            {
                 (None, None)
             }
             _ => (
