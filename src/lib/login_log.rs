@@ -7,7 +7,7 @@
 //! UserAccountUpdater macOS runs at a login to bring the account up to date.
 use crate::error::{Code, Error, Result};
 use serde_json::{Value, json};
-use std::{collections::BTreeSet, process::Command, sync::OnceLock};
+use std::{collections::BTreeSet, process::Command, sync::OnceLock, time::Duration};
 
 /// The unified log subsystem Atlas's markers go to.
 const SUBSYSTEM: &str = "com.insanearts.atlas";
@@ -41,14 +41,23 @@ const PREDICATE: &str = "(subsystem == \"com.insanearts.atlas\" AND category == 
      (process == \"loginwindow\" AND category == \"KeyMilestone\") OR \
      process == \"UserAccountUpdater\"";
 
+/// Maximum retained bytes in each OS-log query stream, not a reply-size budget.
+const OUTPUT_LIMIT: usize = 8 * 1024 * 1024;
+/// The command's execution deadline; owned pipe draining and cleanup follow it.
+const QUERY_LIMIT: Duration = Duration::from_secs(30);
+
 /// The last login of the past two hours, step by step, from the unified
 /// log.
 ///
 /// # Errors
 ///
-/// Returns failures invoking or decoding the operating system's login-log query.
+/// Returns an I/O failure if the query cannot start or complete within thirty seconds,
+/// either stream exceeds eight MiB, pipe reading or child cleanup fails, or the tool
+/// exits unsuccessfully. No partial timeline or raw system-log error text is returned.
+/// This read-only query does not change helper input or acknowledge pending work.
 pub fn timing() -> Result<Value> {
-    let output = Command::new("/usr/bin/log")
+    let mut command = Command::new("/usr/bin/log");
+    command
         .args([
             "show",
             "--last",
@@ -57,17 +66,23 @@ pub fn timing() -> Result<Value> {
             "ndjson",
             "--predicate",
         ])
-        .arg(PREDICATE)
-        .stdin(std::process::Stdio::null())
-        .output()?;
+        .arg(PREDICATE);
+    extract(&mut command, QUERY_LIMIT, OUTPUT_LIMIT)
+}
+
+/// Decode only a complete successful query. The command seam keeps fixtures out
+/// of the system log and permits exercising the actual owned process/pipe path.
+fn extract(command: &mut Command, limit: Duration, cap: usize) -> Result<Value> {
+    let failed = || Error::new(Code::Io, "macOS could not read its log");
+    let output = crate::bounded::output_with_limit(command, limit, cap)
+        .map_err(|cause| failed().with_source(cause))?;
     if !output.status.success() {
-        return Err(Error::new(
-            Code::Io,
-            format!(
-                "macOS could not read its log: {}",
-                String::from_utf8_lossy(&output.stderr).trim()
-            ),
-        ));
+        // The exit status is actionable; arbitrary OS-log stderr is private content,
+        // not a diagnostic. Retain the status without copying either output stream.
+        return Err(failed().with_source(std::io::Error::other(format!(
+            "log show exited with {}",
+            output.status
+        ))));
     }
 
     let events: Vec<Event> = String::from_utf8_lossy(&output.stdout)
@@ -314,6 +329,9 @@ fn summarize(events: &[Event]) -> Value {
         "markers": markers,
     })
 }
+
+#[cfg(test)]
+mod extraction_tests;
 
 #[cfg(test)]
 mod tests {

@@ -49,7 +49,13 @@ pub(crate) fn output(command: &mut Command, limit: Duration) -> io::Result<Outpu
     output_with_limit(command, limit, usize::MAX)
 }
 
-fn output_with_limit(command: &mut Command, limit: Duration, cap: usize) -> io::Result<Output> {
+/// Run an owned command with a byte ceiling for each stream. Overflow fails the
+/// complete observation; no partial output is returned as a successful result.
+pub(crate) fn output_with_limit(
+    command: &mut Command,
+    limit: Duration,
+    cap: usize,
+) -> io::Result<Output> {
     let deadline = Instant::now() + limit;
     let mut child = command
         .stdin(Stdio::null())
@@ -1088,7 +1094,7 @@ mod tests {
 }
 
 #[cfg(test)]
-mod faults {
+pub(crate) mod faults {
     use std::{
         cell::{Cell, RefCell},
         collections::VecDeque,
@@ -1096,7 +1102,7 @@ mod faults {
     };
 
     #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-    pub(super) enum Operation {
+    pub(crate) enum Operation {
         Configure,
         Read,
         Poll,
@@ -1115,7 +1121,7 @@ mod faults {
         CHILD.set(pid);
     }
 
-    pub(super) fn child() -> u32 {
+    pub(crate) fn child() -> u32 {
         CHILD.get()
     }
 
@@ -1127,7 +1133,7 @@ mod faults {
         SIGNALS.get()
     }
 
-    pub(super) fn inject(errors: impl IntoIterator<Item = (Operation, io::Error)>) {
+    pub(crate) fn inject(errors: impl IntoIterator<Item = (Operation, io::Error)>) {
         PENDING.with(|pending| {
             let mut pending = pending.borrow_mut();
             assert!(pending.is_empty(), "all injected failures were exercised");

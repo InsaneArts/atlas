@@ -78,6 +78,29 @@ interrupt active sessions or background jobs, run the needed CLI command with
 
 For an interrupted setup or a managed-layout repair, `atlas setup` inspects the current state. `atlas setup --apply` applies or resumes the migration; `atlas setup --rollback` restores the previous job and configuration when such a migration has something to restore. Use these advanced operations for the setup issue Atlas reports. Guided first-time setup remains `atlas init` or the app's setup window.
 
+## Login timing diagnostics
+
+`atlas doctor --login-timing` reads the last two hours of Atlas login markers and
+selected macOS login milestones from the unified log. macOS owns that log's
+storage, permissions and retention; Atlas does not rotate it or change its access
+policy. Atlas's login markers describe fixed steps, user IDs and durations, not
+passwords or typed input.
+
+The query has a 30-second execution deadline and retains at most 8 MiB from each
+of stdout and stderr. Those are subprocess resource limits, not truncation of a
+successful timeline. If either stream exceeds its limit, the tool fails, pipes
+cannot be read, or child cleanup is unconfirmed, the command reports an I/O
+failure instead of a partial or misleading empty timeline. Raw system-log stderr
+is not copied into the error reply. Normal successful summaries keep the same
+fields and two-hour selection window.
+
+The query runs in its own process group. After a failure Atlas closes its readers,
+stops the group and reaps the child; errors retain the underlying cause internally,
+including unconfirmed cleanup. Pipes held by descendants have a separate bounded
+drain period. This diagnosis does not send helper input, clear pending actions or
+replay a login. Do not lock, switch accounts or remove recovery records merely to
+populate a timing report.
+
 ## Uninstall
 
 Run uninstall from your own account, with the helper off screen. Save any helper work you need first. Uninstall logs the helper out, so its apps quit. It may ask for your password through macOS.
