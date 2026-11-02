@@ -624,7 +624,13 @@ async fn swap_using(
 
     // Staging can take time. Check the staged executable only once that
     // work is done, while the caller still owns controller exclusion.
-    if let Err(error) = preflight(&staged.join(EXECUTABLE)).await {
+    let program = staged.join(EXECUTABLE);
+    let prepared = preflight(&program)
+        .await
+        .and_then(|()| require_helper_access(&program));
+    if let Err(error) = prepared {
+        // No handover was recorded or bundle exchanged; a leftover staging
+        // copy is best-effort housekeeping, not acknowledged helper work.
         let _ = fs::remove_dir_all(&staged);
         return Err(error);
     }
@@ -666,7 +672,10 @@ async fn resume(
 ) -> Result<()> {
     let previous = resume_source(record, installed);
     let next = previous.as_deref().unwrap_or(installed);
-    preflight(&next.join(EXECUTABLE)).await?;
+    let program = next.join(EXECUTABLE);
+    preflight(&program).await?;
+    // Refusal preserves both the recorded handover and candidate for recovery.
+    require_helper_access(&program)?;
     if let Some(previous) = previous {
         exchange(&previous, installed)?;
     }
@@ -690,14 +699,30 @@ fn resume_source(record: &Value, installed: &Path) -> Option<PathBuf> {
 /// every directory above it searchable and the file readable and executable
 /// by others. ACLs are not counted, so this errs on the side of refusing.
 pub(crate) fn reachable_by_others(executable: &Path) -> bool {
+    // These callers ask only for classification. Replacement uses the fallible
+    // gate directly so filesystem causes are retained rather than projected away.
+    require_helper_access(executable).is_ok()
+}
+
+/// The same conservative mode policy for an update candidate, before exchange.
+fn require_helper_access(executable: &Path) -> Result<()> {
     use std::os::unix::fs::PermissionsExt;
 
-    let mode = |path: &Path| fs::metadata(path).map(|metadata| metadata.permissions().mode());
-    mode(executable).is_ok_and(|mode| mode & 0o005 == 0o005)
-        && executable
-            .ancestors()
-            .skip(1)
-            .all(|directory| mode(directory).is_ok_and(|mode| mode & 0o001 != 0))
+    let refused = || problem("Atlas.app must be readable and executable by the helper account");
+    let mode = |path: &Path| {
+        fs::metadata(path)
+            .map(|metadata| metadata.permissions().mode())
+            .map_err(|error| refused().with_source(error))
+    };
+    if mode(executable)? & 0o005 != 0o005 {
+        return Err(refused());
+    }
+    for directory in executable.ancestors().skip(1) {
+        if mode(directory)? & 0o001 == 0 {
+            return Err(refused());
+        }
+    }
+    Ok(())
 }
 
 /// Replace the installed app with the release from `source` when it is newer
@@ -1112,6 +1137,142 @@ mod tests {
         assert!(copies(&installed, update_copy).is_empty());
     }
 
+    #[tokio::test]
+    async fn private_staged_apps_are_refused_before_recording_or_replacing_the_installation() {
+        use std::os::unix::fs::PermissionsExt;
+
+        for (relative, mode) in [
+            ("", 0o700),
+            ("Contents", 0o700),
+            ("Contents/MacOS", 0o700),
+            (EXECUTABLE, 0o700),
+            (EXECUTABLE, 0o744),
+            (EXECUTABLE, 0o711),
+        ] {
+            let directory = tempfile::Builder::new().tempdir_in("/tmp").unwrap();
+            let (installed, _, record) = installation(directory.path());
+            let original = fs::read(installed.join(EXECUTABLE)).unwrap();
+            let new = directory.path().join("unpacked/Atlas.app");
+            let executable = new.join(EXECUTABLE);
+            fs::create_dir_all(executable.parent().unwrap()).unwrap();
+            fs::write(&executable, b"new candidate").unwrap();
+            for path in executable
+                .ancestors()
+                .take_while(|path| path.starts_with(&new))
+            {
+                fs::set_permissions(path, fs::Permissions::from_mode(0o755)).unwrap();
+            }
+            fs::set_permissions(new.join(relative), fs::Permissions::from_mode(mode)).unwrap();
+            let mut checked = false;
+            let error = swap(
+                &new,
+                &installed,
+                "Atlas-9.9.9-macos.zip",
+                &record,
+                async |program| {
+                    checked = true;
+                    assert_eq!(fs::read(program).unwrap(), b"new candidate");
+                    assert!(!record.exists());
+                    Ok(())
+                },
+            )
+            .await
+            .unwrap_err();
+            assert!(checked, "existing preflight checks still run first");
+            assert_eq!(error.code, Code::Update);
+            assert_eq!(fs::read(installed.join(EXECUTABLE)).unwrap(), original);
+            assert!(!record.exists());
+            assert!(copies(&installed, update_copy).is_empty());
+            assert_eq!(fs::read(executable).unwrap(), b"new candidate");
+        }
+    }
+
+    #[tokio::test]
+    async fn a_recorded_private_candidate_is_retained_without_exchange_on_resume() {
+        let directory = tempfile::Builder::new().tempdir_in("/tmp").unwrap();
+        let (installed, _, path) = installation(directory.path());
+        let previous = installed
+            .parent()
+            .unwrap()
+            .join(format!("{STAGED}{UPDATE}{}", crate::files::token()));
+        fs::create_dir_all(previous.join("Contents/MacOS")).unwrap();
+        fs::write(previous.join(EXECUTABLE), b"private candidate").unwrap();
+        let record = json!({
+            "installed": installed,
+            "previous": previous,
+            "executable": crate::digest::file_sha256(&previous.join(EXECUTABLE)).unwrap(),
+        });
+        let bytes = serde_json::to_vec(&record).unwrap();
+        crate::config::save_private(&path, &bytes).unwrap();
+        let mut checked = false;
+        let error = resume(&record, &installed, async |program| {
+            checked = true;
+            assert_eq!(program, previous.join(EXECUTABLE));
+            Ok(())
+        })
+        .await
+        .unwrap_err();
+        assert!(checked);
+        assert_eq!(error.code, Code::Update);
+        assert!(!error.uncertain);
+        assert_eq!(fs::read(&path).unwrap(), bytes);
+        assert_eq!(
+            fs::read(installed.join(EXECUTABLE)).unwrap(),
+            b"installed app stays"
+        );
+        assert_eq!(
+            fs::read(previous.join(EXECUTABLE)).unwrap(),
+            b"private candidate"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_missing_staged_executable_keeps_its_private_io_cause_without_replacement() {
+        use std::error::Error as _;
+
+        let directory = tempfile::Builder::new().tempdir_in("/tmp").unwrap();
+        let (installed, _, record) = installation(directory.path());
+        let new = directory.path().join("unpacked/Atlas.app");
+        fs::create_dir_all(new.join("Contents/MacOS")).unwrap();
+        fs::write(new.join(EXECUTABLE), b"candidate").unwrap();
+        let error = swap_using(
+            &new,
+            &installed,
+            "Atlas-9.9.9-macos.zip",
+            &record,
+            async |_| Ok(()),
+            |new, staged| {
+                stage(new, staged)?;
+                fs::remove_file(staged.join(EXECUTABLE))?;
+                Ok(())
+            },
+        )
+        .await
+        .unwrap_err();
+        assert_eq!(error.code, Code::Update);
+        assert!(!error.uncertain);
+        assert_eq!(
+            error
+                .source()
+                .unwrap()
+                .downcast_ref::<std::io::Error>()
+                .unwrap()
+                .kind(),
+            std::io::ErrorKind::NotFound
+        );
+        assert!(
+            !serde_json::to_string(&error)
+                .unwrap()
+                .contains(directory.path().to_str().unwrap())
+        );
+        assert!(!record.exists());
+        assert!(copies(&installed, update_copy).is_empty());
+        assert_eq!(
+            fs::read(installed.join(EXECUTABLE)).unwrap(),
+            b"installed app stays"
+        );
+    }
+
     #[test]
     fn a_check_reads_the_newest_release_and_installs_nothing() {
         let dir = tempfile::tempdir().unwrap();
@@ -1274,7 +1435,9 @@ mod tests {
 
     #[tokio::test]
     async fn a_swap_is_recorded_first_and_finishing_removes_only_the_staged_copy() {
-        let dir = tempfile::tempdir().unwrap();
+        use std::os::unix::fs::PermissionsExt;
+
+        let dir = tempfile::Builder::new().tempdir_in("/tmp").unwrap();
         let root = fs::canonicalize(dir.path()).unwrap();
         let installed = root.join("Applications/Atlas.app");
         let new = root.join("unpacked/Atlas.app");
@@ -1282,6 +1445,13 @@ mod tests {
             fs::create_dir_all(app.join("Contents/MacOS")).unwrap();
             fs::write(app.join("version"), version).unwrap();
             fs::write(app.join(EXECUTABLE), version).unwrap();
+            for path in app
+                .join(EXECUTABLE)
+                .ancestors()
+                .take_while(|path| path.starts_with(&root))
+            {
+                fs::set_permissions(path, fs::Permissions::from_mode(0o755)).unwrap();
+            }
         }
 
         // A staging copy a stopped update left behind is swept first; a
@@ -1378,6 +1548,7 @@ mod tests {
         // A swap that cannot exchange leaves no record and no staged copy.
         let missing = root.join("Elsewhere/Atlas.app");
         fs::create_dir_all(missing.parent().unwrap()).unwrap();
+        fs::set_permissions(missing.parent().unwrap(), fs::Permissions::from_mode(0o755)).unwrap();
         assert!(
             swap(&new, &missing, "x", &record, async |_| Ok(()))
                 .await

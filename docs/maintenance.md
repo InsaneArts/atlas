@@ -62,6 +62,15 @@ atlas doctor --json
 
 Proceed with helper work when `ready` is true. `update --version TAG` chooses a specific release, and `--force` allows reinstalling a release that is not newer. These are deliberate version-management choices, not fixes for missing permissions or a logged-out helper.
 
+Before exchanging bundles, Atlas checks that the staged executable is readable
+and executable by the helper through ordinary file modes and searchable parent
+directories. Existing setup and active-work preflight checks retain precedence.
+An inaccessible candidate is refused before recording a new handover or replacing
+the installed app; resuming an existing handover leaves its record and candidate
+intact on this refusal. Atlas does not change an incoming archive's permissions
+to make it pass. As with the installed-app location check, private ACL grants are
+not counted by this conservative mode check.
+
 Locally built update bundles must also be readable by the helper account.
 `cargo xtask dist` gives its staged app directories and executable files mode
 `0755`, and non-executable resources mode `0644`, independently of the build's
