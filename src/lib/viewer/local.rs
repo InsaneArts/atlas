@@ -383,17 +383,19 @@ mod tests {
         url: String,
         stop: std::sync::mpsc::Sender<()>,
         thread: Option<std::thread::JoinHandle<()>>,
+        holding: std::sync::mpsc::Receiver<()>,
         closed: std::sync::Arc<std::sync::atomic::AtomicBool>,
     }
 
     impl LocalReply {
-        fn serving(fragments: Vec<(Duration, Vec<u8>)>, hold: Duration) -> Self {
+        fn serving(fragments: Vec<(Duration, Vec<u8>)>, hold_open: bool) -> Self {
             use std::io::{Read, Write};
 
             let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
             listener.set_nonblocking(true).unwrap();
             let url = format!("http://{}/private/", listener.local_addr().unwrap());
             let (stop, stopped) = std::sync::mpsc::channel();
+            let (held, holding) = std::sync::mpsc::channel();
             let closed = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
             let finished = std::sync::Arc::clone(&closed);
             let thread = std::thread::spawn(move || {
@@ -427,7 +429,13 @@ mod tests {
                         }
                         stream.write_all(&bytes)?;
                     }
-                    let _ = stopped.recv_timeout(hold);
+                    if hold_open {
+                        // The fixture, not a guessed duration, owns connection closure.
+                        // Drop always releases this hold before joining the server.
+                        // A fixture dropped before observation need not hear readiness.
+                        let _ = held.send(());
+                        let _ = stopped.recv();
+                    }
                     Ok(())
                 };
                 let _ = result();
@@ -437,12 +445,13 @@ mod tests {
                 url,
                 stop,
                 thread: Some(thread),
+                holding,
                 closed,
             }
         }
 
         fn whole(bytes: &[u8]) -> Self {
-            Self::serving(vec![(Duration::ZERO, bytes.to_vec())], Duration::ZERO)
+            Self::serving(vec![(Duration::ZERO, bytes.to_vec())], false)
         }
     }
 
@@ -545,7 +554,7 @@ mod tests {
                 .chunks(7)
                 .map(|part| (Duration::from_millis(2), part.to_vec()))
                 .collect();
-            let server = LocalReply::serving(fragments, Duration::ZERO);
+            let server = LocalReply::serving(fragments, false);
             let frame = fetch_frame(&server.url, Duration::from_secs(2), wire.len()).unwrap();
             assert_eq!(frame.png, b"png");
             assert_eq!(frame.key, "key");
@@ -573,18 +582,30 @@ mod tests {
 
     #[test]
     fn a_complete_body_returns_while_the_server_keeps_the_connection_open() {
+        let (finished, watching) = std::sync::mpsc::channel();
+        let watchdog = std::thread::spawn(move || {
+            if watching.recv_timeout(Duration::from_secs(20))
+                == Err(std::sync::mpsc::RecvTimeoutError::Timeout)
+            {
+                std::process::abort();
+            }
+        });
         let server = LocalReply::serving(
             vec![(
                 Duration::ZERO,
                 b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\n\r\nok".to_vec(),
             )],
-            Duration::from_secs(3),
+            true,
         );
         assert_eq!(
             fetch(&server.url, "", Duration::from_millis(500), 1024).unwrap(),
             b"ok"
         );
+        server.holding.recv_timeout(Duration::from_secs(5)).unwrap();
         assert!(!server.closed.load(std::sync::atomic::Ordering::SeqCst));
+        drop(server);
+        finished.send(()).unwrap();
+        watchdog.join().unwrap();
     }
 
     #[test]
@@ -598,7 +619,7 @@ mod tests {
                 (Duration::from_millis(90), b"o".to_vec()),
                 (Duration::from_millis(90), b"k".to_vec()),
             ],
-            Duration::ZERO,
+            false,
         );
         let error = fetch(&server.url, "", Duration::from_millis(140), 1024).unwrap_err();
         assert_eq!(
