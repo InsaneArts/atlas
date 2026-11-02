@@ -91,7 +91,8 @@ async fn preview_scope(client: &Client, scope: &Scope) -> Result<Value> {
 
 /// The preview of `scope`'s cleanup: the steps a run would take now, those
 /// an unfinished receipt already took with how far each got, and what each
-/// would act on. It reads only, takes no control and writes nothing.
+/// would act on. It takes no control and changes no work or receipt. Discovery
+/// may create the existing record folders' private lock files.
 async fn preview(
     hands: &impl Hands,
     output: &Path,

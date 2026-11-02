@@ -1,8 +1,8 @@
 //! A private folder of small JSON records, one file per key, in the output
 //! folder: how session and task records and cleanup receipts are kept.
 //! Each record is written whole beside its place and renamed there, so a
-//! reader never sees half of one; writers take the folder's lock, readers
-//! never do.
+//! reader never sees half of one. Ordinary readers need no lock; writers
+//! and complete cleanup scans take the folder's lock.
 use crate::{
     error::{Code, Error, Result},
     files::{
@@ -49,7 +49,8 @@ impl RecordName for crate::daemon::protocol::JobId {
 /// The most entries of a records folder looked at.
 pub(crate) const LISTED: usize = 256;
 
-/// Cleanup may inspect more small records, while retaining a single record at a time.
+/// Cleanup can inspect more small records within the same encoded-byte budget.
+/// The walker reads one at a time; its visitor owns retained decoded projections.
 pub(crate) const CLEANUP_ENTRIES: usize = 4096;
 
 /// What kind of records a folder keeps, and how.
@@ -350,10 +351,9 @@ impl<K: RecordName> RecordFolder<K> {
         let _ = fs::remove_file(self.path(key));
     }
 
-    /// The folder's lock, held while records are changed and never by a
-    /// reader. A writer waits at most its kind's lock wait for another to
-    /// let go of it, then is refused, so recording never holds a command
-    /// up for long.
+    /// The folder's lock, held by writers and complete cleanup scans.
+    /// Acquisition waits at most this record kind's lock wait before
+    /// refusing. That bound does not limit the work done under the lock.
     pub(crate) fn lock(&self) -> Result<LockFile> {
         self.lock_within(self.records.lock_wait)
     }

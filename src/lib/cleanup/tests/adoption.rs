@@ -191,7 +191,12 @@ async fn a_preserved_session_with_stale_tasks_cannot_be_adopted() {
         );
         assert_eq!(fs::read(&path).unwrap(), bytes);
         assert_eq!(fs::read(&task_path).unwrap(), task_bytes);
-        assert!(Receipts::at(output).of_session(neighbour.key()).is_empty());
+        assert!(
+            Receipts::at(output)
+                .of_session(neighbour.key())
+                .unwrap()
+                .is_empty()
+        );
     }
 }
 
@@ -227,7 +232,12 @@ async fn a_recent_read_protects_an_unreadable_neighbour_with_old_tasks_from_clea
     assert!(error.error.contains("may still be working"), "{error}");
     assert_eq!(sessions.read(neighbour.key()).unwrap(), record);
     assert_eq!(Tasks::at(output).of_session(neighbour.key()), tasks);
-    assert!(Receipts::at(output).of_session(neighbour.key()).is_empty());
+    assert!(
+        Receipts::at(output)
+            .of_session(neighbour.key())
+            .unwrap()
+            .is_empty()
+    );
 }
 
 #[tokio::test]
@@ -267,7 +277,10 @@ async fn a_session_that_acts_while_adoption_waits_for_control_is_not_adopted() {
     assert!(error.error.contains("may still be working"), "{error}");
     let output = client.output_dir().unwrap();
     assert!(
-        Receipts::at(output).of_session(&scope.session).is_empty(),
+        Receipts::at(output)
+            .of_session(&scope.session)
+            .unwrap()
+            .is_empty(),
         "nothing recorded"
     );
 }

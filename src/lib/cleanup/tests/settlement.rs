@@ -106,6 +106,7 @@ fn failed_record_writes_and_bounded_scans_never_acknowledge_cleanup() {
                 place.claim(&task, Owned::Plan { id: plan.clone() });
                 session_plan(&place, &key, &plan);
                 let receipt = finished_plan(&place, &key, &plan, state);
+                let loaded = place.loaded(&own(&key));
                 let folder = place.output.join(kind);
                 let faults: Vec<_> = match failure {
                     "scan" => (0..CLEANUP_ENTRIES)
@@ -120,7 +121,29 @@ fn failed_record_writes_and_bounded_scans_never_acknowledge_cleanup() {
                     }
                     fs::create_dir(fault).unwrap();
                 }
-                reconcile_place(&place, &own(&key)).unwrap();
+                if kind == "tasks" && matches!(failure, "scan" | "lock") {
+                    let error = Loaded::of(&place.output, &own(&key))
+                        .err()
+                        .expect("Incomplete discovery must refuse before cleanup");
+                    assert_eq!(
+                        error.code,
+                        if failure == "scan" {
+                            Code::State
+                        } else {
+                            Code::Io
+                        }
+                    );
+                    assert!(!error.uncertain);
+                }
+                // A fault can also arrive after discovery. Keep exercising
+                // acknowledgement itself with the original loaded receipt.
+                reconcile(
+                    &Receipts::at(&place.output),
+                    &Tasks::at(&place.output),
+                    &Sessions::at(&place.output),
+                    &loaded,
+                )
+                .unwrap();
                 assert_unsettled(&place, &receipt);
                 for fault in faults {
                     fs::remove_dir(fault).unwrap();

@@ -339,16 +339,27 @@ impl Receipts {
             .filter(|receipt| receipt.id == *id && receipt.version <= VERSION)
     }
 
-    /// The receipts of `session`'s work among the newest in the folder:
-    /// those its tasks' records name, and any a run cut short before it
-    /// named them.
-    pub(super) fn of_session(&self, session: &Key) -> Vec<Receipt> {
-        self.folder
-            .listed(LISTED)
-            .iter()
-            .filter_map(|id| self.load(id))
-            .filter(|receipt| receipt.session == *session)
-            .collect()
+    /// A complete bounded discovery of readable receipts for this session,
+    /// including a run cut short before its task named the receipt. Opaque
+    /// formats retain load's omission policy; physical scan failures refuse.
+    pub(super) fn of_session(&self, session: &Key) -> Result<Vec<Receipt>> {
+        let Some(identity) = self.folder.cleanup_identity()? else {
+            return Ok(Vec::new());
+        };
+        let _lock = self.folder.lock()?;
+        let mut receipts = Vec::new();
+        self.folder.visit_cleanup(identity, |id, bytes, modified| {
+            if let Ok(receipt) = serde_json::from_slice::<Receipt>(bytes)
+                && receipt.id == *id
+                && receipt.version <= VERSION
+                && receipt.session == *session
+            {
+                receipts.push((modified, receipt));
+            }
+            Ok(())
+        })?;
+        receipts.sort_by_key(|(modified, _)| std::cmp::Reverse(*modified));
+        Ok(receipts.into_iter().map(|(_, receipt)| receipt).collect())
     }
 
     /// Write `receipt` whole, through to the disk, as its state is now.

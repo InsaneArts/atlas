@@ -23,6 +23,7 @@ use std::{
 
 mod adoption;
 mod copies;
+mod discovery;
 mod installs;
 mod jobs;
 mod order;

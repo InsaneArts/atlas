@@ -75,6 +75,34 @@ impl Store {
         records
     }
 
+    /// Discover cleanup work beyond the ordinary display prefix. Keep the
+    /// existing opaque-record policy; strict claim validation belongs to
+    /// settlement. Physical read/scan failures cannot prove an empty scope.
+    pub(crate) fn cleanup_tasks(&self, session: &Key) -> Result<Vec<Record>> {
+        let Some(identity) = self.folder.cleanup_identity()? else {
+            return Ok(Vec::new());
+        };
+        let _lock = self.folder.lock()?;
+        let mut records = Vec::new();
+        self.folder
+            .visit_cleanup(identity, |key, bytes, modified| {
+                // As in load, unsupported JSON/version/identity stays untouched
+                // and cannot supply a claim. Acknowledgement checks it separately.
+                if let Ok(record) = serde_json::from_slice::<Record>(bytes)
+                    && record.key == *key
+                    && record.version <= VERSION
+                    && record.session == *session
+                {
+                    records.push((modified, record));
+                }
+                Ok(())
+            })?;
+        records.sort_by_key(|(modified, _)| std::cmp::Reverse(*modified));
+        let mut records: Vec<_> = records.into_iter().map(|(_, record)| record).collect();
+        records.sort_by_key(|record| record.started);
+        Ok(records)
+    }
+
     /// Change `task`'s record under the lock, making it when new, and write
     /// it through to the disk. A record this build cannot read or did not
     /// write the version of is never replaced: the change is refused.

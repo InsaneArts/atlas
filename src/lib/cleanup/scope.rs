@@ -110,7 +110,7 @@ impl Loaded {
     /// no record yet has nothing to clean up.
     pub(super) fn of(output: &Path, scope: &Scope) -> Result<Self> {
         let record = Sessions::at(output).read_file(&scope.session);
-        let tasks = Tasks::at(output).of_session(&scope.session);
+        let tasks = Tasks::at(output).cleanup_tasks(&scope.session)?;
         let nothing = || {
             Error::new(
                 Code::Input,
@@ -136,7 +136,7 @@ impl Loaded {
             record,
             tasks,
             work,
-            receipts: Receipts::at(output).of_session(&scope.session),
+            receipts: Receipts::at(output).of_session(&scope.session)?,
             task: scope.task.clone(),
         })
     }
