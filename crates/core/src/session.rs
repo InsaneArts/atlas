@@ -226,11 +226,6 @@ impl Observation {
             })
     }
 
-    pub(crate) fn input_settled(&self, uid: u32, pid: u32) -> bool {
-        self.require_hidden(uid)
-            .is_ok_and(|session| self.settled_in(&session, pid))
-    }
-
     pub fn settled_in(&self, session: &Session, pid: u32) -> bool {
         session.input
             && session.epoch.input_pid == pid
@@ -245,7 +240,9 @@ impl Observation {
     }
 
     pub(crate) fn input_current(&self, uid: u32, pid: u32) -> bool {
-        self.input_settled(uid, pid) && self.input_build_current()
+        self.require_hidden(uid)
+            .is_ok_and(|session| self.settled_in(&session, pid))
+            && self.input_build_current()
     }
 
     /// # Errors
@@ -392,12 +389,6 @@ pub fn require_hidden(value: &Value, uid: u32) -> Result<Session> {
     Observation::decode(value).require_hidden(uid)
 }
 
-/// Whether `status` shows input service `pid` ready in the hidden helper with
-/// no controller and nothing held.
-pub fn input_settled(status: &Value, uid: u32, pid: u32) -> bool {
-    Observation::decode(status).input_settled(uid, pid)
-}
-
 /// Whether the input service runs the installed build from the file still
 /// in place (a replaced file leaves even the same build stale).
 pub fn input_build_current(status: &Value) -> bool {
@@ -436,7 +427,8 @@ pub fn has_capability(native: &Value, name: &str) -> bool {
         .any(|capability| capability == name)
 }
 
-/// [`input_settled`], and running the installed build.
+/// Whether `status` shows input service `pid` ready in the hidden helper with
+/// no controller and nothing held, running the installed build.
 pub fn input_current(status: &Value, uid: u32, pid: u32) -> bool {
     Observation::decode(status).input_current(uid, pid)
 }

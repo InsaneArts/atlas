@@ -356,7 +356,7 @@ fn open_app(config: &std::path::Path) -> ExitCode {
             .arg("menubar")
             .exec()
     } else {
-        match atlas_core::app_bundle::app_program() {
+        match atlas_cli::menubar::app_program() {
             Ok(window) => std::process::Command::new(window)
                 .arg("--onboarding")
                 .env("ATLAS_CLI", &executable)

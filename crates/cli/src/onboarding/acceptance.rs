@@ -184,7 +184,7 @@ pub async fn accept_worker(ticket: &str) -> Result<Value> {
             &mut stream,
             &pairing.ticket,
             || verify(&pairing),
-            |action| helper_setup::run_guarded(&serde_json::to_string(action)?, &guard),
+            |action| helper_setup::run_guarded(action, &guard),
         )
         .map(|()| json!({"ok":true}));
     }
@@ -245,7 +245,7 @@ fn serve_channel(
     channel: &mut (impl Read + Write),
     ticket: &str,
     verify: impl Fn() -> Result<()>,
-    run: impl Fn(&Request) -> Result<Value>,
+    run: impl Fn(Request) -> Result<Value>,
 ) -> Result<()> {
     send(channel, &json!({"ok":true,"ticket":ticket}))?;
     loop {
@@ -262,7 +262,7 @@ fn serve_channel(
         if !action.allowed_in_acceptance() {
             return Err(problem("First-login setup is not an acceptance operation"));
         }
-        let outcome = run(&action)
+        let outcome = run(action)
             .unwrap_or_else(|error| json!({"ok":false,"error":error.error,"uncertain":true}));
         send(channel, &outcome)?;
     }

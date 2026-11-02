@@ -301,14 +301,12 @@ fn a_request_is_trusted_only_from_its_controller() {
     write_request(&path, &pairing(me)).unwrap();
     assert_eq!(read_request(&path), Some(pairing(me)));
 
-    // Existing requests can finish without repeating account preparation.
-    let mut legacy: Value = serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
-    legacy.as_object_mut().unwrap().remove("ticket");
-    atlas_core::files::write_atomic(&path, &serde_json::to_vec(&legacy).unwrap(), 0o644).unwrap();
-    let read = read_request(&path).unwrap();
-    assert_eq!(read.controller_uid, me);
-    assert_eq!(read.ticket.len(), atlas_core::files::TOKEN_BYTES * 2);
-    assert_eq!(read_request(&path), Some(read));
+    // Without a ticket: ignored.
+    let mut unticketed: Value = serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
+    unticketed.as_object_mut().unwrap().remove("ticket");
+    atlas_core::files::write_atomic(&path, &serde_json::to_vec(&unticketed).unwrap(), 0o644)
+        .unwrap();
+    assert_eq!(read_request(&path), None);
 
     // Written by someone else than the controller it names: ignored.
     write_request(&path, &pairing(me + 7)).unwrap();

@@ -101,7 +101,7 @@ impl Batch {
     pub(super) fn characters(&self) -> Option<CFIndex> {
         match self.slot("AXNumberOfCharacters")? {
             Slot::Value(value) => value.downcast_ref::<CFNumber>()?.as_isize(),
-            _ => None,
+            Slot::Failed(_) | Slot::Empty | Slot::Unread => None,
         }
     }
 

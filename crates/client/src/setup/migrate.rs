@@ -9,7 +9,10 @@
 //! rolls back without blind replays. The job carrying a reply is never the one
 //! being unloaded, and only artifacts this migration created are undone.
 use super::{configuration::managed, endpoint, helper_job, reported_pid};
-use crate::client::{Client, Run, timestamp};
+use crate::{
+    capability::doctor_report,
+    client::{Client, Run, timestamp},
+};
 use atlas_control::Ownership;
 use atlas_core::{
     account::{Account, account_with_uid},
@@ -17,7 +20,7 @@ use atlas_core::{
     config::{Config, home},
     error::{Code, Error, Result},
     files::save_private,
-    session::{input_current, require_hidden},
+    session::{Diagnosis, input_current, require_hidden},
     transport::run_output,
 };
 use atlas_daemon::helper_setup::{
@@ -984,9 +987,9 @@ async fn starting_log(
 }
 
 /// A finished pass: what it reports, and why it did not complete, if it did not.
-pub struct Pass {
+pub(crate) struct Pass {
     report: Value,
-    pub failure: Option<String>,
+    failure: Option<String>,
 }
 
 /// Apply `log`, first recording an updated Atlas.app (still validly signed
@@ -1014,26 +1017,38 @@ async fn carry_out(path: PathBuf, log: Log, recheck: bool) -> Result<Pass> {
     })
 }
 
+/// Start input, record and verify a first setup, and diagnose the helper it
+/// left. Setup that could not be verified is refused with `code`, the caller's.
+///
+/// # Errors
+///
+/// Returns input, identity, layout, executor or migration failures. Partial or unknown
+/// migration work retains the saved recovery state.
+pub async fn finalize(config_path: &Path, client: &Client, code: Code) -> Result<Diagnosis> {
+    client.start_input().await?;
+    let ownership = client.controller.acquire(true)?;
+    let pass = fresh_pass(config_path, client, &ownership).await?;
+    drop(ownership);
+
+    if let Some(failure) = pass.failure {
+        return Err(Error::new(
+            code,
+            format!("Setup could not be verified: {failure}"),
+        ));
+    }
+
+    let status = client.status().await;
+    Ok(doctor_report(status, client.config.helper_uid).diagnosis)
+}
+
 /// Record and verify a first setup (see [`plan_fresh`]). Re-running on an
 /// applied setup re-verifies it, like [`apply`].
 ///
 /// # Errors
 ///
-/// Returns identity, layout, executor or migration failures. Partial or unknown migration
-/// work retains the saved recovery state.
-pub async fn apply_fresh(
-    config_path: &Path,
-    client: &Client,
-    ownership: &Ownership,
-) -> Result<Value> {
-    Ok(fresh_pass(config_path, client, ownership).await?.report)
-}
-
-/// # Errors
-///
 /// Returns a refusal while the service is in use, or the failure of the setup
-/// it runs.
-pub async fn fresh_pass(
+/// it runs. Partial or unknown migration work retains the saved recovery state.
+pub(crate) async fn fresh_pass(
     config_path: &Path,
     client: &Client,
     ownership: &Ownership,

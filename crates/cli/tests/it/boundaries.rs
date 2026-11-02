@@ -5,7 +5,7 @@ use atlas_core::{
     actions,
     config::Config,
     error::Code,
-    session::{Display, InputEpoch, diagnose, input_current, input_settled, require_hidden},
+    session::{Display, InputEpoch, Observation, diagnose, input_current, require_hidden},
     transport::Transport,
 };
 use serde_json::{Value, json};
@@ -191,12 +191,20 @@ fn input_proof_refusals_preserve_the_capture_session() {
     assert!(InputEpoch::from_proof(&valid, 0).is_err());
 }
 
+/// Whether `status` shows input service `pid` idle in the hidden helper.
+fn settled(status: &Value, pid: u32) -> bool {
+    let observation = Observation::decode(status);
+    observation
+        .require_hidden(502)
+        .is_ok_and(|session| observation.settled_in(&session, pid))
+}
+
 #[test]
 fn only_idle_empty_input_settles_recovery() {
     let mut ready = ready_status();
     ready["inputService"]["controlActive"] = json!(false);
     ready["inputService"]["heldInput"] = json!(false);
-    assert!(input_settled(&ready, 502, 77));
+    assert!(settled(&ready, 77));
     for field in ["controlActive", "heldInput"] {
         for value in [
             None,
@@ -212,7 +220,7 @@ fn only_idle_empty_input_settles_recovery() {
                     state["inputService"].as_object_mut().unwrap().remove(field);
                 }
             }
-            assert!(!input_settled(&state, 502, 77), "{field}: {state}");
+            assert!(!settled(&state, 77), "{field}: {state}");
         }
     }
 }
@@ -1207,14 +1215,14 @@ fn a_settled_service_need_not_be_current_but_a_current_one_must_be_settled() {
     state["inputService"]["heldInput"] = json!(false);
     state["inputService"]["build"] = json!("old");
     state["installedBuild"] = json!("new");
-    assert!(input_settled(&state, 502, 77));
+    assert!(settled(&state, 77));
     assert!(!input_current(&state, 502, 77));
 
     state["inputService"]["heldInput"] = json!(true);
-    assert!(!input_settled(&state, 502, 77));
+    assert!(!settled(&state, 77));
 
     state["inputService"]["heldInput"] = json!(false);
-    assert!(!input_settled(&state, 502, 76), "another PID");
+    assert!(!settled(&state, 76), "another PID");
 }
 
 #[test]

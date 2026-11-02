@@ -474,7 +474,7 @@ fn notice(title: &str, message: &str, switch_back: Option<&str>) {
         return;
     }
 
-    let Ok(app) = atlas_core::app_bundle::app_program() else {
+    let Ok(Some(app)) = atlas_core::app_bundle::shipped_app() else {
         return;
     };
 

@@ -1,6 +1,6 @@
 //! What two accounts share while one asks the other to be its helper: the
 //! request naming them, and whether the onboarding window is open.
-use super::{ROOT, identity::Identity, text_sha256};
+use super::{ROOT, identity::Identity};
 use atlas_core::{account::account_with_uid, error::Result, files::read_limited};
 use serde_json::{Value, json};
 use std::{fs, os::unix::fs::MetadataExt, path::Path, process::Command};
@@ -58,13 +58,7 @@ pub fn read_request(path: &Path) -> Option<Pairing> {
     let body = read_limited(file, MAX_RECORD)?;
     let value: Value = serde_json::from_slice(&body).ok()?;
     let request = Pairing {
-        ticket: match value.get("ticket") {
-            Some(Value::String(ticket)) => ticket.clone(),
-            None => text_sha256(&String::from_utf8_lossy(&body))
-                [..atlas_core::files::TOKEN_BYTES * 2]
-                .to_owned(),
-            _ => return None,
-        },
+        ticket: value["ticket"].as_str()?.to_owned(),
         controller_uid: value["controllerUid"].as_u64()?.try_into().ok()?,
         controller_name: value["controllerName"].as_str()?.to_owned(),
         helper_uid: value["helperUid"].as_u64()?.try_into().ok()?,

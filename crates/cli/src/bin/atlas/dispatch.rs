@@ -351,13 +351,11 @@ fn guide(args: &cli::AgentGuide) -> Value {
 }
 
 fn setup_helper(args: &cli::SetupHelper) -> Result<Value> {
-    atlas_daemon::helper_setup::run_guarded(
-        &args.request,
-        &atlas_daemon::helper_setup::Guard {
-            account: Some(serde_json::from_str(&args.account)?),
-            logged_out: args.logged_out,
-        },
-    )
+    let guard = atlas_daemon::helper_setup::Guard {
+        account: Some(serde_json::from_str(&args.account)?),
+        logged_out: args.logged_out,
+    };
+    atlas_daemon::helper_setup::run_guarded(serde_json::from_str(&args.request)?, &guard)
 }
 
 /// `atlas setup`: a preview, or a migration applied or rolled back.

@@ -105,14 +105,14 @@ impl Store {
     /// Keep `record`, the side `transaction` ended on, and clear its scratch.
     fn settle(&self, transaction: &Transaction, record: Option<&Record>) -> Result<()> {
         self.write_record(record)?;
+        self.clear_scratch(transaction)
+    }
+
+    fn clear_scratch(&self, transaction: &Transaction) -> Result<()> {
         remove_tree(&self.backup(), transaction.before.as_ref())?;
         remove_tree(&self.stage(), transaction.after.as_ref())?;
         remove_file(&self.transaction_path())?;
         sync_directory(&self.state)
-    }
-
-    fn finish(&self, transaction: &Transaction) -> Result<()> {
-        self.settle(transaction, transaction.after.as_ref())
     }
 
     /// A published replacement is committed. Otherwise restore the previous
@@ -136,10 +136,10 @@ impl Store {
         if let Some(after) = &transaction.after
             && matches_record(&self.target, after)?
         {
-            return self.finish(&transaction);
+            return self.settle(&transaction, transaction.after.as_ref());
         }
         if transaction.after.is_none() && !exists(&self.target)? && !exists(&self.backup())? {
-            return self.finish(&transaction);
+            return self.settle(&transaction, transaction.after.as_ref());
         }
         if exists(&self.backup())? {
             let before = transaction
@@ -334,7 +334,7 @@ fn change_at(
     checkpoint("before-settlement")?;
     store.write_record(transaction.after.as_ref())?;
     checkpoint("settled")?;
-    store.finish(&transaction)?;
+    store.clear_scratch(&transaction)?;
     Ok(Removal::Changed)
 }
 

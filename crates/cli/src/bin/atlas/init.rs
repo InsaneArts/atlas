@@ -384,7 +384,7 @@ pub(super) async fn run(config_path: &Path, allow_disrupt: bool) -> Result<Value
     .await?;
     drop(spinner);
     done_steps.extend(refreshed);
-    verify_step(&client, &config, config_path).await?;
+    verify_step(&client, config_path).await?;
     done("Checked", "the helper works");
     done_steps.push(json!({"step": "verified"}));
 
@@ -717,28 +717,15 @@ async fn permissions_step(client: &Client, config: &Config, name: &str) -> Resul
 }
 
 /// Recover, start input, record the setup and check it end to end.
-async fn verify_step(client: &Client, config: &Config, config_path: &Path) -> Result<()> {
+async fn verify_step(client: &Client, config_path: &Path) -> Result<()> {
     recover(client).await?;
 
-    {
-        let _spinner = Spinner::new("Starting input and checking everything…");
-        client.start_input().await?;
-        let ownership = client.controller.acquire(true)?;
-        let recorded = setup::migrate::apply_fresh(config_path, client, &ownership).await?;
-        if recorded["ok"] != true {
-            return Err(problem(format!(
-                "Setup could not be verified: {}",
-                recorded["error"].as_str().unwrap_or("unknown")
-            )));
-        }
-
-        drop(ownership);
-        let doctor = atlas_client::capability::doctor(client.status().await, config.helper_uid);
-        if doctor["ready"] != true {
-            return Err(problem(
-                "Setup finished but is not ready; run atlas doctor to see why",
-            ));
-        }
+    let _spinner = Spinner::new("Starting input and checking everything…");
+    let doctor = setup::migrate::finalize(config_path, client, Code::Init).await?;
+    if !doctor.ready {
+        return Err(problem(
+            "Setup finished but is not ready; run atlas doctor to see why",
+        ));
     }
 
     Ok(())

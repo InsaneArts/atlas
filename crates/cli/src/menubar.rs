@@ -4,7 +4,11 @@
 //! with SwiftPM. It renders the local viewer's status and frame and
 //! runs `atlas` commands; it reaches nothing else. The capability URL
 //! travels on its stdin, never in argv, and closing stdin makes it quit.
-use atlas_core::error::{Code, Error, Result};
+use atlas_core::{
+    app_bundle::{APP_EXECUTABLE, INSTALL_COMMAND, checkout, shipped_app},
+    error::{Code, Error, Result},
+    name::first_line,
+};
 use std::{
     fs,
     path::{Path, PathBuf},
@@ -555,7 +559,7 @@ pub fn login(state: &str) -> Result<serde_json::Value> {
 /// Apply `login`; only the app (as part of Atlas.app) can register its
 /// login agent.
 pub(crate) fn set_login(login: Login) -> Result<serde_json::Value> {
-    let output = std::process::Command::new(atlas_core::app_bundle::app_program()?)
+    let output = std::process::Command::new(app_program()?)
         .args(["--login", login.as_str()])
         .stdin(Stdio::null())
         .output()?;
@@ -615,10 +619,62 @@ impl Program {
     /// viewer program.
     pub fn new(config: &Path) -> Result<Self> {
         Ok(Self {
-            executable: atlas_core::app_bundle::app_program()?,
+            executable: app_program()?,
             config: fs::canonicalize(config)?,
         })
     }
+}
+
+/// The app's executable: the signed one shipped in Atlas.app, or in a
+/// development checkout the package built here.
+///
+/// # Errors
+///
+/// Returns an error when the supported Atlas app executable cannot be located or validated.
+pub fn app_program() -> Result<PathBuf> {
+    shipped_app()?.map_or_else(development, Ok)
+}
+
+/// The package in the checkout this binary was built from, built with SwiftPM.
+fn development() -> Result<PathBuf> {
+    let package = checkout().join("app");
+    if !package.join("Package.swift").is_file() {
+        return Err(Error::new(
+            Code::Menubar,
+            format!("Run the menu bar from Atlas.app; install it with: {INSTALL_COMMAND}"),
+        ));
+    }
+
+    let swift = |args: &[&str]| {
+        std::process::Command::new("/usr/bin/swift")
+            .args(args)
+            .arg("--package-path")
+            .arg(&package)
+            .stdin(Stdio::null())
+            .output()
+            .map_err(|_| {
+                Error::new(
+                    Code::Menubar,
+                    "Building the menu bar needs the Xcode Command Line Tools; run xcode-select --install",
+                )
+            })
+    };
+
+    let built = swift(&["build", "-c", "release", "--product", APP_EXECUTABLE])?;
+    if !built.status.success() {
+        return Err(Error::new(
+            Code::Menubar,
+            format!(
+                "The menu bar did not build: {}",
+                first_line(&built.stderr, 300).unwrap_or_else(|| "no output".to_owned())
+            ),
+        ));
+    }
+
+    let bin = swift(&["build", "-c", "release", "--show-bin-path"])?;
+    let directory = String::from_utf8_lossy(&bin.stdout).trim().to_owned();
+
+    Ok(Path::new(&directory).join(APP_EXECUTABLE))
 }
 
 /// Start the app with `args` and hand it the URL on stdin. Its commands

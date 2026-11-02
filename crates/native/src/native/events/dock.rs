@@ -136,12 +136,15 @@ impl Engine {
             else {
                 return Ok(());
             };
-            if matches!(phase, PointerPhase::Up) {
-                // Resolve again: the Dock may have moved or magnified since down.
-                if !self.dock_click(point, down.button, modifiers, true).await? {
-                    return Err(Error::new(Code::Input, "The Dock moved; no click was sent"));
+            match phase {
+                PointerPhase::Up => {
+                    // Resolve again: the Dock may have moved or magnified since down.
+                    if !self.dock_click(point, down.button, modifiers, true).await? {
+                        return Err(Error::new(Code::Input, "The Dock moved; no click was sent"));
+                    }
+                    return Ok(());
                 }
-                return Ok(());
+                PointerPhase::Down | PointerPhase::Move => {}
             }
             self.post_pointer(
                 PointerPhase::Down,
@@ -151,17 +154,22 @@ impl Engine {
                 down.count,
             )
             .await?;
-        } else if matches!(phase, PointerPhase::Down)
-            && self.held.is_none()
-            && self.dock_click(point, button, modifiers, false).await?
-        {
-            self.dock_down = Some(Down {
-                point,
-                button,
-                modifiers: modifiers.to_vec(),
-                count,
-            });
-            return Ok(());
+        } else {
+            let on_dock = match phase {
+                PointerPhase::Down => {
+                    self.held.is_none() && self.dock_click(point, button, modifiers, false).await?
+                }
+                PointerPhase::Move | PointerPhase::Up => false,
+            };
+            if on_dock {
+                self.dock_down = Some(Down {
+                    point,
+                    button,
+                    modifiers: modifiers.to_vec(),
+                    count,
+                });
+                return Ok(());
+            }
         }
         self.post_pointer(phase, point, button, modifiers, count)
             .await

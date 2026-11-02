@@ -13,7 +13,6 @@ use std::{
     fs,
     os::unix::fs::PermissionsExt,
     path::{Path, PathBuf},
-    process::{Command, Stdio},
 };
 
 pub const BUNDLE_EXECUTABLE: &str = "Contents/MacOS/atlas";
@@ -166,78 +165,32 @@ pub fn checkout() -> &'static Path {
     manifest.ancestors().nth(2).unwrap_or(manifest)
 }
 
-/// The package in the checkout this binary was built from, built with SwiftPM.
-fn development() -> Result<PathBuf> {
-    let package = checkout().join("app");
-    if !package.join("Package.swift").is_file() {
-        return Err(Error::new(
-            Code::Menubar,
-            format!(
-                "Run the menu bar from Atlas.app; install it with: {}",
-                INSTALL_COMMAND
-            ),
-        ));
-    }
-
-    let swift = |args: &[&str]| {
-        Command::new("/usr/bin/swift")
-            .args(args)
-            .arg("--package-path")
-            .arg(&package)
-            .stdin(Stdio::null())
-            .output()
-            .map_err(|_| {
-                Error::new(
-                    Code::Menubar,
-                    "Building the menu bar needs the Xcode Command Line Tools; run xcode-select --install",
-                )
-            })
-    };
-
-    let built = swift(&["build", "-c", "release", "--product", APP_EXECUTABLE])?;
-    if !built.status.success() {
-        return Err(Error::new(
-            Code::Menubar,
-            format!(
-                "The menu bar did not build: {}",
-                crate::name::first_line(&built.stderr, 300)
-                    .unwrap_or_else(|| "no output".to_owned())
-            ),
-        ));
-    }
-
-    let bin = swift(&["build", "-c", "release", "--show-bin-path"])?;
-    let directory = String::from_utf8_lossy(&bin.stdout).trim().to_owned();
-
-    Ok(Path::new(&directory).join(APP_EXECUTABLE))
-}
-
-/// The app's executable: the signed one shipped in Atlas.app, or in a
-/// development checkout the package built here.
+/// The signed app shipped beside this executable in Atlas.app, if this is
+/// the bundle's `atlas`.
 ///
 /// # Errors
 ///
-/// Returns an error when the supported Atlas app executable cannot be located or validated.
-pub fn app_program() -> Result<PathBuf> {
-    if let Some(app) = std::env::current_exe()
+/// Returns an error when the app there is not the one Atlas signed.
+pub fn shipped_app() -> Result<Option<PathBuf>> {
+    let Some(app) = std::env::current_exe()
         .and_then(fs::canonicalize)
         .ok()
         .as_deref()
         .and_then(bundled)
-    {
-        // It receives the viewer's private URL: run only the app Atlas
-        // signed, never a file merely placed there.
-        if !app_signed(&app) {
-            return Err(Error::new(
-                Code::Menubar,
-                "The app inside Atlas.app is not signed by Atlas",
-            ));
-        }
+    else {
+        return Ok(None);
+    };
 
-        return Ok(app);
+    // It receives the viewer's private URL: run only the app Atlas signed,
+    // never a file merely placed there.
+    if !app_signed(&app) {
+        return Err(Error::new(
+            Code::Menubar,
+            "The app inside Atlas.app is not signed by Atlas",
+        ));
     }
 
-    development()
+    Ok(Some(app))
 }
 
 #[cfg(test)]

@@ -1028,18 +1028,7 @@ pub async fn finish(config_path: &Path) -> Result<Value> {
         setup::migrate::archive_foreign(helper.uid, &helper.home)?;
     }
 
-    client.start_input().await?;
-
-    let ownership = client.controller.acquire(true)?;
-    let recorded = setup::migrate::fresh_pass(config_path, &client, &ownership).await?;
-    drop(ownership);
-
-    if let Some(failure) = recorded.failure {
-        return Err(problem(format!("Setup could not be verified: {failure}")));
-    }
-
-    let status = client.status().await;
-    let doctor = atlas_client::capability::doctor_report(status, config.helper_uid).diagnosis;
+    let doctor = setup::migrate::finalize(config_path, &client, Code::Onboarding).await?;
     if !doctor.ready {
         return Err(problem(
             "Atlas is set up but not ready yet. Try again in a moment.",

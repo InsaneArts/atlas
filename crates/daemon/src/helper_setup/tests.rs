@@ -431,9 +431,12 @@ fn requests_are_typed_and_strict() {
 #[test]
 fn the_worker_refuses_another_account() {
     let other = nix::unistd::getuid().as_raw() + 1;
-    let request = json!({"action": "inspect", "uid": other, "labels": []}).to_string();
+    let request = Request::Inspect {
+        uid: other,
+        labels: Vec::new(),
+    };
     assert_eq!(
-        run_guarded(&request, &Guard::default()).unwrap_err().code,
+        run_guarded(request, &Guard::default()).unwrap_err().code,
         "setup"
     );
 }

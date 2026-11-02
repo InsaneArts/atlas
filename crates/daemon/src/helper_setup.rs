@@ -442,11 +442,9 @@ fn checked_account(
 ///
 /// # Errors
 ///
-/// Rejects malformed requests, changed account identity or an unsuitable login, and returns
-/// layout, ACL or launchd failures. Unknown effects remain recorded by the caller's
-/// executor claim.
-pub fn run_guarded(request: &str, guard: &Guard) -> Result<Value> {
-    let request: Request = serde_json::from_str(request)?;
+/// Rejects changed account identity or an unsuitable login, and returns layout, ACL or
+/// launchd failures. Unknown effects remain recorded by the caller's executor claim.
+pub fn run_guarded(request: Request, guard: &Guard) -> Result<Value> {
     let uid = nix::unistd::getuid().as_raw();
     run_guarded_with(
         request,

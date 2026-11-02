@@ -1182,11 +1182,11 @@ async fn input_replacement_and_setup_repairs_refuse_recent_work_before_dispatch(
             Code::Busy
         );
         assert_eq!(
-            crate::setup::migrate::apply_fresh(&config, &client, &ownership)
+            crate::setup::migrate::fresh_pass(&config, &client, &ownership)
                 .await
-                .unwrap_err()
-                .code,
-            Code::Busy
+                .err()
+                .map(|error| error.code),
+            Some(Code::Busy)
         );
         assert_eq!(
             crate::setup::migrate::rollback(&config, &client, &ownership)

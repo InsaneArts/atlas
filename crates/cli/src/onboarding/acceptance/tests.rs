@@ -463,7 +463,7 @@ fn observing_a_matching_receipt_retries_when_the_helper_cannot_report_its_job() 
 
 fn serve_repair_worker(dir: &Path, output: fs::File) {
     let controller = Controller::at(7001, &dir.join("requester/state"));
-    let run = |request: &Request| {
+    let run = |request: Request| {
         assert!(controller.acquire(true).is_err());
         assert_eq!(controller.pending().unwrap().len(), 2);
         if matches!(request, Request::Prepare { .. }) {
@@ -484,7 +484,7 @@ fn serve_repair_worker(dir: &Path, output: fs::File) {
             Request::Prepare { .. } | Request::ForgetOpener { .. } => {}
             _ => panic!("Unexpected repair request"),
         }
-        fs::write(dir.join("changed"), serde_json::to_vec(request)?)?;
+        fs::write(dir.join("changed"), serde_json::to_vec(&request)?)?;
         fs::write(path, serde_json::to_vec(&job)?)?;
         Ok(json!({"ok":true,"pid":job["pid"]}))
     };
@@ -573,7 +573,7 @@ fn an_acceptance_test_worker() {
         serve_repair_worker(&dir, output);
         return;
     }
-    let run = |request: &Request| {
+    let run = |request: Request| {
         let action = match request {
             Request::Prepare { .. } => "prepare",
             Request::Retire { .. } => "retire",
