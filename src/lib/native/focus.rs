@@ -173,6 +173,11 @@ impl Found {
 
 /// What the helper shows, read only as far as a check needs it.
 trait Look {
+    /// The monotonic time of this observation, including time spent reading.
+    fn now(&self) -> Instant {
+        Instant::now()
+    }
+
     /// The process with keyboard focus; None when no app has it.
     fn focused(&mut self) -> Result<Option<i64>>;
     /// Direct app evidence when the system-wide focus attribute is absent.
@@ -334,7 +339,7 @@ fn require(
             .get("reason")
             .is_some_and(|why| why == "unreadable")
     });
-    if (outcome.is_ok() || unread) && Instant::now() >= deadline {
+    if (outcome.is_ok() || unread) && look.now() >= deadline {
         return Err(unreadable().with("unread", json!(Unread::Slow)));
     }
 

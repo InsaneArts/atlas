@@ -56,6 +56,7 @@ struct Seen {
     /// Why the keyboard read fails when it does, and how long it takes.
     unread: Option<Unread>,
     slow: Duration,
+    clock: Option<Instant>,
     focus_reads: usize,
     window_reads: usize,
     keyboard_reads: usize,
@@ -87,6 +88,10 @@ impl Seen {
 }
 
 impl Look for Seen {
+    fn now(&self) -> Instant {
+        self.clock.unwrap_or_else(Instant::now)
+    }
+
     fn app_focused(&mut self, _: i64) -> Result<bool> {
         Ok(self.app_focused)
     }
@@ -101,7 +106,11 @@ impl Look for Seen {
 
     fn keyboard(&mut self, _: i64, _: Judged) -> Result<Keyboard> {
         self.keyboard_reads += 1;
-        std::thread::sleep(self.slow);
+        if let Some(clock) = &mut self.clock {
+            *clock += self.slow;
+        } else {
+            std::thread::sleep(self.slow);
+        }
         if let Some(why) = self.unread {
             return Err(why.error());
         }
@@ -1375,8 +1384,14 @@ fn a_check_that_ran_out_of_time_is_refused_and_says_so() {
     let mut look = inside_with(typing(field("Email")), vec![document()]);
     look.slow = Duration::from_millis(20);
     for expect in [in_document(), in_field("Email")] {
-        let deadline = Instant::now() + Duration::from_millis(5);
+        let started = Instant::now();
+        look.clock = Some(started);
+        let deadline = started + Duration::from_millis(5);
+        assert!(look.now() < deadline);
+        let reads = look.keyboard_reads;
         let error = require(&expect, Need::Keys, &display(), &mut look, deadline).unwrap_err();
+        assert_eq!(look.keyboard_reads, reads + 1);
+        assert_eq!(look.now(), started + look.slow);
         assert_eq!(error.details["reason"], "unreadable");
         assert_eq!(error.details["unread"], "slow");
         assert!(error.error.contains("could not tell"), "{}", error.error);
@@ -1405,7 +1420,10 @@ fn an_unreadable_verification_that_exceeds_the_deadline_retains_the_slow_marker(
     let mut look = inside_with(typing(field("Email")), vec![document()]);
     look.slow = Duration::from_millis(20);
     look.unread = Some(Unread::Failed);
-    let deadline = Instant::now() + Duration::from_millis(5);
+    let started = Instant::now();
+    look.clock = Some(started);
+    let deadline = started + Duration::from_millis(5);
+    assert!(look.now() < deadline);
     let error = require(
         &in_field("Email"),
         Need::Keys,
@@ -1414,6 +1432,8 @@ fn an_unreadable_verification_that_exceeds_the_deadline_retains_the_slow_marker(
         deadline,
     )
     .unwrap_err();
+    assert_eq!(look.keyboard_reads, 1);
+    assert_eq!(look.now(), started + look.slow);
     assert_eq!(error.details["reason"], "unreadable");
     assert_eq!(error.details["unread"], "slow");
     assert!(!error.uncertain);
@@ -1421,6 +1441,52 @@ fn an_unreadable_verification_that_exceeds_the_deadline_retains_the_slow_marker(
     let mut spent = Live::until(Instant::now());
     assert_eq!(spent.focused().unwrap_err().details["unread"], "slow");
     assert_eq!(spent.windows().unwrap_err().details["unread"], "slow");
+}
+
+#[test]
+fn the_focus_deadline_keeps_early_results_and_expires_at_its_exact_boundary() {
+    for millis in [4, 5, 6] {
+        for unread in [None, Some(Unread::Failed)] {
+            let mut look = inside_with(typing(field("Email")), vec![document()]);
+            let started = Instant::now();
+            look.clock = Some(started);
+            look.slow = Duration::from_millis(millis);
+            look.unread = unread;
+            let outcome = require(
+                &in_field("Email"),
+                Need::Keys,
+                &display(),
+                &mut look,
+                started + Duration::from_millis(5),
+            );
+            assert_eq!(look.keyboard_reads, 1);
+            assert_eq!(look.now(), started + look.slow);
+            if millis >= 5 {
+                assert_eq!(outcome.unwrap_err().details["unread"], "slow");
+            } else if unread.is_some() {
+                assert_eq!(outcome.unwrap_err().details["unread"], "failed");
+            } else {
+                assert_eq!(outcome.unwrap(), Some("AXTextField"));
+            }
+        }
+        // A known target mismatch keeps its reason even when the read is late.
+        let mut look = inside_with(typing(field("Password")), vec![document()]);
+        let started = Instant::now();
+        look.clock = Some(started);
+        look.slow = Duration::from_millis(millis);
+        let error = require(
+            &in_field("Email"),
+            Need::Keys,
+            &display(),
+            &mut look,
+            started + Duration::from_millis(5),
+        )
+        .unwrap_err();
+        assert_eq!(look.keyboard_reads, 1);
+        assert_eq!(look.now(), started + look.slow);
+        assert_eq!(error.details["reason"], "field");
+        assert!(!error.uncertain);
+    }
 }
 
 #[test]

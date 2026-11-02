@@ -939,6 +939,11 @@ fn agent_target(gate: &Gate, expect: Option<&Expect>) -> Result<()> {
 
 /// What the input loop needs of the event engine; tests stand in for it.
 trait Perform {
+    /// Monotonic time used to charge the request's shared focus budget.
+    fn now(&self) -> Instant {
+        Instant::now()
+    }
+
     /// Refuse unless `expect` holds for `need` now, before anything is
     /// posted, taking at most `budget` to tell; once it does, the role of
     /// the field it names, when it names one.
@@ -1108,7 +1113,7 @@ async fn require_within(
     budget: &mut Duration,
     prepare: bool,
 ) -> Result<Option<&'static str>> {
-    let started = Instant::now();
+    let started = engine.now();
     let outcome = if need == Need::Nothing {
         Ok(None)
     } else {
@@ -1119,7 +1124,7 @@ async fn require_within(
         };
         engine.require(expect, need, available, prepare).await
     };
-    *budget = budget.saturating_sub(started.elapsed());
+    *budget = budget.saturating_sub(engine.now().saturating_duration_since(started));
     outcome
 }
 
@@ -1401,8 +1406,8 @@ async fn reply(stream: &mut UnixStream, result: Result<Value>) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::{
-        Action, CAPABILITIES, Duration, Error, Expect, Gate, MAX_REQUEST, Need, Perform, Request,
-        Result, admitted, hold, read_request, run,
+        Action, CAPABILITIES, Duration, Error, Expect, Gate, Instant, MAX_REQUEST, Need, Perform,
+        Request, Result, admitted, hold, read_request, run,
     };
     use crate::error::Code;
     use serde::Deserialize;
@@ -3226,6 +3231,7 @@ mod tests {
         preparations: Vec<bool>,
         budgets: Vec<Duration>,
         check_delay: Duration,
+        clock: Option<Instant>,
         held: bool,
         sheet: bool,
         opens_sheet: bool,
@@ -3246,6 +3252,7 @@ mod tests {
                     preparations: Vec::new(),
                     budgets: Vec::new(),
                     check_delay: Duration::ZERO,
+                    clock: None,
                     held: false,
                     sheet: false,
                     opens_sheet: false,
@@ -3272,6 +3279,10 @@ mod tests {
     }
 
     impl Perform for Stand {
+        fn now(&self) -> Instant {
+            self.clock.unwrap_or_else(Instant::now)
+        }
+
         async fn require(
             &mut self,
             expect: &Expect,
@@ -3282,7 +3293,9 @@ mod tests {
             self.assert_locked();
             self.preparations.push(prepare);
             self.budgets.push(budget);
-            if !self.check_delay.is_zero() {
+            if let Some(clock) = &mut self.clock {
+                *clock += self.check_delay;
+            } else if !self.check_delay.is_zero() {
                 tokio::time::sleep(self.check_delay).await;
             }
             if prepare && self.sheet {
@@ -4606,6 +4619,7 @@ mod tests {
         let stand = Stand::locked(&[]);
         let mut engine = stand.lock().await;
         engine.check_delay = Duration::from_millis(5);
+        engine.clock = Some(Instant::now());
         let gate = Gate::default();
         let actions = (0..3)
             .map(|_| Action::Type {
@@ -4615,8 +4629,54 @@ mod tests {
         run(&mut *engine, &gate, actions, app().as_ref())
             .await
             .unwrap();
-        assert_eq!(engine.budgets[0], super::focus::PREPARE_BUDGET);
-        assert!(engine.budgets.windows(2).all(|pair| pair[1] < pair[0]));
+        assert_eq!(
+            engine.budgets,
+            [
+                super::focus::PREPARE_BUDGET,
+                super::focus::PREPARE_BUDGET - Duration::from_millis(5),
+                super::focus::PREPARE_BUDGET - Duration::from_millis(10),
+            ]
+        );
         assert_eq!(engine.preparations, [true, true, true]);
+    }
+
+    #[tokio::test]
+    async fn failed_focus_checks_spend_budget_and_untargeted_actions_spend_none() {
+        let stand = Stand::locked(&[Step::Refuse]);
+        let mut engine = stand.lock().await;
+        engine.clock = Some(Instant::now());
+        engine.check_delay = Duration::from_millis(5);
+        let mut budget = Duration::from_millis(2);
+        let error = super::require_within(
+            &mut *engine,
+            app().as_ref().unwrap(),
+            Need::Keys,
+            &mut budget,
+            true,
+        )
+        .await
+        .unwrap_err();
+        assert_eq!(error.code, Code::FocusChanged);
+        assert_eq!(error.details["reason"], "app");
+        assert_eq!(budget, Duration::ZERO);
+        assert_eq!(engine.budgets, [Duration::from_millis(2)]);
+
+        let before = engine.clock;
+        let mut untouched = super::focus::PREPARE_BUDGET;
+        assert_eq!(
+            super::require_within(
+                &mut *engine,
+                app().as_ref().unwrap(),
+                Need::Nothing,
+                &mut untouched,
+                false,
+            )
+            .await
+            .unwrap(),
+            None
+        );
+        assert_eq!(untouched, super::focus::PREPARE_BUDGET);
+        assert_eq!(engine.clock, before);
+        assert_eq!(engine.budgets, [Duration::from_millis(2)]);
     }
 }
