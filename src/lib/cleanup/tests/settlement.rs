@@ -1,7 +1,8 @@
 //! Finished effects and durable record acknowledgement remain separate.
 use super::*;
 use crate::host_session::record::Record as SessionRecord;
-use crate::record_folder::LISTED;
+use crate::record_folder::CLEANUP_ENTRIES;
+use crate::task::record::Record as TaskRecord;
 
 fn finished_plan(place: &Place, key: &Key, plan: &Token, state: StepState) -> Receipt {
     let mut entry = Entry::new(1, Step::UndoPlan { plan: plan.clone() });
@@ -107,7 +108,7 @@ fn failed_record_writes_and_bounded_scans_never_acknowledge_cleanup() {
                 let receipt = finished_plan(&place, &key, &plan, state);
                 let folder = place.output.join(kind);
                 let faults: Vec<_> = match failure {
-                    "scan" => (0..LISTED)
+                    "scan" => (0..CLEANUP_ENTRIES)
                         .map(|n| folder.join(format!("unrelated-{n}")))
                         .collect(),
                     "lock" => vec![folder.join(".lock")],
@@ -321,7 +322,10 @@ fn nested_unknown_ownership_keeps_finished_steps_unsettled_and_preserves_the_rec
             assert_unsettled(&place, &receipt);
             assert_eq!(fs::read(&path).unwrap(), preserved, "{fault}, {state:?}");
             assert_eq!(
-                Tasks::at(&place.output).checked_all().unwrap_err().code,
+                Tasks::at(&place.output)
+                    .settle_everywhere_checked(&Owned::Plan { id: plan.clone() }, State::Gone, 1)
+                    .unwrap_err()
+                    .code,
                 Code::State
             );
 
@@ -368,4 +372,334 @@ async fn continuing_an_incomplete_receipt_retains_reconciled_acknowledgement() {
             .iter()
             .all(|entry| entry.state == StepState::Done)
     );
+}
+
+#[tokio::test]
+async fn a_finished_cleanup_in_a_315_entry_task_folder_is_acknowledged_without_repeating_it() {
+    for state in [StepState::Done, StepState::Kept] {
+        let place = Place::new();
+        let key = session("large-settlement-folder");
+        let task = default_task(&key);
+        let plan = Token::new();
+        place.claim(&task, Owned::Plan { id: plan.clone() });
+        session_plan(&place, &key, &plan);
+        let receipt = finished_plan(&place, &key, &plan, state);
+        let mut added = 0;
+        for n in 0..314 {
+            let other = Key::parse(&format!("{n:012x}")).unwrap();
+            if other == *task.key() {
+                continue;
+            }
+            let mut record = TaskRecord::new(&task, 1);
+            record.key = other;
+            fs::write(
+                place.output.join(format!("tasks/{}.json", record.key)),
+                serde_json::to_vec(&record).unwrap(),
+            )
+            .unwrap();
+            added += 1;
+            if added == 313 {
+                break;
+            }
+        }
+        assert_eq!(
+            fs::read_dir(place.output.join("tasks")).unwrap().count(),
+            315
+        );
+        let hands = Fake::at(&place.root);
+        let reply = place.apply(&hands, &own(&key)).await;
+        assert_eq!(reply["ok"], true, "{reply}");
+        assert!(
+            hands.logged().is_empty(),
+            "the finished effect must not run again"
+        );
+        let saved = Receipts::at(&place.output).load(&receipt.id).unwrap();
+        assert_eq!(saved.steps[0].at, receipt.steps[0].at);
+        assert_eq!(saved.steps[0].state, state);
+        assert!(
+            saved.steps[0].settled,
+            "{state:?}: complete record proof must acknowledge the finished effect"
+        );
+        let expected = if state == StepState::Done {
+            State::Gone
+        } else {
+            State::Kept
+        };
+        assert!(
+            Tasks::at(&place.output)
+                .load(task.key())
+                .unwrap()
+                .claims()
+                .all(|(_, state)| state == expected)
+        );
+        assert!(
+            Sessions::at(&place.output)
+                .read(&key)
+                .unwrap()
+                .plans
+                .is_empty()
+        );
+    }
+}
+
+#[test]
+fn cleanup_refreshes_matching_claim_timestamps_but_never_rewrites_nonmatching_records() {
+    for state in [State::Gone, State::Kept] {
+        let place = Place::new();
+        let key = session("settlement-timestamps");
+        let task = default_task(&key);
+        let plan = Owned::Plan { id: Token::new() };
+        let other = Owned::Plan { id: Token::new() };
+        let store = Tasks::at(&place.output);
+        store
+            .update(&task, 80, |record| record.claim(&plan, State::Made, 80))
+            .unwrap();
+        let neighbour = Task::of(&key, Some("neighbour")).unwrap();
+        store
+            .update(&neighbour, 90, |record| {
+                record.claim(&other, State::Made, 90)
+            })
+            .unwrap();
+        store
+            .update(&task, 80, |record| {
+                assert!(record.settle(&plan, state, 80));
+                Ok(())
+            })
+            .unwrap();
+        let path = place.output.join(format!("tasks/{}.json", neighbour.key()));
+        let before = fs::read(&path).unwrap();
+        if state == State::Gone {
+            store.settle_everywhere_checked(&plan, state, 40).unwrap();
+        } else {
+            store
+                .settle_in_scope_checked(&key, Some(task.key()), &plan, state, 40)
+                .unwrap();
+        }
+        let refreshed = store.load(task.key()).unwrap();
+        assert_eq!(
+            refreshed.updated, 40,
+            "timestamps are assigned, not maximized"
+        );
+        assert_eq!(refreshed.claimed_at(&plan), Some(40));
+        assert_eq!(fs::read(&path).unwrap(), before);
+    }
+}
+
+#[test]
+fn checked_plan_forgetting_reads_a_315_entry_session_folder_completely() {
+    let place = Place::new();
+    let key = session("many-sessions");
+    let plan = Token::new();
+    session_plan(&place, &key, &plan);
+    let host = HostSession::new(Host::Codex, "many-sessions").unwrap();
+    let folder = place.output.join("sessions");
+    let mut added = 0;
+    for n in 0..314 {
+        let other = Key::parse(&format!("{n:012x}")).unwrap();
+        if other == key {
+            continue;
+        }
+        let mut record = SessionRecord::new(&host, 1, None);
+        record.key = other;
+        fs::write(
+            folder.join(format!("{}.json", record.key)),
+            serde_json::to_vec(&record).unwrap(),
+        )
+        .unwrap();
+        added += 1;
+        if added == 313 {
+            break;
+        }
+    }
+    // Lock creation is part of the scan; an ordinary listing still remains bounded.
+    Sessions::at(&place.output)
+        .forget_plan_checked(&plan)
+        .unwrap();
+    assert_eq!(fs::read_dir(&folder).unwrap().count(), 315);
+    assert!(
+        Sessions::at(&place.output)
+            .read(&key)
+            .unwrap()
+            .plans
+            .is_empty()
+    );
+}
+
+#[test]
+fn checked_settlement_validates_unknown_ownership_outside_the_selected_scope_before_writing() {
+    for state in [State::Gone, State::Kept] {
+        let place = Place::new();
+        let key = session("complete-ownership-proof");
+        let task = default_task(&key);
+        let owned = Owned::Plan { id: Token::new() };
+        place.claim(&task, owned.clone());
+        for n in 0..313 {
+            let mut record = TaskRecord::new(&task, 1);
+            record.key = Key::parse(&format!("{n:012x}")).unwrap();
+            assert_ne!(record.key, *task.key());
+            fs::write(
+                place.output.join(format!("tasks/{}.json", record.key)),
+                serde_json::to_vec(&record).unwrap(),
+            )
+            .unwrap();
+        }
+        let mut foreign = Tasks::at(&place.output).load(task.key()).unwrap();
+        foreign.key = Key::parse("ffffffffffff").unwrap();
+        foreign.session = session("foreign-complete-ownership-proof");
+        let path = place.output.join(format!("tasks/{}.json", foreign.key));
+        let original = serde_json::to_vec(&foreign).unwrap();
+        let mut unknown: Value = serde_json::from_slice(&original).unwrap();
+        unknown["owned"][0]["state"] = json!("future-state");
+        let preserved = serde_json::to_vec_pretty(&unknown).unwrap();
+        fs::write(&path, &preserved).unwrap();
+        let own_path = place.output.join(format!("tasks/{}.json", task.key()));
+        let before = fs::read(&own_path).unwrap();
+        let store = Tasks::at(&place.output);
+        let settle = || {
+            if state == State::Gone {
+                store.settle_everywhere_checked(&owned, state, 2)
+            } else {
+                store.settle_in_scope_checked(&key, Some(task.key()), &owned, state, 2)
+            }
+        };
+        assert!(settle().is_err());
+        assert_eq!(fs::read(&own_path).unwrap(), before);
+        assert_eq!(fs::read(&path).unwrap(), preserved);
+        fs::write(&path, original).unwrap();
+        settle().unwrap();
+        assert!(
+            store
+                .load(task.key())
+                .unwrap()
+                .claims()
+                .all(|(_, found)| found == state)
+        );
+        let other_state = if state == State::Gone {
+            State::Gone
+        } else {
+            State::Made
+        };
+        assert!(
+            store
+                .load(&foreign.key)
+                .unwrap()
+                .claims()
+                .all(|(_, found)| found == other_state)
+        );
+    }
+}
+
+#[test]
+fn task_cleanup_writes_newest_matching_records_first_and_keeps_scoped_neighbours() {
+    for scope in [None, Some("first")] {
+        let place = Place::new();
+        let key = session("settlement-write-order");
+        let owned = Owned::Plan { id: Token::new() };
+        let tasks: Vec<_> = ["first", "second", "third"]
+            .into_iter()
+            .map(|name| Task::of(&key, Some(name)).unwrap())
+            .collect();
+        for (index, task) in tasks.iter().enumerate() {
+            Tasks::at(&place.output)
+                .update(task, 1, |record| record.claim(&owned, State::Made, 1))
+                .unwrap();
+            let path = place.output.join(format!("tasks/{}.json", task.key()));
+            fs::File::open(path)
+                .unwrap()
+                .set_times(fs::FileTimes::new().set_modified(
+                    std::time::SystemTime::UNIX_EPOCH
+                        + std::time::Duration::from_secs(300 - index as u64),
+                ))
+                .unwrap();
+        }
+        let second = place.output.join(format!("tasks/{}.json", tasks[1].key()));
+        let partial = second.with_extension("json.partial");
+        fs::create_dir(&partial).unwrap();
+        let store = Tasks::at(&place.output);
+        if scope.is_none() {
+            assert!(
+                store
+                    .settle_everywhere_checked(&owned, State::Gone, 40)
+                    .is_err()
+            );
+        } else {
+            store
+                .settle_in_scope_checked(&key, Some(tasks[0].key()), &owned, State::Kept, 40)
+                .unwrap();
+        }
+        let expected = if scope.is_none() {
+            State::Gone
+        } else {
+            State::Kept
+        };
+        assert!(
+            store
+                .load(tasks[0].key())
+                .unwrap()
+                .claims()
+                .all(|(_, found)| found == expected)
+        );
+        for task in &tasks[1..] {
+            let untouched = store.load(task.key()).unwrap();
+            assert_eq!(untouched.updated, 1);
+            assert!(untouched.claims().all(|(_, found)| found == State::Made));
+        }
+        fs::remove_dir(partial).unwrap();
+    }
+}
+
+#[test]
+fn session_cleanup_preserves_last_seen_then_modified_write_order() {
+    for same_seen in [false, true] {
+        let place = Place::new();
+        let plan = Token::new();
+        let host = HostSession::new(Host::Codex, "session-write-order").unwrap();
+        let folder = place.output.join("sessions");
+        fs::DirBuilder::new().mode(0o700).create(&folder).unwrap();
+        let first = Key::parse("000000000001").unwrap();
+        let second = Key::parse("000000000002").unwrap();
+        for (key, seen, modified) in [
+            (&first, 20, 100),
+            (&second, if same_seen { 20 } else { 10 }, 300),
+        ] {
+            let mut record = SessionRecord::new(&host, 1, None);
+            record.key = key.clone();
+            record.last_seen = seen;
+            record.planned(plan.clone(), crate::environment::Phase::Applied, 1);
+            let path = folder.join(format!("{key}.json"));
+            fs::write(&path, serde_json::to_vec(&record).unwrap()).unwrap();
+            fs::File::open(path)
+                .unwrap()
+                .set_times(fs::FileTimes::new().set_modified(
+                    std::time::SystemTime::UNIX_EPOCH + std::time::Duration::from_secs(modified),
+                ))
+                .unwrap();
+        }
+        let (earlier, later) = if same_seen {
+            (&second, &first)
+        } else {
+            (&first, &second)
+        };
+        fs::create_dir(folder.join(format!("{later}.json.partial"))).unwrap();
+        let store = Sessions::at(&place.output);
+        assert!(store.forget_plan_checked(&plan).is_err());
+        assert!(store.read(earlier).unwrap().plans.is_empty());
+        assert_eq!(store.read(earlier).unwrap().last_seen, 20);
+        assert_eq!(store.read(later).unwrap().plans.len(), 1);
+    }
+}
+
+#[test]
+fn checked_settlement_of_missing_folders_creates_no_storage() {
+    let place = Place::new();
+    let id = Token::new();
+    let owned = Owned::Plan { id: id.clone() };
+    Tasks::at(&place.output)
+        .settle_everywhere_checked(&owned, State::Gone, 1)
+        .unwrap();
+    Sessions::at(&place.output)
+        .forget_plan_checked(&id)
+        .unwrap();
+    assert!(!place.output.join("tasks").exists());
+    assert!(!place.output.join("sessions").exists());
 }

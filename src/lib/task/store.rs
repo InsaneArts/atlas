@@ -14,7 +14,6 @@ use crate::{
     record_folder::{Cached, LISTED, RecordFolder, Records},
 };
 use std::{
-    fs,
     path::Path,
     sync::{Arc, Mutex},
     time::Duration,
@@ -136,24 +135,85 @@ impl Store {
         state: State,
         now: u64,
     ) -> Result<()> {
-        self.checked_all()?;
-        if fs::symlink_metadata(self.folder.directory())
-            .is_err_and(|error| error.kind() == std::io::ErrorKind::NotFound)
-        {
+        self.settle_checked(owned, state, now, None)
+    }
+
+    pub(crate) fn settle_in_scope_checked(
+        &self,
+        session: &Key,
+        task: Option<&Key>,
+        owned: &Owned,
+        state: State,
+        now: u64,
+    ) -> Result<()> {
+        self.settle_checked(owned, state, now, Some((session, task)))
+    }
+
+    fn settle_checked(
+        &self,
+        owned: &Owned,
+        state: State,
+        now: u64,
+        scope: Option<(&Key, Option<&Key>)>,
+    ) -> Result<()> {
+        let incomplete = |cause| incomplete_settlement().with_source(cause);
+        let Some(identity) = self.folder.cleanup_identity().map_err(incomplete)? else {
             return Ok(());
-        }
+        };
         let _lock = self.folder.lock()?;
-        for mut record in self.checked_all()? {
+        let in_scope = |record: &Record| {
+            scope.is_none_or(|(session, task)| {
+                record.session == *session && task.is_none_or(|task| record.key == *task)
+            })
+        };
+        let matches = |record: &Record| {
+            in_scope(record) && record.claims().any(|(claimed, _)| claimed.same(owned))
+        };
+        let mut selected = Vec::new();
+        self.folder
+            .visit_cleanup(identity, |key, bytes, modified| {
+                let record = cleanup_record(key, bytes)?;
+                if matches(&record) {
+                    selected.push((modified, key.clone()));
+                }
+                Ok(())
+            })
+            .map_err(incomplete)?;
+        // Keep the old newest-written order, but retain only keys, never all records.
+        selected.sort_by_key(|(modified, _)| std::cmp::Reverse(*modified));
+        let mut remaining = self.folder.cleanup_bytes().map_err(incomplete)?;
+        for (_, key) in selected {
+            self.folder
+                .check_cleanup_identity(identity)
+                .map_err(incomplete)?;
+            let bytes = self
+                .folder
+                .read_cleanup(&key, &mut remaining)
+                .map_err(incomplete)?;
+            let mut record = cleanup_record(&key, &bytes)?;
+            if !matches(&record) {
+                return Err(incomplete_settlement());
+            }
             if record.settle(owned, state, now) {
                 record.updated = now;
                 self.write(&record)?;
+            } else {
+                return Err(incomplete_settlement());
             }
         }
-        if self.checked_all()?.iter().any(|record| {
-            record
-                .claims()
-                .any(|(claimed, found)| claimed.same(owned) && found != state)
-        }) {
+        let mut acknowledged = true;
+        self.folder
+            .visit_cleanup(identity, |key, bytes, _| {
+                let record = cleanup_record(key, bytes)?;
+                if in_scope(&record) {
+                    acknowledged &= !record
+                        .claims()
+                        .any(|(claimed, found)| claimed.same(owned) && found != state);
+                }
+                Ok(())
+            })
+            .map_err(incomplete)?;
+        if !acknowledged {
             return Err(incomplete_settlement());
         }
         Ok(())
@@ -186,25 +246,6 @@ impl Store {
             .collect()
     }
 
-    /// No skipped record or bounded scan can establish cleanup acknowledgement.
-    pub(crate) fn checked_all(&self) -> Result<Vec<Record>> {
-        let listing = self.folder.listing(LISTED);
-        if !listing.complete {
-            return Err(incomplete_settlement());
-        }
-        listing
-            .keys
-            .iter()
-            .map(|key| {
-                self.load(key)
-                    // A supported record may still contain a future or malformed
-                    // ownership entry. Its omitted claim cannot prove absence.
-                    .filter(|record| record.claims().count() == record.owned.len())
-                    .ok_or_else(incomplete_settlement)
-            })
-            .collect()
-    }
-
     fn read(&self, key: &Key) -> Read {
         if !self.folder.holds(key) {
             return Read::Missing;
@@ -223,6 +264,19 @@ impl Store {
     fn write(&self, record: &Record) -> Result<()> {
         self.folder.write_json(&record.key, record)
     }
+}
+
+fn cleanup_record(key: &Key, bytes: &[u8]) -> Result<Record> {
+    let record: Record = serde_json::from_slice(bytes)
+        .map_err(|cause| incomplete_settlement().with_source(cause))?;
+    // An omitted future or malformed ownership entry cannot prove absence.
+    if record.key != *key
+        || record.version > VERSION
+        || record.claims().count() != record.owned.len()
+    {
+        return Err(incomplete_settlement());
+    }
+    Ok(record)
 }
 
 fn incomplete_settlement() -> Error {

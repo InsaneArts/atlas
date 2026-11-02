@@ -394,33 +394,49 @@ impl Store {
     /// Cleanup acknowledgement requires a complete supported scan, successful
     /// writes and a complete read-back under the same session-store lock.
     pub(crate) fn forget_plan_checked(&self, plan_id: &Token) -> Result<()> {
-        let checked = || {
-            let (records, complete) = self.scanned(LISTED);
-            if complete {
-                Ok(records)
-            } else {
-                Err(Error::new(
-                    Code::State,
-                    "Session records could not be read completely to confirm cleanup",
-                ))
-            }
-        };
-        checked()?;
-        if fs::symlink_metadata(self.folder.directory())
-            .is_err_and(|error| error.kind() == std::io::ErrorKind::NotFound)
-        {
+        let incomplete = |cause| incomplete_cleanup().with_source(cause);
+        let Some(identity) = self.folder.cleanup_identity().map_err(incomplete)? else {
             return Ok(());
-        }
+        };
         let _lock = self.folder.lock()?;
-        for mut record in checked()? {
-            if record.forget_plan(plan_id) {
-                self.write(&record)?;
+        let mut selected = Vec::new();
+        self.folder
+            .visit_cleanup(identity, |key, bytes, modified| {
+                let record = cleanup_record(key, bytes)?;
+                if record.plans.iter().any(|plan| plan.plan_id == *plan_id) {
+                    selected.push((record.last_seen, modified, key.clone()));
+                }
+                Ok(())
+            })
+            .map_err(incomplete)?;
+        // scanned() stably sorts lastSeen after modification time; keep that write order.
+        selected.sort_by_key(|(seen, modified, _)| {
+            (std::cmp::Reverse(*seen), std::cmp::Reverse(*modified))
+        });
+        let mut remaining = self.folder.cleanup_bytes().map_err(incomplete)?;
+        for (_, _, key) in selected {
+            self.folder
+                .check_cleanup_identity(identity)
+                .map_err(incomplete)?;
+            let bytes = self
+                .folder
+                .read_cleanup(&key, &mut remaining)
+                .map_err(incomplete)?;
+            let mut record = cleanup_record(&key, &bytes)?;
+            if !record.forget_plan(plan_id) {
+                return Err(incomplete_cleanup());
             }
+            self.write(&record)?;
         }
-        if checked()?
-            .iter()
-            .any(|record| record.plans.iter().any(|plan| plan.plan_id == *plan_id))
-        {
+        let mut remaining_plan = false;
+        self.folder
+            .visit_cleanup(identity, |key, bytes, _| {
+                let record = cleanup_record(key, bytes)?;
+                remaining_plan |= record.plans.iter().any(|plan| plan.plan_id == *plan_id);
+                Ok(())
+            })
+            .map_err(incomplete)?;
+        if remaining_plan {
             return Err(Error::new(
                 Code::State,
                 "Session records still name the plan after cleanup",
@@ -531,6 +547,22 @@ impl Store {
     fn write(&self, record: &Record) -> Result<()> {
         self.folder.write_json(&record.key, record)
     }
+}
+
+fn cleanup_record(key: &Key, bytes: &[u8]) -> Result<Record> {
+    let record: Record =
+        serde_json::from_slice(bytes).map_err(|cause| incomplete_cleanup().with_source(cause))?;
+    if record.key != *key || record.version > VERSION {
+        return Err(incomplete_cleanup());
+    }
+    Ok(record)
+}
+
+fn incomplete_cleanup() -> Error {
+    Error::new(
+        Code::State,
+        "Session records could not be read completely to confirm cleanup",
+    )
 }
 
 /// Construct typed reply facts for session-record test fixtures.

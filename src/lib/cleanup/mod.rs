@@ -26,11 +26,7 @@ use crate::{
         Key, now_ms,
         store::{Read as SessionRead, Store as Sessions},
     },
-    task::{
-        Owned, State, Task,
-        record::{Adoption, Record as TaskRecord},
-        store::Store as Tasks,
-    },
+    task::{Owned, State, Task, record::Adoption, store::Store as Tasks},
 };
 use plan::{Bundle, Step, merge_with};
 use receipt::{Entry, Receipt, Receipts, StepState};
@@ -532,47 +528,13 @@ fn settle(
     };
     let now = now_ms();
     let (session, task) = scope;
-    let claiming = |records: Vec<TaskRecord>| -> Vec<TaskRecord> {
-        records
-            .into_iter()
-            .filter(|record| record.session == *session)
-            .filter(|record| task.as_ref().is_none_or(|task| record.key == *task))
-            .filter(|record| record.claims().any(|(claimed, _)| claimed.same(&owned)))
-            .collect()
-    };
-    let state_of = |record: &TaskRecord| {
-        record
-            .claims()
-            .find(|(claimed, _)| claimed.same(&owned))
-            .map(|(_, state)| state)
-    };
-
     let acknowledged = match state {
         StepState::Done => tasks
             .settle_everywhere_checked(&owned, State::Gone, now)
             .is_ok(),
-        StepState::Kept => {
-            let Ok(records) = tasks.checked_all() else {
-                return false;
-            };
-            for record in claiming(records) {
-                if tasks
-                    .update(&Task::recorded(&record), now, |record| {
-                        record.settle(&owned, State::Kept, now);
-                        Ok(())
-                    })
-                    .is_err()
-                {
-                    return false;
-                }
-            }
-            let Ok(records) = tasks.checked_all() else {
-                return false;
-            };
-            claiming(records)
-                .iter()
-                .all(|record| state_of(record) == Some(State::Kept))
-        }
+        StepState::Kept => tasks
+            .settle_in_scope_checked(session, task.as_ref(), &owned, State::Kept, now)
+            .is_ok(),
         _ => return false,
     };
     let forgotten = match &owned {
