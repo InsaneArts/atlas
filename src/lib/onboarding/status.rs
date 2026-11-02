@@ -82,11 +82,13 @@ async fn configured(config_path: &Path, uid: u32, me: Value, app: Value) -> Resu
         json!(null)
     };
     let reply = client.status().await;
-    let hidden = crate::session::require_hidden(&reply, config.helper_uid).is_ok();
+    let crate::session::Diagnosis {
+        observation, ready, ..
+    } = crate::capability::doctor_report(reply.clone(), config.helper_uid).diagnosis;
+    let hidden = observation.require_hidden(config.helper_uid).is_ok();
     let answering = hidden || reply["daemon"]["pid"].is_number();
-    let ready = crate::capability::doctor(reply.clone(), config.helper_uid)["ready"] == true;
     let finished =
-        ready && setup::migrate::settled(helper.uid) && crate::session::input_build_current(&reply);
+        ready && setup::migrate::settled(helper.uid) && observation.input_build_current();
 
     // Never asked and silent (a choice cut short, or an `atlas init` stopped
     // once it wrote settings): the window offers the choice again, and
